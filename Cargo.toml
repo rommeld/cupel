@@ -3,8 +3,6 @@ name = "cupel"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-
 [[bin]]
 name = "cupel"
 path = "src/main.rs"
@@ -12,3 +10,12 @@ path = "src/main.rs"
 [lib]
 name = "cupel"
 path = "src/lib.rs"
+
+[dependencies]
+core-text = "=21.0.0"
+gpui = { version = "*" }
+thiserror = "2"
+unicode-segmentation = "1.12.0"
+
+[dev-dependencies]
+gpui = { version = "*", features = ["test-support"] }
