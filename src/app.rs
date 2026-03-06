@@ -2,10 +2,10 @@ use std::ops::Range;
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, Keystroke, LayoutId, MouseButton,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
-    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, black, div,
-    fill, hsla, opaque_grey, point, prelude::*, px, relative, rgb, rgba, size, white, yellow,
+    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill,
+    hsla, point, prelude::*, px, relative, rgb, rgba, size, white,
 };
 use unicode_segmentation::*;
 
@@ -246,15 +246,6 @@ impl TextInput {
             .unwrap_or(self.content.len())
     }
 
-    fn reset(&mut self) {
-        self.content = "".into();
-        self.selected_range = 0..0;
-        self.selection_reversed = false;
-        self.marked_range = None;
-        self.last_layout = None;
-        self.last_bounds = None;
-        self.is_selecting = false;
-    }
 }
 
 impl EntityInputHandler for TextInput {
@@ -607,7 +598,6 @@ impl Focusable for TextInput {
 
 pub struct CupelWorkspace {
     pub text_input: Entity<TextInput>,
-    pub recent_keystrokes: Vec<Keystroke>,
     pub command_output: SharedString,
     pub focus_handle: FocusHandle,
 }
@@ -615,15 +605,6 @@ pub struct CupelWorkspace {
 impl Focusable for CupelWorkspace {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
-    }
-}
-
-impl CupelWorkspace {
-    fn on_reset_click(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        self.recent_keystrokes.clear();
-        self.text_input
-            .update(cx, |text_input, _cx| text_input.reset());
-        cx.notify();
     }
 }
 
@@ -635,44 +616,12 @@ impl Render for CupelWorkspace {
             .flex()
             .flex_col()
             .size_full()
-            .child(
-                div()
-                    .bg(white())
-                    .border_b_1()
-                    .border_color(black())
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .child(format!("Keyboard {}", cx.keyboard_layout().name()))
-                    .child(
-                        div()
-                            .border_1()
-                            .border_color(black())
-                            .px_2()
-                            .bg(yellow())
-                            .child("Reset")
-                            .hover(|style| {
-                                style
-                                    .bg(yellow().blend(opaque_grey(0.5, 0.5)))
-                                    .cursor_pointer()
-                            })
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_reset_click)),
-                    ),
-            )
             .child(self.text_input.clone())
             .child(
                 div()
                     .p(px(4.))
                     .bg(white())
-                    .border_1()
-                    .border_color(black())
-                    .child(format!("{}", self.text_input.read(cx).content)),
-            )
-            .child(
-                div()
-                    .p(px(4.))
-                    .bg(white())
-                    .child(self.command_output.clone())
+                    .child(self.command_output.clone()),
             )
     }
 }

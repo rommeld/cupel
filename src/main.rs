@@ -2,9 +2,7 @@ use cupel::app::{
     Backspace, Copy, CupelWorkspace, Cut, Delete, End, Home, Left, Paste, Quit, Right, SelectAll,
     SelectLeft, SelectRight, ShowCharacterPalette, TextInput,
 };
-use gpui::{
-    App, AppContext, Application, Bounds, KeyBinding, WindowBounds, WindowOptions, px, size
-};
+use gpui::{App, AppContext, Application, Bounds, KeyBinding, WindowBounds, WindowOptions, px, size};
 
 fn main() {
     Application::new().run(|cx: &mut App| {
@@ -47,7 +45,6 @@ fn main() {
                     });
                     cx.new(|cx| CupelWorkspace {
                         text_input,
-                        recent_keystrokes: vec![],
                         command_output,
                         focus_handle: cx.focus_handle(),
                     })
@@ -55,7 +52,6 @@ fn main() {
             )
             .expect("Expected text example.");
         let view = window.update(cx, |_, _, cx| cx.entity()).expect("");
-        let view_for_keystrokes = view.clone();
 
         cx.spawn(async move |cx| {
             let output = cx
@@ -88,21 +84,6 @@ fn main() {
                     })
                     .ok();
                 }
-            }
-        })
-        .detach();
-
-        cx.observe_keystrokes(move |ev, _, cx| {
-            view_for_keystrokes.update(cx, |view, cx| {
-                view.recent_keystrokes.push(ev.keystroke.clone());
-                cx.notify();
-            })
-        })
-        .detach();
-
-        cx.on_keyboard_layout_change({
-            move |cx| {
-                window.update(cx, |_, _, cx| cx.notify()).ok();
             }
         })
         .detach();
