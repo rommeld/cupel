@@ -1,0 +1,5 @@
+Take a look at @src/main.rs
+
+---
+
+for lines 57:100 I get a warning for line 94: `use of moved values: view` and line 59 `value moved here`.
