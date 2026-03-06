@@ -605,19 +605,20 @@ impl Focusable for TextInput {
     }
 }
 
-pub struct InputExample {
+pub struct CupelWorkspace {
     pub text_input: Entity<TextInput>,
     pub recent_keystrokes: Vec<Keystroke>,
+    pub command_output: SharedString,
     pub focus_handle: FocusHandle,
 }
 
-impl Focusable for InputExample {
+impl Focusable for CupelWorkspace {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl InputExample {
+impl CupelWorkspace {
     fn on_reset_click(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         self.recent_keystrokes.clear();
         self.text_input
@@ -626,7 +627,7 @@ impl InputExample {
     }
 }
 
-impl Render for InputExample {
+impl Render for CupelWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .bg(rgb(0xaaaaaa))
@@ -659,16 +660,19 @@ impl Render for InputExample {
                     ),
             )
             .child(self.text_input.clone())
-            .children(self.recent_keystrokes.iter().rev().map(|ks| {
-                format!(
-                    "{:} {}",
-                    ks.unparse(),
-                    if let Some(key_char) = ks.key_char.as_ref() {
-                        format!("-> {:?}", key_char)
-                    } else {
-                        "".to_owned()
-                    }
-                )
-            }))
+            .child(
+                div()
+                    .p(px(4.))
+                    .bg(white())
+                    .border_1()
+                    .border_color(black())
+                    .child(format!("{}", self.text_input.read(cx).content)),
+            )
+            .child(
+                div()
+                    .p(px(4.))
+                    .bg(white())
+                    .child(self.command_output.clone())
+            )
     }
 }
