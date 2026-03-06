@@ -1,0 +1,35 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+@src/app.rs I have a text output which reads the context `cx` and shows content of the input keystrokes. I want to use 
+
+```
+use tokio::process::Command;
+
+let git_text = Command::new("git log --oneline")
+```
+To see all the git logs in the text output.
+
+Also, rename `struct` so it is more production ready.
+
+Create a plan to first use the `Command` and then create a plan for re-naming to be more production ready.
+
+### Prompt 2
+
+[Request interrupted by user for tool use]
+
+### Prompt 3
+
+Btw I have a tokio command example. use tokio::process::Command;
+
+let command = Command::new("ls")
+        .arg("-l")
+        .arg("-a");
+
+### Prompt 4
+
+[Request interrupted by user for tool use]
+
