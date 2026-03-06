@@ -1,0 +1,35 @@
+Implement the following plan:
+
+# Clean Up Cupel Project
+
+## Context
+The project currently has demo/scaffolding code carried over from initial development (keystroke tracking, keyboard layout display, reset button, content echo). The user wants to keep only the text input component and the git log --oneline output display.
+
+## Changes
+
+### `src/app.rs`
+- **Remove** `recent_keystrokes` field from `CupelWorkspace`
+- **Remove** `on_reset_click` method from `CupelWorkspace`
+- **Remove** from `CupelWorkspace::render`:
+  - Header bar (keyboard layout label + Reset button)
+  - Content echo div (`format!("{}", self.text_input.read(cx).content)`)
+- **Keep**: `TextInput` component (all of it), `TextElement`, `command_output` display, `CupelWorkspace` struct (trimmed)
+- **Remove** unused imports after cleanup (e.g. `Keystroke`, `yellow`, `opaque_grey`, `black`, `MouseButton` for workspace, etc.)
+
+### `src/main.rs`
+- **Remove** `cx.observe_keystrokes(...)` block
+- **Remove** `cx.on_keyboard_layout_change(...)` block
+- **Remove** `view_for_keystrokes` variable
+- **Remove** `recent_keystrokes: vec![]` from `CupelWorkspace` init
+- **Keep**: window setup, key bindings, TextInput creation, git log spawn, focus/activate, Quit action
+
+## Files to modify
+- `src/app.rs`
+- `src/main.rs`
+
+## Verification
+- `cargo build` compiles without errors or warnings
+- Run the app and confirm: text input works, git log output displays
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/denny/.claude/projects/-Users-denny-Documents-repos-cupel/bbd2eccb-31ba-4cf6-a9b4-a73935ee21db.jsonl
