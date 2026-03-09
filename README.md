@@ -6,8 +6,6 @@ _It isn't just a technology choice — it's a product philosophy._
 
 ### Phase 0
 
-- [x] Implement _text input_ and render _response_ as first primitive for all future user interactions
-- [ ] Git root _detection_ & _selection_
-- [ ] Process spawning
-
-Launch App -> Detect git root -> Spanw Process -> Output streaming
+- [ ] implement pure git abstraction layer -> wrapper around `git2` crate, `libgit2`, `git`, and `gh` CLI
+- [ ] abstraction layer around `GitStore` and repository entity
+- [ ] buffer git diff state implementation -> listener on up-to-date diff hunks
