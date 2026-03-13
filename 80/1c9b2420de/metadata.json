@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "801c9b2420de",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/git/real_repo.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/80/1c9b2420de/0/metadata.json",
+      "transcript": "/80/1c9b2420de/0/full.jsonl",
+      "content_hash": "/80/1c9b2420de/0/content_hash.txt",
+      "prompt": "/80/1c9b2420de/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7419,
+    "cache_creation_tokens": 158652,
+    "cache_read_tokens": 7790360,
+    "output_tokens": 45194,
+    "api_call_count": 83
+  }
+}

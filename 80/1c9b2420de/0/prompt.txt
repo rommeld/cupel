@@ -1,0 +1,13 @@
+take a look at @src/git/ and maybe refactor the issues for the parent issue @.issues/feature-macos-app-foundation.md
+
+---
+
+use @.issues/feature-macos-app-foundation.md to implement all the associated child issues.
+
+---
+
+add the git panel to the scope and write new issues to implement.
+
+---
+
+implement the new child issues from @.issues/feature-macos-app-foundation.md
