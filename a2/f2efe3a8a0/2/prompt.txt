@@ -1,0 +1,21 @@
+use the child issues in  @.issues/feature-git-abstraction-layer to implement the git feature in the application.
+
+---
+
+take a look at the implemented tests and fix. there might be a problem with a time out.
+
+---
+
+which test is still running.
+
+---
+
+/simplify
+
+---
+
+great work. now create domaine specific commits.
+
+---
+
+exclude @.epic/ and @.issues/
