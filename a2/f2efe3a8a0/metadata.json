@@ -3,7 +3,7 @@
   "checkpoint_id": "a2f2efe3a8a0",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "src/git/mod.rs",
     "src/git/repo_entity.rs",
@@ -15,6 +15,12 @@
       "transcript": "/a2/f2efe3a8a0/0/full.jsonl",
       "content_hash": "/a2/f2efe3a8a0/0/content_hash.txt",
       "prompt": "/a2/f2efe3a8a0/0/prompt.txt"
+    },
+    {
+      "metadata": "/a2/f2efe3a8a0/1/metadata.json",
+      "transcript": "/a2/f2efe3a8a0/1/full.jsonl",
+      "content_hash": "/a2/f2efe3a8a0/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {

@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "a2f2efe3a8a0",
+  "session_id": "d83cf33e-0160-4c8a-8dcd-b6e53cbcd008",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-13T22:56:26.720946Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/git/mod.rs",
+    "src/git/repo_entity.rs",
+    "src/git/store.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a8fc1b3901e0",
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-13T22:56:26.720603Z",
+    "agent_lines": 494,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 494,
+    "agent_percentage": 100
+  }
+}
