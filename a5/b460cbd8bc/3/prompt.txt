@@ -15,3 +15,7 @@ which test is still running.
 ---
 
 great work. now create domaine specific commits.
+
+---
+
+exclude @.epic/ and @.issues/
