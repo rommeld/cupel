@@ -1,0 +1,1 @@
+take a look at @.issues/ and compact all child issues in parent issues and delete the child issues afterwards
