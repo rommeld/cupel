@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "7871b63921e6",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/git/fake_repo.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/78/71b63921e6/0/metadata.json",
+      "transcript": "/78/71b63921e6/0/full.jsonl",
+      "content_hash": "/78/71b63921e6/0/content_hash.txt",
+      "prompt": "/78/71b63921e6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7419,
+    "cache_creation_tokens": 158652,
+    "cache_read_tokens": 7790360,
+    "output_tokens": 45194,
+    "api_call_count": 83
+  }
+}
