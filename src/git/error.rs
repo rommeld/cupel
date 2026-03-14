@@ -24,6 +24,28 @@ pub enum GitError {
 
     #[error("merge conflict in {path}")]
     MergeConflict { path: RepoPath },
+
+    // ── Forge (gh CLI) errors ─────────────────────────────
+    #[error("gh CLI not installed")]
+    GhNotInstalled,
+
+    #[error("gh CLI not authenticated — run `gh auth login`")]
+    GhNotAuthenticated,
+
+    #[error("remote is not a GitHub repository")]
+    GhNotGitHubRepo,
+
+    #[error("GitHub API rate limited — retry after backoff")]
+    GhRateLimited,
+
+    #[error("GitHub API error ({status}): {message}")]
+    GhApiError { status: u16, message: String },
+
+    #[error("gh CLI failed: {0}")]
+    GhError(String),
+
+    #[error("JSON parse error: {0}")]
+    JsonError(String),
 }
 
 pub type GitResult<T> = Result<T, GitError>;
