@@ -12,5 +12,15 @@ actions!(
         Commit,
         SelectNext,
         SelectPrev,
+        // Diff hunk actions
+        StageHunk,
+        UnstageHunk,
+        RevertHunk,
+        ToggleHunkDiff,
+        ExpandAllDiffHunks,
+        CollapseAllDiffHunks,
+        // Navigation
+        GoToHunk,
+        GoToPrevHunk,
     ]
 );

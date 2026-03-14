@@ -6,8 +6,13 @@ use gpui::{
 use crate::actions::{
     Commit, SelectNext, SelectPrev, StageAll, ToggleStaging, UnstageAll,
 };
+use crate::git::backend_router::GhAuthStatus;
+use crate::git::forge_state::ForgeStateSnapshot;
 use crate::git::store::{GitStore, GitStoreEvent};
-use crate::git::types::{CommitOptions, FileStatus, RepoPath, StagingState, StatusEntry};
+use crate::git::types::{
+    ChecksStatus, CommitOptions, FileStatus, RepoPath, ReviewDecision, RunConclusion, RunStatus,
+    StagingState, StatusEntry,
+};
 use crate::theme::Theme;
 
 // ---------------------------------------------------------------------------
@@ -30,6 +35,7 @@ pub struct GitPanel {
     selected_index: Option<usize>,
     commit_message: String,
     focus_handle: FocusHandle,
+    forge_snapshot: ForgeStateSnapshot,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -53,6 +59,10 @@ impl GitPanel {
                     this.rebuild_entries(cx);
                     cx.notify();
                 }
+                GitStoreEvent::ForgeStateChanged => {
+                    this.refresh_forge_snapshot(cx);
+                    cx.notify();
+                }
             }
         });
 
@@ -62,10 +72,12 @@ impl GitPanel {
             selected_index: None,
             commit_message: String::new(),
             focus_handle,
+            forge_snapshot: ForgeStateSnapshot::default(),
             _subscriptions: vec![sub],
         };
 
         panel.rebuild_entries(cx);
+        panel.refresh_forge_snapshot(cx);
         panel
     }
 
@@ -292,6 +304,168 @@ impl GitPanel {
         section
     }
 
+    fn refresh_forge_snapshot(&mut self, cx: &mut Context<Self>) {
+        let store = self.git_store.read(cx);
+        if let Some(snapshot) = store.forge_snapshot(cx) {
+            self.forge_snapshot = snapshot;
+        }
+    }
+
+    fn auth_status(&self, cx: &mut Context<Self>) -> GhAuthStatus {
+        let store = self.git_store.read(cx);
+        store
+            .active_repository()
+            .map(|repo| repo.read(cx).router().auth_status)
+            .unwrap_or(GhAuthStatus::NotInstalled)
+    }
+
+    fn render_pr_indicator(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let auth = self.auth_status(cx);
+
+        match auth {
+            GhAuthStatus::NotInstalled => {
+                // Hide all forge UI when gh is not installed
+                return div();
+            }
+            GhAuthStatus::NotAuthenticated => {
+                return div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_color(theme.text_muted)
+                            .child("gh: not authenticated"),
+                    );
+            }
+            GhAuthStatus::Connected => {}
+        }
+
+        let snapshot = &self.forge_snapshot;
+
+        if snapshot.is_loading && snapshot.current_pr.is_none() {
+            return div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(div().text_color(theme.text_muted).child("PR: loading..."));
+        }
+
+        let Some(pr) = &snapshot.current_pr else {
+            return div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .child(div().text_color(theme.text_muted).child("No PR"));
+        };
+
+        let pr_label = if pr.is_draft {
+            format!("#{} (draft)", pr.number)
+        } else {
+            format!("#{}", pr.number)
+        };
+
+        let review_icon = match pr.review_decision {
+            Some(ReviewDecision::Approved) => "✓",
+            Some(ReviewDecision::ChangesRequested) => "✗",
+            Some(ReviewDecision::ReviewRequired) => "●",
+            None => "",
+        };
+
+        let review_color = match pr.review_decision {
+            Some(ReviewDecision::Approved) => theme.added,
+            Some(ReviewDecision::ChangesRequested) => theme.deleted,
+            Some(ReviewDecision::ReviewRequired) => theme.modified,
+            None => theme.text_muted,
+        };
+
+        let checks_status = snapshot.aggregate_checks_status();
+
+        let ci_icon = match checks_status {
+            Some(ChecksStatus::Success) => "✓",
+            Some(ChecksStatus::Failure) => "✗",
+            Some(ChecksStatus::Pending) => "◌",
+            None => "",
+        };
+
+        let ci_color = match checks_status {
+            Some(ChecksStatus::Success) => theme.added,
+            Some(ChecksStatus::Failure) => theme.deleted,
+            Some(ChecksStatus::Pending) => theme.modified,
+            None => theme.text_muted,
+        };
+
+        let mut indicator = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .child(div().text_color(theme.accent).child(pr_label));
+
+        if !review_icon.is_empty() {
+            indicator = indicator.child(div().text_color(review_color).child(review_icon));
+        }
+
+        if !ci_icon.is_empty() {
+            indicator = indicator.child(div().text_color(ci_color).child(ci_icon));
+        }
+
+        indicator
+    }
+
+    fn render_workflow_section(&self, theme: &Theme) -> gpui::Div {
+        let runs = &self.forge_snapshot.recent_runs;
+
+        if runs.is_empty() {
+            return div();
+        }
+
+        let mut section = div().w_full().flex().flex_col().child(
+            div()
+                .px_2()
+                .py_1()
+                .text_color(theme.text_muted)
+                .child(format!("Workflow Runs ({})", runs.len())),
+        );
+
+        for run in runs.iter().take(5) {
+            let (icon, color) = match (run.status, run.conclusion) {
+                (Some(RunStatus::Completed), Some(RunConclusion::Success)) => ("✓", theme.added),
+                (Some(RunStatus::Completed), Some(RunConclusion::Failure)) => ("✗", theme.deleted),
+                (Some(RunStatus::Completed), Some(RunConclusion::Cancelled)) => {
+                    ("⊘", theme.text_muted)
+                }
+                (Some(RunStatus::Completed), Some(RunConclusion::Skipped)) => {
+                    ("⊘", theme.text_muted)
+                }
+                (Some(RunStatus::InProgress), _) => ("◌", theme.modified),
+                (Some(RunStatus::Queued), _) => ("○", theme.text_muted),
+                _ => ("?", theme.text_muted),
+            };
+
+            let row = div()
+                .px_2()
+                .py_px()
+                .w_full()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(div().text_color(color).min_w_4().child(icon))
+                .child(div().text_color(theme.text_primary).child(run.name.clone()));
+
+            section = section.child(row);
+        }
+
+        section
+    }
+
     fn handle_key_down(
         &mut self,
         event: &gpui::KeyDownEvent,
@@ -386,22 +560,32 @@ impl Render for GitPanel {
             );
         }
 
+        let pr_indicator = self.render_pr_indicator(theme, cx);
+
         toolbar = toolbar.child(
             div()
                 .flex_grow()
-                .text_color(theme.text_muted)
                 .flex()
+                .flex_row()
+                .items_center()
                 .justify_end()
-                .child(format!(
-                    "{} file{}",
-                    total_files,
-                    if total_files == 1 { "" } else { "s" }
-                )),
+                .gap_2()
+                .child(pr_indicator)
+                .child(
+                    div()
+                        .text_color(theme.text_muted)
+                        .child(format!(
+                            "{} file{}",
+                            total_files,
+                            if total_files == 1 { "" } else { "s" }
+                        )),
+                ),
         );
 
         // Build staged and unstaged sections
         let staged_section = self.render_section(true, staged_count, "Staged Changes", theme, cx);
         let unstaged_section = self.render_section(false, unstaged_count, "Unstaged Changes", theme, cx);
+        let workflow_section = self.render_workflow_section(theme);
 
         // Build commit area
         let has_message = !self.commit_message.trim().is_empty();
@@ -489,7 +673,8 @@ impl Render for GitPanel {
                     .flex()
                     .flex_col()
                     .child(staged_section)
-                    .child(unstaged_section),
+                    .child(unstaged_section)
+                    .child(workflow_section),
             )
             .child(commit_area)
     }

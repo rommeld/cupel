@@ -1,6 +1,9 @@
+pub mod backend_router;
 pub mod diff;
 pub mod error;
 pub mod fake_repo;
+pub mod forge_state;
+pub mod gh_cli;
 pub mod real_repo;
 pub mod repo_entity;
 pub mod repository;

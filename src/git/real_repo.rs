@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
+use crate::git::backend_router::{GitLocalOps, GitRemoteOps};
 use crate::git::error::{GitError, GitResult};
-use crate::git::repository::GitRepository;
 use crate::git::types::{
     BlameEntry, Branch, CommitDetails, CommitOptions, CommitSummary, ConflictSide, FileStatus,
     GitFileStatus, PushOptions, RepoPath, StashEntry, StatusEntry,
@@ -104,9 +104,11 @@ impl RealGitRepository {
     }
 }
 
-impl GitRepository for RealGitRepository {
-    // ── Identity ───────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// GitLocalOps implementation
+// ---------------------------------------------------------------------------
 
+impl GitLocalOps for RealGitRepository {
     fn path(&self) -> &Path {
         &self.path
     }
@@ -114,8 +116,6 @@ impl GitRepository for RealGitRepository {
     fn work_directory(&self) -> Option<&Path> {
         self.work_directory.as_deref()
     }
-
-    // ── Status ─────────────────────────────────────────────
 
     fn status(&self, path_prefixes: &[RepoPath]) -> GitResult<Vec<StatusEntry>> {
         let repo = self.repository.lock().unwrap();
@@ -162,8 +162,6 @@ impl GitRepository for RealGitRepository {
             Err(e) => Err(e.into()),
         }
     }
-
-    // ── Branch operations ──────────────────────────────────
 
     fn current_branch(&self) -> Option<Branch> {
         let repo = self.repository.lock().unwrap();
@@ -235,8 +233,6 @@ impl GitRepository for RealGitRepository {
             .and_then(|r| r.url().map(|s| s.to_string()))
     }
 
-    // ── Diff / Content ─────────────────────────────────────
-
     fn head_text_for_path(&self, path: &RepoPath) -> GitResult<Option<String>> {
         let repo = self.repository.lock().unwrap();
         let head = match repo.head() {
@@ -269,8 +265,6 @@ impl GitRepository for RealGitRepository {
         }
     }
 
-    // ── Blame ──────────────────────────────────────────────
-
     fn blame_for_path(
         &self,
         path: &RepoPath,
@@ -299,8 +293,6 @@ impl GitRepository for RealGitRepository {
         Ok(entries)
     }
 
-    // ── Stash ──────────────────────────────────────────────
-
     fn stash_list(&self) -> GitResult<Vec<StashEntry>> {
         let mut repo = self.repository.lock().unwrap();
         let mut entries = Vec::new();
@@ -314,8 +306,6 @@ impl GitRepository for RealGitRepository {
         })?;
         Ok(entries)
     }
-
-    // ── History ────────────────────────────────────────────
 
     fn log(
         &self,
@@ -390,9 +380,6 @@ impl GitRepository for RealGitRepository {
             let _ = index.read(true);
         }
     }
-
-    // ── Mutating operations ────────────────────────────────
-    // These use the git CLI or git2 index manipulation.
 
     fn stage_paths(
         &self,
@@ -523,8 +510,82 @@ impl GitRepository for RealGitRepository {
         Ok(())
     }
 
-    // ── Remote operations (CLI-based) ──────────────────────
+    fn create_branch(&self, name: &str) -> GitResult<()> {
+        let repo = self.repository.lock().unwrap();
+        let head = repo.head()?;
+        let commit = head.peel_to_commit()?;
+        repo.branch(name, &commit, false)?;
+        Ok(())
+    }
 
+    fn checkout(&self, target: &str, env: &HashMap<String, String>) -> GitResult<()> {
+        self.run_git(&["checkout", target], env)?;
+        Ok(())
+    }
+
+    fn delete_branch(&self, name: &str) -> GitResult<()> {
+        let repo = self.repository.lock().unwrap();
+        let mut branch = repo.find_branch(name, git2::BranchType::Local)?;
+        branch.delete()?;
+        Ok(())
+    }
+
+    fn stash_all(&self, message: Option<&str>) -> GitResult<()> {
+        let mut args = vec!["stash", "push"];
+        if let Some(msg) = message {
+            args.push("-m");
+            args.push(msg);
+        }
+        self.run_git(&args, &HashMap::new())?;
+        Ok(())
+    }
+
+    fn stash_pop(&self, index: usize) -> GitResult<()> {
+        let stash_ref = format!("stash@{{{index}}}");
+        self.run_git(&["stash", "pop", &stash_ref], &HashMap::new())?;
+        Ok(())
+    }
+
+    fn stash_apply(&self, index: usize) -> GitResult<()> {
+        let stash_ref = format!("stash@{{{index}}}");
+        self.run_git(&["stash", "apply", &stash_ref], &HashMap::new())?;
+        Ok(())
+    }
+
+    fn stash_drop(&self, index: usize) -> GitResult<()> {
+        let stash_ref = format!("stash@{{{index}}}");
+        self.run_git(&["stash", "drop", &stash_ref], &HashMap::new())?;
+        Ok(())
+    }
+
+    fn checkout_conflict_path(
+        &self,
+        path: &RepoPath,
+        side: ConflictSide,
+    ) -> GitResult<()> {
+        let side_flag = match side {
+            ConflictSide::Ours => "--ours",
+            ConflictSide::Theirs => "--theirs",
+            ConflictSide::Base => {
+                return Err(GitError::InvalidOperation(
+                    "cannot checkout base side via CLI".to_string(),
+                ));
+            }
+        };
+        let path_str = path.as_path().to_string_lossy().to_string();
+        self.run_git(
+            &["checkout", side_flag, "--", &path_str],
+            &HashMap::new(),
+        )?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GitRemoteOps implementation
+// ---------------------------------------------------------------------------
+
+impl GitRemoteOps for RealGitRepository {
     fn push(
         &self,
         branch: &str,
@@ -565,80 +626,6 @@ impl GitRepository for RealGitRepository {
     fn create_remote(&self, name: &str, url: &str) -> GitResult<()> {
         let repo = self.repository.lock().unwrap();
         repo.remote(name, url)?;
-        Ok(())
-    }
-
-    fn create_branch(&self, name: &str) -> GitResult<()> {
-        let repo = self.repository.lock().unwrap();
-        let head = repo.head()?;
-        let commit = head.peel_to_commit()?;
-        repo.branch(name, &commit, false)?;
-        Ok(())
-    }
-
-    fn checkout(&self, target: &str, env: &HashMap<String, String>) -> GitResult<()> {
-        self.run_git(&["checkout", target], env)?;
-        Ok(())
-    }
-
-    fn delete_branch(&self, name: &str) -> GitResult<()> {
-        let repo = self.repository.lock().unwrap();
-        let mut branch = repo.find_branch(name, git2::BranchType::Local)?;
-        branch.delete()?;
-        Ok(())
-    }
-
-    // ── Stash (CLI-based) ──────────────────────────────────
-
-    fn stash_all(&self, message: Option<&str>) -> GitResult<()> {
-        let mut args = vec!["stash", "push"];
-        if let Some(msg) = message {
-            args.push("-m");
-            args.push(msg);
-        }
-        self.run_git(&args, &HashMap::new())?;
-        Ok(())
-    }
-
-    fn stash_pop(&self, index: usize) -> GitResult<()> {
-        let stash_ref = format!("stash@{{{index}}}");
-        self.run_git(&["stash", "pop", &stash_ref], &HashMap::new())?;
-        Ok(())
-    }
-
-    fn stash_apply(&self, index: usize) -> GitResult<()> {
-        let stash_ref = format!("stash@{{{index}}}");
-        self.run_git(&["stash", "apply", &stash_ref], &HashMap::new())?;
-        Ok(())
-    }
-
-    fn stash_drop(&self, index: usize) -> GitResult<()> {
-        let stash_ref = format!("stash@{{{index}}}");
-        self.run_git(&["stash", "drop", &stash_ref], &HashMap::new())?;
-        Ok(())
-    }
-
-    // ── Conflict resolution ────────────────────────────────
-
-    fn checkout_conflict_path(
-        &self,
-        path: &RepoPath,
-        side: ConflictSide,
-    ) -> GitResult<()> {
-        let side_flag = match side {
-            ConflictSide::Ours => "--ours",
-            ConflictSide::Theirs => "--theirs",
-            ConflictSide::Base => {
-                return Err(GitError::InvalidOperation(
-                    "cannot checkout base side via CLI".to_string(),
-                ));
-            }
-        };
-        let path_str = path.as_path().to_string_lossy().to_string();
-        self.run_git(
-            &["checkout", side_flag, "--", &path_str],
-            &HashMap::new(),
-        )?;
         Ok(())
     }
 }
@@ -683,7 +670,6 @@ mod tests {
     fn test_open_and_identity() {
         let (dir, repo) = init_test_repo();
         assert!(repo.work_directory().is_some());
-        // Canonicalize both paths to handle macOS /var → /private/var symlink
         let expected = dir.path().canonicalize().unwrap();
         let actual = repo.work_directory().unwrap().canonicalize().unwrap();
         assert_eq!(actual, expected);

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::git::backend_router::{GitLocalOps, GitRemoteOps};
 use crate::git::error::{GitError, GitResult};
-use crate::git::repository::GitRepository;
 use crate::git::types::{
     BlameEntry, Branch, CommitDetails, CommitOptions, CommitSummary, ConflictSide, FileStatus,
     GitFileStatus, PushOptions, RepoPath, StashEntry, StatusEntry,
@@ -141,7 +141,7 @@ impl FakeGitRepository {
     }
 }
 
-impl GitRepository for FakeGitRepository {
+impl GitLocalOps for FakeGitRepository {
     fn path(&self) -> &Path {
         &self.path
     }
@@ -288,32 +288,6 @@ impl GitRepository for FakeGitRepository {
         Ok(())
     }
 
-    fn push(
-        &self,
-        _branch: &str,
-        _remote: Option<&str>,
-        _options: &PushOptions,
-        _env: &HashMap<String, String>,
-    ) -> GitResult<()> {
-        Ok(())
-    }
-
-    fn pull(
-        &self,
-        _rebase: bool,
-        _env: &HashMap<String, String>,
-    ) -> GitResult<()> {
-        Ok(())
-    }
-
-    fn fetch(&self, _env: &HashMap<String, String>) -> GitResult<()> {
-        Ok(())
-    }
-
-    fn create_remote(&self, _name: &str, _url: &str) -> GitResult<()> {
-        Ok(())
-    }
-
     fn current_branch(&self) -> Option<Branch> {
         let name = self.current_branch.lock().unwrap().clone()?;
         Some(Branch {
@@ -425,6 +399,34 @@ impl GitRepository for FakeGitRepository {
         _path: &RepoPath,
         _side: ConflictSide,
     ) -> GitResult<()> {
+        Ok(())
+    }
+}
+
+impl GitRemoteOps for FakeGitRepository {
+    fn push(
+        &self,
+        _branch: &str,
+        _remote: Option<&str>,
+        _options: &PushOptions,
+        _env: &HashMap<String, String>,
+    ) -> GitResult<()> {
+        Ok(())
+    }
+
+    fn pull(
+        &self,
+        _rebase: bool,
+        _env: &HashMap<String, String>,
+    ) -> GitResult<()> {
+        Ok(())
+    }
+
+    fn fetch(&self, _env: &HashMap<String, String>) -> GitResult<()> {
+        Ok(())
+    }
+
+    fn create_remote(&self, _name: &str, _url: &str) -> GitResult<()> {
         Ok(())
     }
 }

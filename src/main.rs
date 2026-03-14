@@ -3,7 +3,7 @@ use gpui::{AppContext, Application, KeyBinding, WindowOptions};
 use cupel::actions::{
     Commit, Quit, SelectNext, SelectPrev, StageAll, ToggleStaging, UnstageAll,
 };
-use cupel::app::AppView;
+use cupel::ui::app::AppView;
 use cupel::assets::Assets;
 use cupel::theme::Theme;
 
