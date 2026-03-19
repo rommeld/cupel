@@ -1,0 +1,102 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "command": {
+    "test": {
+      "template": "Run the full test suite with coverage report and show any failures.\nFocus on the failing tests and suggest fixes.",
+      "description": "Run tests with coverage",
+      "agent": "build"
+    }
+  },
+  "lsp": {
+    "rust": {
+      "command": ["rust-analyzer"],
+      "initialization": {
+        "check": { "command": "clippy" }
+      }
+    }
+  },
+  "permission": {
+    "bash": {
+      "*": "ask",
+      "grep *": "allow",
+      "git diff": "allow",
+      "git log*": "allow",
+      "git status*": "allow"
+    },
+    "edit": "ask",
+    "task": {
+      "*": "ask",
+      "code_review": "ask"
+    },
+    "webfetch": "ask"
+  },
+  "tools": {
+    "bash": true
+  },
+  "default_agent": "plan",
+  "agent": {
+    "plan": {
+      "mode": "primary",
+      "model": "fireworks-ai/accounts/fireworks/models/minimax-m2p5",
+      "reasoningEffort": "high",
+      "temperature": 0.1,
+      "tools": {
+        "write": false,
+        "edit": false
+      }
+    },
+    "build": {
+      "mode": "primary",
+      "model": "fireworks-ai/accounts/fireworks/models/minimax-m2p5",
+      "temperature": 0.3,
+      "tools": {
+        "write": true,
+        "edit": true
+      }
+    },
+    "brainstorm": {
+      "description": "Helps brainstorming ideas, implementations, and doing inquiries.",
+      "color": "secondary",
+      "mode": "subagent",
+      "model": "fireworks-ai/accounts/fireworks/models/glm-5",
+      "prompt": "{file:prompts/brainstorm.txt}",
+      "reasoningEffort": "high",
+      "textVerbosity": "low",
+      "temperature": 0.8,
+      "tools": {
+        "write": true,
+        "edit": true
+      }
+    },
+    "quick-thinker": {
+      "description": "Fast reasoning with limited iterations",
+      "color": "secondary",
+      "mode": "subagent",
+      "model": "fireworks-ai/accounts/fireworks/models/gpt-oss-120b",
+      "prompt": "You are a quick thinker. Solve problems with minimal steps.",
+      "reasoningEffort": "medium",
+      "textVerbosity": "low",
+      "steps": 5,
+      "temperature": 0.6,
+      "tools": {
+        "write": false,
+        "edit": false,
+        "bash": true
+      }
+    },
+    "code-reviewer": {
+      "description": "Reviews code for best practices and potential issues",
+      "color": "secondary",
+      "mode": "subagent",
+      "model": "fireworks-ai/accounts/fireworks/models/minimax-m2p5",
+      "prompt": "{file:prompts/review.txt}",
+      "reasoningEffort": "medium",
+      "temperature": 0.1,
+      "tools": {
+        "write": false,
+        "edit": false,
+        "bash": true
+      }
+    }
+  }
+}
