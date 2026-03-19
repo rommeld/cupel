@@ -1,0 +1,239 @@
+{
+  "info": {
+    "id": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+    "slug": "shiny-comet",
+    "projectID": "21e8a2bda35e22e71de7edac2292d08a2242a6bc",
+    "directory": "/Users/denny/Documents/repos/cupel",
+    "title": "List authentication items",
+    "version": "1.2.27",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "time": {
+      "created": 1773955447560,
+      "updated": 1773955455583
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1773955447569
+        },
+        "summary": {
+          "diffs": []
+        },
+        "agent": "plan",
+        "model": {
+          "providerID": "fireworks-ai",
+          "modelID": "accounts/fireworks/models/minimax-m2p5"
+        },
+        "id": "msg_d07fbfb0c001q3Yy5sgmMJz0C1",
+        "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "opencode auth list",
+          "id": "prt_d07fbfb0c002YIvyGSJpvJ8Te8",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "msg_d07fbfb0c001q3Yy5sgmMJz0C1"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1773955447573,
+          "completed": 1773955455570
+        },
+        "parentID": "msg_d07fbfb0c001q3Yy5sgmMJz0C1",
+        "modelID": "accounts/fireworks/models/minimax-m2p5",
+        "providerID": "fireworks-ai",
+        "mode": "plan",
+        "agent": "plan",
+        "path": {
+          "cwd": "/Users/denny/Documents/repos/cupel",
+          "root": "/Users/denny/Documents/repos/cupel"
+        },
+        "cost": 0.00389535,
+        "tokens": {
+          "total": 12575,
+          "input": 12432,
+          "output": 138,
+          "reasoning": 0,
+          "cache": {
+            "read": 5,
+            "write": 0
+          }
+        },
+        "finish": "tool-calls",
+        "id": "msg_d07fbfb15002p89Jh2JXRVrO27",
+        "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "315ea3c9dc8cd515c628ca69b657916095132a3b",
+          "id": "prt_d07fbfdcc001ApDx8RxOy95c03",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "msg_d07fbfb15002p89Jh2JXRVrO27"
+        },
+        {
+          "type": "reasoning",
+          "text": "The user is asking me to run `opencode auth list`. This appears to be a command to list authentication credentials or configurations for the opencode tool itself.\n\nHowever, I'm in \"Plan Mode\" which is read-only - I'm forbidden from making any file edits or system changes. But running a read-only command like `opencode auth list` should be fine since it just reads/inspects data without making changes.\n\nLet me try running this command to see what it outputs.",
+          "time": {
+            "start": 1773955448268,
+            "end": 1773955448606
+          },
+          "id": "prt_d07fbfdcc002N7LAXCmv575xQs",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "msg_d07fbfb15002p89Jh2JXRVrO27"
+        },
+        {
+          "type": "text",
+          "text": "",
+          "time": {
+            "start": 1773955448607,
+            "end": 1773955448607
+          },
+          "id": "prt_d07fbfe950011PYRo95E3ST4wI",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "msg_d07fbfb15002p89Jh2JXRVrO27"
+        },
+        {
+          "type": "tool",
+          "callID": "call_99b66b4c58284b198ddc19cd",
+          "tool": "bash",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "opencode auth list",
+              "description": "List opencode authentication credentials"
+            },
+            "output": "\u001b[0m\n┌  Credentials \u001b[90m~/.local/share/opencode/auth.json\n│\n●  OpenRouter \u001b[90mapi\n│\n●  Fireworks AI \u001b[90mapi\n│\n└  2 credentials\n\n",
+            "title": "List opencode authentication credentials",
+            "metadata": {
+              "output": "\u001b[0m\n┌  Credentials \u001b[90m~/.local/share/opencode/auth.json\n│\n●  OpenRouter \u001b[90mapi\n│\n●  Fireworks AI \u001b[90mapi\n│\n└  2 credentials\n\n",
+              "exit": 0,
+              "description": "List opencode authentication credentials",
+              "truncated": false
+            },
+            "time": {
+              "start": 1773955448592,
+              "end": 1773955455534
+            }
+          },
+          "id": "prt_d07fbfeb5001jsE6stTa6O2NKf",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "msg_d07fbfb15002p89Jh2JXRVrO27"
+        },
+        {
+          "type": "step-finish",
+          "reason": "tool-calls",
+          "snapshot": "315ea3c9dc8cd515c628ca69b657916095132a3b",
+          "cost": 0.00389535,
+          "tokens": {
+            "total": 12575,
+            "input": 12432,
+            "output": 138,
+            "reasoning": 0,
+            "cache": {
+              "read": 5,
+              "write": 0
+            }
+          },
+          "id": "prt_d07fc1a2f001se1kbYPMieTi2h",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "msg_d07fbfb15002p89Jh2JXRVrO27"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1773955455571,
+          "completed": 1773955456480
+        },
+        "parentID": "msg_d07fbfb0c001q3Yy5sgmMJz0C1",
+        "modelID": "accounts/fireworks/models/minimax-m2p5",
+        "providerID": "fireworks-ai",
+        "mode": "plan",
+        "agent": "plan",
+        "path": {
+          "cwd": "/Users/denny/Documents/repos/cupel",
+          "root": "/Users/denny/Documents/repos/cupel"
+        },
+        "cost": 0.00054288,
+        "tokens": {
+          "total": 12732,
+          "input": 206,
+          "output": 90,
+          "reasoning": 0,
+          "cache": {
+            "read": 12436,
+            "write": 0
+          }
+        },
+        "finish": "stop",
+        "id": "REDACTED",
+        "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "315ea3c9dc8cd515c628ca69b657916095132a3b",
+          "id": "prt_d07fc1d310014v40QB6FQk0bN6",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "REDACTED"
+        },
+        {
+          "type": "reasoning",
+          "text": "The command shows there are 2 credentials configured:\n1. OpenRouter - api key\n2. Fireworks AI - api key\n\nThis is useful information for the user. The output shows both credentials are present (indicated by the filled circle ●).",
+          "time": {
+            "start": 1773955456306,
+            "end": 1773955456432
+          },
+          "id": "prt_d07fc1d32001E0Hs6aXGU4AcRQ",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "REDACTED"
+        },
+        {
+          "type": "text",
+          "text": "\n\nYou have 2 credentials configured:\n- **OpenRouter** (api)\n- **Fireworks AI** (api)\n\nBoth are present in `~/.local/share/opencode/auth.json`.",
+          "time": {
+            "start": 1773955456433,
+            "end": 1773955456433
+          },
+          "id": "prt_d07fc1dad001Al0vUKaWWKmV7i",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "REDACTED"
+        },
+        {
+          "type": "step-finish",
+          "reason": "stop",
+          "snapshot": "315ea3c9dc8cd515c628ca69b657916095132a3b",
+          "cost": 0.00054288,
+          "tokens": {
+            "total": 12732,
+            "input": 206,
+            "output": 90,
+            "reasoning": 0,
+            "cache": {
+              "read": 12436,
+              "write": 0
+            }
+          },
+          "id": "prt_d07fc1db1001NTsjISMAadJANz",
+          "sessionID": "ses_2f80404f7ffeOG9DfyLpeZqhrm",
+          "messageID": "REDACTED"
+        }
+      ]
+    }
+  ]
+}
