@@ -3,7 +3,7 @@
   "checkpoint_id": "ae5670789c5a",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "Cargo.lock",
     "src/lib.rs",
@@ -21,6 +21,12 @@
       "transcript": "/ae/5670789c5a/1/full.jsonl",
       "content_hash": "/ae/5670789c5a/1/content_hash.txt",
       "prompt": "/ae/5670789c5a/1/prompt.txt"
+    },
+    {
+      "metadata": "/ae/5670789c5a/2/metadata.json",
+      "transcript": "/ae/5670789c5a/2/full.jsonl",
+      "content_hash": "/ae/5670789c5a/2/content_hash.txt",
+      "prompt": "/ae/5670789c5a/2/prompt.txt"
     }
   ],
   "token_usage": {
