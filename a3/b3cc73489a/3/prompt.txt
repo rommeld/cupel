@@ -1,0 +1,288 @@
+You are a senior code reviewer with team lead authority. Review the following Rust file from a macOS application built with gpui (Zed's UI framework).
+
+## Project Context
+- GUI Framework: gpui (Zed's UI framework)
+- Git Operations: git2 (Rust bindings) + git CLI
+- Error Handling: thiserror + anyhow
+- Async Runtime: smol + tokio
+- Serialization: serde + serde_json
+- Diff Algorithm: imara-diff
+
+## Code Style Guidelines from AGENTS.md
+- Use absolute paths (crate::module::Item) over relative imports
+- Group imports: std → external → crate
+- Types/Enums: PascalCase, Functions: snake_case
+- Use newtype pattern for semantic distinctions
+- Implement common traits (Debug, Clone, PartialEq, Default) consistently
+- Use thiserror for domain-specific errors, anyhow for application-level
+- Avoid bare unwrap() - use expect() when behavior is predictable
+- Place unit tests in #[cfg(test)] modules at end of file
+- Use descriptive test names
+- NO comments unless asked
+
+## File to Review
+
+```rust
+use std::ops::Range;
+
+use gpui::{Context, Entity, EventEmitter, Subscription};
+
+use crate::git::diff::BufferDiffSnapshot;
+use crate::git::store::{BufferId, GitStore, GitStoreEvent};
+use crate::git::types::RepoPath;
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Number of context lines above and below each hunk excerpt.
+pub const HUNK_CONTEXT_LINES: u32 = 3;
+
+// ---------------------------------------------------------------------------
+// DiffExcerpt — a hunk with surrounding context
+// ---------------------------------------------------------------------------
+
+/// Represents a single hunk excerpt in the project diff view.
+#[derive(Clone, Debug)]
+pub struct DiffExcerpt {
+    /// File path this excerpt belongs to.
+    pub repo_path: RepoPath,
+    /// Buffer ID for diff tracking.
+    pub buffer_id: BufferId,
+    /// Line range in the buffer (with context).
+    pub context_range: Range<u32>,
+    /// The actual hunk line range (without context).
+    pub hunk_range: Range<u32>,
+    /// Hunk index in the diff snapshot.
+    pub hunk_index: usize,
+}
+
+// ---------------------------------------------------------------------------
+// ProjectDiffEvent
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct ProjectDiffEvent;
+
+// ---------------------------------------------------------------------------
+// ProjectDiff — multi-buffer diff view
+// ---------------------------------------------------------------------------
+
+/// Shows all changed files across the repo in a single scrollable view.
+///
+/// Each changed file contributes excerpts (hunk + surrounding context) to
+/// the view. All hunks are pre-expanded.
+#[allow(dead_code)]
+pub struct ProjectDiff {
+    git_store: Entity<GitStore>,
+    excerpts: Vec<DiffExcerpt>,
+    current_hunk_index: Option<usize>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl EventEmitter<ProjectDiffEvent> for ProjectDiff {}
+
+impl ProjectDiff {
+    pub fn new(
+        git_store: Entity<GitStore>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let sub = cx.subscribe(&git_store, |this: &mut Self, _store, event, cx| {
+            match event {
+                GitStoreEvent::StatusesChanged(_) | GitStoreEvent::ActiveRepositoryChanged => {
+                    this.update_diff(cx);
+                }
+                _ => {}
+            }
+        });
+
+        let mut view = Self {
+            git_store,
+            excerpts: Vec::new(),
+            current_hunk_index: None,
+            _subscriptions: vec![sub],
+        };
+        view.update_diff(cx);
+        view
+    }
+
+    /// Rebuild the excerpts from all changed files.
+    pub fn update_diff(&mut self, cx: &mut Context<Self>) {
+        self.excerpts.clear();
+
+        // In a full implementation, this would:
+        // 1. Read GitStore.repository_statuses() for all changed files
+        // 2. For each file, get the uncommitted_diff BufferDiffSnapshot
+        // 3. Extract DiffHunks and build context ranges
+        // 4. Build excerpts grouped by file
+        //
+        // For now, excerpts are populated via register_buffer_diff().
+
+        cx.emit(ProjectDiffEvent);
+        cx.notify();
+    }
+
+    /// Register a buffer's diff for display in the project diff view.
+    pub fn register_buffer_diff(
+        &mut self,
+        repo_path: RepoPath,
+        buffer_id: BufferId,
+        snapshot: &BufferDiffSnapshot,
+        total_lines: u32,
+    ) {
+        // Remove existing excerpts for this buffer.
+        self.excerpts.retain(|e| e.buffer_id != buffer_id);
+
+        for (i, hunk) in snapshot.internal_hunks().iter().enumerate() {
+            let context_start = hunk.buffer_range.start.saturating_sub(HUNK_CONTEXT_LINES);
+            let context_end = (hunk.buffer_range.end + HUNK_CONTEXT_LINES).min(total_lines);
+
+            self.excerpts.push(DiffExcerpt {
+                repo_path: repo_path.clone(),
+                buffer_id,
+                context_range: context_start..context_end,
+                hunk_range: hunk.buffer_range.clone(),
+                hunk_index: i,
+            });
+        }
+    }
+
+    /// Get all excerpts.
+    pub fn excerpts(&self) -> &[DiffExcerpt] {
+        &self.excerpts
+    }
+
+    /// Total number of hunks across all files.
+    pub fn hunk_count(&self) -> usize {
+        self.excerpts.len()
+    }
+
+    /// Navigate to the next hunk.
+    pub fn go_to_next_hunk(&mut self) -> Option<&DiffExcerpt> {
+        if self.excerpts.is_empty() {
+            return None;
+        }
+        let next = match self.current_hunk_index {
+            None => 0,
+            Some(idx) => (idx + 1).min(self.excerpts.len() - 1),
+        };
+        self.current_hunk_index = Some(next);
+        self.excerpts.get(next)
+    }
+
+    /// Navigate to the previous hunk.
+    pub fn go_to_prev_hunk(&mut self) -> Option<&DiffExcerpt> {
+        if self.excerpts.is_empty() {
+            return None;
+        }
+        let prev = match self.current_hunk_index {
+            None => 0,
+            Some(idx) => idx.saturating_sub(1),
+        };
+        self.current_hunk_index = Some(prev);
+        self.excerpts.get(prev)
+    }
+
+    /// Get the current hunk index.
+    pub fn current_hunk_index(&self) -> Option<usize> {
+        self.current_hunk_index
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::diff::{compute_diff_hunks, BufferDiffSnapshot};
+
+    #[test]
+    fn test_register_buffer_diff() {
+        let base = "line1\noriginal\nline3\nline4\nline5\n";
+        let current = "line1\nmodified\nline3\nline4\nline5\n";
+        let hunks = compute_diff_hunks(current, Some(base));
+        let mut snapshot = BufferDiffSnapshot::new(Some(base.to_string()));
+        snapshot.set_hunks(hunks);
+
+        let mut excerpts = Vec::new();
+
+        // Test register_buffer_diff logic directly without ProjectDiff entity.
+        for (i, hunk) in snapshot.hunks().iter().enumerate() {
+            let context_start = hunk.buffer_range.start.saturating_sub(HUNK_CONTEXT_LINES);
+            let context_end = (hunk.buffer_range.end + HUNK_CONTEXT_LINES).min(5);
+
+            excerpts.push(DiffExcerpt {
+                repo_path: RepoPath::from("test.rs"),
+                buffer_id: BufferId::new(1),
+                context_range: context_start..context_end,
+                hunk_range: hunk.buffer_range.clone(),
+                hunk_index: i,
+            });
+        }
+
+        assert_eq!(excerpts.len(), 1);
+        let excerpt = &excerpts[0];
+        assert_eq!(excerpt.repo_path, RepoPath::from("test.rs"));
+        assert!(excerpt.context_range.start <= excerpt.hunk_range.start);
+        assert!(excerpt.context_range.end >= excerpt.hunk_range.end);
+    }
+
+    #[test]
+    fn test_hunk_navigation_logic() {
+        let excerpts = vec![
+            DiffExcerpt {
+                repo_path: RepoPath::from("a.rs"),
+                buffer_id: BufferId::new(1),
+                context_range: 0..5,
+                hunk_range: 1..3,
+                hunk_index: 0,
+            },
+            DiffExcerpt {
+                repo_path: RepoPath::from("b.rs"),
+                buffer_id: BufferId::new(2),
+                context_range: 0..10,
+                hunk_range: 5..8,
+                hunk_index: 0,
+            },
+        ];
+
+        // Test navigation logic inline.
+        let mut current_idx: Option<usize> = None;
+
+        // Go to next
+        let next = match current_idx {
+            None => 0,
+            Some(idx) => (idx + 1).min(excerpts.len() - 1),
+        };
+        current_idx = Some(next);
+        assert_eq!(excerpts[next].repo_path, RepoPath::from("a.rs"));
+
+        // Go to next again
+        let next = match current_idx {
+            None => 0,
+            Some(idx) => (idx + 1).min(excerpts.len() - 1),
+        };
+        current_idx = Some(next);
+        assert_eq!(excerpts[next].repo_path, RepoPath::from("b.rs"));
+
+        // Go to prev
+        let prev = match current_idx {
+            None => 0,
+            Some(idx) => idx.saturating_sub(1),
+        };
+        assert_eq!(excerpts[prev].repo_path, RepoPath::from("a.rs"));
+    }
+}
+```
+
+## Review Requirements
+
+Provide a structured review containing:
+- Model used
+- Summary verdict with clear decision (APPROVED / CHANGES REQUESTED / REJECTED)
+- Critical issues (blocking - must fix before merge)
+- Recommended improvements (should fix - important but not blocking)
+- Optional suggestions (nice to have - consider but not required)
+- Positive observations (what was done well)
