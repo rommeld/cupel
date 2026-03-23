@@ -12,7 +12,7 @@ package metrics;
 // A regular (unary) RPC would just say: returns (MetricSnapshot).
 
 service MetricsService {
-  rpc StreamMetrics (StreamRequest) returns (stream MetricSnapshot);
+  rpc StreamMetrics (StreamMetricsRequest) returns (stream StreamMetricsResponse);
 }
 
 // ─── MESSAGES ─────────────────────────────────────────────────────────────────
@@ -21,11 +21,11 @@ service MetricsService {
 // format — not the names. This is why renaming a field is safe, but
 // changing a field number is a breaking change.
 
-message StreamRequest {
+message StreamMetricsRequest {
   uint32 interval_ms = 1; // client tells server how fast to push, e.g. 1000
 }
 
-message MetricSnapshot {
+message StreamMetricsResponse {
   float  cpu_usage_percent    = 1;
   float  memory_usage_percent = 2;
   float  disk_usage_percent   = 3;

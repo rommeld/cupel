@@ -8,7 +8,7 @@ use tonic::{Request, Response, Status};
 // Pull in the generated types and the trait we need to implement.
 // The string "metrics" matches the `package metrics;` in your .proto file.
 use crate::proto::metrics_service_server::MetricsService;
-use crate::proto::{MetricSnapshot, StreamRequest};
+use crate::proto::{StreamMetricsRequest, StreamMetricsResponse};
 
 // ─── SERVICE STRUCT ───────────────────────────────────────────────────────────
 //
@@ -30,11 +30,11 @@ impl MetricsService for MetricsServiceImpl {
     // The return type is generated from `returns (stream MetricSnapshot)`.
     // ReceiverStream<T> is a tokio mpsc receiver that implements Stream —
     // exactly the bridge tonic needs to push messages back to the client.
-    type StreamMetricsStream = ReceiverStream<Result<MetricSnapshot, Status>>;
+    type StreamMetricsStream = ReceiverStream<Result<StreamMetricsResponse, Status>>;
 
     async fn stream_metrics(
         &self,
-        request: Request<StreamRequest>,
+        request: Request<StreamMetricsRequest>,
     ) -> Result<Response<Self::StreamMetricsStream>, Status> {
         // Clamp the interval: respect the client's wish but never go below
         // 100ms — a tight loop hammering sysinfo would spike your CPU.
@@ -83,7 +83,7 @@ impl MetricsService for MetricsServiceImpl {
 //   1. It keeps the async fn above focused on gRPC concerns.
 //   2. It's easy to unit test independently.
 
-fn collect_snapshot(sys: &mut System) -> MetricSnapshot {
+fn collect_snapshot(sys: &mut System) -> StreamMetricsResponse {
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 
@@ -102,7 +102,7 @@ fn collect_snapshot(sys: &mut System) -> MetricSnapshot {
         .unwrap_or_default()
         .as_millis() as i64;
 
-    MetricSnapshot {
+    StreamMetricsResponse {
         cpu_usage_percent: cpu,
         memory_usage_percent: memory,
         disk_usage_percent: disk,
