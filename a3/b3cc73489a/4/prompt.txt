@@ -1,0 +1,41 @@
+@review take a look at @src/main.rs
+
+---
+
+/model
+
+---
+
+@review take a look at @src/main.rs
+
+---
+
+@review take a look at @src/main.rs
+
+---
+
+@review take a look at @src/main.rs
+
+---
+
+@review take a look at @src/theme.rs
+
+---
+
+@review take a look at @src/theme.rs
+
+---
+
+which model is used in @code-quality-lead
+
+---
+
+@code-quality-lead check @src/diff/project_diff.rs
+
+---
+
+@code-quality-lead check @src/diff/project_diff.rs
+
+---
+
+@code-quality-lead check @src/diff/project_diff.rs
