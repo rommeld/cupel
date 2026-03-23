@@ -1,40 +1,38 @@
 # Project
 
-Building a macOS application which will help developers to interact with coding agents. It is intended to be used to plan sprints (write epics, issues, bugs, etc.), follow implementations by human developers and coding agents alike (kanban), do code reviews (by git diffs), and integrate in CI. The tool is able to interact with **git**, **Github CLI**, and coding agents via the **terminal**.
+Building a CLI tool, which is able to interact with **git**, **Github CLI**, and coding agents via the **terminal**.
 
 ## Technology Stack
 
-- **GUI Framework**: gpui (Zed's UI framework)
 - **Git Operations**: git2 (Rust bindings) + git CLI for network operations
 - **Error Handling**: thiserror + anyhow
-- **Async Runtime**: smol + tokio
+- **Async Runtime**: tokio
 - **Serialization**: serde + serde_json
-- **Diff Algorithm**: imara-diff
 
 ## Commands
 
-| Command                   | Purpose                                                              |
-| ------------------------- | -------------------------------------------------------------------- |
-| `cargo build`             | Compile the project in debug mode                                   |
-| `cargo build --release`   | Compile with optimizations for production                           |
-| `cargo run`               | Build and execute the binary                                        |
-| `cargo test`              | Run all unit tests, integration tests, and doc-tests                |
-| `cargo test <name>`       | Run tests matching a specific name or pattern                       |
-| `cargo test -- package::module::function_name` | Run a single test by full path |
-| `cargo clippy`            | Run the linter to catch common mistakes and suggest improvements    |
-| `cargo clippy -- -D warnings` | Treat warnings as errors (useful in CI)                      |
-| `cargo fmt`               | Format code according to Rust style guidelines                      |
-| `cargo fmt --check`       | Verify formatting without modifying files (useful in CI)            |
-| `cargo doc --open`        | Generate and open documentation for the project and dependencies    |
-| `cargo update`            | Update dependencies to newest compatible versions per Cargo.toml    |
-| `cargo check`             | Fast compile check without producing binaries—useful during dev     |
+| Command                                        | Purpose                                                          |
+| ---------------------------------------------- | ---------------------------------------------------------------- |
+| `cargo build`                                  | Compile the project in debug mode                                |
+| `cargo build --release`                        | Compile with optimizations for production                        |
+| `cargo run`                                    | Build and execute the binary                                     |
+| `cargo test`                                   | Run all unit tests, integration tests, and doc-tests             |
+| `cargo test <name>`                            | Run tests matching a specific name or pattern                    |
+| `cargo test -- package::module::function_name` | Run a single test by full path                                   |
+| `cargo clippy`                                 | Run the linter to catch common mistakes and suggest improvements |
+| `cargo clippy -- -D warnings`                  | Treat warnings as errors (useful in CI)                          |
+| `cargo fmt`                                    | Format code according to Rust style guidelines                   |
+| `cargo fmt --check`                            | Verify formatting without modifying files (useful in CI)         |
+| `cargo doc --open`                             | Generate and open documentation for the project and dependencies |
+| `cargo update`                                 | Update dependencies to newest compatible versions per Cargo.toml |
+| `cargo check`                                  | Fast compile check without producing binaries—useful during dev  |
 
 # Code Style
 
 ## Imports
 
 - **Prefer absolute paths** (`crate::module::Item`) over relative (`super::Item` or `self::Item`)
-- **Group imports** by crate: std → external → crate (use std::*, use crate::*, etc.)
+- **Group imports** by crate: std → external → crate (use std::_, use crate::_, etc.)
 - Order: standard library → external crates → local crate modules
 - Avoid re-exports (`pub use`) except for exposing dependencies downstream consumers need
 
@@ -103,12 +101,6 @@ Building a macOS application which will help developers to interact with coding 
 - Use `std::process::Command` for git CLI when needed (network operations, complex output)
 - Parse CLI output carefully—handle binary files, malformed lines gracefully (see `parse_numstat`)
 
-## GPUI Patterns
-
-- Implement `gpui::Global` for global application state
-- Use `Model<T>` for shared state across views
-- Follow existing UI patterns in `src/ui/` module
-
 ## Serialization (serde)
 
 - Use `#[serde(rename_all = "snake_case")]` or `#[serde(rename_all = "SCREAMING_SNAKE_CASE")]` for JSON field mapping
@@ -129,32 +121,3 @@ Building a macOS application which will help developers to interact with coding 
 - **Single responsibility**: Each function/module should do one thing well
 - **Interface over singletons**: Enable testing and flexibility through dependency injection
 - **Fail fast**: Include descriptive error messages for debugging
-
-## File Organization
-
-```
-src/
-├── main.rs              # Binary entry point
-├── lib.rs               # Library root, exports modules
-├── actions.rs           # Application actions
-├── theme.rs             # UI theming
-├── assets.rs            # Embedded assets
-├── git/                 # Git operations
-│   ├── mod.rs
-│   ├── error.rs         # thiserror GitError enum
-│   ├── types.rs         # Core types (RepoPath, FileStatus, etc.)
-│   ├── repository.rs    # Repository trait/abstractions
-│   ├── real_repo.rs     # git2-backed implementation
-│   ├── fake_repo.rs     # Test double
-│   └── ...
-├── diff/                # Diff rendering
-│   ├── mod.rs
-│   ├── split_diff.rs
-│   ├── project_diff.rs
-│   └── ...
-└── ui/                  # GPUI UI components
-    ├── mod.rs
-    ├── app.rs           # Main app view
-    ├── git_panel.rs     # Git panel UI
-    └── diff_panel.rs    # Diff viewer UI
-```

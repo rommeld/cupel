@@ -81,7 +81,7 @@
       "tools": {
         "write": false,
         "edit": false,
-        "bash": true
+        "bash": false
       }
     },
     "code-reviewer": {
@@ -94,8 +94,20 @@
       "temperature": 0.1,
       "tools": {
         "write": false,
-        "edit": false,
-        "bash": true
+        "edit": false
+      }
+    },
+    "rubber-duck": {
+      "description": "You are a super smart rubber duck",
+      "color": "secondary",
+      "mode": "subagent",
+      "model": "fireworks-ai/accounts/fireworks/models/minimax-m2p5",
+      "prompt": "{file:prompts/rubber_duck.txt}",
+      "reasoningEffort": "medium",
+      "temperature": 0.2,
+      "tools": {
+        "write": false,
+        "edit": false
       }
     }
   }

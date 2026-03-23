@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package metrics;
+
+// ─── SERVICE DEFINITION ───────────────────────────────────────────────────────
+//
+// This is the contract between server and client.
+// Both Rust and Swift will generate code from this single file.
+//
+// "stream MetricSnapshot" is the key word here — this tells gRPC that
+// the server will push multiple messages over a single open connection.
+// A regular (unary) RPC would just say: returns (MetricSnapshot).
+
+service MetricsService {
+  rpc StreamMetrics (StreamRequest) returns (stream MetricSnapshot);
+}
+
+// ─── MESSAGES ─────────────────────────────────────────────────────────────────
+//
+// Field numbers (= 1, = 2) are what actually get serialized in the binary
+// format — not the names. This is why renaming a field is safe, but
+// changing a field number is a breaking change.
+
+message StreamRequest {
+  uint32 interval_ms = 1; // client tells server how fast to push, e.g. 1000
+}
+
+message MetricSnapshot {
+  float  cpu_usage_percent    = 1;
+  float  memory_usage_percent = 2;
+  float  disk_usage_percent   = 3;
+  int64  timestamp_unix_ms    = 4;
+}
