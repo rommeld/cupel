@@ -15,7 +15,7 @@ message WineBottleDetail {
   string id = 1; // UUID - stable identifier
   optional string name = 2; // wine name
   optional string producer = 3; // producer name
-  optional string grape_variety = 4; // e.g., "Chardonnay"
+  repeated string grape_variety = 4; // e.g., "Chardonnay"
   optional int32 vintage = 5; // year, e.g., 2018
   optional string country = 6; // e.g., France
   optional string region = 7; // e.g., Burgundy
@@ -38,7 +38,7 @@ message WineBottleSummary {
     string id = 1; // UUID - stable identifier
     string name = 2; // wine name
     string producer = 3; // producer name
-    string grape_variety = 4; // e.g., "Chardonnay"
+    repeated string grape_variety = 4; // e.g., "Chardonnay"
     int32 vintage = 5; // year, e.g., 2018
     string country = 6; // e.g., France
     string region = 7; // e.g., Burgundy
@@ -48,7 +48,7 @@ message WineBottleSummary {
 message CreateWineBottleRequest {
   optional string name = 1;
   optional string producer = 2;
-  optional string grape_variety = 3;
+  repeated string grape_variety = 3;
   optional int32 vintage = 4;
   optional string country = 5;
   optional string region = 6;
@@ -72,7 +72,7 @@ message UpdateWineBottleRequest {
   string id = 1; // Which bottle to update
   optional string name = 2;
   optional string producer = 3;
-  optional string grape_variety = 4;
+  repeated string grape_variety = 4;
   optional int32 vintage = 5;
   optional string country = 6;
   optional string region = 7;

@@ -3,9 +3,6 @@ name = "cupel"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "cellar-client"
-path = "src/client.rs"
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
@@ -17,7 +14,7 @@ tokio-stream = { version = "0.1", features = ["net"] }
 tonic = "0.12"
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-prost-build = "*"
 
 [dependencies.uuid]
 version = "1.23.0"
