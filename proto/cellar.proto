@@ -1,0 +1,183 @@
+syntax = "proto3";
+package cellar;
+
+enum WineColor {
+  WINE_COLOR_UNSPECIFIED = 0;
+  WINE_COLOR_WHITE = 1;
+  WINE_COLOR_RED = 2;
+  WINE_COLOR_ROSE = 3;
+  WINE_COLOR_SPARKLING = 4;
+  WINE_COLOR_DESSERT = 5;
+  WINE_COLOR_FORTIFIED = 6;
+}
+
+message WineBottleDetail {
+  string id = 1; // UUID - stable identifier
+  optional string name = 2; // wine name
+  optional string producer = 3; // producer name
+  optional string grape_variety = 4; // e.g., "Chardonnay"
+  optional int32 vintage = 5; // year, e.g., 2018
+  optional string country = 6; // e.g., France
+  optional string region = 7; // e.g., Burgundy
+  optional WineColor color = 8; // enumariontion "WineColor"
+  optional int32 quantity = 9; // number of bottles
+  optional string purchase_date = 10; // ISO 8061 date string "2026-03-28"
+  optional double purchase_price = 11;
+  optional string currency_code = 12; // ISO currency code
+  optional int32 drink_from_year = 13;
+  optional int32 drink_to_year = 14;
+  optional string notes = 15;
+  optional int32 rating = 16;
+  optional string photo_url = 17;
+  string created_at = 18;
+  string update_at = 19;
+  string deleted_at = 20;
+}
+
+message WineBottleSummary {
+    string id = 1; // UUID - stable identifier
+    string name = 2; // wine name
+    string producer = 3; // producer name
+    string grape_variety = 4; // e.g., "Chardonnay"
+    int32 vintage = 5; // year, e.g., 2018
+    string country = 6; // e.g., France
+    string region = 7; // e.g., Burgundy
+    WineColor color = 8; // enumariontion "WineColor"
+}
+
+message CreateWineBottleRequest {
+  optional string name = 1;
+  optional string producer = 2;
+  optional string grape_variety = 3;
+  optional int32 vintage = 4;
+  optional string country = 5;
+  optional string region = 6;
+  optional WineColor color = 7;
+  optional int32 quantity = 8;
+  optional string purchase_date = 9;
+  optional double purchase_price = 10;
+  optional string currency_code = 11;
+  optional int32 drink_from_year = 12;
+  optional int32 drink_to_year = 13;
+  optional string notes = 14;
+  optional int32 rating = 15;
+  optional string photo_url = 16;
+}
+
+message CreateWineBottleResponse {
+  WineBottleDetail bottle = 1;
+}
+
+message UpdateWineBottleRequest {
+  string id = 1; // Which bottle to update
+  optional string name = 2;
+  optional string producer = 3;
+  optional string grape_variety = 4;
+  optional int32 vintage = 5;
+  optional string country = 6;
+  optional string region = 7;
+  optional WineColor color = 8;
+  optional int32 quantity = 9;
+  optional string purchase_date = 10;
+  optional double purchase_price = 11;
+  optional string currency_code = 12;
+  optional int32 drink_from_year = 13;
+  optional int32 drink_to_year = 14;
+  optional string notes = 15;
+  optional int32 rating = 16;
+  optional string photo_url = 17;
+}
+
+message UpdateWineBottleResponse {
+  WineBottleDetail bottle = 1; // Returns updated bottle
+}
+
+message GetWineBottleRequest {
+  string id = 1; // based on UUID
+}
+
+message GetWineBottleResponse {
+  WineBottleDetail bottle = 1;
+}
+
+enum DeleteReason {
+  DELETE_REASON_UNSPECIFIED = 0;
+  DELETE_REASON_DRUNK = 1;
+  DELETE_REASON_SOLD = 2;
+  DELETE_REASON_GIFTED = 3;
+  DELETE_REASON_CORKED = 4;
+  DELETE_REASON_OTHER = 5;
+}
+
+message DeleteWineBottleRequest {
+  string id = 1;
+  DeleteReason reason = 2;
+}
+
+message DeleteWineBottleResponse {
+  bool success = 1;
+}
+
+message WineBottleFilter {
+  optional WineColor color = 1;
+  optional string country = 2;
+  optional string region = 3;
+  optional string region_contains = 4; // Partial region name
+  optional string producer = 5;
+  optional string producer_contains = 6; // Partial producer name
+  optional int32 vintage_eq = 7; // Exact year
+  optional Int32Range vintage_range = 8; // Range search
+  optional Int32Range rating_range = 9;
+  optional string name_contains = 10; // Search by (partial) name
+  optional string grape_variety = 11;
+  optional bool drinkable_now = 12; // Currently within drink window
+  optional Int32Range drink_window_overlap = 13; // Available in year range
+  optional Int32Range quantity_range = 14;
+  SortField sort_by = 15;
+  bool ascending = 16;
+}
+
+message Int32Range {
+  int32 min = 1;
+  int32 max = 2;
+}
+
+enum SortField {
+  SORT_FIELD_UNSPECIFIED = 0;
+  SORT_FIELD_NAME = 1;
+  SORT_FIELD_VINTAGE = 2;
+  SORT_FIELD_RATING = 3;
+  SORT_FIELD_PURCHASE_DATE = 4;
+  SORT_FIELD_QUANTITY = 5;
+  SORT_FIELD_CREATED_AT = 6;
+  SORT_FIELD_PRODUCER = 7;
+  SORT_FIELD_COUNTRY = 8;
+  SORT_FIELD_REGION = 9;
+}
+
+message PaginationParams {
+  int32 limit = 1; // Default 50, max 100
+  int32 offset = 2; // For simple offset pagination
+  // Alternative: cursor-based (pass last seen ID)
+  optional string cursor = 3;
+}
+
+// List request requires filter + pagination
+message ListWineBottleRequest {
+  WineBottleFilter filter = 1;
+  PaginationParams pagination = 2;
+}
+
+message ListWineBottleResponse {
+  repeated WineBottleSummary bottles = 1;
+  int32 total_count = 2; // Total matching, for UI pagniation display
+  optional string next_cursor = 3; // For cursor-based pagination
+}
+
+service WineCellar {
+  rpc CreateWineBottle(CreateWineBottleRequest) returns (CreateWineBottleResponse);
+  rpc GetWineBottle(GetWineBottleRequest) returns (GetWineBottleResponse);
+  rpc UpdateWineBottle(UpdateWineBottleRequest) returns (UpdateWineBottleResponse);
+  rpc DeleteWineBottle(DeleteWineBottleRequest) returns (DeleteWineBottleResponse);
+  rpc ListWineBottle(ListWineBottleRequest) returns (ListWineBottleResponse);
+}
