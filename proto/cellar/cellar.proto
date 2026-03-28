@@ -29,20 +29,20 @@ message WineBottleDetail {
   optional string notes = 15;
   optional int32 rating = 16;
   optional string photo_url = 17;
-  string created_at = 18;
-  string update_at = 19;
-  string deleted_at = 20;
+  optional string created_at = 18;
+  optional string updated_at = 19;
+  optional string deleted_at = 20;
 }
 
 message WineBottleSummary {
-    string id = 1; // UUID - stable identifier
-    string name = 2; // wine name
-    string producer = 3; // producer name
-    repeated string grape_variety = 4; // e.g., "Chardonnay"
-    int32 vintage = 5; // year, e.g., 2018
-    string country = 6; // e.g., France
-    string region = 7; // e.g., Burgundy
-    WineColor color = 8; // enumariontion "WineColor"
+  string id = 1; // UUID - stable identifier
+  string name = 2; // wine name
+  string producer = 3; // producer name
+  repeated string grape_variety = 4; // e.g., "Chardonnay"
+  int32 vintage = 5; // year, e.g., 2018
+  string country = 6; // e.g., France
+  string region = 7; // e.g., Burgundy
+  WineColor color = 8; // enumariontion "WineColor"
 }
 
 message CreateWineBottleRequest {
@@ -174,7 +174,7 @@ message ListWineBottleResponse {
   optional string next_cursor = 3; // For cursor-based pagination
 }
 
-service WineCellar {
+service WineCellarService {
   rpc CreateWineBottle(CreateWineBottleRequest) returns (CreateWineBottleResponse);
   rpc GetWineBottle(GetWineBottleRequest) returns (GetWineBottleResponse);
   rpc UpdateWineBottle(UpdateWineBottleRequest) returns (UpdateWineBottleResponse);
