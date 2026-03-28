@@ -3,19 +3,22 @@ name = "cupel"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "cupel"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cellar-server"
+path = "src/main.rs"
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-prost = "0.13"
+prost = "0.14"
 rusqlite = { version = "0.39", features = ["bundled"] }
 thiserror = "2.0"
-tokio = { version = "1", features = ["process", "rt-multi-thread"] }
-tokio-stream = { version = "0.1", features = ["net"] }
-tonic = "0.12"
+tokio = { version = "1", features = ["full"] }
+tonic = "0.14"
+tonic-prost = "0.14"
 
 [build-dependencies]
-tonic-prost-build = "*"
-
-[dependencies.uuid]
-version = "1.23.0"
-features = ["v4",]
+tonic-prost-build = "0.14"
