@@ -19,7 +19,7 @@ message WineBottleDetail {
   optional int32 vintage = 5; // year, e.g., 2018
   optional string country = 6; // e.g., France
   optional string region = 7; // e.g., Burgundy
-  optional WineColor color = 8; // enumariontion "WineColor"
+  optional WineColor color = 8; // enumeration "WineColor"
   optional int32 quantity = 9; // number of bottles
   optional string purchase_date = 10; // ISO 8061 date string "2026-03-28"
   optional double purchase_price = 11;
@@ -42,7 +42,7 @@ message WineBottleSummary {
   int32 vintage = 5; // year, e.g., 2018
   string country = 6; // e.g., France
   string region = 7; // e.g., Burgundy
-  WineColor color = 8; // enumariontion "WineColor"
+  WineColor color = 8; // enumeration "WineColor"
 }
 
 message CreateWineBottleRequest {
@@ -170,12 +170,11 @@ message ListWineBottleRequest {
 
 message ListWineBottleResponse {
   repeated WineBottleSummary bottles = 1;
-  int32 total_count = 2; // Total matching, for UI pagniation display
+  int32 total_count = 2; // Total matching, for UI pagination display
   optional string next_cursor = 3; // For cursor-based pagination
 }
 
 message WineCellar {
-  // Wine cellar contains an overview of all bottles (summary)
   string id = 1;
   optional string name = 2;
   repeated WineBottleSummary bottles = 3;
@@ -183,7 +182,8 @@ message WineCellar {
 
 message CreateWineCellarRequest {
   string name = 1;
-  repeated WineBottleSummary bottles = 2;
+  repeated string existing_bottle_ids = 2;
+  repeated CreateWineBottleRequest new_bottles = 3;
 }
 
 message CreateWineCellarResponse {
@@ -193,7 +193,7 @@ message CreateWineCellarResponse {
 message UpdateWineCellarRequest {
   string id = 1;
   optional string name = 2;
-  repeated WineBottleSummary bottles = 3;
+  repeated string bottle_ids = 3;
 }
 
 message UpdateWineCellarResponse {

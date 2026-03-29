@@ -22,7 +22,7 @@ pub struct WineBottleDetail {
     /// e.g., Burgundy
     #[prost(string, optional, tag = "7")]
     pub region: ::core::option::Option<::prost::alloc::string::String>,
-    /// enumariontion "WineColor"
+    /// enumeration "WineColor"
     #[prost(enumeration = "WineColor", optional, tag = "8")]
     pub color: ::core::option::Option<i32>,
     /// number of bottles
@@ -76,7 +76,7 @@ pub struct WineBottleSummary {
     /// e.g., Burgundy
     #[prost(string, tag = "7")]
     pub region: ::prost::alloc::string::String,
-    /// enumariontion "WineColor"
+    /// enumeration "WineColor"
     #[prost(enumeration = "WineColor", tag = "8")]
     pub color: i32,
 }
@@ -260,7 +260,7 @@ pub struct ListWineBottleRequest {
 pub struct ListWineBottleResponse {
     #[prost(message, repeated, tag = "1")]
     pub bottles: ::prost::alloc::vec::Vec<WineBottleSummary>,
-    /// Total matching, for UI pagniation display
+    /// Total matching, for UI pagination display
     #[prost(int32, tag = "2")]
     pub total_count: i32,
     /// For cursor-based pagination
@@ -269,7 +269,6 @@ pub struct ListWineBottleResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WineCellar {
-    /// Wine cellar contains an overview of all bottles (summary)
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "2")]
@@ -281,22 +280,24 @@ pub struct WineCellar {
 pub struct CreateWineCellarRequest {
     #[prost(string, tag = "1")]
     pub name: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "2")]
-    pub bottles: ::prost::alloc::vec::Vec<WineBottleSummary>,
+    #[prost(string, repeated, tag = "2")]
+    pub existing_bottle_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "3")]
+    pub new_bottles: ::prost::alloc::vec::Vec<CreateWineBottleRequest>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateWineCellarResponse {
     #[prost(message, optional, tag = "1")]
     pub wine_cellar: ::core::option::Option<WineCellar>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateWineCellarRequest {
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
     #[prost(string, optional, tag = "2")]
     pub name: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(message, repeated, tag = "3")]
-    pub bottles: ::prost::alloc::vec::Vec<WineBottleSummary>,
+    #[prost(string, repeated, tag = "3")]
+    pub bottle_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateWineCellarResponse {
