@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 prost = "0.14"
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.39", features = [ "bundled" ] }
 thiserror = "2.0"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.14"
