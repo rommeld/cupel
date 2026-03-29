@@ -174,10 +174,47 @@ message ListWineBottleResponse {
   optional string next_cursor = 3; // For cursor-based pagination
 }
 
+message WineCellar {
+  // Wine cellar contains an overview of all bottles (summary)
+  string id = 1;
+  optional string name = 2;
+  repeated WineBottleSummary bottles = 3;
+}
+
+message CreateWineCellarRequest {
+  string name = 1;
+  repeated WineBottleSummary bottles = 2;
+}
+
+message CreateWineCellarResponse {
+  WineCellar wine_cellar = 1;
+}
+
+message UpdateWineCellarRequest {
+  string id = 1;
+  optional string name = 2;
+  repeated WineBottleSummary bottles = 3;
+}
+
+message UpdateWineCellarResponse {
+  WineCellar wine_cellar = 1;
+}
+
+message DeleteWineCellarRequest {
+  string id = 1;
+}
+
+message DeleteWineCellarResponse {
+  bool success = 1;
+}
+
 service WineCellarService {
   rpc CreateWineBottle(CreateWineBottleRequest) returns (CreateWineBottleResponse);
   rpc GetWineBottle(GetWineBottleRequest) returns (GetWineBottleResponse);
   rpc UpdateWineBottle(UpdateWineBottleRequest) returns (UpdateWineBottleResponse);
   rpc DeleteWineBottle(DeleteWineBottleRequest) returns (DeleteWineBottleResponse);
   rpc ListWineBottle(ListWineBottleRequest) returns (ListWineBottleResponse);
+  rpc CreateWineCellar(CreateWineCellarRequest) returns (CreateWineCellarResponse);
+  rpc UpdateWineCellar(UpdateWineCellarRequest) returns (UpdateWineCellarResponse);
+  rpc DeleteWineCellar(DeleteWineCellarRequest) returns (DeleteWineCellarResponse);
 }

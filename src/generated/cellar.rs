@@ -267,6 +267,52 @@ pub struct ListWineBottleResponse {
     #[prost(string, optional, tag = "3")]
     pub next_cursor: ::core::option::Option<::prost::alloc::string::String>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WineCellar {
+    /// Wine cellar contains an overview of all bottles (summary)
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "3")]
+    pub bottles: ::prost::alloc::vec::Vec<WineBottleSummary>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreateWineCellarRequest {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub bottles: ::prost::alloc::vec::Vec<WineBottleSummary>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreateWineCellarResponse {
+    #[prost(message, optional, tag = "1")]
+    pub wine_cellar: ::core::option::Option<WineCellar>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpdateWineCellarRequest {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "3")]
+    pub bottles: ::prost::alloc::vec::Vec<WineBottleSummary>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpdateWineCellarResponse {
+    #[prost(message, optional, tag = "1")]
+    pub wine_cellar: ::core::option::Option<WineCellar>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DeleteWineCellarRequest {
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DeleteWineCellarResponse {
+    #[prost(bool, tag = "1")]
+    pub success: bool,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum WineColor {
@@ -607,6 +653,78 @@ pub mod wine_cellar_service_client {
                 .insert(GrpcMethod::new("cellar.WineCellarService", "ListWineBottle"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn create_wine_cellar(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateWineCellarRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CreateWineCellarResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineCellarService/CreateWineCellar",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineCellarService", "CreateWineCellar"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn update_wine_cellar(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UpdateWineCellarRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UpdateWineCellarResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineCellarService/UpdateWineCellar",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineCellarService", "UpdateWineCellar"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn delete_wine_cellar(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteWineCellarRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteWineCellarResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineCellarService/DeleteWineCellar",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineCellarService", "DeleteWineCellar"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -655,6 +773,27 @@ pub mod wine_cellar_service_server {
             request: tonic::Request<super::ListWineBottleRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ListWineBottleResponse>,
+            tonic::Status,
+        >;
+        async fn create_wine_cellar(
+            &self,
+            request: tonic::Request<super::CreateWineCellarRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CreateWineCellarResponse>,
+            tonic::Status,
+        >;
+        async fn update_wine_cellar(
+            &self,
+            request: tonic::Request<super::UpdateWineCellarRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UpdateWineCellarResponse>,
+            tonic::Status,
+        >;
+        async fn delete_wine_cellar(
+            &self,
+            request: tonic::Request<super::DeleteWineCellarRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteWineCellarResponse>,
             tonic::Status,
         >;
     }
@@ -958,6 +1097,153 @@ pub mod wine_cellar_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListWineBottleSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/cellar.WineCellarService/CreateWineCellar" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateWineCellarSvc<T: WineCellarService>(pub Arc<T>);
+                    impl<
+                        T: WineCellarService,
+                    > tonic::server::UnaryService<super::CreateWineCellarRequest>
+                    for CreateWineCellarSvc<T> {
+                        type Response = super::CreateWineCellarResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CreateWineCellarRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as WineCellarService>::create_wine_cellar(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateWineCellarSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/cellar.WineCellarService/UpdateWineCellar" => {
+                    #[allow(non_camel_case_types)]
+                    struct UpdateWineCellarSvc<T: WineCellarService>(pub Arc<T>);
+                    impl<
+                        T: WineCellarService,
+                    > tonic::server::UnaryService<super::UpdateWineCellarRequest>
+                    for UpdateWineCellarSvc<T> {
+                        type Response = super::UpdateWineCellarResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UpdateWineCellarRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as WineCellarService>::update_wine_cellar(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UpdateWineCellarSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/cellar.WineCellarService/DeleteWineCellar" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteWineCellarSvc<T: WineCellarService>(pub Arc<T>);
+                    impl<
+                        T: WineCellarService,
+                    > tonic::server::UnaryService<super::DeleteWineCellarRequest>
+                    for DeleteWineCellarSvc<T> {
+                        type Response = super::DeleteWineCellarResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DeleteWineCellarRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as WineCellarService>::delete_wine_cellar(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteWineCellarSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
