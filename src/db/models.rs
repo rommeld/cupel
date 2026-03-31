@@ -170,3 +170,116 @@ impl WineBottle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wine_color_from_i32() {
+        assert_eq!(WineColor::from(0), WineColor::Unspecified);
+        assert_eq!(WineColor::from(1), WineColor::White);
+        assert_eq!(WineColor::from(2), WineColor::Red);
+        assert_eq!(WineColor::from(3), WineColor::Rose);
+        assert_eq!(WineColor::from(4), WineColor::Sparkling);
+        assert_eq!(WineColor::from(5), WineColor::Dessert);
+        assert_eq!(WineColor::from(6), WineColor::Fortified);
+    }
+
+    #[test]
+    fn test_wine_color_from_i32_invalid() {
+        assert_eq!(WineColor::from(99), WineColor::Unspecified);
+        assert_eq!(WineColor::from(-1), WineColor::Unspecified);
+    }
+
+    #[test]
+    fn test_wine_color_to_i32() {
+        assert_eq!(i32::from(WineColor::Unspecified), 0);
+        assert_eq!(i32::from(WineColor::White), 1);
+        assert_eq!(i32::from(WineColor::Red), 2);
+        assert_eq!(i32::from(WineColor::Rose), 3);
+        assert_eq!(i32::from(WineColor::Sparkling), 4);
+        assert_eq!(i32::from(WineColor::Dessert), 5);
+        assert_eq!(i32::from(WineColor::Fortified), 6);
+    }
+
+    #[test]
+    fn test_delete_reason_from_i32() {
+        assert_eq!(DeleteReason::from(0), DeleteReason::Unspecified);
+        assert_eq!(DeleteReason::from(1), DeleteReason::Drunk);
+        assert_eq!(DeleteReason::from(2), DeleteReason::Sold);
+        assert_eq!(DeleteReason::from(3), DeleteReason::Gifted);
+        assert_eq!(DeleteReason::from(4), DeleteReason::Corked);
+        assert_eq!(DeleteReason::from(5), DeleteReason::Other);
+    }
+
+    #[test]
+    fn test_delete_reason_from_i32_invalid() {
+        assert_eq!(DeleteReason::from(99), DeleteReason::Unspecified);
+        assert_eq!(DeleteReason::from(-1), DeleteReason::Unspecified);
+    }
+
+    #[test]
+    fn test_delete_reason_to_i32() {
+        assert_eq!(i32::from(DeleteReason::Unspecified), 0);
+        assert_eq!(i32::from(DeleteReason::Drunk), 1);
+        assert_eq!(i32::from(DeleteReason::Sold), 2);
+        assert_eq!(i32::from(DeleteReason::Gifted), 3);
+        assert_eq!(i32::from(DeleteReason::Corked), 4);
+        assert_eq!(i32::from(DeleteReason::Other), 5);
+    }
+
+    #[test]
+    fn test_grape_variety_to_string_single() {
+        let varieties = vec!["Chardonnay".to_string()];
+        assert_eq!(WineBottle::grape_variety_to_string(&varieties), "Chardonnay");
+    }
+
+    #[test]
+    fn test_grape_variety_to_string_multiple() {
+        let varieties = vec!["Chardonnay".to_string(), "Pinot Noir".to_string()];
+        assert_eq!(WineBottle::grape_variety_to_string(&varieties), "Chardonnay,Pinot Noir");
+    }
+
+    #[test]
+    fn test_grape_variety_to_string_empty() {
+        let varieties: Vec<String> = vec![];
+        assert_eq!(WineBottle::grape_variety_to_string(&varieties), "");
+    }
+
+    #[test]
+    fn test_grape_variety_from_string_single() {
+        let result = WineBottle::grape_variety_from_string("Chardonnay");
+        assert_eq!(result, vec!["Chardonnay"]);
+    }
+
+    #[test]
+    fn test_grape_variety_from_string_multiple() {
+        let result = WineBottle::grape_variety_from_string("Chardonnay,Pinot Noir");
+        assert_eq!(result, vec!["Chardonnay", "Pinot Noir"]);
+    }
+
+    #[test]
+    fn test_grape_variety_from_string_with_spaces() {
+        let result = WineBottle::grape_variety_from_string("Chardonnay, Pinot Noir , Riesling");
+        assert_eq!(result, vec!["Chardonnay", "Pinot Noir", "Riesling"]);
+    }
+
+    #[test]
+    fn test_grape_variety_from_string_empty() {
+        assert_eq!(WineBottle::grape_variety_from_string(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_grape_variety_from_string_only_separator() {
+        assert_eq!(WineBottle::grape_variety_from_string(","), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_grape_variety_roundtrip() {
+        let original = vec!["Cabernet Sauvignon".to_string(), "Merlot".to_string()];
+        let serialized = WineBottle::grape_variety_to_string(&original);
+        let deserialized = WineBottle::grape_variety_from_string(&serialized);
+        assert_eq!(original, deserialized);
+    }
+}

@@ -30,10 +30,6 @@ impl AppState {
     }
 }
 
-fn parse_iso(s: &str) -> Result<chrono::DateTime<chrono::Utc>, ServiceError> {
-    s.parse::<chrono::DateTime<chrono::Utc>>()
-        .map_err(|_| ServiceError::InvalidArgument(format!("Invalid ISO date format: {}", s)))
-}
 
 fn parse_naive_date(s: &str) -> Result<chrono::NaiveDate, ServiceError> {
     chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
@@ -49,9 +45,6 @@ fn parse_naive_date_opt(s: &Option<String>) -> Option<chrono::NaiveDate> {
     }
 }
 
-fn parse_uuid(s: &str) -> Result<Uuid, ServiceError> {
-    Uuid::parse_str(s).map_err(|e| ServiceError::InvalidArgument(format!("Invalid UUID: {}", e)))
-}
 
 fn parse_uuid_row(row: &rusqlite::Row, idx: usize) -> Result<Uuid, rusqlite::Error> {
     let s: String = row.get(idx)?;
