@@ -1,9 +1,10 @@
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::db::DbPool;
+use crate::errors::ServiceError;
 use crate::generated::cellar::{
     wine_bottle_service_server::WineBottleService, wine_cellar_service_server::WineCellarService,
     CreateWineBottleRequest, CreateWineBottleResponse, CreateWineCellarRequest,
@@ -29,14 +30,47 @@ impl AppState {
     }
 }
 
-fn parse_iso(s: &str) -> Result<chrono::DateTime<chrono::Utc>, Status> {
+fn parse_iso(s: &str) -> Result<chrono::DateTime<chrono::Utc>, ServiceError> {
     s.parse::<chrono::DateTime<chrono::Utc>>()
-        .map_err(|_| Status::invalid_argument("Invalid ISO date format"))
+        .map_err(|_| ServiceError::InvalidArgument(format!("Invalid ISO date format: {}", s)))
 }
 
-fn parse_naive_date(s: &str) -> Result<chrono::NaiveDate, Status> {
+fn parse_naive_date(s: &str) -> Result<chrono::NaiveDate, ServiceError> {
     chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .map_err(|_| Status::invalid_argument("Invalid date format, expected YYYY-MM-DD"))
+        .map_err(|_| ServiceError::InvalidArgument(format!("Invalid date format: {}", s)))
+}
+
+fn parse_naive_date_opt(s: &Option<String>) -> Option<chrono::NaiveDate> {
+    match s {
+        Some(date_str) if !date_str.is_empty() => {
+            parse_naive_date(date_str).ok()
+        }
+        _ => None,
+    }
+}
+
+fn parse_uuid(s: &str) -> Result<Uuid, ServiceError> {
+    Uuid::parse_str(s).map_err(|e| ServiceError::InvalidArgument(format!("Invalid UUID: {}", e)))
+}
+
+fn parse_uuid_row(row: &rusqlite::Row, idx: usize) -> Result<Uuid, rusqlite::Error> {
+    let s: String = row.get(idx)?;
+    Uuid::parse_str(&s).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
+        s.len(),
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid UUID: {}", e))),
+    ))
+}
+
+fn parse_iso_row(row: &rusqlite::Row, idx: usize) -> Result<chrono::DateTime<chrono::Utc>, rusqlite::Error> {
+    let s: String = row.get(idx)?;
+    s.parse::<chrono::DateTime<chrono::Utc>>().map_err(|_| {
+        rusqlite::Error::FromSqlConversionFailure(
+            s.len(),
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid ISO date format")),
+        )
+    })
 }
 
 fn bottle_to_proto(bottle: &ModelWineBottle) -> WineBottleDetail {
@@ -64,11 +98,9 @@ fn bottle_to_proto(bottle: &ModelWineBottle) -> WineBottleDetail {
     }
 }
 
-fn proto_to_bottle(request: &CreateWineBottleRequest) -> Result<ModelWineBottle, Status> {
+fn proto_to_bottle(request: &CreateWineBottleRequest) -> Result<ModelWineBottle, ServiceError> {
     let id = Uuid::new_v4();
     let now = chrono::Utc::now();
-    let created_at = now;
-    let updated_at = now;
 
     let grape_variety = if request.grape_variety.is_empty() {
         Vec::new()
@@ -81,14 +113,11 @@ fn proto_to_bottle(request: &CreateWineBottleRequest) -> Result<ModelWineBottle,
         .map(ModelWineColor::from)
         .unwrap_or(ModelWineColor::Unspecified);
 
-    let purchase_date = if let Some(ref date_str) = request.purchase_date {
-        if !date_str.is_empty() {
+    let purchase_date = match &request.purchase_date {
+        Some(date_str) if !date_str.is_empty() => {
             Some(parse_naive_date(date_str)?)
-        } else {
-            None
         }
-    } else {
-        None
+        _ => None,
     };
 
     Ok(ModelWineBottle {
@@ -109,8 +138,8 @@ fn proto_to_bottle(request: &CreateWineBottleRequest) -> Result<ModelWineBottle,
         notes: request.notes.clone(),
         rating: request.rating,
         photo_url: request.photo_url.clone(),
-        created_at,
-        updated_at,
+        created_at: now,
+        updated_at: now,
         deleted_at: None,
     })
 }
@@ -122,24 +151,27 @@ impl WineCellarService for AppState {
         request: Request<CreateWineCellarRequest>,
     ) -> Result<Response<CreateWineCellarResponse>, Status> {
         let req = request.into_inner();
-        let db = self.db.0.lock().await;
+        let mut db = self.db.0.lock().await;
         let now = chrono::Utc::now();
         let cellar_id = Uuid::new_v4();
 
-        db.execute(
+        let tx = db.transaction()
+            .map_err(|e| ServiceError::Internal(format!("Failed to begin transaction: {}", e)))?;
+
+        tx.execute(
             "INSERT INTO wine_cellars (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![cellar_id.to_string(), req.name, now.to_rfc3339(), now.to_rfc3339()],
+            params![cellar_id.to_string(), req.name, now.to_rfc3339(), now.to_rfc3339()],
         )
-        .map_err(|e| Status::internal(format!("Failed to create cellar: {}", e)))?;
+        .map_err(ServiceError::from)?;
 
         for bottle_req in &req.new_bottles {
             let mut bottle = proto_to_bottle(bottle_req)?;
             bottle.id = Uuid::new_v4();
             
-            db.execute(
+            tx.execute(
                 "INSERT INTO wine_bottles (id, name, producer, grape_variety, vintage, country, region, color, quantity, purchase_date, purchase_price, currency_code, drink_from_year, drink_to_year, notes, rating, photo_url, created_at, updated_at, deleted_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
-                rusqlite::params![
+                params![
                     bottle.id.to_string(),
                     bottle.name,
                     bottle.producer,
@@ -162,22 +194,25 @@ impl WineCellarService for AppState {
                     bottle.deleted_at.map(|d| d.to_rfc3339()),
                 ],
             )
-            .map_err(|e| Status::internal(format!("Failed to create bottle: {}", e)))?;
+            .map_err(ServiceError::from)?;
 
-            db.execute(
+            tx.execute(
                 "INSERT INTO wine_cellar_bottles (cellar_id, bottle_id, added_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params![cellar_id.to_string(), bottle.id.to_string(), now.to_rfc3339()],
+                params![cellar_id.to_string(), bottle.id.to_string(), now.to_rfc3339()],
             )
-            .map_err(|e| Status::internal(format!("Failed to link bottle to cellar: {}", e)))?;
+            .map_err(ServiceError::from)?;
         }
 
         for bottle_id in &req.existing_bottle_ids {
-            db.execute(
+            tx.execute(
                 "INSERT INTO wine_cellar_bottles (cellar_id, bottle_id, added_at) VALUES (?1, ?2, ?3)",
-                rusqlite::params![cellar_id.to_string(), bottle_id, now.to_rfc3339()],
+                params![cellar_id.to_string(), bottle_id, now.to_rfc3339()],
             )
-            .map_err(|e| Status::internal(format!("Failed to link existing bottle: {}", e)))?;
+            .map_err(ServiceError::from)?;
         }
+
+        tx.commit()
+            .map_err(|e| ServiceError::Internal(format!("Failed to commit transaction: {}", e)))?;
 
         let bottles = fetch_cellar_bottles(&db, &cellar_id)?;
 
@@ -197,47 +232,75 @@ impl WineCellarService for AppState {
         request: Request<UpdateWineCellarRequest>,
     ) -> Result<Response<UpdateWineCellarResponse>, Status> {
         let req = request.into_inner();
-        let db = self.db.0.lock().await;
+        let mut db = self.db.0.lock().await;
         let now = chrono::Utc::now();
 
         let cellar_uuid = Uuid::parse_str(&req.id)
             .map_err(|_| Status::invalid_argument("Invalid cellar ID"))?;
 
+        let tx = db.transaction()
+            .map_err(|e| ServiceError::Internal(format!("Failed to begin transaction: {}", e)))?;
+
         if let Some(ref name) = req.name {
-            db.execute(
+            let rows = tx.execute(
                 "UPDATE wine_cellars SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![name, now.to_rfc3339(), cellar_uuid.to_string()],
+                params![name, now.to_rfc3339(), cellar_uuid.to_string()],
             )
-            .map_err(|e| Status::internal(format!("Failed to update cellar: {}", e)))?;
-        }
+            .map_err(ServiceError::from)?;
 
-        if !req.bottle_ids.is_empty() {
-            db.execute(
-                "DELETE FROM wine_cellar_bottles WHERE cellar_id = ?1",
-                rusqlite::params![cellar_uuid.to_string()],
-            )
-            .map_err(|e| Status::internal(format!("Failed to clear bottles: {}", e)))?;
-
-            for bottle_id in &req.bottle_ids {
-                db.execute(
-                    "INSERT INTO wine_cellar_bottles (cellar_id, bottle_id, added_at) VALUES (?1, ?2, ?3)",
-                    rusqlite::params![cellar_uuid.to_string(), bottle_id, now.to_rfc3339()],
-                )
-                .map_err(|e| Status::internal(format!("Failed to add bottle: {}", e)))?;
+            if rows == 0 {
+                return Err(Status::not_found("Cellar not found"));
             }
         }
 
+        if !req.bottle_ids.is_empty() {
+            let existing_bottles: Vec<String> = {
+                let mut stmt = tx
+                    .prepare("SELECT bottle_id FROM wine_cellar_bottles WHERE cellar_id = ?1")
+                    .map_err(|e| ServiceError::Internal(format!("Failed to prepare: {}", e)))?;
+                stmt.query_map(params![cellar_uuid.to_string()], |row| row.get(0))
+                    .map_err(ServiceError::from)?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            };
+
+            let new_ids: std::collections::HashSet<_> = req.bottle_ids.iter().collect();
+            let existing_ids: std::collections::HashSet<_> = existing_bottles.iter().collect();
+
+            let to_remove: Vec<_> = existing_ids.difference(&new_ids).cloned().collect();
+            let to_add: Vec<_> = new_ids.difference(&existing_ids).cloned().collect();
+
+            for bottle_id in &to_remove {
+                tx.execute(
+                    "DELETE FROM wine_cellar_bottles WHERE cellar_id = ?1 AND bottle_id = ?2",
+                    params![cellar_uuid.to_string(), bottle_id],
+                )
+                .map_err(ServiceError::from)?;
+            }
+
+            for bottle_id in &to_add {
+                tx.execute(
+                    "INSERT INTO wine_cellar_bottles (cellar_id, bottle_id, added_at) VALUES (?1, ?2, ?3)",
+                    params![cellar_uuid.to_string(), bottle_id, now.to_rfc3339()],
+                )
+                .map_err(ServiceError::from)?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| ServiceError::Internal(format!("Failed to commit transaction: {}", e)))?;
+
         let mut stmt = db
             .prepare("SELECT id, name, created_at, updated_at FROM wine_cellars WHERE id = ?1")
-            .map_err(|e| Status::internal(format!("Failed to prepare: {}", e)))?;
+            .map_err(|e| ServiceError::Internal(format!("Failed to prepare: {}", e)))?;
 
         let cellar = stmt
-            .query_row(rusqlite::params![cellar_uuid.to_string()], |row| {
+            .query_row(params![cellar_uuid.to_string()], |row| {
                 Ok(ModelWineCellar {
-                    id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap(),
+                    id: parse_uuid_row(row, 0)?,
                     name: row.get(1)?,
-                    created_at: parse_iso(&row.get::<_, String>(2)?).unwrap(),
-                    updated_at: parse_iso(&row.get::<_, String>(3)?).unwrap(),
+                    created_at: parse_iso_row(row, 2)?,
+                    updated_at: parse_iso_row(row, 3)?,
                 })
             })
             .map_err(|_| Status::not_found("Cellar not found"))?;
@@ -260,22 +323,32 @@ impl WineCellarService for AppState {
         request: Request<DeleteWineCellarRequest>,
     ) -> Result<Response<DeleteWineCellarResponse>, Status> {
         let req = request.into_inner();
-        let db = self.db.0.lock().await;
+        let mut db = self.db.0.lock().await;
 
         let cellar_uuid = Uuid::parse_str(&req.id)
             .map_err(|_| Status::invalid_argument("Invalid cellar ID"))?;
 
-        db.execute(
-            "DELETE FROM wine_cellar_bottles WHERE cellar_id = ?1",
-            rusqlite::params![cellar_uuid.to_string()],
-        )
-        .map_err(|e| Status::internal(format!("Failed to delete cellar bottles: {}", e)))?;
+        let tx = db.transaction()
+            .map_err(|e| ServiceError::Internal(format!("Failed to begin transaction: {}", e)))?;
 
-        db.execute(
-            "DELETE FROM wine_cellars WHERE id = ?1",
-            rusqlite::params![cellar_uuid.to_string()],
+        tx.execute(
+            "DELETE FROM wine_cellar_bottles WHERE cellar_id = ?1",
+            params![cellar_uuid.to_string()],
         )
-        .map_err(|e| Status::internal(format!("Failed to delete cellar: {}", e)))?;
+        .map_err(ServiceError::from)?;
+
+        let rows = tx.execute(
+            "DELETE FROM wine_cellars WHERE id = ?1",
+            params![cellar_uuid.to_string()],
+        )
+        .map_err(ServiceError::from)?;
+
+        if rows == 0 {
+            return Err(Status::not_found("Cellar not found"));
+        }
+
+        tx.commit()
+            .map_err(|e| ServiceError::Internal(format!("Failed to commit transaction: {}", e)))?;
 
         Ok(Response::new(DeleteWineCellarResponse { success: true }))
     }
@@ -292,7 +365,7 @@ fn fetch_cellar_bottles(db: &Connection, cellar_id: &Uuid) -> Result<Vec<WineBot
         .map_err(|e| Status::internal(format!("Failed to prepare: {}", e)))?;
 
     let bottles = stmt
-        .query_map(rusqlite::params![cellar_id.to_string()], |row: &rusqlite::Row| {
+        .query_map(params![cellar_id.to_string()], |row: &rusqlite::Row| {
             let grape_str: String = row.get(3)?;
             Ok(WineBottleSummary {
                 id: row.get(0)?,
@@ -331,13 +404,31 @@ fn fetch_bottle_detail(db: &Connection, bottle_id: &Uuid) -> Result<Option<Model
         .map_err(|e| Status::internal(format!("Failed to prepare: {}", e)))?;
 
     let bottle = stmt
-        .query_row(rusqlite::params![bottle_id.to_string()], |row: &rusqlite::Row| {
+        .query_row(params![bottle_id.to_string()], |row: &rusqlite::Row| {
             let grape_str: String = row.get(3)?;
             let purchase_date_str: Option<String> = row.get(9)?;
             let deleted_at_str: Option<String> = row.get(19)?;
 
+            let purchase_date = parse_naive_date_opt(&purchase_date_str);
+
+            let deleted_at = match deleted_at_str {
+                Some(ref s) if !s.is_empty() => {
+                    Some(s.parse::<chrono::DateTime<chrono::Utc>>().map_err(|_| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            s.len(),
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Invalid deleted_at timestamp",
+                            )),
+                        )
+                    })?)
+                }
+                _ => None,
+            };
+
             Ok(ModelWineBottle {
-                id: Uuid::parse_str(&row.get::<_, String>(0)?).unwrap(),
+                id: parse_uuid_row(row, 0)?,
                 name: row.get(1)?,
                 producer: row.get(2)?,
                 grape_variety: if grape_str.is_empty() {
@@ -350,7 +441,7 @@ fn fetch_bottle_detail(db: &Connection, bottle_id: &Uuid) -> Result<Option<Model
                 region: row.get(6)?,
                 color: ModelWineColor::from(row.get::<_, i32>(7)?),
                 quantity: row.get(8)?,
-                purchase_date: purchase_date_str.and_then(|s: String| chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+                purchase_date,
                 purchase_price: row.get(10)?,
                 currency_code: row.get(11)?,
                 drink_from_year: row.get(12)?,
@@ -358,9 +449,9 @@ fn fetch_bottle_detail(db: &Connection, bottle_id: &Uuid) -> Result<Option<Model
                 notes: row.get(14)?,
                 rating: row.get(15)?,
                 photo_url: row.get(16)?,
-                created_at: parse_iso(&row.get::<_, String>(17)?).unwrap(),
-                updated_at: parse_iso(&row.get::<_, String>(18)?).unwrap(),
-                deleted_at: deleted_at_str.and_then(|s: String| s.parse::<chrono::DateTime<chrono::Utc>>().ok()),
+                created_at: parse_iso_row(row, 17)?,
+                updated_at: parse_iso_row(row, 18)?,
+                deleted_at,
             })
         })
         .optional()
@@ -378,12 +469,12 @@ impl WineBottleService for AppState {
         let req = request.into_inner();
         let db = self.db.0.lock().await;
 
-        let bottle = proto_to_bottle(&req)?;
+        let bottle = proto_to_bottle(&req).map_err(|e| Status::from(e))?;
 
         db.execute(
             "INSERT INTO wine_bottles (id, name, producer, grape_variety, vintage, country, region, color, quantity, purchase_date, purchase_price, currency_code, drink_from_year, drink_to_year, notes, rating, photo_url, created_at, updated_at, deleted_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
-            rusqlite::params![
+            params![
                 bottle.id.to_string(),
                 bottle.name,
                 bottle.producer,
@@ -406,7 +497,7 @@ impl WineBottleService for AppState {
                 bottle.deleted_at.map(|d| d.to_rfc3339()),
             ],
         )
-        .map_err(|e| Status::internal(format!("Failed to create bottle: {}", e)))?;
+        .map_err(ServiceError::from)?;
 
         Ok(Response::new(CreateWineBottleResponse {
             bottle: Some(bottle_to_proto(&bottle)),
@@ -465,7 +556,11 @@ impl WineBottleService for AppState {
         let region = req.region.or(existing.region);
         let color = req.color.map(ModelWineColor::from).unwrap_or(existing.color);
         let quantity = req.quantity.or(existing.quantity);
-        let purchase_date = req.purchase_date.map(|s| parse_naive_date(&s)).transpose()?.or(existing.purchase_date);
+        let purchase_date = req.purchase_date.as_ref()
+            .map(|s| parse_naive_date(s))
+            .transpose()
+            .map_err(|e| Status::from(e))?
+            .or(existing.purchase_date);
         let purchase_price = req.purchase_price.or(existing.purchase_price);
         let currency_code = req.currency_code.or(existing.currency_code);
         let drink_from_year = req.drink_from_year.or(existing.drink_from_year);
@@ -479,7 +574,7 @@ impl WineBottleService for AppState {
              country = ?5, region = ?6, color = ?7, quantity = ?8, purchase_date = ?9,
              purchase_price = ?10, currency_code = ?11, drink_from_year = ?12, drink_to_year = ?13,
              notes = ?14, rating = ?15, photo_url = ?16, updated_at = ?17 WHERE id = ?18",
-            rusqlite::params![
+            params![
                 name,
                 producer,
                 ModelWineBottle::grape_variety_to_string(&grape_variety),
@@ -500,7 +595,7 @@ impl WineBottleService for AppState {
                 bottle_uuid.to_string(),
             ],
         )
-        .map_err(|e| Status::internal(format!("Failed to update bottle: {}", e)))?;
+        .map_err(ServiceError::from)?;
 
         let updated = fetch_bottle_detail(&db, &bottle_uuid)?
             .ok_or_else(|| Status::not_found("Bottle not found"))?;
@@ -521,11 +616,15 @@ impl WineBottleService for AppState {
         let bottle_uuid = Uuid::parse_str(&req.id)
             .map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
 
-        db.execute(
+        let rows = db.execute(
             "UPDATE wine_bottles SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
-            rusqlite::params![now.to_rfc3339(), now.to_rfc3339(), bottle_uuid.to_string()],
+            params![now.to_rfc3339(), now.to_rfc3339(), bottle_uuid.to_string()],
         )
-        .map_err(|e| Status::internal(format!("Failed to delete bottle: {}", e)))?;
+        .map_err(ServiceError::from)?;
+
+        if rows == 0 {
+            return Err(Status::not_found("Bottle not found or already deleted"));
+        }
 
         Ok(Response::new(DeleteWineBottleResponse { success: true }))
     }
