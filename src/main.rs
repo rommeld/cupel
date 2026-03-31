@@ -3,7 +3,7 @@ use cupel::generated::cellar::{
     wine_bottle_service_server::WineBottleServiceServer,
     wine_cellar_service_server::WineCellarServiceServer,
 };
-use cupel::server::server::AppState;
+use cupel::server::server_impl::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tonic::transport::Server;

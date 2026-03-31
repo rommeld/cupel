@@ -7,7 +7,7 @@ use cupel::generated::cellar::{
     wine_cellar_service_client::WineCellarServiceClient,
     wine_cellar_service_server::WineCellarServiceServer,
 };
-use cupel::server::server::AppState;
+use cupel::server::server_impl::AppState;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::spawn;
@@ -321,7 +321,7 @@ mod wine_bottle_tests {
                 name: Some(format!("Wine {}", i)),
                 producer: Some("Test Winery".to_string()),
                 grape_variety: vec!["Pinot Noir".to_string()],
-                vintage: Some(2020 + i as i32),
+                vintage: Some(2020 + i),
                 country: Some("France".to_string()),
                 region: Some("Burgundy".to_string()),
                 color: Some(WineColor::Red as i32),
@@ -332,7 +332,7 @@ mod wine_bottle_tests {
                 drink_from_year: None,
                 drink_to_year: None,
                 notes: None,
-                rating: Some(85 + i as i32),
+                rating: Some(85 + i),
                 photo_url: None,
             };
 
