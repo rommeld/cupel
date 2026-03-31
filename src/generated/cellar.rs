@@ -450,10 +450,10 @@ pub mod wine_bottle_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
-    use tonic::codegen::http::Uri;
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct WineBottleServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -492,13 +492,14 @@ pub mod wine_bottle_service_client {
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
             T: tonic::codegen::Service<
-                    http::Request<tonic::body::Body>,
-                    Response = http::Response<
-                        <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
-                    >,
+                http::Request<tonic::body::Body>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
                 >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::Body>>>::Error:
-                Into<StdError> + std::marker::Send + std::marker::Sync,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             WineBottleServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -536,32 +537,46 @@ pub mod wine_bottle_service_client {
         pub async fn create_wine_bottle(
             &mut self,
             request: impl tonic::IntoRequest<super::CreateWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::CreateWineBottleResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::CreateWineBottleResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/cellar.WineBottleService/CreateWineBottle");
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineBottleService/CreateWineBottle",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "cellar.WineBottleService",
-                "CreateWineBottle",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineBottleService", "CreateWineBottle"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn get_wine_bottle(
             &mut self,
             request: impl tonic::IntoRequest<super::GetWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetWineBottleResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::GetWineBottleResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/cellar.WineBottleService/GetWineBottle");
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineBottleService/GetWineBottle",
+            );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("cellar.WineBottleService", "GetWineBottle"));
@@ -570,55 +585,73 @@ pub mod wine_bottle_service_client {
         pub async fn update_wine_bottle(
             &mut self,
             request: impl tonic::IntoRequest<super::UpdateWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::UpdateWineBottleResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::UpdateWineBottleResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/cellar.WineBottleService/UpdateWineBottle");
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineBottleService/UpdateWineBottle",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "cellar.WineBottleService",
-                "UpdateWineBottle",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineBottleService", "UpdateWineBottle"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn delete_wine_bottle(
             &mut self,
             request: impl tonic::IntoRequest<super::DeleteWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::DeleteWineBottleResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteWineBottleResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/cellar.WineBottleService/DeleteWineBottle");
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineBottleService/DeleteWineBottle",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "cellar.WineBottleService",
-                "DeleteWineBottle",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineBottleService", "DeleteWineBottle"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn list_wine_bottle(
             &mut self,
             request: impl tonic::IntoRequest<super::ListWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::ListWineBottleResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::ListWineBottleResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/cellar.WineBottleService/ListWineBottle");
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineBottleService/ListWineBottle",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "cellar.WineBottleService",
-                "ListWineBottle",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineBottleService", "ListWineBottle"));
             self.inner.unary(req, path, codec).await
         }
     }
@@ -630,7 +663,7 @@ pub mod wine_bottle_service_server {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
     use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with WineBottleServiceServer.
@@ -639,23 +672,38 @@ pub mod wine_bottle_service_server {
         async fn create_wine_bottle(
             &self,
             request: tonic::Request<super::CreateWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::CreateWineBottleResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::CreateWineBottleResponse>,
+            tonic::Status,
+        >;
         async fn get_wine_bottle(
             &self,
             request: tonic::Request<super::GetWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::GetWineBottleResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::GetWineBottleResponse>,
+            tonic::Status,
+        >;
         async fn update_wine_bottle(
             &self,
             request: tonic::Request<super::UpdateWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::UpdateWineBottleResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::UpdateWineBottleResponse>,
+            tonic::Status,
+        >;
         async fn delete_wine_bottle(
             &self,
             request: tonic::Request<super::DeleteWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::DeleteWineBottleResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteWineBottleResponse>,
+            tonic::Status,
+        >;
         async fn list_wine_bottle(
             &self,
             request: tonic::Request<super::ListWineBottleRequest>,
-        ) -> std::result::Result<tonic::Response<super::ListWineBottleResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::ListWineBottleResponse>,
+            tonic::Status,
+        >;
     }
     #[derive(Debug)]
     pub struct WineBottleServiceServer<T> {
@@ -678,7 +726,10 @@ pub mod wine_bottle_service_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -733,19 +784,26 @@ pub mod wine_bottle_service_server {
                 "/cellar.WineBottleService/CreateWineBottle" => {
                     #[allow(non_camel_case_types)]
                     struct CreateWineBottleSvc<T: WineBottleService>(pub Arc<T>);
-                    impl<T: WineBottleService>
-                        tonic::server::UnaryService<super::CreateWineBottleRequest>
-                        for CreateWineBottleSvc<T>
-                    {
+                    impl<
+                        T: WineBottleService,
+                    > tonic::server::UnaryService<super::CreateWineBottleRequest>
+                    for CreateWineBottleSvc<T> {
                         type Response = super::CreateWineBottleResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::CreateWineBottleRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as WineBottleService>::create_wine_bottle(&inner, request).await
+                                <T as WineBottleService>::create_wine_bottle(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -775,19 +833,23 @@ pub mod wine_bottle_service_server {
                 "/cellar.WineBottleService/GetWineBottle" => {
                     #[allow(non_camel_case_types)]
                     struct GetWineBottleSvc<T: WineBottleService>(pub Arc<T>);
-                    impl<T: WineBottleService>
-                        tonic::server::UnaryService<super::GetWineBottleRequest>
-                        for GetWineBottleSvc<T>
-                    {
+                    impl<
+                        T: WineBottleService,
+                    > tonic::server::UnaryService<super::GetWineBottleRequest>
+                    for GetWineBottleSvc<T> {
                         type Response = super::GetWineBottleResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::GetWineBottleRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as WineBottleService>::get_wine_bottle(&inner, request).await
+                                <T as WineBottleService>::get_wine_bottle(&inner, request)
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -817,19 +879,26 @@ pub mod wine_bottle_service_server {
                 "/cellar.WineBottleService/UpdateWineBottle" => {
                     #[allow(non_camel_case_types)]
                     struct UpdateWineBottleSvc<T: WineBottleService>(pub Arc<T>);
-                    impl<T: WineBottleService>
-                        tonic::server::UnaryService<super::UpdateWineBottleRequest>
-                        for UpdateWineBottleSvc<T>
-                    {
+                    impl<
+                        T: WineBottleService,
+                    > tonic::server::UnaryService<super::UpdateWineBottleRequest>
+                    for UpdateWineBottleSvc<T> {
                         type Response = super::UpdateWineBottleResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::UpdateWineBottleRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as WineBottleService>::update_wine_bottle(&inner, request).await
+                                <T as WineBottleService>::update_wine_bottle(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -859,19 +928,26 @@ pub mod wine_bottle_service_server {
                 "/cellar.WineBottleService/DeleteWineBottle" => {
                     #[allow(non_camel_case_types)]
                     struct DeleteWineBottleSvc<T: WineBottleService>(pub Arc<T>);
-                    impl<T: WineBottleService>
-                        tonic::server::UnaryService<super::DeleteWineBottleRequest>
-                        for DeleteWineBottleSvc<T>
-                    {
+                    impl<
+                        T: WineBottleService,
+                    > tonic::server::UnaryService<super::DeleteWineBottleRequest>
+                    for DeleteWineBottleSvc<T> {
                         type Response = super::DeleteWineBottleResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::DeleteWineBottleRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as WineBottleService>::delete_wine_bottle(&inner, request).await
+                                <T as WineBottleService>::delete_wine_bottle(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -901,19 +977,23 @@ pub mod wine_bottle_service_server {
                 "/cellar.WineBottleService/ListWineBottle" => {
                     #[allow(non_camel_case_types)]
                     struct ListWineBottleSvc<T: WineBottleService>(pub Arc<T>);
-                    impl<T: WineBottleService>
-                        tonic::server::UnaryService<super::ListWineBottleRequest>
-                        for ListWineBottleSvc<T>
-                    {
+                    impl<
+                        T: WineBottleService,
+                    > tonic::server::UnaryService<super::ListWineBottleRequest>
+                    for ListWineBottleSvc<T> {
                         type Response = super::ListWineBottleResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::ListWineBottleRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as WineBottleService>::list_wine_bottle(&inner, request).await
+                                <T as WineBottleService>::list_wine_bottle(&inner, request)
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -940,19 +1020,25 @@ pub mod wine_bottle_service_server {
                     };
                     Box::pin(fut)
                 }
-                _ => Box::pin(async move {
-                    let mut response = http::Response::new(tonic::body::Body::default());
-                    let headers = response.headers_mut();
-                    headers.insert(
-                        tonic::Status::GRPC_STATUS,
-                        (tonic::Code::Unimplemented as i32).into(),
-                    );
-                    headers.insert(
-                        http::header::CONTENT_TYPE,
-                        tonic::metadata::GRPC_CONTENT_TYPE,
-                    );
-                    Ok(response)
-                }),
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
             }
         }
     }
@@ -981,10 +1067,10 @@ pub mod wine_cellar_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
-    use tonic::codegen::http::Uri;
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct WineCellarServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -1023,13 +1109,14 @@ pub mod wine_cellar_service_client {
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
             T: tonic::codegen::Service<
-                    http::Request<tonic::body::Body>,
-                    Response = http::Response<
-                        <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
-                    >,
+                http::Request<tonic::body::Body>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
                 >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::Body>>>::Error:
-                Into<StdError> + std::marker::Send + std::marker::Sync,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             WineCellarServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -1067,55 +1154,73 @@ pub mod wine_cellar_service_client {
         pub async fn create_wine_cellar(
             &mut self,
             request: impl tonic::IntoRequest<super::CreateWineCellarRequest>,
-        ) -> std::result::Result<tonic::Response<super::CreateWineCellarResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::CreateWineCellarResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/cellar.WineCellarService/CreateWineCellar");
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineCellarService/CreateWineCellar",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "cellar.WineCellarService",
-                "CreateWineCellar",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineCellarService", "CreateWineCellar"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn update_wine_cellar(
             &mut self,
             request: impl tonic::IntoRequest<super::UpdateWineCellarRequest>,
-        ) -> std::result::Result<tonic::Response<super::UpdateWineCellarResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::UpdateWineCellarResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/cellar.WineCellarService/UpdateWineCellar");
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineCellarService/UpdateWineCellar",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "cellar.WineCellarService",
-                "UpdateWineCellar",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineCellarService", "UpdateWineCellar"));
             self.inner.unary(req, path, codec).await
         }
         pub async fn delete_wine_cellar(
             &mut self,
             request: impl tonic::IntoRequest<super::DeleteWineCellarRequest>,
-        ) -> std::result::Result<tonic::Response<super::DeleteWineCellarResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteWineCellarResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/cellar.WineCellarService/DeleteWineCellar");
+            let path = http::uri::PathAndQuery::from_static(
+                "/cellar.WineCellarService/DeleteWineCellar",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "cellar.WineCellarService",
-                "DeleteWineCellar",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("cellar.WineCellarService", "DeleteWineCellar"));
             self.inner.unary(req, path, codec).await
         }
     }
@@ -1127,7 +1232,7 @@ pub mod wine_cellar_service_server {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
     use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with WineCellarServiceServer.
@@ -1136,15 +1241,24 @@ pub mod wine_cellar_service_server {
         async fn create_wine_cellar(
             &self,
             request: tonic::Request<super::CreateWineCellarRequest>,
-        ) -> std::result::Result<tonic::Response<super::CreateWineCellarResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::CreateWineCellarResponse>,
+            tonic::Status,
+        >;
         async fn update_wine_cellar(
             &self,
             request: tonic::Request<super::UpdateWineCellarRequest>,
-        ) -> std::result::Result<tonic::Response<super::UpdateWineCellarResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::UpdateWineCellarResponse>,
+            tonic::Status,
+        >;
         async fn delete_wine_cellar(
             &self,
             request: tonic::Request<super::DeleteWineCellarRequest>,
-        ) -> std::result::Result<tonic::Response<super::DeleteWineCellarResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteWineCellarResponse>,
+            tonic::Status,
+        >;
     }
     #[derive(Debug)]
     pub struct WineCellarServiceServer<T> {
@@ -1167,7 +1281,10 @@ pub mod wine_cellar_service_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -1222,19 +1339,26 @@ pub mod wine_cellar_service_server {
                 "/cellar.WineCellarService/CreateWineCellar" => {
                     #[allow(non_camel_case_types)]
                     struct CreateWineCellarSvc<T: WineCellarService>(pub Arc<T>);
-                    impl<T: WineCellarService>
-                        tonic::server::UnaryService<super::CreateWineCellarRequest>
-                        for CreateWineCellarSvc<T>
-                    {
+                    impl<
+                        T: WineCellarService,
+                    > tonic::server::UnaryService<super::CreateWineCellarRequest>
+                    for CreateWineCellarSvc<T> {
                         type Response = super::CreateWineCellarResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::CreateWineCellarRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as WineCellarService>::create_wine_cellar(&inner, request).await
+                                <T as WineCellarService>::create_wine_cellar(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -1264,19 +1388,26 @@ pub mod wine_cellar_service_server {
                 "/cellar.WineCellarService/UpdateWineCellar" => {
                     #[allow(non_camel_case_types)]
                     struct UpdateWineCellarSvc<T: WineCellarService>(pub Arc<T>);
-                    impl<T: WineCellarService>
-                        tonic::server::UnaryService<super::UpdateWineCellarRequest>
-                        for UpdateWineCellarSvc<T>
-                    {
+                    impl<
+                        T: WineCellarService,
+                    > tonic::server::UnaryService<super::UpdateWineCellarRequest>
+                    for UpdateWineCellarSvc<T> {
                         type Response = super::UpdateWineCellarResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::UpdateWineCellarRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as WineCellarService>::update_wine_cellar(&inner, request).await
+                                <T as WineCellarService>::update_wine_cellar(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -1306,19 +1437,26 @@ pub mod wine_cellar_service_server {
                 "/cellar.WineCellarService/DeleteWineCellar" => {
                     #[allow(non_camel_case_types)]
                     struct DeleteWineCellarSvc<T: WineCellarService>(pub Arc<T>);
-                    impl<T: WineCellarService>
-                        tonic::server::UnaryService<super::DeleteWineCellarRequest>
-                        for DeleteWineCellarSvc<T>
-                    {
+                    impl<
+                        T: WineCellarService,
+                    > tonic::server::UnaryService<super::DeleteWineCellarRequest>
+                    for DeleteWineCellarSvc<T> {
                         type Response = super::DeleteWineCellarResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::DeleteWineCellarRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as WineCellarService>::delete_wine_cellar(&inner, request).await
+                                <T as WineCellarService>::delete_wine_cellar(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -1345,19 +1483,25 @@ pub mod wine_cellar_service_server {
                     };
                     Box::pin(fut)
                 }
-                _ => Box::pin(async move {
-                    let mut response = http::Response::new(tonic::body::Body::default());
-                    let headers = response.headers_mut();
-                    headers.insert(
-                        tonic::Status::GRPC_STATUS,
-                        (tonic::Code::Unimplemented as i32).into(),
-                    );
-                    headers.insert(
-                        http::header::CONTENT_TYPE,
-                        tonic::metadata::GRPC_CONTENT_TYPE,
-                    );
-                    Ok(response)
-                }),
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
             }
         }
     }
