@@ -4,19 +4,19 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::db::DbPool;
+use crate::db::models::{
+    GRAPE_VARIETY_SEPARATOR, WineBottle as ModelWineBottle, WineCellar as ModelWineCellar,
+    WineColor as ModelWineColor,
+};
 use crate::errors::ServiceError;
 use crate::generated::cellar::{
-    wine_bottle_service_server::WineBottleService, wine_cellar_service_server::WineCellarService,
     CreateWineBottleRequest, CreateWineBottleResponse, CreateWineCellarRequest,
     CreateWineCellarResponse, DeleteWineBottleRequest, DeleteWineBottleResponse,
     DeleteWineCellarRequest, DeleteWineCellarResponse, GetWineBottleRequest, GetWineBottleResponse,
     ListWineBottleRequest, ListWineBottleResponse, UpdateWineBottleRequest,
     UpdateWineBottleResponse, UpdateWineCellarRequest, UpdateWineCellarResponse, WineBottleDetail,
     WineBottleSummary, WineCellar as ProtoWineCellar,
-};
-use crate::db::models::{
-    WineBottle as ModelWineBottle, WineCellar as ModelWineCellar,
-    WineColor as ModelWineColor, GRAPE_VARIETY_SEPARATOR,
+    wine_bottle_service_server::WineBottleService, wine_cellar_service_server::WineCellarService,
 };
 
 #[derive(Clone)]
@@ -30,7 +30,6 @@ impl AppState {
     }
 }
 
-
 fn parse_naive_date(s: &str) -> Result<chrono::NaiveDate, ServiceError> {
     chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .map_err(|_| ServiceError::InvalidArgument(format!("Invalid date format: {}", s)))
@@ -38,30 +37,38 @@ fn parse_naive_date(s: &str) -> Result<chrono::NaiveDate, ServiceError> {
 
 fn parse_naive_date_opt(s: &Option<String>) -> Option<chrono::NaiveDate> {
     match s {
-        Some(date_str) if !date_str.is_empty() => {
-            parse_naive_date(date_str).ok()
-        }
+        Some(date_str) if !date_str.is_empty() => parse_naive_date(date_str).ok(),
         _ => None,
     }
 }
 
-
 fn parse_uuid_row(row: &rusqlite::Row, idx: usize) -> Result<Uuid, rusqlite::Error> {
     let s: String = row.get(idx)?;
-    Uuid::parse_str(&s).map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-        s.len(),
-        rusqlite::types::Type::Text,
-        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid UUID: {}", e))),
-    ))
+    Uuid::parse_str(&s).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            s.len(),
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid UUID: {}", e),
+            )),
+        )
+    })
 }
 
-fn parse_iso_row(row: &rusqlite::Row, idx: usize) -> Result<chrono::DateTime<chrono::Utc>, rusqlite::Error> {
+fn parse_iso_row(
+    row: &rusqlite::Row,
+    idx: usize,
+) -> Result<chrono::DateTime<chrono::Utc>, rusqlite::Error> {
     let s: String = row.get(idx)?;
     s.parse::<chrono::DateTime<chrono::Utc>>().map_err(|_| {
         rusqlite::Error::FromSqlConversionFailure(
             s.len(),
             rusqlite::types::Type::Text,
-            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid ISO date format")),
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid ISO date format",
+            )),
         )
     })
 }
@@ -107,9 +114,7 @@ fn proto_to_bottle(request: &CreateWineBottleRequest) -> Result<ModelWineBottle,
         .unwrap_or(ModelWineColor::Unspecified);
 
     let purchase_date = match &request.purchase_date {
-        Some(date_str) if !date_str.is_empty() => {
-            Some(parse_naive_date(date_str)?)
-        }
+        Some(date_str) if !date_str.is_empty() => Some(parse_naive_date(date_str)?),
         _ => None,
     };
 
@@ -148,19 +153,25 @@ impl WineCellarService for AppState {
         let now = chrono::Utc::now();
         let cellar_id = Uuid::new_v4();
 
-        let tx = db.transaction()
+        let tx = db
+            .transaction()
             .map_err(|e| ServiceError::Internal(format!("Failed to begin transaction: {}", e)))?;
 
         tx.execute(
             "INSERT INTO wine_cellars (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-            params![cellar_id.to_string(), req.name, now.to_rfc3339(), now.to_rfc3339()],
+            params![
+                cellar_id.to_string(),
+                req.name,
+                now.to_rfc3339(),
+                now.to_rfc3339()
+            ],
         )
         .map_err(ServiceError::from)?;
 
         for bottle_req in &req.new_bottles {
             let mut bottle = proto_to_bottle(bottle_req)?;
             bottle.id = Uuid::new_v4();
-            
+
             tx.execute(
                 "INSERT INTO wine_bottles (id, name, producer, grape_variety, vintage, country, region, color, quantity, purchase_date, purchase_price, currency_code, drink_from_year, drink_to_year, notes, rating, photo_url, created_at, updated_at, deleted_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
@@ -228,18 +239,20 @@ impl WineCellarService for AppState {
         let mut db = self.db.0.lock().await;
         let now = chrono::Utc::now();
 
-        let cellar_uuid = Uuid::parse_str(&req.id)
-            .map_err(|_| Status::invalid_argument("Invalid cellar ID"))?;
+        let cellar_uuid =
+            Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid cellar ID"))?;
 
-        let tx = db.transaction()
+        let tx = db
+            .transaction()
             .map_err(|e| ServiceError::Internal(format!("Failed to begin transaction: {}", e)))?;
 
         if let Some(ref name) = req.name {
-            let rows = tx.execute(
-                "UPDATE wine_cellars SET name = ?1, updated_at = ?2 WHERE id = ?3",
-                params![name, now.to_rfc3339(), cellar_uuid.to_string()],
-            )
-            .map_err(ServiceError::from)?;
+            let rows = tx
+                .execute(
+                    "UPDATE wine_cellars SET name = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![name, now.to_rfc3339(), cellar_uuid.to_string()],
+                )
+                .map_err(ServiceError::from)?;
 
             if rows == 0 {
                 return Err(Status::not_found("Cellar not found"));
@@ -318,10 +331,11 @@ impl WineCellarService for AppState {
         let req = request.into_inner();
         let mut db = self.db.0.lock().await;
 
-        let cellar_uuid = Uuid::parse_str(&req.id)
-            .map_err(|_| Status::invalid_argument("Invalid cellar ID"))?;
+        let cellar_uuid =
+            Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid cellar ID"))?;
 
-        let tx = db.transaction()
+        let tx = db
+            .transaction()
             .map_err(|e| ServiceError::Internal(format!("Failed to begin transaction: {}", e)))?;
 
         tx.execute(
@@ -330,11 +344,12 @@ impl WineCellarService for AppState {
         )
         .map_err(ServiceError::from)?;
 
-        let rows = tx.execute(
-            "DELETE FROM wine_cellars WHERE id = ?1",
-            params![cellar_uuid.to_string()],
-        )
-        .map_err(ServiceError::from)?;
+        let rows = tx
+            .execute(
+                "DELETE FROM wine_cellars WHERE id = ?1",
+                params![cellar_uuid.to_string()],
+            )
+            .map_err(ServiceError::from)?;
 
         if rows == 0 {
             return Err(Status::not_found("Cellar not found"));
@@ -347,7 +362,10 @@ impl WineCellarService for AppState {
     }
 }
 
-fn fetch_cellar_bottles(db: &Connection, cellar_id: &Uuid) -> Result<Vec<WineBottleSummary>, Status> {
+fn fetch_cellar_bottles(
+    db: &Connection,
+    cellar_id: &Uuid,
+) -> Result<Vec<WineBottleSummary>, Status> {
     let mut stmt = db
         .prepare(
             "SELECT b.id, b.name, b.producer, b.grape_variety, b.vintage, b.country, b.region, b.color
@@ -367,7 +385,10 @@ fn fetch_cellar_bottles(db: &Connection, cellar_id: &Uuid) -> Result<Vec<WineBot
                 grape_variety: if grape_str.is_empty() {
                     Vec::new()
                 } else {
-                    grape_str.split(GRAPE_VARIETY_SEPARATOR).map(|s: &str| s.trim().to_string()).collect()
+                    grape_str
+                        .split(GRAPE_VARIETY_SEPARATOR)
+                        .map(|s: &str| s.trim().to_string())
+                        .collect()
                 },
                 vintage: row.get::<_, Option<i32>>(4)?.unwrap_or(0),
                 country: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
@@ -385,7 +406,10 @@ fn fetch_cellar_bottles(db: &Connection, cellar_id: &Uuid) -> Result<Vec<WineBot
     Ok(result)
 }
 
-fn fetch_bottle_detail(db: &Connection, bottle_id: &Uuid) -> Result<Option<ModelWineBottle>, Status> {
+fn fetch_bottle_detail(
+    db: &Connection,
+    bottle_id: &Uuid,
+) -> Result<Option<ModelWineBottle>, Status> {
     let mut stmt = db
         .prepare(
             "SELECT id, name, producer, grape_variety, vintage, country, region, color,
@@ -427,7 +451,10 @@ fn fetch_bottle_detail(db: &Connection, bottle_id: &Uuid) -> Result<Option<Model
                 grape_variety: if grape_str.is_empty() {
                     Vec::new()
                 } else {
-                    grape_str.split(GRAPE_VARIETY_SEPARATOR).map(|s: &str| s.trim().to_string()).collect()
+                    grape_str
+                        .split(GRAPE_VARIETY_SEPARATOR)
+                        .map(|s: &str| s.trim().to_string())
+                        .collect()
                 },
                 vintage: row.get(4)?,
                 country: row.get(5)?,
@@ -504,8 +531,8 @@ impl WineBottleService for AppState {
         let req = request.into_inner();
         let db = self.db.0.lock().await;
 
-        let bottle_uuid = Uuid::parse_str(&req.id)
-            .map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
+        let bottle_uuid =
+            Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
 
         let bottle = fetch_bottle_detail(&db, &bottle_uuid)?
             .ok_or_else(|| Status::not_found("Bottle not found"))?;
@@ -527,8 +554,8 @@ impl WineBottleService for AppState {
         let db = self.db.0.lock().await;
         let now = chrono::Utc::now();
 
-        let bottle_uuid = Uuid::parse_str(&req.id)
-            .map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
+        let bottle_uuid =
+            Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
 
         let existing = fetch_bottle_detail(&db, &bottle_uuid)?
             .ok_or_else(|| Status::not_found("Bottle not found"))?;
@@ -547,9 +574,14 @@ impl WineBottleService for AppState {
         let vintage = req.vintage.or(existing.vintage);
         let country = req.country.or(existing.country);
         let region = req.region.or(existing.region);
-        let color = req.color.map(ModelWineColor::from).unwrap_or(existing.color);
+        let color = req
+            .color
+            .map(ModelWineColor::from)
+            .unwrap_or(existing.color);
         let quantity = req.quantity.or(existing.quantity);
-        let purchase_date = req.purchase_date.as_ref()
+        let purchase_date = req
+            .purchase_date
+            .as_ref()
             .map(|s| parse_naive_date(s))
             .transpose()
             .map_err(|e| Status::from(e))?
@@ -606,8 +638,8 @@ impl WineBottleService for AppState {
         let db = self.db.0.lock().await;
         let now = chrono::Utc::now();
 
-        let bottle_uuid = Uuid::parse_str(&req.id)
-            .map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
+        let bottle_uuid =
+            Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
 
         let rows = db.execute(
             "UPDATE wine_bottles SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
@@ -645,7 +677,10 @@ impl WineBottleService for AppState {
                     grape_variety: if grape_str.is_empty() {
                         Vec::new()
                     } else {
-                        grape_str.split(GRAPE_VARIETY_SEPARATOR).map(|s: &str| s.trim().to_string()).collect()
+                        grape_str
+                            .split(GRAPE_VARIETY_SEPARATOR)
+                            .map(|s: &str| s.trim().to_string())
+                            .collect()
                     },
                     vintage: row.get::<_, Option<i32>>(4)?.unwrap_or(0),
                     country: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
@@ -659,7 +694,9 @@ impl WineBottleService for AppState {
         let mut total_count = 0i32;
         for bottle in bottles {
             total_count += 1;
-            result.push(bottle.map_err(|e| Status::internal(format!("Failed to read bottle: {}", e)))?);
+            result.push(
+                bottle.map_err(|e| Status::internal(format!("Failed to read bottle: {}", e)))?,
+            );
         }
 
         Ok(Response::new(ListWineBottleResponse {

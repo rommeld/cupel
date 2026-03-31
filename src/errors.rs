@@ -75,7 +75,7 @@ mod tests {
     fn test_rusqlite_error_to_service_error() {
         let sqlite_err = rusqlite::Error::InvalidParameterName("test".to_string());
         let service_err: ServiceError = sqlite_err.into();
-        
+
         match service_err {
             ServiceError::Database(msg) => {
                 assert!(msg.contains("InvalidParameterName") || msg.contains("test"));
@@ -86,9 +86,21 @@ mod tests {
 
     #[test]
     fn test_service_error_display() {
-        assert_eq!(ServiceError::NotFound("foo".to_string()).to_string(), "Not Found: foo");
-        assert_eq!(ServiceError::InvalidArgument("bar".to_string()).to_string(), "Invalid Argument: bar");
-        assert_eq!(ServiceError::Internal("baz".to_string()).to_string(), "Internal Error: baz");
-        assert_eq!(ServiceError::Database("qux".to_string()).to_string(), "Database Error: qux");
+        assert_eq!(
+            ServiceError::NotFound("foo".to_string()).to_string(),
+            "Not Found: foo"
+        );
+        assert_eq!(
+            ServiceError::InvalidArgument("bar".to_string()).to_string(),
+            "Invalid Argument: bar"
+        );
+        assert_eq!(
+            ServiceError::Internal("baz".to_string()).to_string(),
+            "Internal Error: baz"
+        );
+        assert_eq!(
+            ServiceError::Database("qux".to_string()).to_string(),
+            "Database Error: qux"
+        );
     }
 }

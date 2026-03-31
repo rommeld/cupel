@@ -232,13 +232,19 @@ mod tests {
     #[test]
     fn test_grape_variety_to_string_single() {
         let varieties = vec!["Chardonnay".to_string()];
-        assert_eq!(WineBottle::grape_variety_to_string(&varieties), "Chardonnay");
+        assert_eq!(
+            WineBottle::grape_variety_to_string(&varieties),
+            "Chardonnay"
+        );
     }
 
     #[test]
     fn test_grape_variety_to_string_multiple() {
         let varieties = vec!["Chardonnay".to_string(), "Pinot Noir".to_string()];
-        assert_eq!(WineBottle::grape_variety_to_string(&varieties), "Chardonnay,Pinot Noir");
+        assert_eq!(
+            WineBottle::grape_variety_to_string(&varieties),
+            "Chardonnay,Pinot Noir"
+        );
     }
 
     #[test]
@@ -267,12 +273,18 @@ mod tests {
 
     #[test]
     fn test_grape_variety_from_string_empty() {
-        assert_eq!(WineBottle::grape_variety_from_string(""), Vec::<String>::new());
+        assert_eq!(
+            WineBottle::grape_variety_from_string(""),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn test_grape_variety_from_string_only_separator() {
-        assert_eq!(WineBottle::grape_variety_from_string(","), Vec::<String>::new());
+        assert_eq!(
+            WineBottle::grape_variety_from_string(","),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
