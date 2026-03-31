@@ -489,7 +489,7 @@ impl WineBottleService for AppState {
         let req = request.into_inner();
         let db = self.db.0.lock().await;
 
-        let bottle = proto_to_bottle(&req).map_err(|e| Status::from(e))?;
+        let bottle = proto_to_bottle(&req).map_err(Status::from)?;
 
         db.execute(
             "INSERT INTO wine_bottles (id, name, producer, grape_variety, vintage, country, region, color, quantity, purchase_date, purchase_price, currency_code, drink_from_year, drink_to_year, notes, rating, photo_url, created_at, updated_at, deleted_at)
@@ -584,7 +584,7 @@ impl WineBottleService for AppState {
             .as_ref()
             .map(|s| parse_naive_date(s))
             .transpose()
-            .map_err(|e| Status::from(e))?
+            .map_err(Status::from)?
             .or(existing.purchase_date);
         let purchase_price = req.purchase_price.or(existing.purchase_price);
         let currency_code = req.currency_code.or(existing.currency_code);
