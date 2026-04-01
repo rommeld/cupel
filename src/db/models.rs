@@ -3,6 +3,8 @@ use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::errors::ServiceError;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WineBottle {
     pub id: Uuid,
@@ -188,10 +190,10 @@ impl WineBottle {
     }
 }
 
-pub fn get_or_create_variety(db: &Connection, name: &str) -> SqliteResult<Uuid> {
+pub fn get_or_create_variety(db: &Connection, name: &str) -> Result<Uuid, ServiceError> {
     let normalized = name.trim().to_string();
     if normalized.is_empty() {
-        return Err(rusqlite::Error::InvalidParameterName(
+        return Err(ServiceError::InvalidArgument(
             "Grape variety name cannot be empty".to_string(),
         ));
     }
@@ -205,14 +207,20 @@ pub fn get_or_create_variety(db: &Connection, name: &str) -> SqliteResult<Uuid> 
         .ok();
 
     if let Some(id) = existing {
-        return Ok(Uuid::parse_str(&id).unwrap_or_else(|_| Uuid::new_v4()));
+        return Uuid::parse_str(&id).map_err(|e| {
+            ServiceError::DataIntegrity(format!(
+                "Invalid UUID '{}' in grape_varieties table: {}",
+                id, e
+            ))
+        });
     }
 
     let id = Uuid::new_v4();
     db.execute(
         "INSERT INTO grape_varieties (id, name) VALUES (?1, ?2)",
         params![id.to_string(), normalized],
-    )?;
+    )
+    .map_err(ServiceError::from)?;
     Ok(id)
 }
 
@@ -236,18 +244,20 @@ pub fn set_bottle_varieties(
     db: &Connection,
     bottle_id: &Uuid,
     varieties: &[String],
-) -> SqliteResult<()> {
+) -> Result<(), ServiceError> {
     db.execute(
         "DELETE FROM wine_bottle_varieties WHERE bottle_id = ?1",
         params![bottle_id.to_string()],
-    )?;
+    )
+    .map_err(ServiceError::from)?;
 
     for variety_name in varieties {
         let variety_id = get_or_create_variety(db, variety_name)?;
         db.execute(
             "INSERT OR IGNORE INTO wine_bottle_varieties (bottle_id, variety_id) VALUES (?1, ?2)",
             params![bottle_id.to_string(), variety_id.to_string()],
-        )?;
+        )
+        .map_err(ServiceError::from)?;
     }
 
     Ok(())
@@ -400,5 +410,35 @@ mod tests {
         let serialized = WineBottle::grape_variety_to_string(&original);
         let deserialized = WineBottle::grape_variety_from_string(&serialized);
         assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn test_get_or_create_variety_empty_name() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+
+        let result = get_or_create_variety(&conn, "");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ServiceError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn test_get_or_create_variety_malformed_uuid_in_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA_SQL).unwrap();
+
+        conn.execute(
+            "INSERT INTO grape_varieties (id, name) VALUES (?1, ?2)",
+            params!["not-a-valid-uuid", "Test Variety"],
+        )
+        .unwrap();
+
+        let result = get_or_create_variety(&conn, "Test Variety");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ServiceError::DataIntegrity(_)));
+        let error_msg = err.to_string();
+        assert!(error_msg.contains("not-a-valid-uuid"));
     }
 }

@@ -1,5 +1,5 @@
 use chrono::Datelike;
-use rusqlite::{Connection, OptionalExtension, params, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -589,7 +589,7 @@ impl WineBottleService for AppState {
             let bottle_id = bottle.id.to_string();
             let variety_id = self
                 .db
-                .execute(move |conn| get_or_create_variety(conn, &variety_name))
+                .execute_async(move |conn| get_or_create_variety(conn, &variety_name))
                 .await?;
             self.db
                 .execute(move |conn| {
@@ -885,7 +885,9 @@ impl WineBottleService for AppState {
                     count_params.iter().map(|p| p.as_ref()).collect();
                 let total_count: i32 = conn
                     .query_row(&count_sql, count_params_refs.as_slice(), |row| row.get(0))
-                    .map_err(|e| ServiceError::Internal(format!("Failed to count bottles: {}", e)))?;
+                    .map_err(|e| {
+                        ServiceError::Internal(format!("Failed to count bottles: {}", e))
+                    })?;
 
                 let limit = pagination.limit.clamp(1, 100);
                 let offset = pagination.offset.max(0);
@@ -907,9 +909,9 @@ impl WineBottleService for AppState {
                     .prepare(&result_sql)
                     .map_err(|e| ServiceError::Internal(format!("Failed to prepare: {}", e)))?;
 
-                let mut rows = stmt
-                    .query(all_params_refs.as_slice())
-                    .map_err(|e| ServiceError::Internal(format!("Failed to query bottles: {}", e)))?;
+                let mut rows = stmt.query(all_params_refs.as_slice()).map_err(|e| {
+                    ServiceError::Internal(format!("Failed to query bottles: {}", e))
+                })?;
 
                 let mut bottles = Vec::new();
                 while let Some(row) = rows
@@ -919,37 +921,49 @@ impl WineBottleService for AppState {
                     let bottle_id_str: String = row
                         .get(0)
                         .map_err(|e| ServiceError::Internal(format!("Failed to get id: {}", e)))?;
-                    let bottle_uuid = Uuid::parse_str(&bottle_id_str)
-                        .map_err(|e| ServiceError::Internal(format!("Invalid bottle UUID: {}", e)))?;
-                    let varieties = get_varieties_for_bottle(conn, &bottle_uuid)
-                        .map_err(|e| ServiceError::Internal(format!("Failed to get varieties: {}", e)))?;
+                    let bottle_uuid = Uuid::parse_str(&bottle_id_str).map_err(|e| {
+                        ServiceError::Internal(format!("Invalid bottle UUID: {}", e))
+                    })?;
+                    let varieties = get_varieties_for_bottle(conn, &bottle_uuid).map_err(|e| {
+                        ServiceError::Internal(format!("Failed to get varieties: {}", e))
+                    })?;
 
                     bottles.push(WineBottleSummary {
                         id: bottle_id_str,
                         name: row
                             .get::<_, Option<String>>(1)
-                            .map_err(|e| ServiceError::Internal(format!("Failed to get name: {}", e)))?
+                            .map_err(|e| {
+                                ServiceError::Internal(format!("Failed to get name: {}", e))
+                            })?
                             .unwrap_or_default(),
                         producer: row
                             .get::<_, Option<String>>(2)
-                            .map_err(|e| ServiceError::Internal(format!("Failed to get producer: {}", e)))?
+                            .map_err(|e| {
+                                ServiceError::Internal(format!("Failed to get producer: {}", e))
+                            })?
                             .unwrap_or_default(),
                         grape_variety: varieties,
                         vintage: row
                             .get::<_, Option<i32>>(3)
-                            .map_err(|e| ServiceError::Internal(format!("Failed to get vintage: {}", e)))?
+                            .map_err(|e| {
+                                ServiceError::Internal(format!("Failed to get vintage: {}", e))
+                            })?
                             .unwrap_or(0),
                         country: row
                             .get::<_, Option<String>>(4)
-                            .map_err(|e| ServiceError::Internal(format!("Failed to get country: {}", e)))?
+                            .map_err(|e| {
+                                ServiceError::Internal(format!("Failed to get country: {}", e))
+                            })?
                             .unwrap_or_default(),
                         region: row
                             .get::<_, Option<String>>(5)
-                            .map_err(|e| ServiceError::Internal(format!("Failed to get region: {}", e)))?
+                            .map_err(|e| {
+                                ServiceError::Internal(format!("Failed to get region: {}", e))
+                            })?
                             .unwrap_or_default(),
-                        color: row
-                            .get::<_, i32>(6)
-                            .map_err(|e| ServiceError::Internal(format!("Failed to get color: {}", e)))?,
+                        color: row.get::<_, i32>(6).map_err(|e| {
+                            ServiceError::Internal(format!("Failed to get color: {}", e))
+                        })?,
                     });
                 }
 

@@ -14,6 +14,9 @@ pub enum ServiceError {
 
     #[error("Database Error: {0}")]
     Database(String),
+
+    #[error("Data Integrity Error: {0}")]
+    DataIntegrity(String),
 }
 
 impl From<ServiceError> for Status {
@@ -23,6 +26,9 @@ impl From<ServiceError> for Status {
             ServiceError::InvalidArgument(msg) => Status::invalid_argument(msg),
             ServiceError::Internal(msg) => Status::internal(msg),
             ServiceError::Database(msg) => Status::internal(format!("Database error: {}", msg)),
+            ServiceError::DataIntegrity(msg) => {
+                Status::internal(format!("Data integrity error: {}", msg))
+            }
         }
     }
 }
