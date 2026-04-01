@@ -217,8 +217,29 @@ message DeleteWineCellarResponse {
   bool success = 1;
 }
 
+message GetWineCellarRequest {
+  string id = 1;
+}
+
+message GetWineCellarResponse {
+  WineCellar wine_cellar = 1;
+}
+
+message ListWineCellarRequest {
+  optional string name_contains = 1;
+  PaginationParams pagination = 2;
+}
+
+message ListWineCellarResponse {
+  repeated WineCellar wine_cellar = 1;
+  int32 total_count = 2;
+  optional string next_cursor = 3;
+}
+
 service WineCellarService {
   rpc CreateWineCellar(CreateWineCellarRequest) returns (CreateWineCellarResponse);
+  rpc GetWineCellar(GetWineCellarRequest) returns (GetWineCellarResponse);
   rpc UpdateWineCellar(UpdateWineCellarRequest) returns (UpdateWineCellarResponse);
   rpc DeleteWineCellar(DeleteWineCellarRequest) returns (DeleteWineCellarResponse);
+  rpc ListWineCellar(ListWineCellarRequest) returns (ListWineCellarResponse);
 }

@@ -1,8 +1,9 @@
 use cupel::db::DbPool;
 use cupel::generated::cellar::{
     CreateWineBottleRequest, CreateWineCellarRequest, DeleteWineBottleRequest,
-    DeleteWineCellarRequest, GetWineBottleRequest, ListWineBottleRequest, UpdateWineBottleRequest,
-    UpdateWineCellarRequest, WineColor, wine_bottle_service_client::WineBottleServiceClient,
+    DeleteWineCellarRequest, GetWineBottleRequest, GetWineCellarRequest, ListWineBottleRequest,
+    ListWineCellarRequest, PaginationParams, UpdateWineBottleRequest, UpdateWineCellarRequest,
+    WineColor, wine_bottle_service_client::WineBottleServiceClient,
     wine_bottle_service_server::WineBottleServiceServer,
     wine_cellar_service_client::WineCellarServiceClient,
     wine_cellar_service_server::WineCellarServiceServer,
@@ -806,6 +807,158 @@ mod wine_cellar_tests {
         assert_eq!(
             update_response.wine_cellar.as_ref().unwrap().bottles.len(),
             2
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_wine_cellar() {
+        let addr = setup_test_server().await;
+        let mut cellar_client = WineCellarServiceClient::connect(addr.clone())
+            .await
+            .expect("Failed to connect to server");
+
+        let request = CreateWineCellarRequest {
+            name: "Test Cellar".to_string(),
+            existing_bottle_ids: vec![],
+            new_bottles: vec![],
+        };
+
+        let create_response = cellar_client
+            .create_wine_cellar(request)
+            .await
+            .expect("Failed to create wine cellar")
+            .into_inner();
+
+        let cellar_id = create_response.wine_cellar.unwrap().id;
+
+        let get_request = GetWineCellarRequest {
+            id: cellar_id.clone(),
+        };
+
+        let get_response = cellar_client
+            .get_wine_cellar(get_request)
+            .await
+            .expect("Failed to get wine cellar")
+            .into_inner();
+
+        assert!(get_response.wine_cellar.is_some());
+        let cellar = get_response.wine_cellar.unwrap();
+        assert_eq!(cellar.id, cellar_id);
+        assert_eq!(cellar.name, Some("Test Cellar".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_wine_cellar_not_found() {
+        let addr = setup_test_server().await;
+        let mut cellar_client = WineCellarServiceClient::connect(addr.clone())
+            .await
+            .expect("Failed to connect to server");
+
+        let get_request = GetWineCellarRequest {
+            id: "00000000-0000-0000-0000-000000000000".to_string(),
+        };
+
+        let result = cellar_client.get_wine_cellar(get_request).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_list_wine_cellars() {
+        let addr = setup_test_server().await;
+        let mut cellar_client = WineCellarServiceClient::connect(addr.clone())
+            .await
+            .expect("Failed to connect to server");
+
+        let request1 = CreateWineCellarRequest {
+            name: "Cellar Alpha".to_string(),
+            existing_bottle_ids: vec![],
+            new_bottles: vec![],
+        };
+
+        let request2 = CreateWineCellarRequest {
+            name: "Cellar Beta".to_string(),
+            existing_bottle_ids: vec![],
+            new_bottles: vec![],
+        };
+
+        cellar_client
+            .create_wine_cellar(request1)
+            .await
+            .expect("Failed to create cellar 1");
+
+        cellar_client
+            .create_wine_cellar(request2)
+            .await
+            .expect("Failed to create cellar 2");
+
+        let list_request = ListWineCellarRequest {
+            name_contains: None,
+            pagination: Some(PaginationParams {
+                limit: 50,
+                offset: 0,
+                cursor: None,
+            }),
+        };
+
+        let list_response = cellar_client
+            .list_wine_cellar(list_request)
+            .await
+            .expect("Failed to list wine cellars")
+            .into_inner();
+
+        assert_eq!(list_response.total_count, 2);
+        assert_eq!(list_response.wine_cellar.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_wine_cellars_filter_by_name() {
+        let addr = setup_test_server().await;
+        let mut cellar_client = WineCellarServiceClient::connect(addr.clone())
+            .await
+            .expect("Failed to connect to server");
+
+        let request1 = CreateWineCellarRequest {
+            name: "Cellar Alpha".to_string(),
+            existing_bottle_ids: vec![],
+            new_bottles: vec![],
+        };
+
+        let request2 = CreateWineCellarRequest {
+            name: "Cellar Beta".to_string(),
+            existing_bottle_ids: vec![],
+            new_bottles: vec![],
+        };
+
+        cellar_client
+            .create_wine_cellar(request1)
+            .await
+            .expect("Failed to create cellar 1");
+
+        cellar_client
+            .create_wine_cellar(request2)
+            .await
+            .expect("Failed to create cellar 2");
+
+        let list_request = ListWineCellarRequest {
+            name_contains: Some("Alpha".to_string()),
+            pagination: Some(PaginationParams {
+                limit: 50,
+                offset: 0,
+                cursor: None,
+            }),
+        };
+
+        let list_response = cellar_client
+            .list_wine_cellar(list_request)
+            .await
+            .expect("Failed to list wine cellars")
+            .into_inner();
+
+        assert_eq!(list_response.total_count, 1);
+        assert_eq!(list_response.wine_cellar.len(), 1);
+        assert_eq!(
+            list_response.wine_cellar[0].name,
+            Some("Cellar Alpha".to_string())
         );
     }
 }

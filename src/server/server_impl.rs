@@ -14,7 +14,8 @@ use crate::generated::cellar::{
     CreateWineBottleRequest, CreateWineBottleResponse, CreateWineCellarRequest,
     CreateWineCellarResponse, DeleteWineBottleRequest, DeleteWineBottleResponse,
     DeleteWineCellarRequest, DeleteWineCellarResponse, GetWineBottleRequest, GetWineBottleResponse,
-    ListWineBottleRequest, ListWineBottleResponse, UpdateWineBottleRequest,
+    GetWineCellarRequest, GetWineCellarResponse, ListWineBottleRequest, ListWineBottleResponse,
+    ListWineCellarRequest, ListWineCellarResponse, UpdateWineBottleRequest,
     UpdateWineBottleResponse, UpdateWineCellarRequest, UpdateWineCellarResponse, WineBottleDetail,
     WineBottleSummary, WineCellar as ProtoWineCellar,
     wine_bottle_service_server::WineBottleService, wine_cellar_service_server::WineCellarService,
@@ -385,6 +386,161 @@ impl WineCellarService for AppState {
 
         Ok(Response::new(DeleteWineCellarResponse { success: true }))
     }
+
+    async fn get_wine_cellar(
+        &self,
+        request: Request<GetWineCellarRequest>,
+    ) -> Result<Response<GetWineCellarResponse>, Status> {
+        let req = request.into_inner();
+
+        let cellar_uuid =
+            Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid cellar ID"))?;
+
+        let proto_cellar = self
+            .db
+            .execute_async(move |conn| {
+                let cellar = fetch_cellar(conn, &cellar_uuid)?
+                    .ok_or_else(|| ServiceError::NotFound("Cellar not found".to_string()))?;
+
+                let bottles = fetch_cellar_bottles(conn, &cellar_uuid)?;
+
+                Ok(ProtoWineCellar {
+                    id: cellar.id.to_string(),
+                    name: cellar.name,
+                    bottles,
+                })
+            })
+            .await?;
+
+        Ok(Response::new(GetWineCellarResponse {
+            wine_cellar: Some(proto_cellar),
+        }))
+    }
+
+    async fn list_wine_cellar(
+        &self,
+        request: Request<ListWineCellarRequest>,
+    ) -> Result<Response<ListWineCellarResponse>, Status> {
+        let req = request.into_inner();
+
+        let name_contains = req.name_contains.clone();
+        let pagination = req
+            .pagination
+            .unwrap_or(crate::generated::cellar::PaginationParams {
+                limit: 50,
+                offset: 0,
+                cursor: None,
+            });
+
+        let result = self
+            .db
+            .execute_async(move |conn| {
+                let limit = pagination.limit.clamp(1, 100);
+                let offset = pagination.offset.max(0);
+
+                let (count_sql, count_params): (&str, Vec<Box<dyn rusqlite::ToSql>>) =
+                    if let Some(ref name) = name_contains {
+                        (
+                            "SELECT COUNT(*) FROM wine_cellars WHERE name LIKE ?",
+                            vec![Box::new(format!("%{}%", name))],
+                        )
+                    } else {
+                        ("SELECT COUNT(*) FROM wine_cellars", vec![])
+                    };
+
+                let count_params_refs: Vec<&dyn rusqlite::ToSql> =
+                    count_params.iter().map(|p| p.as_ref()).collect();
+                let total_count: i32 = conn
+                    .query_row(count_sql, count_params_refs.as_slice(), |row| row.get(0))
+                    .map_err(|e| {
+                        ServiceError::Internal(format!("Failed to count cellars: {}", e))
+                    })?;
+
+                let (query_sql, query_params): (&str, Vec<Box<dyn rusqlite::ToSql>>) =
+                    if let Some(ref name) = name_contains {
+                        (
+                            "SELECT id, name, created_at, updated_at FROM wine_cellars WHERE name LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                            vec![
+                                Box::new(format!("%{}%", name)),
+                                Box::new(limit),
+                                Box::new(offset),
+                            ],
+                        )
+                    } else {
+                        (
+                            "SELECT id, name, created_at, updated_at FROM wine_cellars ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                            vec![Box::new(limit), Box::new(offset)],
+                        )
+                    };
+
+                let query_params_refs: Vec<&dyn rusqlite::ToSql> =
+                    query_params.iter().map(|p| p.as_ref()).collect();
+
+                let mut stmt = conn
+                    .prepare(query_sql)
+                    .map_err(|e| ServiceError::Internal(format!("Failed to prepare: {}", e)))?;
+
+                let mut rows = stmt
+                    .query(query_params_refs.as_slice())
+                    .map_err(|e| ServiceError::Internal(format!("Failed to query cellars: {}", e)))?;
+
+                let mut cellars = Vec::new();
+                while let Some(row) = rows.next().map_err(|e| {
+                    ServiceError::Internal(format!("Failed to read row: {}", e))
+                })? {
+                    let id_str: String =
+                        row.get(0)
+                            .map_err(|e| ServiceError::Internal(format!("Failed to get id: {}", e)))?;
+                    let uuid = Uuid::parse_str(&id_str).map_err(|e| {
+                        ServiceError::Internal(format!("Invalid UUID: {}", e))
+                    })?;
+                    let name: Option<String> = row
+                        .get(1)
+                        .map_err(|e| ServiceError::Internal(format!("Failed to get name: {}", e)))?;
+
+                    let bottles =
+                        fetch_cellar_bottles(conn, &uuid).map_err(|e| ServiceError::Internal(format!("Failed to fetch bottles: {}", e)))?;
+
+                    cellars.push(ProtoWineCellar {
+                        id: uuid.to_string(),
+                        name,
+                        bottles,
+                    });
+                }
+
+                Ok(ListWineCellarResponse {
+                    wine_cellar: cellars,
+                    total_count,
+                    next_cursor: None,
+                })
+            })
+            .await?;
+
+        Ok(Response::new(result))
+    }
+}
+
+fn fetch_cellar(
+    db: &Connection,
+    cellar_id: &Uuid,
+) -> Result<Option<ModelWineCellar>, ServiceError> {
+    let mut stmt = db
+        .prepare("SELECT id, name, created_at, updated_at FROM wine_cellars WHERE id = ?1")
+        .map_err(|e| ServiceError::Internal(format!("Failed to prepare: {}", e)))?;
+
+    let result = stmt
+        .query_row(params![cellar_id.to_string()], |row| {
+            Ok(ModelWineCellar {
+                id: parse_uuid_row(row, 0)?,
+                name: row.get(1)?,
+                created_at: parse_iso_row(row, 2)?,
+                updated_at: parse_iso_row(row, 3)?,
+            })
+        })
+        .optional()
+        .map_err(|e| ServiceError::Internal(format!("Failed to query cellar: {}", e)))?;
+
+    Ok(result)
 }
 
 fn fetch_cellar_bottles(
