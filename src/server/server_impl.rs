@@ -1,3 +1,4 @@
+use chrono::Datelike;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -480,6 +481,21 @@ fn fetch_bottle_detail(
     Ok(bottle)
 }
 
+fn get_sort_column(sort_by: i32) -> &'static str {
+    match sort_by {
+        1 => "name",
+        2 => "vintage",
+        3 => "rating",
+        4 => "purchase_date",
+        5 => "quantity",
+        6 => "created_at",
+        7 => "producer",
+        8 => "country",
+        9 => "region",
+        _ => "name",
+    }
+}
+
 #[tonic::async_trait]
 impl WineBottleService for AppState {
     async fn create_wine_bottle(
@@ -656,53 +672,194 @@ impl WineBottleService for AppState {
 
     async fn list_wine_bottle(
         &self,
-        _request: Request<ListWineBottleRequest>,
+        request: Request<ListWineBottleRequest>,
     ) -> Result<Response<ListWineBottleResponse>, Status> {
+        let req = request.into_inner();
         let db = self.db.0.lock().await;
 
-        let mut stmt = db
-            .prepare(
-                "SELECT id, name, producer, grape_variety, vintage, country, region, color
-                 FROM wine_bottles WHERE deleted_at IS NULL",
-            )
-            .map_err(|e| Status::internal(format!("Failed to prepare: {}", e)))?;
+        let filter = req.filter.unwrap_or_default();
+        let pagination = req
+            .pagination
+            .unwrap_or(crate::generated::cellar::PaginationParams {
+                limit: 50,
+                offset: 0,
+                cursor: None,
+            });
 
-        let bottles = stmt
-            .query_map([], |row: &rusqlite::Row| {
-                let grape_str: String = row.get(3)?;
-                Ok(WineBottleSummary {
-                    id: row.get(0)?,
-                    name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    producer: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    grape_variety: if grape_str.is_empty() {
-                        Vec::new()
-                    } else {
-                        grape_str
-                            .split(GRAPE_VARIETY_SEPARATOR)
-                            .map(|s: &str| s.trim().to_string())
-                            .collect()
-                    },
-                    vintage: row.get::<_, Option<i32>>(4)?.unwrap_or(0),
-                    country: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                    region: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                    color: row.get::<_, i32>(7)?,
-                })
-            })
-            .map_err(|e| Status::internal(format!("Failed to query bottles: {}", e)))?;
+        let mut conditions = Vec::new();
+        let mut count_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-        let mut result = Vec::new();
-        let mut total_count = 0i32;
-        for bottle in bottles {
-            total_count += 1;
-            result.push(
-                bottle.map_err(|e| Status::internal(format!("Failed to read bottle: {}", e)))?,
-            );
+        conditions.push("deleted_at IS NULL".to_string());
+
+        if let Some(color) = filter.color {
+            conditions.push("color = ?".to_string());
+            count_params.push(Box::new(color));
         }
 
+        if let Some(ref country) = filter.country {
+            conditions.push("country = ?".to_string());
+            count_params.push(Box::new(country.clone()));
+        }
+
+        if let Some(ref region) = filter.region {
+            conditions.push("region = ?".to_string());
+            count_params.push(Box::new(region.clone()));
+        }
+
+        if let Some(ref region_contains) = filter.region_contains {
+            conditions.push("region LIKE ?".to_string());
+            count_params.push(Box::new(format!("%{}%", region_contains)));
+        }
+
+        if let Some(ref producer) = filter.producer {
+            conditions.push("producer = ?".to_string());
+            count_params.push(Box::new(producer.clone()));
+        }
+
+        if let Some(ref producer_contains) = filter.producer_contains {
+            conditions.push("producer LIKE ?".to_string());
+            count_params.push(Box::new(format!("%{}%", producer_contains)));
+        }
+
+        if let Some(vintage_eq) = filter.vintage_eq {
+            conditions.push("vintage = ?".to_string());
+            count_params.push(Box::new(vintage_eq));
+        }
+
+        if let Some(ref range) = filter.vintage_range {
+            conditions.push("vintage >= ? AND vintage <= ?".to_string());
+            count_params.push(Box::new(range.min));
+            count_params.push(Box::new(range.max));
+        }
+
+        if let Some(ref range) = filter.rating_range {
+            conditions.push("rating >= ? AND rating <= ?".to_string());
+            count_params.push(Box::new(range.min));
+            count_params.push(Box::new(range.max));
+        }
+
+        if let Some(ref name_contains) = filter.name_contains {
+            conditions.push("name LIKE ?".to_string());
+            count_params.push(Box::new(format!("%{}%", name_contains)));
+        }
+
+        if let Some(ref grape_variety) = filter.grape_variety {
+            conditions.push("grape_variety LIKE ?".to_string());
+            count_params.push(Box::new(format!("%{}%", grape_variety)));
+        }
+
+        if filter.drinkable_now == Some(true) {
+            let current_year = chrono::Utc::now().date_naive().year();
+            conditions.push("drink_from_year <= ? AND drink_to_year >= ?".to_string());
+            count_params.push(Box::new(current_year));
+            count_params.push(Box::new(current_year));
+        }
+
+        if let Some(ref range) = filter.drink_window_overlap {
+            conditions.push("drink_from_year <= ? AND drink_to_year >= ?".to_string());
+            count_params.push(Box::new(range.min));
+            count_params.push(Box::new(range.max));
+        }
+
+        if let Some(ref range) = filter.quantity_range {
+            conditions.push("quantity >= ? AND quantity <= ?".to_string());
+            count_params.push(Box::new(range.min));
+            count_params.push(Box::new(range.max));
+        }
+
+        let sort_column = get_sort_column(filter.sort_by);
+        let order_dir = if filter.ascending { "ASC" } else { "DESC" };
+        let order_by = format!("{} {}", sort_column, order_dir);
+
+        let where_clause = conditions.join(" AND ");
+        let count_sql = format!("SELECT COUNT(*) FROM wine_bottles WHERE {}", where_clause);
+
+        let count_params_refs: Vec<&dyn rusqlite::ToSql> =
+            count_params.iter().map(|p| p.as_ref()).collect();
+        let total_count: i32 = db
+            .query_row(&count_sql, count_params_refs.as_slice(), |row| row.get(0))
+            .map_err(|e| Status::internal(format!("Failed to count bottles: {}", e)))?;
+
+        let limit = pagination.limit.clamp(1, 100);
+        let offset = pagination.offset.max(0);
+
+        let result_sql = format!(
+            "SELECT id, name, producer, grape_variety, vintage, country, region, color
+             FROM wine_bottles WHERE {} ORDER BY {} LIMIT ? OFFSET ?",
+            where_clause, order_by
+        );
+
+        let mut all_params: Vec<Box<dyn rusqlite::ToSql>> = count_params;
+        all_params.push(Box::new(limit));
+        all_params.push(Box::new(offset));
+
+        let all_params_refs: Vec<&dyn rusqlite::ToSql> =
+            all_params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = db
+            .prepare(&result_sql)
+            .map_err(|e| Status::internal(format!("Failed to prepare: {}", e)))?;
+
+        let mut rows = stmt
+            .query(all_params_refs.as_slice())
+            .map_err(|e| Status::internal(format!("Failed to query bottles: {}", e)))?;
+
+        let mut bottles = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| Status::internal(format!("Failed to read row: {}", e)))?
+        {
+            let grape_str: String = row
+                .get(3)
+                .map_err(|e| Status::internal(format!("Failed to get grape_variety: {}", e)))?;
+            bottles.push(WineBottleSummary {
+                id: row
+                    .get(0)
+                    .map_err(|e| Status::internal(format!("Failed to get id: {}", e)))?,
+                name: row
+                    .get::<_, Option<String>>(1)
+                    .map_err(|e| Status::internal(format!("Failed to get name: {}", e)))?
+                    .unwrap_or_default(),
+                producer: row
+                    .get::<_, Option<String>>(2)
+                    .map_err(|e| Status::internal(format!("Failed to get producer: {}", e)))?
+                    .unwrap_or_default(),
+                grape_variety: if grape_str.is_empty() {
+                    Vec::new()
+                } else {
+                    grape_str
+                        .split(GRAPE_VARIETY_SEPARATOR)
+                        .map(|s| s.trim().to_string())
+                        .collect()
+                },
+                vintage: row
+                    .get::<_, Option<i32>>(4)
+                    .map_err(|e| Status::internal(format!("Failed to get vintage: {}", e)))?
+                    .unwrap_or(0),
+                country: row
+                    .get::<_, Option<String>>(5)
+                    .map_err(|e| Status::internal(format!("Failed to get country: {}", e)))?
+                    .unwrap_or_default(),
+                region: row
+                    .get::<_, Option<String>>(6)
+                    .map_err(|e| Status::internal(format!("Failed to get region: {}", e)))?
+                    .unwrap_or_default(),
+                color: row
+                    .get::<_, i32>(7)
+                    .map_err(|e| Status::internal(format!("Failed to get color: {}", e)))?,
+            });
+        }
+
+        let next_cursor = if bottles.len() as i32 == limit && pagination.cursor.is_none() {
+            bottles.last().map(|b| format!("{}|{}", b.name, b.id))
+        } else {
+            None
+        };
+
         Ok(Response::new(ListWineBottleResponse {
-            bottles: result,
+            bottles,
             total_count,
-            next_cursor: None,
+            next_cursor,
         }))
     }
 }
