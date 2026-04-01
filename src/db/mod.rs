@@ -39,4 +39,18 @@ impl DbPool {
         .await
         .map_err(|e| ServiceError::Internal(format!("Task join error: {}", e)))?
     }
+
+    pub async fn execute_async<F, T>(&self, f: F) -> Result<T, ServiceError>
+    where
+        F: FnOnce(&Connection) -> Result<T, ServiceError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let db = Arc::clone(&self.0);
+        tokio::task::spawn_blocking(move || {
+            let guard = db.lock().unwrap();
+            f(&guard)
+        })
+        .await
+        .map_err(|e| ServiceError::Internal(format!("Task join error: {}", e)))?
+    }
 }
