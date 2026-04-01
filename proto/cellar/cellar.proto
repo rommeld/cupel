@@ -86,6 +86,7 @@ message UpdateWineBottleRequest {
   optional string notes = 15;
   optional int32 rating = 16;
   optional string photo_url = 17;
+  optional bool clear_grape_varieties = 18; // Set to true to clear all grape varieties
 }
 
 message UpdateWineBottleResponse {

@@ -157,6 +157,9 @@ pub struct UpdateWineBottleRequest {
     pub rating: ::core::option::Option<i32>,
     #[prost(string, optional, tag = "17")]
     pub photo_url: ::core::option::Option<::prost::alloc::string::String>,
+    /// Set to true to clear all grape varieties
+    #[prost(bool, optional, tag = "18")]
+    pub clear_grape_varieties: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateWineBottleResponse {

@@ -658,6 +658,7 @@ impl WineBottleService for AppState {
         let req_notes = req.notes.clone();
         let req_rating = req.rating;
         let req_photo_url = req.photo_url.clone();
+        let req_clear_grape_varieties = req.clear_grape_varieties;
 
         let proto_bottle = self
             .db
@@ -672,7 +673,9 @@ impl WineBottleService for AppState {
 
                     let name = req_name.or(existing.name);
                     let producer = req_producer.or(existing.producer);
-                    let grape_variety = if req_grape_variety.is_empty() {
+                    let grape_variety = if req_clear_grape_varieties == Some(true) {
+                        Vec::new()
+                    } else if req_grape_variety.is_empty() {
                         existing.grape_variety
                     } else {
                         req_grape_variety.clone()

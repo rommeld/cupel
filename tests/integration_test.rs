@@ -208,6 +208,7 @@ mod wine_bottle_tests {
             notes: None,
             rating: Some(100),
             photo_url: None,
+            clear_grape_varieties: None,
         };
 
         let update_response = client
@@ -454,12 +455,98 @@ mod wine_bottle_tests {
             notes: None,
             rating: None,
             photo_url: None,
+            clear_grape_varieties: None,
         };
 
         let result = client.update_wine_bottle(request).await;
         assert!(result.is_err());
         let status = result.unwrap_err();
         assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_update_clear_grape_varieties() {
+        let addr = setup_test_server().await;
+        let mut client = WineBottleServiceClient::connect(addr)
+            .await
+            .expect("Failed to connect to server");
+
+        let create_request = CreateWineBottleRequest {
+            name: Some("Chablis".to_string()),
+            producer: Some("William Fèvre".to_string()),
+            grape_variety: vec!["Chardonnay".to_string()],
+            vintage: Some(2020),
+            country: Some("France".to_string()),
+            region: Some("Burgundy".to_string()),
+            color: Some(WineColor::White as i32),
+            quantity: Some(6),
+            purchase_date: None,
+            purchase_price: Some(45.00),
+            currency_code: Some("EUR".to_string()),
+            drink_from_year: None,
+            drink_to_year: None,
+            notes: None,
+            rating: None,
+            photo_url: None,
+        };
+
+        let create_response = client
+            .create_wine_bottle(create_request)
+            .await
+            .expect("Failed to create wine bottle")
+            .into_inner();
+
+        let bottle_id = create_response.bottle.unwrap().id;
+
+        let get_request = GetWineBottleRequest {
+            id: bottle_id.clone(),
+        };
+        let get_response = client
+            .get_wine_bottle(get_request)
+            .await
+            .expect("Failed to get wine bottle")
+            .into_inner();
+        let bottle = get_response.bottle.unwrap();
+        assert_eq!(bottle.grape_variety, vec!["Chardonnay".to_string()]);
+
+        let update_request = UpdateWineBottleRequest {
+            id: bottle_id.clone(),
+            name: None,
+            producer: None,
+            grape_variety: vec![],
+            vintage: None,
+            country: None,
+            region: None,
+            color: None,
+            quantity: None,
+            purchase_date: None,
+            purchase_price: None,
+            currency_code: None,
+            drink_from_year: None,
+            drink_to_year: None,
+            notes: None,
+            rating: None,
+            photo_url: None,
+            clear_grape_varieties: Some(true),
+        };
+
+        let update_response = client
+            .update_wine_bottle(update_request)
+            .await
+            .expect("Failed to update wine bottle")
+            .into_inner();
+
+        let updated_bottle = update_response.bottle.unwrap();
+        assert_eq!(updated_bottle.grape_variety, Vec::<String>::new());
+
+        let get_request = GetWineBottleRequest { id: bottle_id };
+        let get_response = client
+            .get_wine_bottle(get_request)
+            .await
+            .expect("Failed to get wine bottle")
+            .into_inner();
+        let bottle = get_response.bottle.unwrap();
+        assert_eq!(bottle.grape_variety, Vec::<String>::new());
     }
 }
 
