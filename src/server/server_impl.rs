@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::db::DbPool;
 use crate::db::models::{
-    GRAPE_VARIETY_SEPARATOR, WineBottle as ModelWineBottle, WineCellar as ModelWineCellar,
-    WineColor as ModelWineColor,
+    WineBottle as ModelWineBottle, WineCellar as ModelWineCellar, WineColor as ModelWineColor,
+    get_or_create_variety, get_varieties_for_bottle, set_bottle_varieties,
 };
 use crate::errors::ServiceError;
 use crate::generated::cellar::{
@@ -201,6 +201,16 @@ impl WineCellarService for AppState {
             )
             .map_err(ServiceError::from)?;
 
+            for variety_name in &bottle.grape_variety {
+                let variety_id =
+                    get_or_create_variety(&tx, variety_name).map_err(ServiceError::from)?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO wine_bottle_varieties (bottle_id, variety_id) VALUES (?1, ?2)",
+                    params![bottle.id.to_string(), variety_id.to_string()],
+                )
+                .map_err(ServiceError::from)?;
+            }
+
             tx.execute(
                 "INSERT INTO wine_cellar_bottles (cellar_id, bottle_id, added_at) VALUES (?1, ?2, ?3)",
                 params![cellar_id.to_string(), bottle.id.to_string(), now.to_rfc3339()],
@@ -366,42 +376,49 @@ impl WineCellarService for AppState {
 fn fetch_cellar_bottles(
     db: &Connection,
     cellar_id: &Uuid,
-) -> Result<Vec<WineBottleSummary>, Status> {
+) -> Result<Vec<WineBottleSummary>, ServiceError> {
     let mut stmt = db
         .prepare(
-            "SELECT b.id, b.name, b.producer, b.grape_variety, b.vintage, b.country, b.region, b.color
+            "SELECT b.id, b.name, b.producer, b.vintage, b.country, b.region, b.color
              FROM wine_bottles b
              INNER JOIN wine_cellar_bottles cb ON b.id = cb.bottle_id
              WHERE cb.cellar_id = ?1 AND b.deleted_at IS NULL",
         )
-        .map_err(|e| Status::internal(format!("Failed to prepare: {}", e)))?;
+        .map_err(|e| ServiceError::Internal(format!("Failed to prepare: {}", e)))?;
 
-    let bottles = stmt
-        .query_map(params![cellar_id.to_string()], |row: &rusqlite::Row| {
-            let grape_str: String = row.get(3)?;
-            Ok(WineBottleSummary {
-                id: row.get(0)?,
-                name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                producer: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                grape_variety: if grape_str.is_empty() {
-                    Vec::new()
-                } else {
-                    grape_str
-                        .split(GRAPE_VARIETY_SEPARATOR)
-                        .map(|s: &str| s.trim().to_string())
-                        .collect()
-                },
-                vintage: row.get::<_, Option<i32>>(4)?.unwrap_or(0),
-                country: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                region: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                color: row.get::<_, i32>(7)?,
-            })
-        })
-        .map_err(|e| Status::internal(format!("Failed to query bottles: {}", e)))?;
+    let bottle_ids: Vec<String> = stmt
+        .query_map(params![cellar_id.to_string()], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
 
     let mut result = Vec::new();
-    for bottle in bottles {
-        result.push(bottle.map_err(|e| Status::internal(format!("Failed to read bottle: {}", e)))?);
+    for bottle_id in bottle_ids {
+        let uuid = Uuid::parse_str(&bottle_id)
+            .map_err(|e| ServiceError::Internal(format!("Invalid bottle UUID: {}", e)))?;
+        let varieties = get_varieties_for_bottle(db, &uuid).map_err(ServiceError::from)?;
+
+        let mut stmt = db
+            .prepare(
+                "SELECT id, name, producer, vintage, country, region, color
+                 FROM wine_bottles WHERE id = ?1 AND deleted_at IS NULL",
+            )
+            .map_err(|e| ServiceError::Internal(format!("Failed to prepare: {}", e)))?;
+
+        let summary = stmt
+            .query_row(params![bottle_id], |row| {
+                Ok(WineBottleSummary {
+                    id: row.get(0)?,
+                    name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    producer: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    grape_variety: varieties.clone(),
+                    vintage: row.get::<_, Option<i32>>(3)?.unwrap_or(0),
+                    country: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    region: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                    color: row.get::<_, i32>(6)?,
+                })
+            })
+            .map_err(|e| ServiceError::Internal(format!("Failed to query bottle: {}", e)))?;
+        result.push(summary);
     }
 
     Ok(result)
@@ -410,22 +427,21 @@ fn fetch_cellar_bottles(
 fn fetch_bottle_detail(
     db: &Connection,
     bottle_id: &Uuid,
-) -> Result<Option<ModelWineBottle>, Status> {
+) -> Result<Option<ModelWineBottle>, ServiceError> {
     let mut stmt = db
         .prepare(
-            "SELECT id, name, producer, grape_variety, vintage, country, region, color,
+            "SELECT id, name, producer, vintage, country, region, color,
                     quantity, purchase_date, purchase_price, currency_code,
                     drink_from_year, drink_to_year, notes, rating, photo_url,
                     created_at, updated_at, deleted_at
              FROM wine_bottles WHERE id = ?1",
         )
-        .map_err(|e| Status::internal(format!("Failed to prepare: {}", e)))?;
+        .map_err(|e| ServiceError::Internal(format!("Failed to prepare: {}", e)))?;
 
-    let bottle = stmt
-        .query_row(params![bottle_id.to_string()], |row: &rusqlite::Row| {
-            let grape_str: String = row.get(3)?;
-            let purchase_date_str: Option<String> = row.get(9)?;
-            let deleted_at_str: Option<String> = row.get(19)?;
+    let mut bottle = stmt
+        .query_row(params![bottle_id.to_string()], |row| {
+            let purchase_date_str: Option<String> = row.get(8)?;
+            let deleted_at_str: Option<String> = row.get(18)?;
 
             let purchase_date = parse_naive_date_opt(&purchase_date_str);
 
@@ -449,34 +465,32 @@ fn fetch_bottle_detail(
                 id: parse_uuid_row(row, 0)?,
                 name: row.get(1)?,
                 producer: row.get(2)?,
-                grape_variety: if grape_str.is_empty() {
-                    Vec::new()
-                } else {
-                    grape_str
-                        .split(GRAPE_VARIETY_SEPARATOR)
-                        .map(|s: &str| s.trim().to_string())
-                        .collect()
-                },
-                vintage: row.get(4)?,
-                country: row.get(5)?,
-                region: row.get(6)?,
-                color: ModelWineColor::from(row.get::<_, i32>(7)?),
-                quantity: row.get(8)?,
+                grape_variety: Vec::new(),
+                vintage: row.get(3)?,
+                country: row.get(4)?,
+                region: row.get(5)?,
+                color: ModelWineColor::from(row.get::<_, i32>(6)?),
+                quantity: row.get(7)?,
                 purchase_date,
-                purchase_price: row.get(10)?,
-                currency_code: row.get(11)?,
-                drink_from_year: row.get(12)?,
-                drink_to_year: row.get(13)?,
-                notes: row.get(14)?,
-                rating: row.get(15)?,
-                photo_url: row.get(16)?,
-                created_at: parse_iso_row(row, 17)?,
-                updated_at: parse_iso_row(row, 18)?,
+                purchase_price: row.get(9)?,
+                currency_code: row.get(10)?,
+                drink_from_year: row.get(11)?,
+                drink_to_year: row.get(12)?,
+                notes: row.get(13)?,
+                rating: row.get(14)?,
+                photo_url: row.get(15)?,
+                created_at: parse_iso_row(row, 16)?,
+                updated_at: parse_iso_row(row, 17)?,
                 deleted_at,
             })
         })
         .optional()
-        .map_err(|e| Status::internal(format!("Failed to query bottle: {}", e)))?;
+        .map_err(|e| ServiceError::Internal(format!("Failed to query bottle: {}", e)))?;
+
+    if let Some(ref mut bottle) = bottle {
+        bottle.grape_variety =
+            get_varieties_for_bottle(db, bottle_id).map_err(ServiceError::from)?;
+    }
 
     Ok(bottle)
 }
@@ -503,37 +517,78 @@ impl WineBottleService for AppState {
         request: Request<CreateWineBottleRequest>,
     ) -> Result<Response<CreateWineBottleResponse>, Status> {
         let req = request.into_inner();
-        let db = self.db.0.lock().await;
-
         let bottle = proto_to_bottle(&req).map_err(Status::from)?;
 
-        db.execute(
-            "INSERT INTO wine_bottles (id, name, producer, grape_variety, vintage, country, region, color, quantity, purchase_date, purchase_price, currency_code, drink_from_year, drink_to_year, notes, rating, photo_url, created_at, updated_at, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
-            params![
-                bottle.id.to_string(),
-                bottle.name,
-                bottle.producer,
-                ModelWineBottle::grape_variety_to_string(&bottle.grape_variety),
-                bottle.vintage,
-                bottle.country,
-                bottle.region,
-                i32::from(bottle.color),
-                bottle.quantity,
-                bottle.purchase_date.map(|d| d.to_string()),
-                bottle.purchase_price,
-                bottle.currency_code,
-                bottle.drink_from_year,
-                bottle.drink_to_year,
-                bottle.notes,
-                bottle.rating,
-                bottle.photo_url,
-                bottle.created_at.to_rfc3339(),
-                bottle.updated_at.to_rfc3339(),
-                bottle.deleted_at.map(|d| d.to_rfc3339()),
-            ],
-        )
-        .map_err(ServiceError::from)?;
+        let bottle_id_str = bottle.id.to_string();
+        let bottle_name = bottle.name.clone();
+        let bottle_producer = bottle.producer.clone();
+        let bottle_grape_str = ModelWineBottle::grape_variety_to_string(&bottle.grape_variety);
+        let bottle_vintage = bottle.vintage;
+        let bottle_country = bottle.country.clone();
+        let bottle_region = bottle.region.clone();
+        let bottle_color = i32::from(bottle.color);
+        let bottle_quantity = bottle.quantity;
+        let bottle_purchase_date = bottle.purchase_date.map(|d| d.to_string());
+        let bottle_purchase_price = bottle.purchase_price;
+        let bottle_currency_code = bottle.currency_code.clone();
+        let bottle_drink_from_year = bottle.drink_from_year;
+        let bottle_drink_to_year = bottle.drink_to_year;
+        let bottle_notes = bottle.notes.clone();
+        let bottle_rating = bottle.rating;
+        let bottle_photo_url = bottle.photo_url.clone();
+        let bottle_created_at = bottle.created_at.to_rfc3339();
+        let bottle_updated_at = bottle.updated_at.to_rfc3339();
+
+        self.db
+            .execute(move |conn| {
+                conn.execute(
+                    "INSERT INTO wine_bottles (id, name, producer, grape_variety, vintage, country, region, color, quantity, purchase_date, purchase_price, currency_code, drink_from_year, drink_to_year, notes, rating, photo_url, created_at, updated_at, deleted_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                    params![
+                        bottle_id_str,
+                        bottle_name,
+                        bottle_producer,
+                        bottle_grape_str,
+                        bottle_vintage,
+                        bottle_country,
+                        bottle_region,
+                        bottle_color,
+                        bottle_quantity,
+                        bottle_purchase_date,
+                        bottle_purchase_price,
+                        bottle_currency_code,
+                        bottle_drink_from_year,
+                        bottle_drink_to_year,
+                        bottle_notes,
+                        bottle_rating,
+                        bottle_photo_url,
+                        bottle_created_at,
+                        bottle_updated_at,
+                        Option::<String>::None,
+                    ],
+                )
+            })
+            .await
+            .map_err(ServiceError::from)?;
+
+        for variety_name in &bottle.grape_variety {
+            let variety_name = variety_name.clone();
+            let bottle_id = bottle.id.to_string();
+            let variety_id = self
+                .db
+                .execute(move |conn| Ok(get_or_create_variety(conn, &variety_name)?))
+                .await
+                .map_err(ServiceError::from)?;
+            self.db
+                .execute(move |conn| {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO wine_bottle_varieties (bottle_id, variety_id) VALUES (?1, ?2)",
+                        params![bottle_id, variety_id.to_string()],
+                    )
+                })
+                .await
+                .map_err(ServiceError::from)?;
+        }
 
         Ok(Response::new(CreateWineBottleResponse {
             bottle: Some(bottle_to_proto(&bottle)),
@@ -638,6 +693,8 @@ impl WineBottleService for AppState {
         )
         .map_err(ServiceError::from)?;
 
+        set_bottle_varieties(&db, &bottle_uuid, &grape_variety).map_err(ServiceError::from)?;
+
         let updated = fetch_bottle_detail(&db, &bottle_uuid)?
             .ok_or_else(|| Status::not_found("Bottle not found"))?;
 
@@ -650,18 +707,22 @@ impl WineBottleService for AppState {
         &self,
         request: Request<DeleteWineBottleRequest>,
     ) -> Result<Response<DeleteWineBottleResponse>, Status> {
-        let req = request.into_inner();
-        let db = self.db.0.lock().await;
+        let bottle_uuid = Uuid::parse_str(&request.into_inner().id)
+            .map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
+
         let now = chrono::Utc::now();
-
-        let bottle_uuid =
-            Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
-
-        let rows = db.execute(
-            "UPDATE wine_bottles SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
-            params![now.to_rfc3339(), now.to_rfc3339(), bottle_uuid.to_string()],
-        )
-        .map_err(ServiceError::from)?;
+        let now_str = now.to_rfc3339();
+        let bottle_id_str = bottle_uuid.to_string();
+        let rows = self
+            .db
+            .execute(move |conn| {
+                conn.execute(
+                    "UPDATE wine_bottles SET deleted_at = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
+                    params![now_str, now_str, bottle_id_str],
+                )
+            })
+            .await
+            .map_err(ServiceError::from)?;
 
         if rows == 0 {
             return Err(Status::not_found("Bottle not found or already deleted"));
@@ -743,9 +804,14 @@ impl WineBottleService for AppState {
             count_params.push(Box::new(format!("%{}%", name_contains)));
         }
 
-        if let Some(ref grape_variety) = filter.grape_variety {
-            conditions.push("grape_variety LIKE ?".to_string());
-            count_params.push(Box::new(format!("%{}%", grape_variety)));
+        if let Some(ref grape_variety_filter) = filter.grape_variety {
+            conditions.push(
+                "EXISTS (SELECT 1 FROM wine_bottle_varieties wbv \
+                 JOIN grape_varieties gv ON wbv.variety_id = gv.id \
+                 WHERE wbv.bottle_id = wine_bottles.id AND gv.name LIKE ?)"
+                    .to_string(),
+            );
+            count_params.push(Box::new(format!("%{}%", grape_variety_filter)));
         }
 
         if filter.drinkable_now == Some(true) {
@@ -784,7 +850,7 @@ impl WineBottleService for AppState {
         let offset = pagination.offset.max(0);
 
         let result_sql = format!(
-            "SELECT id, name, producer, grape_variety, vintage, country, region, color
+            "SELECT id, name, producer, vintage, country, region, color
              FROM wine_bottles WHERE {} ORDER BY {} LIMIT ? OFFSET ?",
             where_clause, order_by
         );
@@ -809,13 +875,16 @@ impl WineBottleService for AppState {
             .next()
             .map_err(|e| Status::internal(format!("Failed to read row: {}", e)))?
         {
-            let grape_str: String = row
-                .get(3)
-                .map_err(|e| Status::internal(format!("Failed to get grape_variety: {}", e)))?;
+            let bottle_id_str: String = row
+                .get(0)
+                .map_err(|e| Status::internal(format!("Failed to get id: {}", e)))?;
+            let bottle_uuid = Uuid::parse_str(&bottle_id_str)
+                .map_err(|e| Status::internal(format!("Invalid bottle UUID: {}", e)))?;
+            let varieties = get_varieties_for_bottle(&db, &bottle_uuid)
+                .map_err(|e| Status::internal(format!("Failed to get varieties: {}", e)))?;
+
             bottles.push(WineBottleSummary {
-                id: row
-                    .get(0)
-                    .map_err(|e| Status::internal(format!("Failed to get id: {}", e)))?,
+                id: bottle_id_str,
                 name: row
                     .get::<_, Option<String>>(1)
                     .map_err(|e| Status::internal(format!("Failed to get name: {}", e)))?
@@ -824,28 +893,21 @@ impl WineBottleService for AppState {
                     .get::<_, Option<String>>(2)
                     .map_err(|e| Status::internal(format!("Failed to get producer: {}", e)))?
                     .unwrap_or_default(),
-                grape_variety: if grape_str.is_empty() {
-                    Vec::new()
-                } else {
-                    grape_str
-                        .split(GRAPE_VARIETY_SEPARATOR)
-                        .map(|s| s.trim().to_string())
-                        .collect()
-                },
+                grape_variety: varieties,
                 vintage: row
-                    .get::<_, Option<i32>>(4)
+                    .get::<_, Option<i32>>(3)
                     .map_err(|e| Status::internal(format!("Failed to get vintage: {}", e)))?
                     .unwrap_or(0),
                 country: row
-                    .get::<_, Option<String>>(5)
+                    .get::<_, Option<String>>(4)
                     .map_err(|e| Status::internal(format!("Failed to get country: {}", e)))?
                     .unwrap_or_default(),
                 region: row
-                    .get::<_, Option<String>>(6)
+                    .get::<_, Option<String>>(5)
                     .map_err(|e| Status::internal(format!("Failed to get region: {}", e)))?
                     .unwrap_or_default(),
                 color: row
-                    .get::<_, i32>(7)
+                    .get::<_, i32>(6)
                     .map_err(|e| Status::internal(format!("Failed to get color: {}", e)))?,
             });
         }

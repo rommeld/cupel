@@ -1,4 +1,5 @@
 use chrono::{DateTime, NaiveDate, Utc};
+use rusqlite::{Connection, Result as SqliteResult, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -103,6 +104,8 @@ impl From<DeleteReason> for i32 {
     }
 }
 
+pub const GRAPE_VARIETY_SEPARATOR: char = ',';
+
 pub const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS wine_bottles (
     id TEXT PRIMARY KEY,
@@ -143,6 +146,19 @@ CREATE TABLE IF NOT EXISTS wine_cellar_bottles (
     FOREIGN KEY (bottle_id) REFERENCES wine_bottles(id)
 );
 
+CREATE TABLE IF NOT EXISTS grape_varieties (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE
+);
+
+CREATE TABLE IF NOT EXISTS wine_bottle_varieties (
+    bottle_id TEXT NOT NULL,
+    variety_id TEXT NOT NULL,
+    PRIMARY KEY (bottle_id, variety_id),
+    FOREIGN KEY (bottle_id) REFERENCES wine_bottles(id) ON DELETE CASCADE,
+    FOREIGN KEY (variety_id) REFERENCES grape_varieties(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_bottles_country ON wine_bottles(country);
 CREATE INDEX IF NOT EXISTS idx_bottles_region ON wine_bottles(region);
 CREATE INDEX IF NOT EXISTS idx_bottles_vintage ON wine_bottles(vintage);
@@ -150,9 +166,10 @@ CREATE INDEX IF NOT EXISTS idx_bottles_color ON wine_bottles(color);
 CREATE INDEX IF NOT EXISTS idx_bottles_deleted_at ON wine_bottles(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_cellar_bottles_cellar ON wine_cellar_bottles(cellar_id);
 CREATE INDEX IF NOT EXISTS idx_cellar_bottles_bottle ON wine_cellar_bottles(bottle_id);
+CREATE INDEX IF NOT EXISTS idx_grape_varieties_name ON grape_varieties(name);
+CREATE INDEX IF NOT EXISTS idx_bottle_varieties_bottle ON wine_bottle_varieties(bottle_id);
+CREATE INDEX IF NOT EXISTS idx_bottle_varieties_variety ON wine_bottle_varieties(variety_id);
 "#;
-
-pub const GRAPE_VARIETY_SEPARATOR: char = ',';
 
 impl WineBottle {
     pub fn grape_variety_to_string(varieties: &[String]) -> String {
@@ -169,6 +186,96 @@ impl WineBottle {
                 .collect()
         }
     }
+}
+
+pub fn get_or_create_variety(db: &Connection, name: &str) -> SqliteResult<Uuid> {
+    let normalized = name.trim().to_string();
+    if normalized.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Grape variety name cannot be empty".to_string(),
+        ));
+    }
+
+    let existing: Option<String> = db
+        .query_row(
+            "SELECT id FROM grape_varieties WHERE name = ?1 COLLATE NOCASE",
+            params![normalized],
+            |row| row.get(0),
+        )
+        .ok();
+
+    if let Some(id) = existing {
+        return Ok(Uuid::parse_str(&id).unwrap_or_else(|_| Uuid::new_v4()));
+    }
+
+    let id = Uuid::new_v4();
+    db.execute(
+        "INSERT INTO grape_varieties (id, name) VALUES (?1, ?2)",
+        params![id.to_string(), normalized],
+    )?;
+    Ok(id)
+}
+
+pub fn get_varieties_for_bottle(db: &Connection, bottle_id: &Uuid) -> SqliteResult<Vec<String>> {
+    let mut stmt = db.prepare(
+        "SELECT gv.name FROM grape_varieties gv
+         INNER JOIN wine_bottle_varieties wbv ON gv.id = wbv.variety_id
+         WHERE wbv.bottle_id = ?1
+         ORDER BY gv.name",
+    )?;
+
+    let varieties = stmt
+        .query_map(params![bottle_id.to_string()], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(varieties)
+}
+
+pub fn set_bottle_varieties(
+    db: &Connection,
+    bottle_id: &Uuid,
+    varieties: &[String],
+) -> SqliteResult<()> {
+    db.execute(
+        "DELETE FROM wine_bottle_varieties WHERE bottle_id = ?1",
+        params![bottle_id.to_string()],
+    )?;
+
+    for variety_name in varieties {
+        let variety_id = get_or_create_variety(db, variety_name)?;
+        db.execute(
+            "INSERT OR IGNORE INTO wine_bottle_varieties (bottle_id, variety_id) VALUES (?1, ?2)",
+            params![bottle_id.to_string(), variety_id.to_string()],
+        )?;
+    }
+
+    Ok(())
+}
+
+pub fn backfill_grape_varieties(db: &Connection) -> SqliteResult<usize> {
+    let mut stmt = db.prepare("SELECT id, grape_variety FROM wine_bottles WHERE grape_variety IS NOT NULL AND grape_variety != ''")?;
+
+    let bottles: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut count = 0;
+    for (bottle_id, grape_variety_str) in bottles {
+        let varieties = WineBottle::grape_variety_from_string(&grape_variety_str);
+        for variety_name in &varieties {
+            if let Ok(variety_id) = get_or_create_variety(db, variety_name) {
+                db.execute(
+                    "INSERT OR IGNORE INTO wine_bottle_varieties (bottle_id, variety_id) VALUES (?1, ?2)",
+                    params![bottle_id, variety_id.to_string()],
+                )?;
+            }
+        }
+        count += 1;
+    }
+
+    Ok(count)
 }
 
 #[cfg(test)]
