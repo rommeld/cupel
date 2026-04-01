@@ -3,7 +3,8 @@ pub mod models;
 use crate::errors::ServiceError;
 use rusqlite::{Connection, Result};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub use models::SCHEMA_SQL;
 
@@ -33,7 +34,7 @@ impl DbPool {
     {
         let db = Arc::clone(&self.0);
         tokio::task::spawn_blocking(move || {
-            let guard = db.lock().unwrap();
+            let guard = db.blocking_lock();
             f(&guard).map_err(ServiceError::from)
         })
         .await
@@ -47,7 +48,7 @@ impl DbPool {
     {
         let db = Arc::clone(&self.0);
         tokio::task::spawn_blocking(move || {
-            let guard = db.lock().unwrap();
+            let guard = db.blocking_lock();
             f(&guard)
         })
         .await
