@@ -3,15 +3,15 @@ pub mod models;
 use crate::errors::ServiceError;
 use rusqlite::{Connection, Result};
 use std::path::Path;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub use models::SCHEMA_SQL;
 
-pub struct DbPool(pub Mutex<Connection>);
+pub struct DbPool(pub Arc<Mutex<Connection>>);
 
 impl DbPool {
     pub fn new(connection: Connection) -> Self {
-        Self(Mutex::new(connection))
+        Self(Arc::new(Mutex::new(connection)))
     }
 
     pub async fn connect_in_memory() -> Result<Self> {
@@ -31,7 +31,12 @@ impl DbPool {
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        let db = self.0.lock().await;
-        f(&*db).map_err(|e| e.into())
+        let db = Arc::clone(&self.0);
+        tokio::task::spawn_blocking(move || {
+            let guard = db.lock().unwrap();
+            f(&guard).map_err(ServiceError::from)
+        })
+        .await
+        .map_err(|e| ServiceError::Internal(format!("Task join error: {}", e)))?
     }
 }

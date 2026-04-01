@@ -150,7 +150,7 @@ impl WineCellarService for AppState {
         request: Request<CreateWineCellarRequest>,
     ) -> Result<Response<CreateWineCellarResponse>, Status> {
         let req = request.into_inner();
-        let mut db = self.db.0.lock().await;
+        let mut db = self.db.0.lock().unwrap();
         let now = chrono::Utc::now();
         let cellar_id = Uuid::new_v4();
 
@@ -247,7 +247,7 @@ impl WineCellarService for AppState {
         request: Request<UpdateWineCellarRequest>,
     ) -> Result<Response<UpdateWineCellarResponse>, Status> {
         let req = request.into_inner();
-        let mut db = self.db.0.lock().await;
+        let mut db = self.db.0.lock().unwrap();
         let now = chrono::Utc::now();
 
         let cellar_uuid =
@@ -340,7 +340,7 @@ impl WineCellarService for AppState {
         request: Request<DeleteWineCellarRequest>,
     ) -> Result<Response<DeleteWineCellarResponse>, Status> {
         let req = request.into_inner();
-        let mut db = self.db.0.lock().await;
+        let mut db = self.db.0.lock().unwrap();
 
         let cellar_uuid =
             Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid cellar ID"))?;
@@ -568,17 +568,15 @@ impl WineBottleService for AppState {
                     ],
                 )
             })
-            .await
-            .map_err(ServiceError::from)?;
+            .await?;
 
         for variety_name in &bottle.grape_variety {
             let variety_name = variety_name.clone();
             let bottle_id = bottle.id.to_string();
             let variety_id = self
                 .db
-                .execute(move |conn| Ok(get_or_create_variety(conn, &variety_name)?))
-                .await
-                .map_err(ServiceError::from)?;
+                .execute(move |conn| get_or_create_variety(conn, &variety_name))
+                .await?;
             self.db
                 .execute(move |conn| {
                     conn.execute(
@@ -586,8 +584,7 @@ impl WineBottleService for AppState {
                         params![bottle_id, variety_id.to_string()],
                     )
                 })
-                .await
-                .map_err(ServiceError::from)?;
+                .await?;
         }
 
         Ok(Response::new(CreateWineBottleResponse {
@@ -600,7 +597,7 @@ impl WineBottleService for AppState {
         request: Request<GetWineBottleRequest>,
     ) -> Result<Response<GetWineBottleResponse>, Status> {
         let req = request.into_inner();
-        let db = self.db.0.lock().await;
+        let db = self.db.0.lock().unwrap();
 
         let bottle_uuid =
             Uuid::parse_str(&req.id).map_err(|_| Status::invalid_argument("Invalid bottle ID"))?;
@@ -622,7 +619,7 @@ impl WineBottleService for AppState {
         request: Request<UpdateWineBottleRequest>,
     ) -> Result<Response<UpdateWineBottleResponse>, Status> {
         let req = request.into_inner();
-        let db = self.db.0.lock().await;
+        let db = self.db.0.lock().unwrap();
         let now = chrono::Utc::now();
 
         let bottle_uuid =
@@ -721,8 +718,7 @@ impl WineBottleService for AppState {
                     params![now_str, now_str, bottle_id_str],
                 )
             })
-            .await
-            .map_err(ServiceError::from)?;
+            .await?;
 
         if rows == 0 {
             return Err(Status::not_found("Bottle not found or already deleted"));
@@ -736,7 +732,7 @@ impl WineBottleService for AppState {
         request: Request<ListWineBottleRequest>,
     ) -> Result<Response<ListWineBottleResponse>, Status> {
         let req = request.into_inner();
-        let db = self.db.0.lock().await;
+        let db = self.db.0.lock().unwrap();
 
         let filter = req.filter.unwrap_or_default();
         let pagination = req
