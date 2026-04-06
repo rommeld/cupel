@@ -4,7 +4,7 @@ This file provides guidance to all AI code assistants when working with code in 
 
 # Project
 
-This project is a cellar book for managing wine collections in private or professional settings. It documents information such as quantity, grape variety, producer, region, country, vintage, special characteristics, price, and other relevant details. The current focus is on iOS ecosystem. The application is written in Rust and Swift.
+This project is a cellar book for managing wine collections in private or professional settings. It documents information such as quantity, grape variety, producer, region, country, vintage, special characteristics, price, and other relevant details.
 
 ## Technology Stack
 
@@ -14,15 +14,6 @@ This project is a cellar book for managing wine collections in private or profes
 - **Error Handling**: thiserror + anyhow
 - **Async Runtime**: tokio
 - **Serialization**: serde + serde_json
-
-### iOS App (Swift)
-
-- **UI Framework**: SwiftUI
-- **Layout**: SwiftUI native (with occasional UIKit via UIViewRepresentable)
-- **Architecture**: MVVM with Observable macro
-- **Networking**: URLSession with async/await
-- **Data Persistence**: SQLite.swift
-- **Dependency Injection**: Environment values
 
 ## Commands
 
@@ -43,15 +34,6 @@ This project is a cellar book for managing wine collections in private or profes
 | `cargo doc --open`                             | Generate and open documentation for the project and dependencies |
 | `cargo update`                                 | Update dependencies to newest compatible versions per Cargo.toml |
 | `cargo check`                                  | Fast compile check without producing binaries—useful during dev  |
-
-### Swift (iOS App)
-
-| Command                                              | Purpose                                      |
-| ---------------------------------------------------- | -------------------------------------------- |
-| `xcodebuild -project Cupel.xcodeproj -scheme Cupel build` | Build the iOS project                   |
-| `xcodebuild test -project Cupel.xcodeproj -scheme Cupel` | Run iOS unit tests                      |
-| `swift build`                                        | Build Swift Package Manager targets          |
-| `swift test`                                        | Run Swift tests                              |
 
 # Code Style
 
@@ -149,19 +131,3 @@ This project is a cellar book for managing wine collections in private or profes
 - **Single responsibility**: Each function/module should do one thing well
 - **Interface over singletons**: Enable testing and flexibility through dependency injection
 - **Fail fast**: Include descriptive error messages for debugging
-
-### Swift
-
-- **Swift Style Guide**: Follow [Apple's Swift API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/)
-- **Type Names**: PascalCase (`WineCellar`, `BottleDetails`)
-- **Function/Method Names**: camelCase (`fetchBottles()`, `addBottle()`)
-- **Variables/Constants**: camelCase (`wineCollection`, `bottleCount`)
-- **Enums**: PascalCase with associated values on separate lines
-- **Prefer `struct`s over `class`es**: Swift structs have automatic initializers and value semantics
-- **Use `guard` for early returns**: Keeps code flat and readable
-- **Avoid `self` where not needed**: Swift allows implicit references in closures and methods
-- **Use `Observable` macro over `ObservableObject`**: For iOS 17+ with `@Observable` property wrapper
-- **Prefer `@State` and `@Bindable` for local state**: Use environment values for shared state
-- **Use `async/await` for asynchronous operations**: Avoid completion handlers where possible
-- **Never force unwrap**: Use `guard let` or `if let` for optionals
-- **Text files**: Always end with an empty line

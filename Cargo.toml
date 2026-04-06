@@ -8,21 +8,5 @@ name = "cupel"
 path = "src/lib.rs"
 
 [[bin]]
-name = "cellar-server"
+name = "cupel"
 path = "src/main.rs"
-
-[dependencies]
-async-trait = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
-prost = "0.14"
-rusqlite = { version = "0.39", features = [ "bundled" ] }
-serde = { version = "1.0", features = ["derive"] }
-thiserror = "2.0"
-tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1"
-tonic = "0.14"
-tonic-prost = "0.14"
-uuid = { version = "1.0", features = ["v4", "serde"] }
-
-[build-dependencies]
-tonic-prost-build = "0.14"
