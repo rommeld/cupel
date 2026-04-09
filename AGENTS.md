@@ -4,13 +4,12 @@ This file provides guidance to all AI code assistants when working with code in 
 
 # Project
 
-This project is a cellar book for managing wine collections in private or professional settings. It documents information such as quantity, grape variety, producer, region, country, vintage, special characteristics, price, and other relevant details.
+This project contains a observability platform for your interaction with your coding agent. The platform monitors agent behavior like file creation/modification, tool use, and all in one unified trace.
 
 ## Technology Stack
 
 ### Backend (Rust)
 
-- **gRPC**: tonic
 - **Error Handling**: thiserror + anyhow
 - **Async Runtime**: tokio
 - **Serialization**: serde + serde_json
@@ -102,12 +101,6 @@ This project is a cellar book for managing wine collections in private or profes
 - Use descriptive test names: `staging_state_fully_staged` not `test1`
 - Test both positive and negative cases
 - Use `tempfile` crate for tests that need temporary directories
-
-## Git/CLI Integration
-
-- Use `git2` crate for local git operations (reading commits, status, etc.)
-- Use `std::process::Command` for git CLI when needed (network operations, complex output)
-- Parse CLI output carefully—handle binary files, malformed lines gracefully (see `parse_numstat`)
 
 ## Serialization (serde)
 
