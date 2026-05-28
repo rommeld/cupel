@@ -8,5 +8,6 @@
 !Cargo.toml
 !Cargo.lock
 
+!AGENTS.md
 !CONTRIBUTION.md
 !README.md
