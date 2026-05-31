@@ -8,6 +8,8 @@
 !Cargo.toml
 !Cargo.lock
 
+!clippy.toml
+
 !AGENTS.md
 !CONTRIBUTION.md
 !README.md
