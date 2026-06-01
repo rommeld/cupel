@@ -1,11 +1,60 @@
-[package]
-name = "cupel"
-version = "0.1.0"
+[workspace]
+resolver = "2"
+members = [
+    "crates/cupel-inference"
+]
+
+[workspace.package]
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/rommeld/cupel"
 
-[dependencies]
-serde_json = "1.0.150"
+[workspace.dependencies]
+async-stream = "0.3"
+futures = "0.3"
+reqwest = { version = "0.13", features = ["json", "stream"] }
+secrecy = { version = "0.10", features = ["serde"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1.52", features = ["full"] }
 
-[lints.clippy]
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-restrictio  = { level = "warn",  priority = -1 }
+restriction = { level = "warn", priority = -1 }
+
+arbitrary_source_item_ordering = "allow"
+
+as_conversions = "allow"
+
+blanket_clippy_restriction_lints = "allow"
+
+cast_precision_loss = "allow"
+
+default_numeric_fallback = "allow"
+
+exhaustive_enums = "allow"
+exhaustive_structs = "allow"
+
+expect_used = "allow"
+
+float_arithmetic = "allow"
+
+implicit_return = "allow"
+
+missing_docs_in_private_items = "allow"
+missing_inline_in_public_items = "allow"
+
+module_name_repetitions = "allow"
+mod_module_files = "allow"
+
+pub_use = "allow"
+
+single_call_fn = "allow"
+
+std_instead_of_alloc = "allow"
+
+unused_trait_names = "allow"
