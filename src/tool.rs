@@ -9,7 +9,7 @@ pub struct ToolSpec {
 
 #[derive(Debug, Clone)]
 pub struct CompletedToolCall {
-    pub tool_call_id: String,
-    pub tool_call_name: String,
-    pub tool_call_input: Value,
+    pub completed_tool_call_id: String,
+    pub completed_tool_call_name: String,
+    pub completed_tool_call_input: Value,
 }
