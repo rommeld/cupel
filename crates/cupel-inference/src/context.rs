@@ -1,7 +1,11 @@
 //! Abstraction layer to hide messages, contents, input, parse, or blocks from runtime.
 use serde::{Deserialize, Serialize};
 
-use crate::{FinishReason, ToolCallDelta, tool::ToolName, usage::TokenUsage};
+use crate::{
+    event::{FinishReason, ToolCall},
+    tool::ToolName,
+    usage::TokenUsage,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -25,7 +29,7 @@ pub struct UserMessage {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssistantMessage {
     pub content: Vec<ContentBlock>,
-    pub tool_calls: Vec<ToolCallDelta>,
+    pub tool_calls: Vec<ToolCall>,
     pub finish_reason: Option<FinishReason>,
     pub usage: Option<TokenUsage>,
 }

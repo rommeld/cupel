@@ -355,8 +355,6 @@ impl AssistantState {
                             .and_then(|function_delta| function_delta.arguments.clone()),
                     };
 
-                    self.message.tool_calls.push(delta.clone());
-
                     events.push(AssistantMessageEvent::ToolCallDelta {
                         delta,
                         message: self.message.clone(),
