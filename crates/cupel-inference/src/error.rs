@@ -23,7 +23,7 @@ pub enum InferenceError {
     #[error("provider protocol error: {message}")]
     ProviderProtocol { message: String },
 
-    #[error("reuqst failed: {message}")]
+    #[error("request failed: {message}")]
     RequestFailed { message: String },
 
     #[error("JSON serialization error: {message}")]

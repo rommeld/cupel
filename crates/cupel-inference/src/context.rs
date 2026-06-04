@@ -47,7 +47,7 @@ pub enum ContentBlock {
 
     /// Provider-neutral representation of visible reasoning text.
     ///
-    /// Hidden provider reasong should not be stored here unless the provider
+    /// Hidden provider reasoning should not be stored here unless the provider
     /// explicitly returns it as visible content.
     Thinking {
         text: String,

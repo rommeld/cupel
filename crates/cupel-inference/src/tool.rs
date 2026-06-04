@@ -12,7 +12,7 @@ use serde_json::Value;
 pub struct ToolName(pub String);
 
 /// Minimal JSON schema.
-/// 
+///
 /// Keep generic. Do not bind `cupel-inference` to a specific schema crate.
 /// The runtime/tool crates provide typed builders.
 pub type JsonSchema = Value;
@@ -25,5 +25,5 @@ pub struct ToolDefinition {
 
     // Provider-specific flags can be added without contaminating core fields.
     #[serde(default)]
-    pub metadata: BTreeMap<String, Value>
+    pub metadata: BTreeMap<String, Value>,
 }

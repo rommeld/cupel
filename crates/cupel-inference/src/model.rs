@@ -32,7 +32,7 @@ pub struct ProviderId(pub String);
 
 /// API protocol family.
 ///
-/// This is deliberatly not the same thing as a provider name.
+/// This is deliberately not the same thing as a provider name.
 /// Several providers can expose the same API family.
 ///
 /// Examples:

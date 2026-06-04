@@ -1,7 +1,8 @@
 //! Provider-neutral inference primitives for cupel.
 //!
-//! This crate ownes model API access, streaming events, model metadata,
-//! provider registration, and provider-neutral request/response types.
+//! This module only registers protocol adapters. It should not load user config,
+//! read environment variables, or execute tools. Those jobs belong to CLI
+//! and runtime crates.
 pub mod client;
 pub mod context;
 pub mod error;

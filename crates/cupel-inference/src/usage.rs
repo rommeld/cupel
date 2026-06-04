@@ -29,7 +29,7 @@ pub struct UsageCost {
 
 impl TokenUsage {
     #[must_use]
-    pub fn estiamte_cost(self, pricing: TokenPricing) -> UsageCost {
+    pub fn estimate_cost(self, pricing: TokenPricing) -> UsageCost {
         let cached_input = self.cached_input_tokens.unwrap_or(0);
         let uncached_input = self.input_tokens.saturating_sub(cached_input);
 

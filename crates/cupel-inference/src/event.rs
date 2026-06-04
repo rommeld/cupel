@@ -35,7 +35,7 @@ pub struct ToolCallDelta {
 
     /// Partial or complete JSON argument string.
     ///
-    /// Some providers stream invalid/incomplete JSON fragements.
+    /// Some providers stream invalid/incomplete JSON fragments.
     pub arguments_delta: Option<String>,
 }
 

@@ -6,6 +6,11 @@ use serde_json::Value;
 
 use crate::{InferenceContext, InferenceStream, ModelRef, ModelSpec, ToolDefinition};
 
+/// Options that vary per request.
+///
+/// The API key lives here because it is a secret and request-scoped. Do not store
+/// secrets in `ModelSpec`, because model specs are configuration data that may
+/// be printed, serialized, or shared.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InferenceRequestOptions {
     pub temperature: Option<f32>,
@@ -17,7 +22,10 @@ pub struct InferenceRequestOptions {
     /// Adapters translate this into provider-specific fields where supported.
     pub reasoning_effort: Option<ReasoningEffort>,
 
-    /// Whether raw provider events should be emitted into the stream.
+    /// Emit raw provider JSON events into the provider-neutral stream.
+    ///
+    /// This is useful while debugging adapters, but it should stay opt-in
+    /// because prompts and tool results may contain private code.
     pub include_raw: bool,
 
     /// Provider-specific escape hatch.
@@ -25,9 +33,11 @@ pub struct InferenceRequestOptions {
     /// Just development related implementation.
     pub extra: BTreeMap<String, Value>,
 
-    /// Optional explicit API key.
+    /// Secret credential injected by config or CLI code.
     ///
-    /// CLI/config.rs code should inject this. Provider code must not log it.
+    /// `serde(skip)` prevents accidental serialization. The `secrecy` type
+    /// prevents casual debug printing of the raw secret.
+    /// Provider code must not log it.
     #[serde(skip)]
     pub api_key: Option<SecretString>,
 }
@@ -37,7 +47,7 @@ pub struct InferenceRequestOptions {
 pub enum ReasoningEffort {
     Low,
     Medium,
-    How,
+    High,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
