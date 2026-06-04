@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
-use crate::{model::ApiFamily, registry::ProviderRegistry};
+use crate::{
+    AssistantMessage,
+    event::{AssistantMessageEvent, FinishReason},
+    model::ApiFamily,
+    registry::ProviderRegistry,
+};
 
 #[cfg(feature = "provider-anthropic")]
 pub mod anthropic;
@@ -16,6 +21,19 @@ pub mod openai_responses;
 
 pub mod sse;
 
+#[must_use]
+pub fn error_event(error: crate::InferenceError) -> AssistantMessageEvent {
+    AssistantMessageEvent::Error {
+        error,
+        message: AssistantMessage {
+            content: Vec::new(),
+            tool_calls: Vec::new(),
+            finish_reason: Some(FinishReason::Error),
+            usage: None,
+        },
+    }
+}
+
 /// Register only network-backed providers.
 ///
 /// Keep this separate from the faux provider so tests can choose deterministic
@@ -30,7 +48,7 @@ pub fn register_openai_compat_provider(registry: &mut ProviderRegistry) {
     #[cfg(feature = "provider-openai-responses")]
     registry.register(
         ApiFamily::OpenAiResponses,
-        Arc::new(openai_responses::OpenAiResponsesProvider::new()),
+        Arc::new(openai_responses::OpenAiResponseProvider::new()),
     );
 
     #[cfg(feature = "provider-anthropic")]

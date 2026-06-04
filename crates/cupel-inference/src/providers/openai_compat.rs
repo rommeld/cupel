@@ -4,7 +4,7 @@ use crate::{
     error::InferenceError,
     event::InferenceStream,
     provider::{InferenceProvider, ResolvedInferenceRequest},
-    providers::sse::SseDecoder,
+    providers::{error_event, sse::SseDecoder},
 };
 use async_stream::stream;
 use futures::StreamExt;
@@ -412,16 +412,4 @@ struct OpenAiToolCallDelta {
 struct OpenAiToolFunctionDelta {
     name: Option<String>,
     arguments: Option<String>,
-}
-
-fn error_event(error: InferenceError) -> AssistantMessageEvent {
-    AssistantMessageEvent::Error {
-        error,
-        message: AssistantMessage {
-            content: Vec::new(),
-            tool_calls: Vec::new(),
-            finish_reason: Some(FinishReason::Error),
-            usage: None,
-        },
-    }
 }
