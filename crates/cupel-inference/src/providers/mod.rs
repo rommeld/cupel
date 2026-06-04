@@ -14,6 +14,8 @@ pub mod openai_compat;
 #[cfg(feature = "provider-openai-responses")]
 pub mod openai_responses;
 
+pub mod sse;
+
 /// Register only network-backed providers.
 ///
 /// Keep this separate from the faux provider so tests can choose deterministic

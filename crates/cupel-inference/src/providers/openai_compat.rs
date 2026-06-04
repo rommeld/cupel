@@ -4,6 +4,7 @@ use crate::{
     error::InferenceError,
     event::InferenceStream,
     provider::{InferenceProvider, ResolvedInferenceRequest},
+    providers::sse::SseDecoder,
 };
 use async_stream::stream;
 use futures::StreamExt;
@@ -105,7 +106,9 @@ impl InferenceProvider for OpenAiCompatProvider {
                     }
                 };
 
-                for data in sse.push(&chunk_bytes) {
+                for sse_event in sse.push(&chunk_bytes) {
+                    let data = sse_event.data;
+
                     if data == "[DONE]" {
                         state.message.finish_reason = Some(FinishReason::Stop);
                         yield AssistantMessageEvent::Done { message: state.message.clone() };
@@ -411,38 +414,6 @@ struct OpenAiToolCallDelta {
 struct OpenAiToolFunctionDelta {
     name: Option<String>,
     arguments: Option<String>,
-}
-
-#[derive(Default)]
-struct SseDecoder {
-    buffer: String,
-}
-
-impl SseDecoder {
-    fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        self.buffer.push_str(&String::from_utf8_lossy(bytes));
-
-        let mut events = Vec::new();
-
-        while let Some((raw_event, remaining_buffer)) = self.buffer.split_once("\n\n") {
-            let event_text = raw_event.to_owned();
-            self.buffer = remaining_buffer.to_owned();
-
-            let mut data_lines = Vec::new();
-
-            for line in event_text.lines() {
-                if let Some(data) = line.strip_prefix("data:") {
-                    data_lines.push(data.trim().to_owned());
-                }
-            }
-
-            if !data_lines.is_empty() {
-                events.push(data_lines.join("\n"));
-            }
-        }
-
-        events
-    }
 }
 
 fn error_event(error: InferenceError) -> AssistantMessageEvent {
