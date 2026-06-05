@@ -11,7 +11,7 @@ use crate::{
     event::{
         AssistantMessageEvent, FinishReason, InferenceStream, ToolCallAccumulator, ToolCallDelta,
     },
-    model::ModelSpec,
+    model::{ApiFamily, ModelSpec},
     provider::{InferenceProvider, InferenceRequest, ResolvedInferenceRequest},
     providers::{error_event, sse::SseDecoder},
     tool::ToolDefinition,
@@ -298,11 +298,11 @@ fn map_context_to_response_input(
                 // Completed tool calls from previous assistant turns must be
                 // replayed so the provider sees the full conversation.
                 for call in &assistant.tool_calls {
-                    input.push(OpenAiInputItem::FunctionCallOutput {
+                    input.push(OpenAiInputItem::FunctionalCall {
                         call_id: call
                             .id
                             .clone()
-                            .unwrap_or_else(|| format!("call_{call.index}")),
+                            .unwrap_or_else(|| format!("call_{}", call.index)),
                         name: call.name.clone(),
                         arguments: call.raw_arguments.clone(),
                     });
