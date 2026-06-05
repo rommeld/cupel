@@ -132,7 +132,7 @@ impl ToolCallAccumulator {
     /// Add one streamed delta to the matching in-progress call.
     pub fn push_delta(&mut self, delta: ToolCallDelta) {
         let call = self.call_mut(delta.index);
-        call.apply_delta(&delta)
+        call.apply_delta(&delta);
     }
 
     /// Return completed calls when JSON currently parses.
@@ -148,7 +148,10 @@ impl ToolCallAccumulator {
 
     fn call_mut(&mut self, index: usize) -> &mut AccumulatedToolCall {
         if let Some(position) = self.calls.iter().position(|call| call.index == index) {
-            return &mut self.calls[position];
+            return self
+                .calls
+                .get_mut(position)
+                .expect("position came from iterating over tool calls");
         }
 
         self.calls.push(AccumulatedToolCall {

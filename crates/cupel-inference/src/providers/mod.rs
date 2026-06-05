@@ -7,9 +7,6 @@ use crate::{
     registry::ProviderRegistry,
 };
 
-#[cfg(feature = "provider-anthropic")]
-pub mod anthropic;
-
 #[cfg(feature = "provider-faux")]
 pub mod faux;
 
@@ -49,12 +46,6 @@ pub fn register_openai_compat_provider(registry: &mut ProviderRegistry) {
     registry.register(
         ApiFamily::OpenAiResponses,
         Arc::new(openai_responses::OpenAiResponseProvider::new()),
-    );
-
-    #[cfg(feature = "provider-anthropic")]
-    registry.register(
-        ApiFamily::AnthropicMessages,
-        Arc::new(openai_responses::AnthropicProvider::new()),
     );
 }
 

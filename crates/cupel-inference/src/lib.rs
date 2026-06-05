@@ -26,7 +26,7 @@ pub use event::{
 pub use model::{
     ApiFamily, ContextWindow, ModelId, ModelRef, ModelSpec, ProviderId, ReasoningSupport,
 };
-pub use provider::{InferenceProvider, InferenceRequest, InferenceRequestOptions};
+pub use provider::{InferenceProvider, InferenceRequest, InferenceRequestOptions, ReasoningEffort};
 pub use registry::{ModelRegistry, ProviderRegistry};
 pub use tool::{JsonSchema, ToolDefinition, ToolName};
 pub use usage::{TokenPricing, TokenUsage, UsageCost};

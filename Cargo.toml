@@ -30,6 +30,8 @@ arbitrary_source_item_ordering = "allow"
 
 as_conversions = "allow"
 
+assigning_clones = "allow"
+
 blanket_clippy_restriction_lints = "allow"
 
 cast_precision_loss = "allow"
@@ -41,20 +43,34 @@ exhaustive_structs = "allow"
 
 expect_used = "allow"
 
+field_reassign_with_default = "allow"
+
 float_arithmetic = "allow"
 
 implicit_return = "allow"
 
 missing_docs_in_private_items = "allow"
+missing_errors_doc = "allow"
 missing_inline_in_public_items = "allow"
 
 module_name_repetitions = "allow"
 mod_module_files = "allow"
 
+needless_pass_by_value = "allow"
+
+pattern_type_mismatch = "allow"
+
 pub_use = "allow"
+
+question_mark_used = "allow"
+
+shadow_unrelated = "allow"
+shadow_reuse = "allow"
 
 single_call_fn = "allow"
 
 std_instead_of_alloc = "allow"
+
+too_many_lines = "allow"
 
 unused_trait_names = "allow"

@@ -12,17 +12,20 @@ use crate::{
         AssistantMessageEvent, FinishReason, InferenceStream, ToolCallAccumulator, ToolCallDelta,
     },
     model::{ApiFamily, ModelSpec},
-    provider::{InferenceProvider, InferenceRequest, ResolvedInferenceRequest},
+    provider::{
+        InferenceProvider, InferenceRequest, InferenceRequestOptions, ReasoningEffort,
+        ResolvedInferenceRequest,
+    },
     providers::{error_event, sse::SseDecoder},
     tool::ToolDefinition,
     usage::TokenUsage,
 };
 
-/// Provider adapter for the official OpenAI Responses API.
+/// Provider adapter for the official `OpenAI` Responses API.
 ///
 /// This adapter owns only protocol translation:
-/// - cupel request -> OpenAI JSON payload
-/// - OpenAI SSE stream -> cupel assistan events
+/// - cupel request -> `OpenAI` JSON payload
+/// - `OpenAI` SSE stream -> cupel assistan events
 ///
 /// It does not load API keys from the environment. The CLI/runtime injects the
 /// key into `InferenceRequestOptions`.
@@ -46,6 +49,10 @@ impl Default for OpenAiResponseProvider {
     }
 }
 
+#[expect(
+    clippy::renamed_function_params,
+    reason = "Confusion with seperatly defined `request`"
+)]
 impl InferenceProvider for OpenAiResponseProvider {
     fn stream(&self, resolved: ResolvedInferenceRequest) -> InferenceStream {
         let http = self.http.clone();
@@ -157,7 +164,7 @@ impl InferenceProvider for OpenAiResponseProvider {
 
 /// JSON body sent to `POST /v1/responses`.
 ///
-/// Keep this struct provider-specific. Do not leak OpenAi wire names into the
+/// Keep this struct provider-specific. Do not leak `OpenAi` wire names into the
 /// provider-neutral request types.
 #[derive(Debug, Serialize)]
 struct OpenAiResponsesRequest {
@@ -179,7 +186,7 @@ struct OpenAiResponsesRequest {
     top_p: Option<f32>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    max_output_tokes: Option<u32>,
+    max_output_tokens: Option<u32>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenAiReasoning>,
@@ -187,7 +194,7 @@ struct OpenAiResponsesRequest {
 
 #[derive(Debug, Serialize)]
 struct OpenAiReasoning {
-    /// OpenAI Responses supports effort values for reasoning models.
+    /// `OpenAI` Responses supports effort values for reasoning models.
     ///
     /// cupel's provider-neutral enum maps into this provider-specific string.
     effort: String,
@@ -227,7 +234,7 @@ enum OpenAiMessageRole {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum OpenAiContentPart {
     InputText { text: String },
-    Output { text: String },
+    OutputText { text: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -260,7 +267,7 @@ impl OpenAiResponsesRequest {
             tools: map_tools(&request.tools),
             temperature: request.options.temperature,
             top_p: request.options.top_p,
-            max_output_tokes: request.options.max_output_tokens,
+            max_output_tokens: request.options.max_output_tokens,
             reasoning: map_reasoning(&request.options),
         })
     }
@@ -291,7 +298,7 @@ fn map_context_to_response_input(
                 if !text.is_empty() {
                     input.push(OpenAiInputItem::Message {
                         role: OpenAiMessageRole::Assistant,
-                        content: vec![OpenAiContentPart::Output { text }],
+                        content: vec![OpenAiContentPart::OutputText { text }],
                     });
                 }
 
@@ -356,6 +363,56 @@ fn map_input_content_blocks(
     Ok(parts)
 }
 
+fn blocks_to_text(blocks: &[ContentBlock]) -> Result<String, InferenceError> {
+    let mut out = String::new();
+
+    for block in blocks {
+        match block {
+            ContentBlock::Text { text } => {
+                // Text blocks may be split across provider deltas. Joining
+                // without extra separators preserves the original stream.
+                out.push_str(text);
+            }
+            ContentBlock::Thinking { text } => {
+                // This is visible reasoning content that cupel already chose
+                // to store. Preserve the boundary so replayed assistant/tool
+                // messages do not make thinking look like normal answer text.
+                out.push_str("<thinking>");
+                out.push_str(text);
+                out.push_str("</thinking>");
+            }
+            ContentBlock::Image { .. } => {
+                // Placeholder because adapter does not have image replay wired yet.
+                return Err(InferenceError::UnsupportedFeature {
+                    api_family: ApiFamily::OpenAiResponses,
+                    feature: "image content  replay in OpenAI Responses adapter".to_owned(),
+                });
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+fn map_reasoning(options: &InferenceRequestOptions) -> Option<OpenAiReasoning> {
+    let effort = match *options.reasoning_effort.as_ref()? {
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+    };
+
+    Some(OpenAiReasoning {
+        // OpenAI expects a lowercase string in the Responeses `reasoning`
+        // object.
+        effort: effort.to_owned(),
+
+        // cupel stores only visible reasoning summaries in
+        // ContentBlock::Thinking. `summary: "auto"` opts in to the most useful
+        // summary the model supports without exposing hidden chain-of-thought.
+        summary: "auto".to_owned(),
+    })
+}
+
 fn map_tools(tools: &[ToolDefinition]) -> Option<Vec<OpenAiResponsesTool>> {
     if tools.is_empty() {
         return None;
@@ -374,7 +431,7 @@ fn map_tools(tools: &[ToolDefinition]) -> Option<Vec<OpenAiResponsesTool>> {
     )
 }
 
-/// Minimal subset of OpenAI Responses streaming events cupel needs for v1.
+/// Minimal subset of `OpenAI` Responses streaming events cupel needs for v1.
 ///
 /// Unknown fields are intentionally ignored. Unknown event types should not
 /// crash the stream unless they are reuqired for correctness.
@@ -529,7 +586,9 @@ impl OpenAiResponsesState {
                 self.done = true;
                 out.push(AssistantMessageEvent::Error {
                     error: InferenceError::ProviderProtocol {
-                        message: "OpenAI Responses stream failed".to_owned(),
+                        message: response
+                            .status
+                            .unwrap_or_else(|| "openai responses stream failed".to_owned()),
                     },
                     message: self.message.clone(),
                 });
@@ -589,5 +648,87 @@ fn map_openai_usage(usage: OpenAiUsage) -> TokenUsage {
         reasoning_tokens: usage
             .output_tokens_details
             .and_then(|details| details.reasoning_tokens),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_to_text_preserves_text_and_visible_thinking() {
+        let blocks = vec![
+            ContentBlock::Text {
+                text: "answer ".to_owned(),
+            },
+            ContentBlock::Thinking {
+                text: "checked the tool result".to_owned(),
+            },
+            ContentBlock::Text {
+                text: " done".to_owned(),
+            },
+        ];
+
+        let text = blocks_to_text(&blocks).expect("text blocks should map");
+
+        assert_eq!(
+            text,
+            "answer <thinking>checked the tool result</thinking> done"
+        );
+    }
+
+    #[test]
+    fn blocks_to_text_rejects_images() {
+        let blocks = vec![ContentBlock::Image {
+            media: "image/png".to_owned(),
+            data: Vec::new(),
+        }];
+
+        assert!(matches!(
+            blocks_to_text(&blocks),
+            Err(InferenceError::UnsupportedFeature {
+                api_family: ApiFamily::OpenAiResponses,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn map_reasoning_omits_reasoning_when_no_effort_is_set() {
+        let options = InferenceRequestOptions::default();
+
+        assert!(map_reasoning(&options).is_none());
+    }
+
+    #[test]
+    fn map_reasoning_maps_provider_neutral_effort_to_openai_wire_value() {
+        let mut options = InferenceRequestOptions::default();
+        options.reasoning_effort = Some(ReasoningEffort::High);
+
+        let reasoning = map_reasoning(&options).expect("effort should map");
+
+        assert_eq!(reasoning.effort, "high");
+        assert_eq!(reasoning.summary, "auto");
+    }
+
+    #[test]
+    fn map_openai_usage_preserves_reasoning_token_breakdown() {
+        let usage = OpenAiUsage {
+            input_tokens: 10,
+            output_tokens: 20,
+            input_tokens_details: Some(OpenAiInputTokenDetails {
+                cached_tokens: Some(3),
+            }),
+            output_tokens_details: Some(OpenAiOutputTokenDetails {
+                reasoning_tokens: Some(7),
+            }),
+        };
+
+        let mapped = map_openai_usage(usage);
+
+        assert_eq!(mapped.input_tokens, 10);
+        assert_eq!(mapped.output_tokens, 20);
+        assert_eq!(mapped.cached_input_tokens, Some(3));
+        assert_eq!(mapped.reasoning_tokens, Some(7));
     }
 }

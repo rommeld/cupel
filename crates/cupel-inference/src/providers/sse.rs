@@ -1,7 +1,7 @@
 /// One parsed Server-Sent Event frame.
 ///
 /// SSE allows an optional event name plus one or more data lines.
-/// Event name will stay optional because OpenAI often relies on the
+/// Event name will stay optional because `OpenAI` often relies on the
 /// JSON `type`field, while Anthropic also sends explicit SSE event names such
 /// as `message_start`.
 pub struct SseEvent {
@@ -94,32 +94,46 @@ fn parse_sse_event(raw_event: &str) -> Option<SseEvent> {
     })
 }
 
-#[test]
-fn sse_decoder_waits_for_complete_events() {
-    let mut decoder = SseDecoder::default();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // No blank line yet, so there is no complete SSE event to return.
-    assert!(decoder.push(b"data: {\"type\"").is_empty());
+    #[test]
+    fn sse_decoder_waits_for_complete_events() {
+        let mut decoder = SseDecoder::default();
 
-    let events = decoder.push(br#": "response.created"}"#);
-    assert!(events.is_empty());
+        // No blank line yet, so there is no complete SSE event to return.
+        assert!(decoder.push(b"data: {\"type\"").is_empty());
 
-    // The blank line completes the event.
-    let events = decoder.push(b"\n\n");
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].data, r#"{"type": "response.creaded"}"#);
-}
+        let events = decoder.push(br#": "response.created"}"#);
+        assert!(events.is_empty());
 
-#[test]
-fn sse_decoder_handels_named_events_and_multiline_data() {
-    let mut decoder = SseDecoder::default();
+        // The blank line completes the event.
+        let events = decoder.push(b"\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events.first().map(|event| event.data.as_str()),
+            Some(r#"{"type": "response.created"}"#)
+        );
+    }
 
-    let events = decoder.push(
-        b"event: message_start\n\
+    #[test]
+    fn sse_decoder_handles_named_events_and_multiline_data() {
+        let mut decoder = SseDecoder::default();
+
+        let events = decoder.push(
+            b"event: message_start\n\
             data: {\"a\":1}\n\
-            data: {\"b\":2}\n\n"
-    );
+            data: {\"b\":2}\n\n",
+        );
 
-    assert_eq!(events[0].event.as_deref(), Some("message_start"));
-    assert_eq!(events[0].data, "{\"a\":1}\n{\"b\":2}");
+        assert_eq!(
+            events.first().and_then(|event| event.event.as_deref()),
+            Some("message_start")
+        );
+        assert_eq!(
+            events.first().map(|event| event.data.as_str()),
+            Some("{\"a\":1}\n{\"b\":2}")
+        );
+    }
 }

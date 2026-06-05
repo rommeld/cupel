@@ -59,7 +59,7 @@ pub enum ContentBlock {
 
     /// TODO: future extension point.
     Image {
-        media_type: String,
+        media: String,
         data: Vec<u8>,
     },
 }
