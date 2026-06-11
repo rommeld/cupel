@@ -27,7 +27,7 @@ use crate::{
 /// - cupel request -> `OpenAI` JSON payload
 /// - `OpenAI` SSE stream -> cupel assistan events
 ///
-/// It does not load API keys from the environment. The CLI/runtime injects the
+/// Does not load API keys from the environment. The CLI/runtime injects the
 /// key into `InferenceRequestOptions`.
 #[derive(Clone)]
 pub struct OpenAiResponseProvider {
@@ -205,22 +205,40 @@ struct OpenAiReasoning {
     summary: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum OpenAiInputItem {
     Message {
-        role: OpenAiMessageRole,
-        content: Vec<OpenAiContentPart>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        content: Vec<OpenAiOutputContentPart>,
+        #[serde(default)]
+        status: Option<String>,
     },
-    FunctionalCall {
+
+    Reasoning {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        summary: Vec<OpenAiReasoningSummaryPart>,
+        #[serde(default)]
+        content: Vec<OpenAiReasoningTextPart>,
+    },
+    
+    FunctionCall {
+        #[serde(default)]
+        id: Option<String>,
         call_id: String,
         name: String,
+        #[serde(default)]
         arguments: String,
     },
-    FunctionCallOutput {
-        call_id: String,
-        output: String,
-    },
+
+    /// Unknown output items are ignored by the neutral state machine, while the
+    /// original raw event can still be emitted when `include_raw` is enabled.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,6 +246,32 @@ enum OpenAiInputItem {
 enum OpenAiMessageRole {
     User,
     Assistant,
+}
+
+#[derive(Debug, Deserialize)]
+enum OpenAiOutputContentPart {
+    OutputText {
+        #[serde(default)]
+        text: String,
+    },
+    Refusal {
+        #[serde(default)]
+        refusal: String,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiReasoningSummaryPart {
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiReasoningTextPart {
+    #[serde(default)]
+    text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -305,7 +349,7 @@ fn map_context_to_response_input(
                 // Completed tool calls from previous assistant turns must be
                 // replayed so the provider sees the full conversation.
                 for call in &assistant.tool_calls {
-                    input.push(OpenAiInputItem::FunctionalCall {
+                    input.push(OpenAiInputItem::FunctionCall {
                         call_id: call
                             .id
                             .clone()
@@ -476,13 +520,20 @@ enum OpenAiResponsesEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenAiOutputItem {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    call_id: Option<String>,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAiOutputItem {
+    Message {},
+    Reasoning {},
+    FunctionCall {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        call_id: Option<String>,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -490,7 +541,28 @@ struct OpenAiCompletedResponse {
     #[serde(default)]
     usage: Option<OpenAiUsage>,
     #[serde(default)]
-    status: Option<String>,
+    status: Option<OpenAiResponseStatus>,
+    #[serde(default)]
+    incomplete_details: Option<OpenAiIncompleteDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum OpenAiResponseStatus {
+    Completed,
+    Incomplete,
+    Failed,
+    Cancelled,
+    Queued,
+    InProgress,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiIncompleteDetails {
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 #[derive(Default)]
@@ -525,17 +597,18 @@ impl OpenAiResponsesState {
                 });
             }
             OpenAiResponsesEvent::OutputItemAdded { output_index, item } => {
-                let delta = ToolCallDelta {
-                    id: item.call_id.or(item.id),
-                    index: output_index,
-                    name: item.name,
-                    arguments_delta: None,
-                };
-                self.tool_calls.push_delta(delta.clone());
-                out.push(AssistantMessageEvent::ToolCallDelta {
-                    delta,
-                    message: self.message.clone(),
-                });
+                match item {
+                    OpenAiOutputItem::Message { .. } => {
+                        self.start_item(output_index, ActiveOutputKind::Message);
+                    }
+                    OpenAiOutputItem::Reasoning { .. } => {
+                        self.start_item(output_index, ActiveOutputKind::Reasoning);
+                    }
+                    OpenAiOutputItem::FunctionCall { id, name, call_id , arguments } => {
+                        self.start_function_call(output_index, id, call_id, name, arguments);
+                    }
+                    OpenAiOutputItem::Unknown => {}
+                }
             }
             OpenAiResponsesEvent::FunctionCallArgumentsDelta {
                 output_index,
@@ -557,28 +630,49 @@ impl OpenAiResponsesState {
                 output_index,
                 arguments,
             } => {
-                // Some streams send a final full argument string. Treat as
-                // authoritative for that call. The accumulator API can expose a
-                // replace/finalize method if this becomes necessary.
-                let delta = ToolCallDelta {
-                    id: None,
-                    index: output_index,
-                    name: None,
-                    arguments_delta: Some(arguments),
-                };
-                self.tool_calls.push_delta(delta.clone());
-                out.push(AssistantMessageEvent::ToolCallDelta {
-                    delta,
-                    message: self.message.clone(),
-                });
+                // The done event carries the final authoritative JSON string,
+                // not another incremental delta. Replace the accumulator buffer
+                // so finalization does not duplicate already-streamed text. If
+                // the final string merely extends the current buffer, emit only
+                // the suffix as a normal provider-neutral delta.
+                if let Some(arguments_delta) = self
+                    .tool_calls
+                    .replace_arguments(output_index, arguments)
+                    .filter(|suffix| !suffix.is_empty())
+                {
+                    let delta = ToolCallDelta {
+                        id: None,
+                        index: output_index,
+                        name: None,
+                        arguments_delta: Some(arguments_delta),
+                    };
+                    out.push(AssistantMessageEvent::ToolCallDelta {
+                        delta,
+                        message: self.message.clone(),
+                    });
+                }
             }
             OpenAiResponsesEvent::Completed { response } => {
-                self.message.finish_reason = Some(FinishReason::Stop);
                 self.message.usage = response.usage.map(map_openai_usage);
-                self.done = true;
-                out.push(AssistantMessageEvent::Done {
-                    message: self.message.clone(),
-                });
+
+                if let Err(error) = self.finalize_tool_calls() {
+                    self.message.finish_reason = Some(FinishReason::Error);
+                    self.done = true;
+                    out.push(AssistantMessageEvent::Error {
+                        error,
+                        message: self.message.clone(),
+                    });
+                } else {
+                    self.message.finish_reason = Some(map_response_status(
+                        response.status,
+                        response.incomplete_details.as_ref(),
+                        !self.message.tool_calls.is_empty(),
+                    ));
+                    self.done = true;
+                    out.push(AssistantMessageEvent::Done {
+                        message: self.message.clone(),
+                    });
+                }
             }
             OpenAiResponsesEvent::Failed { response } => {
                 self.message.finish_reason = Some(FinishReason::Error);
@@ -588,6 +682,9 @@ impl OpenAiResponsesState {
                     error: InferenceError::ProviderProtocol {
                         message: response
                             .status
+                            .map(|status| {
+                                format!("openai responses stream failed with status {status:?}")
+                            })
                             .unwrap_or_else(|| "openai responses stream failed".to_owned()),
                     },
                     message: self.message.clone(),
@@ -608,6 +705,53 @@ impl OpenAiResponsesState {
         }
 
         out
+    }
+
+    fn finalize_tool_calls(&mut self) -> Result<(), InferenceError> {
+        let mut tool_calls = Vec::new();
+
+        for call in self.tool_calls.finish_all() {
+            let call = call.map_err(|error| InferenceError::ProviderProtocol {
+                message: format!("malformed openai responses tool-call arguments: {error}"),
+            })?;
+            tool_calls.push(call);
+        }
+
+        self.message.tool_calls = tool_calls;
+        Ok(())
+    }
+}
+
+fn map_response_status(
+    status: Option<OpenAiResponseStatus>,
+    incomplete_details: Option<&OpenAiIncompleteDetails>,
+    has_tool_calls: bool,
+) -> FinishReason {
+    match status {
+        Some(OpenAiResponseStatus::Incomplete) => {
+            if incomplete_details
+                .and_then(|details| details.reason.as_deref())
+                .is_some_and(|reason| reason == "content_filter")
+            {
+                FinishReason::ContentFilter
+            } else {
+                FinishReason::Length
+            }
+        }
+        Some(OpenAiResponseStatus::Failed | OpenAiResponseStatus::Cancelled) => FinishReason::Error,
+        Some(
+            OpenAiResponseStatus::Completed
+            | OpenAiResponseStatus::Queued
+            | OpenAiResponseStatus::InProgress
+            | OpenAiResponseStatus::Unknown,
+        )
+        | None => {
+            if has_tool_calls {
+                FinishReason::ToolCalls
+            } else {
+                FinishReason::Stop
+            }
+        }
     }
 }
 
@@ -709,6 +853,239 @@ mod tests {
 
         assert_eq!(reasoning.effort, "high");
         assert_eq!(reasoning.summary, "auto");
+    }
+
+    #[test]
+    fn output_item_added_ignores_message_and_reasoning_items() {
+        for item in [OpenAiOutputItem::Message {}, OpenAiOutputItem::Reasoning {}] {
+            let mut state = OpenAiResponsesState::default();
+
+            let events = state.apply_event(OpenAiResponsesEvent::OutputItemAdded {
+                output_index: 0,
+                item,
+            });
+
+            assert!(events.is_empty());
+            assert!(state.tool_calls.finish_all().is_empty());
+        }
+    }
+
+    #[test]
+    fn output_item_added_starts_function_call_items() {
+        let mut state = OpenAiResponsesState::default();
+
+        let events = state.apply_event(OpenAiResponsesEvent::OutputItemAdded {
+            output_index: 2,
+            item: OpenAiOutputItem::FunctionCall {
+                id: Some("item_1".to_owned()),
+                call_id: Some("call_1".to_owned()),
+                name: Some("read".to_owned()),
+            },
+        });
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            AssistantMessageEvent::ToolCallDelta {
+                delta: ToolCallDelta {
+                    id: Some(id),
+                    index: 2,
+                    name: Some(name),
+                    arguments_delta: None,
+                },
+                ..
+            } if id == "call_1" && name == "read"
+        ));
+    }
+
+    #[test]
+    fn output_item_added_ignores_unknown_items() {
+        let event = serde_json::from_value::<OpenAiResponsesEvent>(serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "web_search_call",
+                "id": "ws_1"
+            }
+        }))
+        .expect("unknown output item should deserialize");
+
+        let mut state = OpenAiResponsesState::default();
+        let events = state.apply_event(event);
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn completed_finalizes_accumulated_tool_calls() {
+        let mut state = OpenAiResponsesState::default();
+
+        state.apply_event(OpenAiResponsesEvent::OutputItemAdded {
+            output_index: 1,
+            item: OpenAiOutputItem::FunctionCall {
+                id: Some("item_1".to_owned()),
+                call_id: Some("call_1".to_owned()),
+                name: Some("read".to_owned()),
+            },
+        });
+        state.apply_event(OpenAiResponsesEvent::FunctionCallArgumentsDelta {
+            output_index: 1,
+            delta: r#"{"path":"README.md"}"#.to_owned(),
+        });
+
+        let events = state.apply_event(OpenAiResponsesEvent::Completed {
+            response: OpenAiCompletedResponse {
+                usage: None,
+                status: Some(OpenAiResponseStatus::Completed),
+                incomplete_details: None,
+            },
+        });
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            AssistantMessageEvent::Done { message }
+                if message.tool_calls.len() == 1
+                    && message.tool_calls[0].id.as_deref() == Some("call_1")
+                    && message.tool_calls[0].index == 1
+                    && message.tool_calls[0].name == "read"
+                    && message.tool_calls[0].arguments["path"] == "README.md"
+                    && message.tool_calls[0].raw_arguments == r#"{"path":"README.md"}"#
+                    && message.finish_reason == Some(FinishReason::ToolCalls)
+        ));
+        assert_eq!(state.message.tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn function_call_arguments_done_replaces_accumulated_arguments() {
+        let mut state = OpenAiResponsesState::default();
+
+        state.apply_event(OpenAiResponsesEvent::OutputItemAdded {
+            output_index: 0,
+            item: OpenAiOutputItem::FunctionCall {
+                id: None,
+                call_id: Some("call_1".to_owned()),
+                name: Some("read".to_owned()),
+            },
+        });
+        state.apply_event(OpenAiResponsesEvent::FunctionCallArgumentsDelta {
+            output_index: 0,
+            delta: r#"{"path"#.to_owned(),
+        });
+
+        let events = state.apply_event(OpenAiResponsesEvent::FunctionCallArgumentsDone {
+            output_index: 0,
+            arguments: r#"{"path":"README.md"}"#.to_owned(),
+        });
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            AssistantMessageEvent::ToolCallDelta {
+                delta: ToolCallDelta {
+                    index: 0,
+                    arguments_delta: Some(arguments_delta),
+                    ..
+                },
+                ..
+            } if arguments_delta == "\":\"README.md\"}"
+        ));
+
+        let events = state.apply_event(OpenAiResponsesEvent::Completed {
+            response: OpenAiCompletedResponse {
+                usage: None,
+                status: Some(OpenAiResponseStatus::Completed),
+                incomplete_details: None,
+            },
+        });
+
+        assert!(matches!(
+            &events[0],
+            AssistantMessageEvent::Done { message }
+                if message.tool_calls[0].raw_arguments == r#"{"path":"README.md"}"#
+                    && message.tool_calls[0].arguments["path"] == "README.md"
+        ));
+    }
+
+    #[test]
+    fn completed_reports_error_for_malformed_tool_call_arguments() {
+        let mut state = OpenAiResponsesState::default();
+
+        state.apply_event(OpenAiResponsesEvent::OutputItemAdded {
+            output_index: 0,
+            item: OpenAiOutputItem::FunctionCall {
+                id: None,
+                call_id: Some("call_bad".to_owned()),
+                name: Some("read".to_owned()),
+            },
+        });
+        state.apply_event(OpenAiResponsesEvent::FunctionCallArgumentsDelta {
+            output_index: 0,
+            delta: "not json".to_owned(),
+        });
+
+        let events = state.apply_event(OpenAiResponsesEvent::Completed {
+            response: OpenAiCompletedResponse {
+                usage: None,
+                status: Some(OpenAiResponseStatus::Completed),
+                incomplete_details: None,
+            },
+        });
+
+        assert_eq!(events.len(), 1);
+        assert!(state.done);
+        assert_eq!(state.message.finish_reason, Some(FinishReason::Error));
+        assert!(matches!(
+            &events[0],
+            AssistantMessageEvent::Error {
+                error: InferenceError::ProviderProtocol { message },
+                ..
+            } if message.contains("malformed openai responses tool-call arguments")
+        ));
+    }
+
+    #[test]
+    fn map_response_status_maps_incomplete_to_length() {
+        assert_eq!(
+            map_response_status(Some(OpenAiResponseStatus::Incomplete), None, false),
+            FinishReason::Length
+        );
+    }
+
+    #[test]
+    fn map_response_status_maps_incomplete_content_filter_reason() {
+        let details = OpenAiIncompleteDetails {
+            reason: Some("content_filter".to_owned()),
+        };
+
+        assert_eq!(
+            map_response_status(
+                Some(OpenAiResponseStatus::Incomplete),
+                Some(&details),
+                false
+            ),
+            FinishReason::ContentFilter
+        );
+    }
+
+    #[test]
+    fn map_response_status_maps_completed_with_tool_calls() {
+        assert_eq!(
+            map_response_status(Some(OpenAiResponseStatus::Completed), None, true),
+            FinishReason::ToolCalls
+        );
+    }
+
+    #[test]
+    fn map_response_status_maps_failed_to_error() {
+        assert_eq!(
+            map_response_status(Some(OpenAiResponseStatus::Failed), None, false),
+            FinishReason::Error
+        );
+        assert_eq!(
+            map_response_status(Some(OpenAiResponseStatus::Cancelled), None, false),
+            FinishReason::Error
+        );
     }
 
     #[test]

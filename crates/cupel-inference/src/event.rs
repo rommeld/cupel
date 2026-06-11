@@ -135,6 +135,23 @@ impl ToolCallAccumulator {
         call.apply_delta(&delta);
     }
 
+    /// Replace the accumulated raw argument string for one call.
+    ///
+    /// Some providers send a final authoritative argument string after streaming
+    /// partial deltas. When the final string extends the current buffer, this
+    /// returns the suffix that can still be emitted as a normal delta. If it
+    /// does not extend the current buffer, the stored value is still replaced,
+    /// but `None` is returned because provider-neutral deltas have no replace
+    /// semantic.
+    pub fn replace_arguments(&mut self, index: usize, arguments: String) -> Option<String> {
+        let call = self.call_mut(index);
+        let suffix = arguments
+            .strip_prefix(&call.raw_arguments)
+            .map(ToOwned::to_owned);
+        call.raw_arguments = arguments;
+        suffix
+    }
+
     /// Return completed calls when JSON currently parses.
     ///
     /// This is useful at message end. Do not silently drop parse failures in
