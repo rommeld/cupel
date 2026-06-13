@@ -1,12 +1,15 @@
-use serde::{Deserialize, Serialize};
+
 use thiserror::Error;
 
-use crate::{ApiFamily, ModelRef};
+pub type Result<T> = std::result::Result<T, InferenceError>;
 
-#[derive(Debug, Clone, Error, Serialize, Deserialize)]
+#[derive(Debug, Error)]
 pub enum InferenceError {
-    #[error("model not found: {0:?}")]
-    ModelNotFound(ModelRef),
+    #[error("no API provider registered for api: {0}")]
+    NoApiProvider(String),
+    
+    #[error("model not found: provider={provider}, model={model}")]
+    ModelNotFound { provider: String, model: String},
 
     #[error("no provider registered for API family: {0}")]
     ProviderNotRegistered(ApiFamily),

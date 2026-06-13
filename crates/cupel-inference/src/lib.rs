@@ -11,6 +11,7 @@ pub mod model;
 pub mod provider;
 pub mod providers;
 pub mod registry;
+pub mod types;
 pub mod tool;
 pub mod usage;
 
