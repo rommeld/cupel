@@ -59,7 +59,7 @@ pub enum ThinkingLevel {
     XHigh,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ModelThinkingLevel {
     Off,
@@ -372,3 +372,81 @@ impl AssistantMessageEvent {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAICompletionsCompat {
+    pub supports_store: Option<bool>,
+    pub supports_developer_role: Option<bool>,
+    pub supports_reasoning_effort: Option<bool>,
+    pub supports_usage_in_streaming: Option<bool>,
+    pub max_tokens_field: Option<String>,
+    pub requires_tool_result_name: Option<bool>,
+    pub requires_assistant_after_tool_result: Option<bool>,
+    pub requires_thinking_as_text: Option<bool>,
+    pub requites_reasoning_content_on_assistant_messages: Option<bool>,
+    pub thinking_format: Option<String>,
+    pub supports_strict_mode: Option<bool>,
+    pub cache_control_format: Option<String>,
+    pub send_session_affinity_headers: Option<bool>,
+    pub supports_long_cache_retention: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenAIResponsesCompat {
+    pub supports_developer_role: Option<bool>,
+    pub send_session_id_header: Option<bool>,
+    pub supports_long_cache_retention: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnthropicMessagesCompat {
+    pub supports_eager_tool_input_streaming: Option<bool>,
+    pub supports_long_cache_retention: Option<bool>,
+    pub send_session_affinity_headers: Option<bool>,
+    pub supports_cache_control_on_tools: Option<bool>,
+    pub supports_temperature: Option<bool>,
+    pub force_adaptive_thinking: Option<bool>,
+    pub allow_empty_signature: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCompat {
+    pub openai_completions: Option<OpenAICompletionsCompat>,
+    pub openai_responses: Option<OpenAIResponsesCompat>,
+    pub anthropic_messages: Option<AnthropicMessagesCompat>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Model {
+    pub id: String,
+    pub name: String,
+    pub api: Api,
+    pub provider: Provider,
+    pub base_url: String,
+    pub reasoning: bool,
+
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub thinking_level_map: HashMap<ModelThinkingLevel, Option<String>>,
+
+    pub cost: ModelCost,
+    pub context_window: u64,
+    pub max_tokens: u64,
+
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
+
+    #[serde(default)]
+    pub compat: ModelCompat,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCost {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+}

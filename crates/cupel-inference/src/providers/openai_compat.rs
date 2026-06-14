@@ -2,7 +2,7 @@ use crate::{
     ApiFamily, AssistantMessage, AssistantMessageEvent, ContentBlock, FinishReason,
     InferenceContext, InferenceRequest, Message, ModelSpec, ToolCallDelta, ToolDefinition,
     error::InferenceError,
-    event::InferenceStream,
+    event_stream::InferenceStream,
     provider::{InferenceProvider, ResolvedInferenceRequest},
     providers::{error_event, sse::SseDecoder},
 };

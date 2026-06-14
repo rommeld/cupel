@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    event::{FinishReason, ToolCall},
+    event_stream::{FinishReason, ToolCall},
     tool::ToolName,
     usage::TokenUsage,
 };

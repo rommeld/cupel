@@ -5,12 +5,13 @@
 //! and runtime crates.
 pub mod client;
 pub mod context;
+pub mod diagnostics;
 pub mod error;
-pub mod event;
+pub mod event_stream;
 pub mod model;
 pub mod provider;
 pub mod providers;
-pub mod registry;
+pub mod api_registry;
 pub mod types;
 pub mod tool;
 pub mod usage;
@@ -21,14 +22,14 @@ pub use context::{
     ToolResultMessage, UserMessage,
 };
 pub use error::InferenceError;
-pub use event::{
+pub use event_stream::{
     AssistantMessageDelta, AssistantMessageEvent, FinishReason, InferenceStream, ToolCallDelta,
 };
 pub use model::{
     ApiFamily, ContextWindow, ModelId, ModelRef, ModelSpec, ProviderId, ReasoningSupport,
 };
 pub use provider::{InferenceProvider, InferenceRequest, InferenceRequestOptions, ReasoningEffort};
-pub use registry::{ModelRegistry, ProviderRegistry};
+pub use api_registry::{ModelRegistry, ProviderRegistry};
 pub use tool::{JsonSchema, ToolDefinition, ToolName};
 pub use usage::{TokenPricing, TokenUsage, UsageCost};
 

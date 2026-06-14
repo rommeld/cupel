@@ -3,7 +3,7 @@ use futures::StreamExt;
 
 use crate::{
     AssistantMessage, InferenceError, InferenceRequest, ModelRegistry, ProviderRegistry,
-    event::{AssistantMessageEvent, FinishReason, InferenceStream},
+    event_stream::{AssistantMessageEvent, FinishReason, InferenceStream},
     provider::ResolvedInferenceRequest,
 };
 

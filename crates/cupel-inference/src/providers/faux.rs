@@ -13,7 +13,7 @@ use std::{
 
 use crate::{
     context::{AssistantMessage, ContentBlock},
-    event::{AssistantMessageEvent, FinishReason, InferenceStream},
+    event_stream::{AssistantMessageEvent, FinishReason, InferenceStream},
     provider::{InferenceProvider, ResolvedInferenceRequest},
 };
 #[derive(Default, Clone)]
@@ -88,12 +88,12 @@ mod tests {
     use crate::{
         client::InferenceClient,
         context::InferenceContext,
-        event::FinishReason,
+        event_stream::FinishReason,
         model::{
             ApiFamily, ContextWindow, ModelId, ModelRef, ModelSpec, ProviderId, ReasoningSupport,
         },
         provider::{InferenceRequest, InferenceRequestOptions},
-        registry::{ModelRegistry, ProviderRegistry},
+        api_registry::{ModelRegistry, ProviderRegistry},
     };
     use std::sync::Arc;
 

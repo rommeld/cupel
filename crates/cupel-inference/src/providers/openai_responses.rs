@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::{
     context::{AssistantMessage, ContentBlock, InferenceContext, Message},
     error::InferenceError,
-    event::{
+    event_stream::{
         AssistantMessageEvent, FinishReason, InferenceStream, ToolCallAccumulator, ToolCallDelta,
     },
     model::{ApiFamily, ModelSpec},
