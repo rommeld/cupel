@@ -205,40 +205,22 @@ struct OpenAiReasoning {
     summary: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum OpenAiInputItem {
     Message {
-        #[serde(default)]
-        id: Option<String>,
-        #[serde(default)]
-        content: Vec<OpenAiOutputContentPart>,
-        #[serde(default)]
-        status: Option<String>,
+        role: OpenAiMessageRole,
+        content: Vec<OpenAiContentPart>,
     },
-
-    Reasoning {
-        #[serde(default)]
-        id: Option<String>,
-        #[serde(default)]
-        summary: Vec<OpenAiReasoningSummaryPart>,
-        #[serde(default)]
-        content: Vec<OpenAiReasoningTextPart>,
-    },
-    
     FunctionCall {
-        #[serde(default)]
-        id: Option<String>,
         call_id: String,
         name: String,
-        #[serde(default)]
         arguments: String,
     },
-
-    /// Unknown output items are ignored by the neutral state machine, while the
-    /// original raw event can still be emitted when `include_raw` is enabled.
-    #[serde(other)]
-    Unknown,
+    FunctionCallOutput {
+        call_id: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -246,32 +228,6 @@ enum OpenAiInputItem {
 enum OpenAiMessageRole {
     User,
     Assistant,
-}
-
-#[derive(Debug, Deserialize)]
-enum OpenAiOutputContentPart {
-    OutputText {
-        #[serde(default)]
-        text: String,
-    },
-    Refusal {
-        #[serde(default)]
-        refusal: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiReasoningSummaryPart {
-    #[serde(default)]
-    text: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiReasoningTextPart {
-    #[serde(default)]
-    text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -522,8 +478,8 @@ enum OpenAiResponsesEvent {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum OpenAiOutputItem {
-    Message {},
-    Reasoning {},
+    Message,
+    Reasoning,
     FunctionCall {
         #[serde(default)]
         id: Option<String>,
@@ -596,20 +552,14 @@ impl OpenAiResponsesState {
                     message: self.message.clone(),
                 });
             }
-            OpenAiResponsesEvent::OutputItemAdded { output_index, item } => {
-                match item {
-                    OpenAiOutputItem::Message { .. } => {
-                        self.start_item(output_index, ActiveOutputKind::Message);
-                    }
-                    OpenAiOutputItem::Reasoning { .. } => {
-                        self.start_item(output_index, ActiveOutputKind::Reasoning);
-                    }
-                    OpenAiOutputItem::FunctionCall { id, name, call_id , arguments } => {
-                        self.start_function_call(output_index, id, call_id, name, arguments);
-                    }
-                    OpenAiOutputItem::Unknown => {}
+            OpenAiResponsesEvent::OutputItemAdded { output_index, item } => match item {
+                OpenAiOutputItem::FunctionCall { id, name, call_id } => {
+                    out.push(self.start_function_call(output_index, id, call_id, name));
                 }
-            }
+                OpenAiOutputItem::Message
+                | OpenAiOutputItem::Reasoning
+                | OpenAiOutputItem::Unknown => {}
+            },
             OpenAiResponsesEvent::FunctionCallArgumentsDelta {
                 output_index,
                 delta,
@@ -680,12 +630,12 @@ impl OpenAiResponsesState {
                 self.done = true;
                 out.push(AssistantMessageEvent::Error {
                     error: InferenceError::ProviderProtocol {
-                        message: response
-                            .status
-                            .map(|status| {
+                        message: response.status.map_or_else(
+                            || "openai responses stream failed".to_owned(),
+                            |status| {
                                 format!("openai responses stream failed with status {status:?}")
-                            })
-                            .unwrap_or_else(|| "openai responses stream failed".to_owned()),
+                            },
+                        ),
                     },
                     message: self.message.clone(),
                 });
@@ -705,6 +655,28 @@ impl OpenAiResponsesState {
         }
 
         out
+    }
+
+    fn start_function_call(
+        &mut self,
+        output_index: usize,
+        item_id: Option<String>,
+        call_id: Option<String>,
+        name: Option<String>,
+    ) -> AssistantMessageEvent {
+        let id = call_id.or(item_id);
+        let delta = ToolCallDelta {
+            id,
+            index: output_index,
+            name,
+            arguments_delta: None,
+        };
+
+        self.tool_calls.push_delta(delta.clone());
+        AssistantMessageEvent::ToolCallDelta {
+            delta,
+            message: self.message.clone(),
+        }
     }
 
     fn finalize_tool_calls(&mut self) -> Result<(), InferenceError> {
@@ -796,6 +768,10 @@ fn map_openai_usage(usage: OpenAiUsage) -> TokenUsage {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "tests assert exact event and tool-call shapes"
+)]
 mod tests {
     use super::*;
 
@@ -857,7 +833,7 @@ mod tests {
 
     #[test]
     fn output_item_added_ignores_message_and_reasoning_items() {
-        for item in [OpenAiOutputItem::Message {}, OpenAiOutputItem::Reasoning {}] {
+        for item in [OpenAiOutputItem::Message, OpenAiOutputItem::Reasoning] {
             let mut state = OpenAiResponsesState::default();
 
             let events = state.apply_event(OpenAiResponsesEvent::OutputItemAdded {

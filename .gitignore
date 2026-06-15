@@ -5,9 +5,6 @@
 !/crates/cupel-inference/src/
 !/crates/cupel-inference/src/**
 
-!/docs/
-!/docs/PLAN.md
-
 !.gitignore
 
 !Cargo.toml

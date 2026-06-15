@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::{
     AssistantMessage,
+    api_registry::ProviderRegistry,
     event_stream::{AssistantMessageEvent, FinishReason},
     model::ApiFamily,
-    api_registry::ProviderRegistry,
 };
 
 #[cfg(feature = "provider-faux")]

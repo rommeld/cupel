@@ -1,100 +1,79 @@
-use crate::{
-    error::{InferenceError, Result},
-    event_stream::AssistantMessageEventStream,
-    types::{Api, Context, Model, SimpleStreamOptions, StreamOptions},
-};
-use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use std::{collections::HashMap, sync::Arc};
 
-pub type StreamFn =
-    Arc<dyn Fn(Model, Context, StreamOptions) -> Result<AssistantMessageEventStream> + Send + Sync>;
-pub type StreamSimpleFn = Arc<
-    dyn Fn(Model, Context, SimpleStreamOptions) -> Result<AssistantMessageEventStream>
-        + Send
-        + Sync,
->;
+use crate::{
+    error::{InferenceError, Result},
+    model::{ApiFamily, ModelRef, ModelSpec},
+    provider::InferenceProvider,
+};
 
-#[derive(Clone)]
-pub struct ApiProvider {
-    pub api: Api,
-    pub stream: StreamFn,
-    pub stream_simple: StreamSimpleFn,
+#[derive(Debug, Default, Clone)]
+pub struct ModelRegistry {
+    models: HashMap<ModelRef, ModelSpec>,
 }
 
-#[derive(Clone)]
-struct RegisteredApiProvider {
-    provider: ApiProvider,
-    source_id: Option<String>,
+impl ModelRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, model: ModelSpec) -> Option<ModelSpec> {
+        self.models.insert(model.model_ref.clone(), model)
+    }
+
+    pub fn get(&self, model_ref: &ModelRef) -> Result<ModelSpec> {
+        self.models
+            .get(model_ref)
+            .cloned()
+            .ok_or_else(|| InferenceError::ModelRefNotFound {
+                model_ref: model_ref.0.clone(),
+            })
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.models.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.models.is_empty()
+    }
 }
 
-static REGISTRY: Lazy<RwLock<HashMap<String, RegisteredApiProvider>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-
-fn wrap_stream(api: Api, inner: StreamFn) -> StreamFn {
-    Arc::new(move |model, context, options| {
-        if model.api != api {
-            return Err(InferenceError::MismatechApi {
-                actual: model.api.0,
-                expected: api.0.clone(),
-            });
-        }
-        inner(model, context, options)
-    })
+#[derive(Default, Clone)]
+pub struct ProviderRegistry {
+    providers: HashMap<ApiFamily, Arc<dyn InferenceProvider>>,
 }
 
-fn wrap_stream_simple(api: Api, inner: StreamSimpleFn) -> StreamSimpleFn {
-    Arc::new(|model, context, options| {
-        if model.api != api {
-            return Err(InferenceError::MismatechApi {
-                actual: model.api.0,
-                expected: api.0.clone(),
-            });
-        }
-        inner(model, context, options)
-    })
-}
+impl ProviderRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-pub fn register_api_provider(provider: ApiProvider, source_id: Option<String>) {
-    let api = provider.api.clone();
-    let wrapped = ApiProvider {
-        api: api.clone(),
-        stream: wrap_stream(api.clone(), provider.stream),
-        stream_simple: wrap_stream_simple(api.clone(), provider.stream_simple),
-    };
-    REGISTRY.write().insert(
-        api.0.clone(),
-        RegisteredApiProvider {
-            provider: wrapped,
-            source_id,
-        },
-    );
-}
+    pub fn register(
+        &mut self,
+        api_family: ApiFamily,
+        provider: Arc<dyn InferenceProvider>,
+    ) -> Option<Arc<dyn InferenceProvider>> {
+        self.providers.insert(api_family, provider)
+    }
 
-pub fn get_api_provider(api: &Api) -> Option<ApiProvider> {
-    REGISTRY
-        .read()
-        .get(api.as_str())
-        .map(|entry| entry.provider.clone())
-}
+    pub fn get(&self, api_family: &ApiFamily) -> Result<Arc<dyn InferenceProvider>> {
+        self.providers
+            .get(api_family)
+            .cloned()
+            .ok_or_else(|| InferenceError::NoApiProvider(api_family.to_string()))
+    }
 
-pub fn get_api_providers() -> Vec<ApiProviderHandle> {
-    REGISTRY
-        .read()
-        .values()
-        .map(|entry| ApiProviderHandle {
-            api: entry.provider.api.clone(),
-            source_id: entry.source_id.clone(),
-        })
-        .collect()
-}
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.providers.len()
+    }
 
-pub fn unregister_api_providers(source_id: &str) {
-    REGISTRY
-        .write()
-        .retain(|_, entry| entry.source_id.as_deref() != Some(source_id));
-}
-
-pub fn clear_api_providers() {
-    REGISTRY.write().clear();
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.providers.is_empty()
+    }
 }

@@ -86,6 +86,7 @@ impl InferenceProvider for FauxProvider {
 mod tests {
     use super::*;
     use crate::{
+        api_registry::{ModelRegistry, ProviderRegistry},
         client::InferenceClient,
         context::InferenceContext,
         event_stream::FinishReason,
@@ -93,7 +94,6 @@ mod tests {
             ApiFamily, ContextWindow, ModelId, ModelRef, ModelSpec, ProviderId, ReasoningSupport,
         },
         provider::{InferenceRequest, InferenceRequestOptions},
-        api_registry::{ModelRegistry, ProviderRegistry},
     };
     use std::sync::Arc;
 

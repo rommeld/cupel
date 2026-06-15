@@ -3,6 +3,7 @@
 //! This module only registers protocol adapters. It should not load user config,
 //! read environment variables, or execute tools. Those jobs belong to CLI
 //! and runtime crates.
+pub mod api_registry;
 pub mod client;
 pub mod context;
 pub mod diagnostics;
@@ -11,11 +12,11 @@ pub mod event_stream;
 pub mod model;
 pub mod provider;
 pub mod providers;
-pub mod api_registry;
-pub mod types;
 pub mod tool;
+pub mod types;
 pub mod usage;
 
+pub use api_registry::{ModelRegistry, ProviderRegistry};
 pub use client::InferenceClient;
 pub use context::{
     AssistantMessage, ContentBlock, InferenceContext, Message, Role, SystemMessage,
@@ -29,7 +30,6 @@ pub use model::{
     ApiFamily, ContextWindow, ModelId, ModelRef, ModelSpec, ProviderId, ReasoningSupport,
 };
 pub use provider::{InferenceProvider, InferenceRequest, InferenceRequestOptions, ReasoningEffort};
-pub use api_registry::{ModelRegistry, ProviderRegistry};
 pub use tool::{JsonSchema, ToolDefinition, ToolName};
 pub use usage::{TokenPricing, TokenUsage, UsageCost};
 

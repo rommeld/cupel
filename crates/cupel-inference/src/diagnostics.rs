@@ -1,3 +1,5 @@
+use core::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -17,15 +19,20 @@ pub struct AssistantMessageDiagnostic {
     pub details: Option<Map<String, Value>>,
 }
 
+#[must_use]
 pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-pub fn create_assistant_message_diagnostic(
-    diagnostic_type: impl Into<String>,
-    error: impl std::fmt::Display,
+pub fn create_assistant_message_diagnostic<DiagnosticType, Error>(
+    diagnostic_type: DiagnosticType,
+    error: Error,
     details: Option<Map<String, Value>>,
-) -> AssistantMessageDiagnostic {
+) -> AssistantMessageDiagnostic
+where
+    DiagnosticType: Into<String>,
+    Error: Display,
+{
     AssistantMessageDiagnostic {
         diagnostic_type: diagnostic_type.into(),
         timestamp: now_ms(),
