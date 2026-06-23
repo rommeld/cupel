@@ -6,19 +6,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-async-stream.workspace = true
 chrono.workspace = true
-futures.workspace = true
-once_cell.workspace = true
-oneshot.workspace = true
-parking_lot.workspace = true
+futures-core.workspace = true
 reqwest.workspace = true
-secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
+tokio-util.workspace = true
 
 [features]
 default = ["provider-faux", "provider-openai-compat", "provider-openai-responses"]

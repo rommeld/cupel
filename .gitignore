@@ -1,9 +1,9 @@
 *
 
 !/crates/
-!/crates/cupel-inference/
-!/crates/cupel-inference/src/
-!/crates/cupel-inference/src/**
+!/crates/cupel-core/
+!/crates/cupel-core/src/
+!/crates/cupel-core/src/**
 
 !.gitignore
 
