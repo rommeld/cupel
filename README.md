@@ -38,3 +38,9 @@ cargo run -p cupel-coding-agent -- --model accounts/fireworks/models/kimi-k2p7-c
 Options: `--model <id>` picks a model from the built-in catalog, `--thinking off|minimal|low|medium|high|xhigh` sets the reasoning level, `--plain` forces the line-based REPL (used automatically when output is piped).
 
 In the TUI: `enter` sends (while the agent works, it queues a steering message), `alt+enter` newline, `esc` aborts the turn, `ctrl-t` expands tool output, `pgup/pgdn` scrolls, `ctrl-c` quits.
+
+## Implementation milestones
+
+- Persistencey is currently missing from the project. Sessions will not survive after exiting `cupel`.
+- Alternative to `grep` will be implemented in `cupel-index` using a combination of `fff` and `entire`'s code search.
+- Expand existing model providers (e.g., integrate local models via `ollama`).

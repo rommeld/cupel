@@ -264,6 +264,31 @@ impl App {
                     .attach_tool_result(&tool_call_id, ToolOutcome { text, is_error });
             }
 
+            AgentEvent::CompactionStart { reason } => {
+                let cause = match reason {
+                    cupel_agent::CompactionReason::Threshold => "context filling up",
+                    cupel_agent::CompactionReason::Overflow => "context overflow",
+                };
+                self.transcript.cells.push(Cell::Notice {
+                    text: format!("compacting context ({cause})..."),
+                });
+            }
+            AgentEvent::CompactionEnd {
+                tokens_before,
+                tokens_after,
+                error,
+            } => {
+                let text = match error {
+                    None => format!(
+                        "context compacted: ~{}k -> ~{}k tokens",
+                        tokens_before / 1000,
+                        tokens_after / 1000
+                    ),
+                    Some(error) => format!("compaction failed: {error}"),
+                };
+                self.transcript.cells.push(Cell::Notice { text });
+            }
+
             AgentEvent::AutoRetry {
                 attempt,
                 max_attempts,

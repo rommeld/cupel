@@ -111,6 +111,21 @@ pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
                         );
                     }
                 }
+                AgentEvent::CompactionStart { .. } => {
+                    println!("\x1b[33mcompacting context...\x1b[0m");
+                }
+                AgentEvent::CompactionEnd {
+                    tokens_before,
+                    tokens_after,
+                    error,
+                } => match error {
+                    None => println!(
+                        "\x1b[33mcontext compacted: ~{}k -> ~{}k tokens\x1b[0m",
+                        tokens_before / 1000,
+                        tokens_after / 1000
+                    ),
+                    Some(error) => println!("\x1b[31mcompaction failed: {error}\x1b[0m"),
+                },
                 AgentEvent::AutoRetry {
                     attempt,
                     max_attempts,

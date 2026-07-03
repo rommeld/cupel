@@ -230,6 +230,7 @@ pub struct AgentLoopConfig {
     pub max_tokens: Option<u64>,
     pub tool_execution: ToolExecutionMode,
     pub retry: RetryConfig,
+    pub compaction: crate::compaction::CompactionConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +322,15 @@ impl AgentHooks for NoHooks {}
 // Events
 // ---------------------------------------------------------------------------
 
+/// What triggered a compaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionReason {
+    /// The pre-turn estimate crossed the reserve threshold.
+    Threshold,
+    /// The provider rejected a request as exceeding the context window.
+    Overflow,
+}
+
 /// Events emitted by the agent for UIs. `AgentEnd` is always the last event
 /// of a run.
 #[derive(Debug, Clone)]
@@ -347,6 +357,19 @@ pub enum AgentEvent {
     },
     MessageEnd {
         message: AgentMessage,
+    },
+    /// Context compaction is starting: old history is being summarized to
+    /// fit the context window. The loop pauses until it finishes.
+    CompactionStart {
+        reason: CompactionReason,
+    },
+    /// Compaction finished. `error: Some(..)` means it failed; the loop
+    /// proceeds anyway (the next request may still fit - if not, the
+    /// overflow error reaches the user normally).
+    CompactionEnd {
+        tokens_before: u64,
+        tokens_after: u64,
+        error: Option<String>,
     },
     /// A transient provider failure is about to be retried after a backoff
     /// wait. The errored turn already ended normally (`TurnEnd` fired); a

@@ -32,9 +32,10 @@ use cupel_core::{
     },
 };
 
+use crate::compaction;
 use crate::types::{
     AgentContext, AgentEvent, AgentHooks, AgentLoopConfig, AgentMessage, AgentTool,
-    AgentToolResult, ToolExecutionMode, ToolUpdateFn,
+    AgentToolResult, CompactionReason, ToolExecutionMode, ToolUpdateFn,
 };
 
 // ---------------------------------------------------------------------------
@@ -182,6 +183,9 @@ async fn run_loop(
     // Consecutive transient-failure retries so far; any successful response
     // resets it (pi's session does the same).
     let mut retry_attempt: u32 = 0;
+    // Guard for reactive overflow compaction: at most once per failure
+    // episode, or a provider that keeps rejecting would loop forever.
+    let mut overflow_compacted = false;
     // The user may have queued steering input while the previous run wound
     // down; check before the first request.
     let mut pending_messages = hooks.steering_messages().await;
@@ -212,6 +216,24 @@ async fn run_loop(
                 new_messages.push(message);
             }
 
+            // ---- Proactive context management -----------------------------
+            // Compact BEFORE the request that would overflow, not after it
+            // fails: cheaper (no wasted request) and invisible to the model.
+            let estimate = compaction::estimate_context_tokens(&context);
+            if compaction::should_compact(estimate, config.model.context_window, &config.compaction)
+            {
+                run_compaction(
+                    &mut context,
+                    &config,
+                    &hooks,
+                    &registry,
+                    &cancel,
+                    sink,
+                    CompactionReason::Threshold,
+                )
+                .await;
+            }
+
             // ---- One assistant response --------------------------------
             let message =
                 stream_assistant_response(&mut context, &config, &hooks, &registry, &cancel, sink)
@@ -223,6 +245,37 @@ async fn run_loop(
                     message: Box::new(AgentMessage::Llm(Message::Assistant(message.clone()))),
                     tool_results: Vec::new(),
                 });
+
+                // ---- Reactive overflow handling ----------------------------
+                // The pre-turn estimate is a heuristic; when it undershoots,
+                // the provider rejects the request as too large. That error
+                // is checked BEFORE transient retry (pi's guidance: handle
+                // overflow first) - waiting and resending the same oversized
+                // request could never succeed. Compact, then re-request
+                // immediately (no backoff: the failure wasn't load-related).
+                if cupel_core::overflow::is_context_overflow(&message, config.model.context_window)
+                    && config.compaction.enabled
+                    && !overflow_compacted
+                    && !cancel.is_cancelled()
+                {
+                    let compacted = run_compaction(
+                        &mut context,
+                        &config,
+                        &hooks,
+                        &registry,
+                        &cancel,
+                        sink,
+                        CompactionReason::Overflow,
+                    )
+                    .await;
+                    if compacted {
+                        overflow_compacted = true;
+                        has_more_tool_calls = true;
+                        continue;
+                    }
+                    // Compaction failed or found nothing to cut: fall through
+                    // to normal error handling.
+                }
 
                 // ---- Automatic retry for transient failures ---------------
                 // An "overloaded"/529/dropped-connection response should not
@@ -272,8 +325,9 @@ async fn run_loop(
                 });
                 return;
             }
-            // A successful response closes the retry episode.
+            // A successful response closes the retry/overflow episode.
             retry_attempt = 0;
+            overflow_compacted = false;
 
             // ---- Its tool calls ------------------------------------------
             let tool_calls: Vec<ToolCall> = message
@@ -338,6 +392,55 @@ async fn run_loop(
     sink.emit(AgentEvent::AgentEnd {
         messages: new_messages.clone(),
     });
+}
+
+/// Run one compaction attempt, emitting start/end events. Returns whether
+/// the transcript actually shrank. Failures are reported on the event
+/// stream but never abort the run - a failed compaction just means the next
+/// request goes out as-is (and its error, if any, reaches the user).
+async fn run_compaction(
+    context: &mut AgentContext,
+    config: &AgentLoopConfig,
+    hooks: &Arc<dyn AgentHooks>,
+    registry: &Arc<Registry>,
+    cancel: &CancellationToken,
+    sink: &AgentEventSink,
+    reason: CompactionReason,
+) -> bool {
+    sink.emit(AgentEvent::CompactionStart { reason });
+    let api_key = hooks
+        .api_key(config.model.provider.as_str())
+        .await
+        .or_else(|| config.api_key.clone());
+    let tokens_before = compaction::estimate_context_tokens(context);
+
+    match compaction::compact(
+        context,
+        registry,
+        &config.model,
+        api_key,
+        &config.compaction,
+        cancel,
+    )
+    .await
+    {
+        Ok(outcome) => {
+            sink.emit(AgentEvent::CompactionEnd {
+                tokens_before: outcome.tokens_before,
+                tokens_after: outcome.tokens_after,
+                error: None,
+            });
+            true
+        }
+        Err(err) => {
+            sink.emit(AgentEvent::CompactionEnd {
+                tokens_before,
+                tokens_after: tokens_before,
+                error: Some(err.to_string()),
+            });
+            false
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

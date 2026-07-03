@@ -93,6 +93,7 @@ pub struct AgentOptions {
     pub max_tokens: Option<u64>,
     pub tool_execution: ToolExecutionMode,
     pub retry: RetryConfig,
+    pub compaction: crate::compaction::CompactionConfig,
     pub steering_mode: QueueMode,
     pub follow_up_mode: QueueMode,
 }
@@ -114,6 +115,7 @@ impl AgentOptions {
             max_tokens: None,
             tool_execution: ToolExecutionMode::default(),
             retry: RetryConfig::default(),
+            compaction: crate::compaction::CompactionConfig::default(),
             steering_mode: QueueMode::default(),
             follow_up_mode: QueueMode::default(),
         }
@@ -141,6 +143,7 @@ pub struct Agent {
     max_tokens: Option<u64>,
     tool_execution: ToolExecutionMode,
     retry: RetryConfig,
+    compaction: crate::compaction::CompactionConfig,
     /// The active run: cancel token + its join handle.
     active: Option<(CancellationToken, tokio::task::JoinHandle<()>)>,
 }
@@ -169,6 +172,7 @@ impl Agent {
             max_tokens: options.max_tokens,
             tool_execution: options.tool_execution,
             retry: options.retry,
+            compaction: options.compaction,
             active: None,
         }
     }
@@ -261,6 +265,7 @@ impl Agent {
                     max_tokens: self.max_tokens,
                     tool_execution: self.tool_execution,
                     retry: self.retry,
+                    compaction: self.compaction,
                 },
             )
         };
