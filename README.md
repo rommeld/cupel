@@ -6,6 +6,6 @@ A cupel is a small vessel for refining precious metal. This project borrows that
 
 ## Implementation milestones
 
-### 1. `cupel-inference`
+### 1. `cupel-core`
 
 The inference crate builds the foundation.

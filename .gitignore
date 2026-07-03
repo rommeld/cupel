@@ -1,9 +1,17 @@
 *
 
 !/crates/
+
 !/crates/cupel-core/
 !/crates/cupel-core/src/
 !/crates/cupel-core/src/**
+
+!/crates/cupel-agent/
+!/crates/cupel-agent/src/
+!/crates/cupel-agent/src/**
+
+!/crates/cupel-core/
+!/crates/cupel-core/**
 
 !.gitignore
 

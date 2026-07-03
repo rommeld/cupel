@@ -1,7 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/cupel-inference"
+    "crates/cupel-core",
+    "crates/cupel-agent",
+    "crates/cupel-coding-agent",
+    "crates/cupel-index",
 ]
 
 [workspace.package]
@@ -10,14 +13,46 @@ license = "MIT"
 repository = "https://github.com/rommeld/cupel"
 
 [workspace.dependencies]
+# Internal crates, so members can depend on each other by name.
+cupel-core = { path = "crates/cupel-core" }
+cupel-agent = { path = "crates/cupel-agent" }
+cupel-index = { path = "crates/cupel-index" }
+
+# `async_trait` lets us write `async fn` in traits that still support dynamic
+# dispatch (`dyn Trait`). Native async-fn-in-trait exists but is not yet
+# object-safe, and we store tools as `Arc<dyn AgentTool>`.
+async-trait = "0.1"
+# Official AWS SDK: handles SigV4 signing, credential/region resolution, and
+# the binary event-stream decoding that Bedrock's ConverseStream API uses.
+# pi does the same via @aws-sdk/client-bedrock-runtime.
+aws-config = "1"
+aws-sdk-bedrockruntime = "1"
+aws-smithy-types = "1"
+base64 = "0.22"
 chrono = "0.4"
 futures-core = "0.3"
+futures-util = "0.3"
+# Ripgrep's engine as a library (used by the grep tool). pi spawns an `rg`
+# binary instead; linking the library removes that runtime dependency.
+grep-matcher = "0.1"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+# Directory walker with .gitignore support, also from the ripgrep project.
+ignore = "0.4"
+# Terminal UI framework: immediate-mode rendering with double-buffered
+# diffing, so we only describe "what the screen should look like" each frame
+# and ratatui writes the minimal terminal updates. This replaces pi's entire
+# hand-rolled tui package (differential renderer + component tree).
+ratatui = "0.29"
 reqwest = { version = "0.13", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1.52", features = ["full"] }
 tokio-util = "0.7"
+# Display-column width of Unicode text (CJK chars are 2 columns wide, etc.).
+# Needed for correct line wrapping in the TUI transcript.
+unicode-width = "0.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -30,7 +65,25 @@ absolute-paths = "allow"
 
 arbitrary_source_item_ordering = "allow"
 
+# `#[allow]` with documented reasoning is exactly how lint exceptions
+# should look; banning the attribute itself is circular.
+allow_attributes = "allow"
+allow_attributes_without_reason = "allow"
+
+# Overflow checks on every `+` are the wrong tool for token counters and
+# content indexes; debug builds already trap overflow.
+arithmetic_side_effects = "allow"
+
 as_conversions = "allow"
+
+assertions_on_result_states = "allow"
+
+# Bounded values (e.g. temperature 0..2 as f32) truncate harmlessly.
+cast_possible_truncation = "allow"
+
+# Streaming event loops are genuinely long match statements; splitting them
+# hides the protocol shape. Reviewed per function, not by metric.
+cognitive_complexity = "allow"
 
 assigning_clones = "allow"
 
@@ -43,6 +96,26 @@ default_numeric_fallback = "allow"
 exhaustive_enums = "allow"
 exhaustive_structs = "allow"
 
+# Literal formatting nits (hex "suggestions" for date math constants, `_i64`
+# suffix style, non-ASCII chars in test fixtures).
+decimal_literal_representation = "allow"
+separated_literal_suffix = "allow"
+non_ascii_literal = "allow"
+
+# Rustdoc completeness nits; revisit before publishing to crates.io.
+doc_markdown = "allow"
+doc_paragraphs_missing_punctuation = "allow"
+missing_panics_doc = "allow"
+
+else_if_without_else = "allow"
+
+# `std::process::exit` after `--help` is the standard CLI pattern.
+exit = "allow"
+
+filetype_is_file = "allow"
+
+format_push_string = "allow"
+
 expect_used = "allow"
 
 field_reassign_with_default = "allow"
@@ -50,6 +123,32 @@ field_reassign_with_default = "allow"
 float_arithmetic = "allow"
 
 implicit_return = "allow"
+
+# `impl Into<String>` parameters are idiomatic constructor ergonomics.
+impl_trait_in_params = "allow"
+
+# Slice/str indexing after an explicit bounds/boundary check is fine; the
+# panic-free alternatives obscure simple code.
+indexing_slicing = "allow"
+string_slice = "allow"
+
+integer_division = "allow"
+integer_division_remainder_used = "allow"
+
+# Provider request futures are a few KB; they're awaited once, not stored.
+large_futures = "allow"
+
+# Local helper types defined next to their (single) use site read better
+# than hoisting everything to the top of the function.
+items_after_statements = "allow"
+
+# `let _ = sink.emit(...)` is our documented "consumer may be gone" idiom.
+let_underscore_untyped = "allow"
+let_underscore_must_use = "allow"
+unused_result_ok = "allow"
+
+# `map(a).unwrap_or(b)` reads fine; `map_or(b, a)` reverses the arg order.
+map_unwrap_or = "allow"
 
 manual-let-else = "allow"
 
@@ -67,20 +166,54 @@ needless_pass_by_value = "allow"
 
 pattern_type_mismatch = "allow"
 
+# The CLI binary talks to the terminal; that's its job.
+print_stdout = "allow"
+print_stderr = "allow"
+
+# These two lints are each other's opposites; pick neither.
 pub_use = "allow"
+pub_with_shorthand = "allow"
+pub_without_shorthand = "allow"
 
 question_mark_used = "allow"
 
+semicolon_outside_block = "allow"
+
 shadow_unrelated = "allow"
 shadow_reuse = "allow"
+shadow_same = "allow"
+
+similar_names = "allow"
+
+# Compat-flag structs are naturally bags of independent booleans.
+struct_excessive_bools = "allow"
+
+# `fn description(&self) -> &str` returning a stored String is a trait
+# contract; the lifetime is not "unnecessary".
+unnecessary_literal_bound = "allow"
 
 single_call_fn = "allow"
+single_char_lifetime_names = "allow"
+
+# A Some/None match where both arms carry logic is often clearer than
+# if-let/else; decided case by case, not by lint.
+single_match_else = "allow"
 
 std_instead_of_alloc = "allow"
+std_instead_of_core = "allow"
 
 str-to-string = "allow"
 
 too_many_lines = "allow"
+
+# Tests use unwrap/panic freely; production code returns Result. Enforced
+# by review - clippy cannot scope restriction lints to #[cfg(test)].
+unwrap_used = "allow"
+panic = "allow"
+
+# `.expect()` on a Mutex lock inside a Result-returning fn is deliberate:
+# a poisoned lock means another thread panicked; propagating is pointless.
+unwrap_in_result = "allow"
 
 unused_trait_names = "allow"
 
