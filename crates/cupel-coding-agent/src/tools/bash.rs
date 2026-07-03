@@ -225,7 +225,12 @@ impl BashTool {
 /// direct syscalls need `unsafe`, which this workspace forbids.
 fn kill_process_group(pid: u32) {
     let _ = std::process::Command::new("kill")
-        .args(["-9", &format!("-{pid}")])
+        // `--` is required: a negative PID (= process group) looks like an
+        // option flag otherwise. BSD kill (macOS) tolerates its absence,
+        // Linux's procps kill does NOT - it silently refuses, the group
+        // survives, and "timeout" waits out the full command (caught by CI
+        // on the first-ever Linux run).
+        .args(["-9", "--", &format!("-{pid}")])
         .output();
 }
 
@@ -340,6 +345,11 @@ impl AgentTool for BashTool {
                     if let Some(pid) = pid {
                         kill_process_group(pid);
                     }
+                    // Also SIGKILL the direct child via tokio: even if the
+                    // external `kill` misbehaves, the shell itself dies (and
+                    // `bash -c` usually execs the command, so the shell IS
+                    // the command).
+                    let _ = child.start_kill();
                     outcome = Some(RunOutcome::Aborted);
                 }
                 () = async {
@@ -351,6 +361,7 @@ impl AgentTool for BashTool {
                     if let Some(pid) = pid {
                         kill_process_group(pid);
                     }
+                    let _ = child.start_kill();
                     outcome = Some(RunOutcome::TimedOut);
                 }
                 chunk = rx.recv() => {
@@ -383,7 +394,10 @@ impl AgentTool for BashTool {
             {
                 output.append(&chunk);
             }
-            let _ = child.wait().await;
+            // Bounded reap: if the process somehow survived both kills, give
+            // up after a beat instead of hanging the turn - the OS reaps the
+            // zombie when cupel exits, which beats a frozen agent.
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         }
 
         // ---- Format the final result -----------------------------------------
