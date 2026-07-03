@@ -15,7 +15,10 @@ use crate::modes::SessionMeta;
 
 pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
     println!("cupel - {} ({})", meta.model_name, meta.provider);
-    println!("tools: grep | cwd: {} | 'exit' to quit\n", meta.cwd);
+    println!(
+        "tools: read, bash, edit, write, grep | cwd: {} | 'exit' to quit\n",
+        meta.cwd
+    );
 
     let stdin = std::io::stdin();
     loop {

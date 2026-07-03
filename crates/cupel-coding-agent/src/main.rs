@@ -17,7 +17,9 @@ use cupel_agent::{Agent, AgentOptions, ToolExecutionMode, types::AgentTool};
 use cupel_coding_agent::modes::{self, SessionMeta};
 use cupel_coding_agent::search::GrepSearch;
 use cupel_coding_agent::system_prompt::build_system_prompt;
-use cupel_coding_agent::tools::grep::GrepTool;
+use cupel_coding_agent::tools::{
+    bash::BashTool, edit::EditTool, grep::GrepTool, read::ReadTool, write::WriteTool,
+};
 use cupel_core::types::{Model, ThinkingLevel};
 
 fn main() -> std::process::ExitCode {
@@ -143,18 +145,36 @@ async fn run() -> Result<(), String> {
     // The grep tool talks to a CodeSearch backend; today that's GrepSearch,
     // in iteration two an index-backed one from cupel-index slots in here.
     let backend = Arc::new(GrepSearch::new(&cwd));
-    let grep: Arc<dyn AgentTool> = Arc::new(GrepTool::new(&cwd, backend));
+    let tools: Vec<Arc<dyn AgentTool>> = vec![
+        Arc::new(ReadTool::new(&cwd)),
+        Arc::new(BashTool::new(&cwd)),
+        Arc::new(EditTool::new(&cwd)),
+        Arc::new(WriteTool::new(&cwd)),
+        Arc::new(GrepTool::new(&cwd, backend)),
+    ];
+    // Name + one-line snippet per tool, shown in the system prompt (the full
+    // descriptions travel in the tool schemas).
     let system_prompt = build_system_prompt(
         &cwd,
-        &[(
-            "grep",
-            "Search file contents for patterns (respects .gitignore)",
-        )],
+        &[
+            ("read", "Read file contents"),
+            ("bash", "Execute bash commands (ls, find, cargo, etc.)"),
+            (
+                "edit",
+                "Make precise file edits with exact text replacement, including multiple \
+                 disjoint edits in one call",
+            ),
+            ("write", "Create or overwrite files"),
+            (
+                "grep",
+                "Search file contents for patterns (respects .gitignore)",
+            ),
+        ],
     );
 
     let mut options = AgentOptions::new(model.clone(), Arc::new(cupel_core::default_registry()));
     options.system_prompt = system_prompt;
-    options.tools = vec![grep];
+    options.tools = tools;
     options.api_key = api_key;
     options.thinking_level = args.thinking;
     options.tool_execution = ToolExecutionMode::Parallel;

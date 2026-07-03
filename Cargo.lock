@@ -795,6 +795,7 @@ name = "cupel-coding-agent"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "cupel-agent",
  "cupel-core",
  "futures-util",
@@ -805,9 +806,11 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "similar",
  "thiserror",
  "tokio",
  "tokio-util",
+ "unicode-normalization",
  "unicode-width 0.2.0",
 ]
 
@@ -2372,6 +2375,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2730,6 +2739,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

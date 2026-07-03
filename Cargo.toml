@@ -47,9 +47,15 @@ ratatui = "0.29"
 reqwest = { version = "0.13", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Text diffing (Myers algorithm) for the edit tool's diff output - the Rust
+# equivalent of pi's `diff` npm dependency.
+similar = "2"
 thiserror = "2"
 tokio = { version = "1.52", features = ["full"] }
 tokio-util = "0.7"
+# Unicode NFKC normalization for the edit tool's fuzzy matching (models
+# sometimes echo smart quotes / odd spaces that differ from the file bytes).
+unicode-normalization = "0.1"
 # Display-column width of Unicode text (CJK chars are 2 columns wide, etc.).
 # Needed for correct line wrapping in the TUI transcript.
 unicode-width = "0.2"

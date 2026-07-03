@@ -1,11 +1,11 @@
 //! System prompt construction. Simplified port of pi's `system-prompt.ts`:
-//! pi additionally injects project context files (AGENTS.md), skills, and
-//! per-tool guidelines for its seven tools - those return with the tools
-//! that need them.
+//! pi additionally injects project context files (AGENTS.md) and skills -
+//! those come with session management in a later iteration.
 
 use std::path::Path;
 
-/// Build the system prompt for the grep-only coding agent.
+/// Build the system prompt. Guidelines mirror pi's per-tool guidance and
+/// only appear for tools that are actually available.
 #[must_use]
 pub fn build_system_prompt(cwd: &Path, tools: &[(&str, &str)]) -> String {
     let tools_list = if tools.is_empty() {
@@ -18,21 +18,49 @@ pub fn build_system_prompt(cwd: &Path, tools: &[(&str, &str)]) -> String {
             .join("\n")
     };
 
+    let has = |tool: &str| tools.iter().any(|(name, _)| *name == tool);
+    let mut guidelines: Vec<&str> = Vec::new();
+    if has("grep") {
+        guidelines.push("Use grep to locate code before answering questions about it");
+    }
+    if has("read") {
+        guidelines.push("Use read to examine files instead of cat or sed");
+    }
+    if has("edit") {
+        guidelines.push("Use edit for precise changes (edits[].oldText must match exactly)");
+        guidelines.push(
+            "When changing multiple separate locations in one file, use one edit call with \
+             multiple entries in edits[] instead of multiple edit calls",
+        );
+        guidelines.push(
+            "Keep edits[].oldText as small as possible while still being unique in the file. \
+             Do not pad with large unchanged regions.",
+        );
+    }
+    if has("write") {
+        guidelines.push("Use write only for new files or complete rewrites");
+    }
+    guidelines.push("Be concise in your responses");
+    guidelines.push("Show file paths clearly when working with files");
+    let guidelines = guidelines
+        .iter()
+        .map(|g| format!("- {g}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     // Forward slashes even on Windows: models handle them more reliably.
     let prompt_cwd = cwd.display().to_string().replace('\\', "/");
     let date = current_date();
 
     format!(
         "You are an expert coding assistant operating inside cupel, a coding agent harness. \
-You help users by searching and reasoning about code.
+You help users by reading files, executing commands, editing code, and writing new files.
 
 Available tools:
 {tools_list}
 
 Guidelines:
-- Use grep to locate code before answering questions about it
-- Be concise in your responses
-- Show file paths clearly when working with files
+{guidelines}
 
 Current date: {date}
 Current working directory: {prompt_cwd}"
