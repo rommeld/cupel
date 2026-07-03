@@ -264,6 +264,20 @@ impl App {
                     .attach_tool_result(&tool_call_id, ToolOutcome { text, is_error });
             }
 
+            AgentEvent::AutoRetry {
+                attempt,
+                max_attempts,
+                delay_ms,
+                error_message,
+            } => {
+                self.transcript.cells.push(Cell::Notice {
+                    text: format!(
+                        "retrying in {:.1}s (attempt {attempt}/{max_attempts}): {error_message}",
+                        delay_ms as f64 / 1000.0
+                    ),
+                });
+            }
+
             AgentEvent::AgentEnd { .. } => self.finish_run().await,
             _ => {}
         }

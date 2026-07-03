@@ -24,6 +24,7 @@ pub mod model;
 pub mod options_util;
 pub mod provider;
 pub mod providers;
+pub mod retry;
 pub mod sse;
 pub mod transform;
 pub mod types;

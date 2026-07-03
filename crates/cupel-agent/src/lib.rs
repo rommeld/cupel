@@ -17,5 +17,5 @@ pub use agent::{Agent, AgentError, AgentOptions, AgentState};
 pub use agent_loop::{AgentEventStream, agent_loop, agent_loop_continue};
 pub use types::{
     AgentContext, AgentEvent, AgentHooks, AgentLoopConfig, AgentMessage, AgentTool,
-    AgentToolResult, NoHooks, QueueMode, ToolError, ToolExecutionMode,
+    AgentToolResult, NoHooks, QueueMode, RetryConfig, ToolError, ToolExecutionMode,
 };

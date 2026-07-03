@@ -25,7 +25,7 @@ use cupel_core::{
 use crate::agent_loop::{AgentEventSink, AgentEventStream, agent_event_channel, agent_loop};
 use crate::types::{
     AgentContext, AgentEvent, AgentHooks, AgentLoopConfig, AgentMessage, AgentTool, NoHooks,
-    QueueMode, ToolExecutionMode,
+    QueueMode, RetryConfig, ToolExecutionMode,
 };
 
 // ---------------------------------------------------------------------------
@@ -92,6 +92,7 @@ pub struct AgentOptions {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub tool_execution: ToolExecutionMode,
+    pub retry: RetryConfig,
     pub steering_mode: QueueMode,
     pub follow_up_mode: QueueMode,
 }
@@ -112,6 +113,7 @@ impl AgentOptions {
             temperature: None,
             max_tokens: None,
             tool_execution: ToolExecutionMode::default(),
+            retry: RetryConfig::default(),
             steering_mode: QueueMode::default(),
             follow_up_mode: QueueMode::default(),
         }
@@ -138,6 +140,7 @@ pub struct Agent {
     temperature: Option<f64>,
     max_tokens: Option<u64>,
     tool_execution: ToolExecutionMode,
+    retry: RetryConfig,
     /// The active run: cancel token + its join handle.
     active: Option<(CancellationToken, tokio::task::JoinHandle<()>)>,
 }
@@ -165,6 +168,7 @@ impl Agent {
             temperature: options.temperature,
             max_tokens: options.max_tokens,
             tool_execution: options.tool_execution,
+            retry: options.retry,
             active: None,
         }
     }
@@ -256,6 +260,7 @@ impl Agent {
                     temperature: self.temperature,
                     max_tokens: self.max_tokens,
                     tool_execution: self.tool_execution,
+                    retry: self.retry,
                 },
             )
         };

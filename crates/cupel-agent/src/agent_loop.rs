@@ -179,6 +179,9 @@ async fn run_loop(
     sink: &AgentEventSink,
 ) {
     let mut first_turn = true;
+    // Consecutive transient-failure retries so far; any successful response
+    // resets it (pi's session does the same).
+    let mut retry_attempt: u32 = 0;
     // The user may have queued steering input while the previous run wound
     // down; check before the first request.
     let mut pending_messages = hooks.steering_messages().await;
@@ -217,14 +220,60 @@ async fn run_loop(
 
             if matches!(message.stop_reason, StopReason::Error | StopReason::Aborted) {
                 sink.emit(AgentEvent::TurnEnd {
-                    message: Box::new(AgentMessage::Llm(Message::Assistant(message))),
+                    message: Box::new(AgentMessage::Llm(Message::Assistant(message.clone()))),
                     tool_results: Vec::new(),
                 });
+
+                // ---- Automatic retry for transient failures ---------------
+                // An "overloaded"/529/dropped-connection response should not
+                // kill the run; wait with exponential backoff and re-request.
+                // The errored message stays in the transcript for honesty -
+                // transform_messages already drops errored turns from what
+                // goes over the wire, so the replayed request is clean.
+                if cupel_core::retry::is_retryable_assistant_error(&message)
+                    && retry_attempt < config.retry.max_retries
+                    && !cancel.is_cancelled()
+                {
+                    retry_attempt += 1;
+                    let delay_ms = config.retry.base_delay_ms * 2_u64.pow(retry_attempt - 1);
+                    sink.emit(AgentEvent::AutoRetry {
+                        attempt: retry_attempt,
+                        max_attempts: config.retry.max_retries,
+                        delay_ms,
+                        error_message: message
+                            .error_message
+                            .clone()
+                            .unwrap_or_else(|| "Unknown error".to_string()),
+                    });
+
+                    // Abortable backoff: the user can still cancel mid-wait.
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => {
+                            sink.emit(AgentEvent::AgentEnd {
+                                messages: new_messages.clone(),
+                            });
+                            return;
+                        }
+                        () = tokio::time::sleep(
+                            core::time::Duration::from_millis(delay_ms),
+                        ) => {}
+                    }
+                    // Re-enter the turn loop: the context still ends with the
+                    // user/tool-result message that triggered this request.
+                    // Forcing the flag keeps the `while` condition true even
+                    // when this turn was entered via a steering message.
+                    has_more_tool_calls = true;
+                    continue;
+                }
+
                 sink.emit(AgentEvent::AgentEnd {
                     messages: new_messages.clone(),
                 });
                 return;
             }
+            // A successful response closes the retry episode.
+            retry_attempt = 0;
 
             // ---- Its tool calls ------------------------------------------
             let tool_calls: Vec<ToolCall> = message

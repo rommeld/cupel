@@ -193,6 +193,29 @@ pub struct AgentContext {
     pub tools: Vec<Arc<dyn AgentTool>>,
 }
 
+/// Automatic-retry policy for transient provider failures (pi's session
+/// retry settings: 3 retries, 2s base delay, exponential backoff).
+///
+/// Which errors count as transient is decided by
+/// [`cupel_core::retry::is_retryable_assistant_error`]; this struct only
+/// carries the budget. `max_retries: 0` disables retries entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryConfig {
+    /// Maximum CONSECUTIVE retries; a successful response resets the count.
+    pub max_retries: u32,
+    /// First backoff delay; attempt N waits `base_delay_ms * 2^(N-1)`.
+    pub base_delay_ms: u64,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            base_delay_ms: 2000,
+        }
+    }
+}
+
 /// Everything the loop needs besides the context itself.
 #[derive(Clone)]
 pub struct AgentLoopConfig {
@@ -206,6 +229,7 @@ pub struct AgentLoopConfig {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub tool_execution: ToolExecutionMode,
+    pub retry: RetryConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +347,18 @@ pub enum AgentEvent {
     },
     MessageEnd {
         message: AgentMessage,
+    },
+    /// A transient provider failure is about to be retried after a backoff
+    /// wait. The errored turn already ended normally (`TurnEnd` fired); a
+    /// fresh `TurnStart` follows once the wait elapses. pi additionally
+    /// emits an `auto_retry_end` event; here success is observable from the
+    /// next assistant message, so one event carries all the signal.
+    AutoRetry {
+        /// 1-based attempt number.
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        error_message: String,
     },
     // -- tool execution lifecycle --
     ToolExecutionStart {

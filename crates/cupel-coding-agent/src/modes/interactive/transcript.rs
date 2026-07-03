@@ -45,6 +45,8 @@ pub enum Cell {
     },
     /// An error surfaced by the agent or a provider.
     Error { text: String },
+    /// A status notice (e.g. "retrying in 2s"), rendered in warning color.
+    Notice { text: String },
     /// Per-turn usage/cost summary.
     Usage { text: String },
 }
@@ -191,6 +193,9 @@ impl Transcript {
                         width,
                         Style::new().fg(Color::Red),
                     );
+                }
+                Cell::Notice { text } => {
+                    push_wrapped(&mut out, text, width, Style::new().fg(Color::Yellow));
                 }
                 Cell::Usage { text } => {
                     push_wrapped(

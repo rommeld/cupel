@@ -111,6 +111,22 @@ pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
                         );
                     }
                 }
+                AgentEvent::AutoRetry {
+                    attempt,
+                    max_attempts,
+                    delay_ms,
+                    error_message,
+                } => {
+                    if in_thinking {
+                        print!("\x1b[0m\n\n");
+                        in_thinking = false;
+                    }
+                    println!(
+                        "\x1b[33mretrying in {:.1}s (attempt {attempt}/{max_attempts}): \
+                         {error_message}\x1b[0m",
+                        delay_ms as f64 / 1000.0
+                    );
+                }
                 AgentEvent::AgentEnd { .. } => break,
                 _ => {}
             }
