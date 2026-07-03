@@ -54,6 +54,18 @@ tokio-util = "0.7"
 # Needed for correct line wrapping in the TUI transcript.
 unicode-width = "0.2"
 
+# Settings for `cargo build --release` - the distributable binary.
+# Rust binaries are self-contained by default (the runtime is statically
+# linked, and reqwest uses rustls so there's no OpenSSL dependency); these
+# knobs just trade compile time for a smaller, faster artifact.
+[profile.release]
+# Link-time optimization across all crates: smaller and faster, slower build.
+lto = "thin"
+# Strip debug symbols from the binary (they're useless without the source).
+strip = "symbols"
+# One codegen unit per crate maximizes optimization at the cost of build time.
+codegen-units = 1
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

@@ -58,6 +58,10 @@ struct AnthropicCompat {
     /// Some Anthropic-compatible gateways emit (and accept) empty thinking
     /// signatures; real Anthropic requires converting those blocks to text.
     allow_empty_signature: bool,
+    /// Send `x-session-affinity` so a gateway (e.g. Fireworks) routes all of
+    /// a session's requests to the same cache shard. Without it requests
+    /// still succeed, but prompt-cache hit rates suffer.
+    send_session_affinity_headers: bool,
 }
 
 impl Default for AnthropicCompat {
@@ -69,6 +73,7 @@ impl Default for AnthropicCompat {
             supports_cache_control_on_tools: true,
             supports_long_cache_retention: true,
             allow_empty_signature: false,
+            send_session_affinity_headers: false,
         }
     }
 }
@@ -237,6 +242,14 @@ async fn run(
         req = req.header("x-api-key", &api_key);
         if !betas.is_empty() {
             req = req.header("anthropic-beta", betas.join(","));
+        }
+        // Cache-shard affinity for gateways that ask for it (see compat).
+        // Only meaningful when caching is on, hence the retention check.
+        if compat.send_session_affinity_headers
+            && options.cache_retention != Some(CacheRetention::None)
+            && let Some(session_id) = &options.session_id
+        {
+            req = req.header("x-session-affinity", session_id);
         }
     }
     req = apply_custom_headers(req, model, options);

@@ -39,6 +39,9 @@ pub fn default_registry() -> provider::Registry {
     registry.register(Arc::new(
         providers::openai_responses::OpenAiResponsesProvider::new(),
     ));
+    registry.register(Arc::new(
+        providers::openai_completions::OpenAiCompletionsProvider::new(),
+    ));
     registry.register(Arc::new(providers::bedrock::BedrockProvider::new()));
     registry
 }

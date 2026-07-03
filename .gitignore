@@ -14,9 +14,6 @@
 !/crates/cupel-coding-agent/src/
 !/crates/cupel-coding-agent/src/**
 
-!/crates/cupel-core/
-!/crates/cupel-core/**
-
 !.gitignore
 
 !Cargo.toml
@@ -26,5 +23,4 @@
 
 !AGENTS.md
 !CONTRIBUTION.md
-!PLAN.md
 !README.md

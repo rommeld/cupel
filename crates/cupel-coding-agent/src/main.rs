@@ -96,6 +96,7 @@ fn select_model(args: &CliArgs) -> Result<(Model, Option<String>), String> {
         match provider {
             "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
             "openai" => std::env::var("OPENAI_API_KEY").ok(),
+            "fireworks" => std::env::var("FIREWORKS_API_KEY").ok(),
             // Bedrock auth runs through the AWS credential chain inside the
             // provider; no key travels through StreamOptions.
             _ => None,
@@ -111,12 +112,13 @@ fn select_model(args: &CliArgs) -> Result<(Model, Option<String>), String> {
         return Ok((model, key));
     }
 
-    // No --model: first provider with credentials wins.
+    // No --model: first provider with credentials wins, in catalog order
+    // (Anthropic, OpenAI, Bedrock, then Fireworks).
     let has_aws =
         std::env::var("AWS_ACCESS_KEY_ID").is_ok() || std::env::var("AWS_PROFILE").is_ok();
     for model in catalog {
         match model.provider.as_str() {
-            "anthropic" | "openai" => {
+            "anthropic" | "openai" | "fireworks" => {
                 if let Some(key) = api_key_for(model.provider.as_str()) {
                     return Ok((model, Some(key)));
                 }
@@ -126,7 +128,8 @@ fn select_model(args: &CliArgs) -> Result<(Model, Option<String>), String> {
         }
     }
     Err(
-        "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, or AWS credentials"
+        "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, FIREWORKS_API_KEY, \
+         or AWS credentials"
             .to_string(),
     )
 }

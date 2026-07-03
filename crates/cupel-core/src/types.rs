@@ -21,6 +21,7 @@ impl Api {
     // sessions stay interchangeable between the two implementations.
     pub const ANTHROPIC_MESSAGES: &'static str = "anthropic-messages";
     pub const OPENAI_RESPONSES: &'static str = "openai-responses";
+    pub const OPENAI_COMPLETIONS: &'static str = "openai-completions";
     pub const BEDROCK_CONVERSE_STREAM: &'static str = "bedrock-converse-stream";
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -49,6 +50,7 @@ impl Provider {
     pub const ANTHROPIC: &'static str = "anthropic";
     pub const OPENAI: &'static str = "openai";
     pub const AMAZON_BEDROCK: &'static str = "amazon-bedrock";
+    pub const FIREWORKS: &'static str = "fireworks";
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
