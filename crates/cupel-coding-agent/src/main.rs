@@ -197,6 +197,12 @@ async fn run() -> Result<(), String> {
         Arc::new(WriteTool::new(&cwd)),
         Arc::new(GrepTool::new(&cwd, backend)),
     ];
+    // Project context (AGENTS.md/CLAUDE.md, eager) and skills (SKILL.md,
+    // lazy catalog) come from the binary's install dir and the project cwd.
+    let roots = cupel_coding_agent::resources::default_roots(&cwd);
+    let context_files = cupel_coding_agent::resources::load_context_files(&roots);
+    let skills = cupel_coding_agent::resources::discover_skills(&roots);
+
     // Name + one-line snippet per tool, shown in the system prompt (the full
     // descriptions travel in the tool schemas).
     let system_prompt = build_system_prompt(
@@ -215,6 +221,8 @@ async fn run() -> Result<(), String> {
                 "Search file contents for patterns (respects .gitignore)",
             ),
         ],
+        &context_files,
+        &skills,
     );
 
     let mut options = AgentOptions::new(model.clone(), Arc::new(cupel_core::default_registry()));

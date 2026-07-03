@@ -39,6 +39,8 @@ Options: `--model <id>` picks a model from the built-in catalog, `--thinking off
 
 In the TUI: `enter` sends (while the agent works, it queues a steering message), `alt+enter` newline, `esc` aborts the turn, `ctrl-t` expands tool output, `pgup/pgdn` scrolls, `ctrl-c` quits.
 
+Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory or next to the installed binary is loaded into the system prompt on every request. Skills are discovered under `skills/<name>/SKILL.md` in the same two locations; only their name/description enter the prompt, and the agent reads the full skill file on demand when a task matches.
+
 Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,cupel_agent=info` (per-request tokens/cost/duration, turns, tool timings, retries, compaction) or `cupel_core=trace` to include request bodies. Logs go to stderr in `--plain` mode and to a temp file (path printed at startup) in the TUI.
 
 ## Implementation milestones

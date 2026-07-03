@@ -9,6 +9,7 @@
 //! chat loop.
 
 pub mod modes;
+pub mod resources;
 pub mod search;
 pub mod system_prompt;
 pub mod tools;

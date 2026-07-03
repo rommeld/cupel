@@ -1,13 +1,20 @@
-//! System prompt construction. Simplified port of pi's `system-prompt.ts`:
-//! pi additionally injects project context files (AGENTS.md) and skills -
-//! those come with session management in a later iteration.
+//! System prompt construction. Port of pi's `system-prompt.ts`: tool list,
+//! per-tool guidelines, project context files (eager), a skills catalog
+//! (lazy - see [`crate::resources`]), and date/cwd last.
 
 use std::path::Path;
+
+use crate::resources::{ContextFile, Skill};
 
 /// Build the system prompt. Guidelines mirror pi's per-tool guidance and
 /// only appear for tools that are actually available.
 #[must_use]
-pub fn build_system_prompt(cwd: &Path, tools: &[(&str, &str)]) -> String {
+pub fn build_system_prompt(
+    cwd: &Path,
+    tools: &[(&str, &str)],
+    context_files: &[ContextFile],
+    skills: &[Skill],
+) -> String {
     let tools_list = if tools.is_empty() {
         "(none)".to_string()
     } else {
@@ -52,7 +59,7 @@ pub fn build_system_prompt(cwd: &Path, tools: &[(&str, &str)]) -> String {
     let prompt_cwd = cwd.display().to_string().replace('\\', "/");
     let date = current_date();
 
-    format!(
+    let mut prompt = format!(
         "You are an expert coding assistant operating inside cupel, a coding agent harness. \
 You help users by reading files, executing commands, editing code, and writing new files.
 
@@ -60,11 +67,56 @@ Available tools:
 {tools_list}
 
 Guidelines:
-{guidelines}
+{guidelines}"
+    );
 
-Current date: {date}
-Current working directory: {prompt_cwd}"
-    )
+    // ---- Project context (eager): full contents, every request ------------
+    if !context_files.is_empty() {
+        prompt.push_str("\n\n<project_context>\n\nProject-specific instructions and guidelines:\n");
+        for file in context_files {
+            prompt.push_str(&format!(
+                "\n<project_instructions path=\"{}\">\n{}\n</project_instructions>\n",
+                file.path.display(),
+                file.content.trim_end(),
+            ));
+        }
+        prompt.push_str("\n</project_context>");
+    }
+
+    // ---- Skills (lazy): catalog only; the model reads the file on demand.
+    // Only useful when the read tool exists to do that reading.
+    if has("read") && !skills.is_empty() {
+        prompt.push_str(
+            "\n\nThe following skills provide specialized instructions for specific tasks.\n\
+             Use the read tool to load a skill's file when the task matches its description.\n\
+             When a skill file references a relative path, resolve it against the skill's \
+             directory and use that absolute path in tool commands.\n\n<available_skills>",
+        );
+        for skill in skills {
+            prompt.push_str(&format!(
+                "\n  <skill>\n    <name>{}</name>\n    <description>{}</description>\n    \
+                 <location>{}</location>\n  </skill>",
+                escape_xml(&skill.name),
+                escape_xml(&skill.description),
+                escape_xml(&skill.path.display().to_string()),
+            ));
+        }
+        prompt.push_str("\n</available_skills>");
+    }
+
+    prompt.push_str(&format!(
+        "\n\nCurrent date: {date}\nCurrent working directory: {prompt_cwd}"
+    ));
+    prompt
+}
+
+/// Escape text placed inside the skills XML block, so a `<` in a skill
+/// description can't break the structure the model parses.
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Date as `YYYY-MM-DD` without pulling in chrono: days since the Unix epoch,
@@ -105,9 +157,53 @@ mod tests {
         let prompt = build_system_prompt(
             Path::new("/tmp/project"),
             &[("grep", "Search file contents for patterns")],
+            &[],
+            &[],
         );
         assert!(prompt.contains("- grep: Search file contents for patterns"));
         assert!(prompt.contains("Current working directory: /tmp/project"));
+        // Empty inputs add no empty sections.
+        assert!(!prompt.contains("<project_context>"));
+        assert!(!prompt.contains("<available_skills>"));
+    }
+
+    #[test]
+    fn context_files_are_embedded_eagerly() {
+        let prompt = build_system_prompt(
+            Path::new("/tmp/project"),
+            &[("read", "Read files")],
+            &[ContextFile {
+                path: "/tmp/project/AGENTS.md".into(),
+                content: "Always run cargo clippy.".to_string(),
+            }],
+            &[],
+        );
+        assert!(prompt.contains("<project_instructions path=\"/tmp/project/AGENTS.md\">"));
+        assert!(prompt.contains("Always run cargo clippy."));
+    }
+
+    #[test]
+    fn skills_appear_as_catalog_only_when_read_tool_exists() {
+        let skill = Skill {
+            name: "commit<style>".to_string(),
+            description: "How to write commits".to_string(),
+            path: "/tmp/skills/commit-style/SKILL.md".into(),
+        };
+        let with_read = build_system_prompt(
+            Path::new("/tmp"),
+            &[("read", "Read files")],
+            &[],
+            std::slice::from_ref(&skill),
+        );
+        assert!(with_read.contains("<available_skills>"));
+        assert!(with_read.contains("<location>/tmp/skills/commit-style/SKILL.md</location>"));
+        // XML-sensitive characters in names are escaped.
+        assert!(with_read.contains("<name>commit&lt;style&gt;</name>"));
+
+        // No read tool -> the model couldn't load skills; omit the catalog.
+        let without_read =
+            build_system_prompt(Path::new("/tmp"), &[("grep", "Search")], &[], &[skill]);
+        assert!(!without_read.contains("<available_skills>"));
     }
 
     #[test]
