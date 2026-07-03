@@ -1,0 +1,95 @@
+# Release pipeline: push a tag like `v0.1.0` and this builds per-platform
+# binaries and attaches them to a GitHub Release. Users install with the
+# repo's install.sh (or by downloading an archive) - no Rust required.
+#
+# Platform notes:
+# - macOS ships one UNIVERSAL binary (arm64 + x86_64 via lipo), so there is
+#   no "which Mac do I have" question.
+# - Linux builds against MUSL, statically linking libc: one binary runs on
+#   any distro regardless of glibc version.
+# - aarch64 Linux builds NATIVELY on GitHub's free arm runners
+#   (ubuntu-24.04-arm) instead of cross-compiling - no cross toolchain to
+#   maintain.
+# - No Windows yet: the bash tool is Unix-only (process groups, `kill`).
+#
+# Maintenance alternative: `cargo-dist` generates this whole pipeline plus
+# installers from Cargo.toml metadata. This file is hand-rolled so the
+# machinery stays visible; migrating later is a drop-in replacement.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # needed to create the GitHub Release
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            artifact: cupel-macos-universal
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: cupel-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: cupel-linux-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build (macOS universal)
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build --release -p cupel-coding-agent --target aarch64-apple-darwin
+          cargo build --release -p cupel-coding-agent --target x86_64-apple-darwin
+          lipo -create \
+            target/aarch64-apple-darwin/release/cupel \
+            target/x86_64-apple-darwin/release/cupel \
+            -output cupel
+
+      - name: Build (Linux musl)
+        if: runner.os == 'Linux'
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo build --release -p cupel-coding-agent --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/cupel cupel
+
+      - name: Package
+        run: |
+          tar -czf ${{ matrix.artifact }}.tar.gz cupel LICENSE README.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Checksums
+        run: sha256sum cupel-*.tar.gz > sha256sums.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            cupel-*.tar.gz sha256sums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "cupel $GITHUB_REF_NAME" \
+            --generate-notes

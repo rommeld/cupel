@@ -7,12 +7,18 @@
 !/crates/cupel-core/src/**
 
 !/crates/cupel-agent/
+!crates/cupel-agent/tests
+!/crates/cupel-agent/tests/**
 !/crates/cupel-agent/src/
 !/crates/cupel-agent/src/**
 
 !/crates/cupel-coding-agent/
 !/crates/cupel-coding-agent/src/
 !/crates/cupel-coding-agent/src/**
+
+!/crates/cupel-index/
+!/crates/cupel-index/src/
+!/crates/cupel-index/src/**
 
 !.gitignore
 
@@ -22,5 +28,16 @@
 !clippy.toml
 
 !AGENTS.md
+
 !CONTRIBUTION.md
+
 !README.md
+
+!install.sh
+!LICENSE
+
+!/.github/
+!/.github/**
+
+!/packaging/
+!/packaging/**

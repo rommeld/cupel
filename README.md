@@ -18,14 +18,28 @@ Includes the basic agent definition and defines an agent loop primitive.
 
 Use the `ripgrep` crate as the underlying for the **grep tool**. The crate also includes a simple `cuple CLI` to call functionality from the terminal. `ratatui` is the TUI crate of choice.
 
+## Install
+
+No Rust required - the installer downloads a prebuilt binary for macOS
+(universal) or Linux (x86_64/aarch64, static musl) and puts `cupel` on your PATH:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
+```
+
+Alternatives: download an archive from the [releases page](https://github.com/rommeld/cupel/releases),
+`brew install rommeld/tap/cupel` (once the tap is published - see `packaging/README.md`),
+or build from source with `cargo build --release -p cupel-coding-agent`.
+Windows is not supported yet (the bash tool is Unix-only).
+
 ## Usage
 
 ```sh
 # credentials: first provider found wins (or pick one with --model)
 export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY / FIREWORKS_API_KEY / AWS credentials
 
-cargo run -p cupel-coding-agent               # TUI in the current directory
-cargo run -p cupel-coding-agent -- --help     # flags + built-in model list
+cupel            # TUI in the current directory
+cupel --help     # flags + built-in model list
 ```
 
 Supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and Fireworks, e.g.:
