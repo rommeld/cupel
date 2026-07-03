@@ -136,8 +136,53 @@ fn select_model(args: &CliArgs) -> Result<(Model, Option<String>), String> {
     )
 }
 
+/// Install the tracing subscriber - the ONE place in the whole workspace
+/// that consumes trace data (libraries only emit).
+///
+/// Opt-in via `RUST_LOG`; without it no subscriber exists and every
+/// `tracing::` macro in the libraries compiles down to a branch on a static.
+/// Examples:
+///   RUST_LOG=cupel_core=info,cupel_agent=info   requests, turns, tools, cost
+///   RUST_LOG=cupel_core=trace                   + full request bodies
+///
+/// Writer selection: plain mode logs to stderr (standard, pipe-friendly);
+/// the TUI logs to a file because anything written to the terminal would
+/// corrupt the ratatui screen. Returns the log-file path in that case.
+fn init_tracing(interactive: bool) -> Option<std::path::PathBuf> {
+    use tracing_subscriber::fmt::format::FmtSpan;
+
+    // No RUST_LOG, no subscriber, no overhead.
+    std::env::var("RUST_LOG").ok()?;
+    let filter = tracing_subscriber::EnvFilter::from_default_env();
+
+    // FmtSpan::CLOSE prints a line when each span ends, WITH its measured
+    // duration - that's where provider-request and agent-run timing comes
+    // from (the events themselves don't carry durations).
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_span_events(FmtSpan::CLOSE);
+
+    if interactive {
+        let path = std::env::temp_dir().join(format!("cupel-{}.log", std::process::id()));
+        let file = std::fs::File::create(&path).ok()?;
+        builder
+            .with_ansi(false) // no color codes in files
+            .with_writer(std::sync::Mutex::new(file))
+            .init();
+        Some(path)
+    } else {
+        builder.with_writer(std::io::stderr).init();
+        None
+    }
+}
+
 async fn run() -> Result<(), String> {
     let args = parse_args()?;
+    let use_plain = args.plain || !std::io::stdout().is_terminal();
+    if let Some(log_path) = init_tracing(!use_plain) {
+        // Announced BEFORE the TUI takes the screen; visible in scrollback.
+        eprintln!("logging to {}", log_path.display());
+    }
     let (model, api_key) = select_model(&args)?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
 
@@ -190,7 +235,7 @@ async fn run() -> Result<(), String> {
     // ---- Pick a frontend ------------------------------------------------------
     // The TUI takes over the whole screen; that only makes sense on a real
     // terminal. Piped output (cupel < script, CI logs) gets plain mode.
-    if args.plain || !std::io::stdout().is_terminal() {
+    if use_plain {
         modes::plain::run(agent, &meta).await
     } else {
         modes::interactive::run(agent, meta)

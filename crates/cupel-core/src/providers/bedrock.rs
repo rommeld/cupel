@@ -25,7 +25,7 @@ use crate::{
     model::calculate_cost,
     options_util::{adjust_max_tokens_for_thinking, clamp_max_tokens_to_context},
     provider::Provider,
-    providers::{error_message, new_output_message, with_cancel},
+    providers::{error_message, log_completion, new_output_message, with_cancel},
     transform::transform_messages,
     types::{
         Api, AssistantContent, AssistantMessage, CacheRetention, Context, Message, Model,
@@ -73,6 +73,7 @@ impl Provider for BedrockProvider {
                 } else {
                     StopReason::Error
                 };
+                tracing::warn!(error = %err, "provider request failed");
                 let msg = error_message(&model, reason, err.to_string());
                 let _ = sink.error(reason, msg);
             }
@@ -156,6 +157,7 @@ fn supports_prompt_caching(model: &Model) -> bool {
 // Worker
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(name = "bedrock_request", skip_all, fields(model = %model.id, provider = %model.provider.as_str()))]
 async fn run(
     model: &Model,
     context: &Context,
@@ -442,6 +444,7 @@ async fn run(
     }
 
     let reason = output.stop_reason;
+    log_completion(&output);
     let _ = sink.done(reason, output);
     Ok(())
 }

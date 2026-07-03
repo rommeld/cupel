@@ -39,6 +39,8 @@ Options: `--model <id>` picks a model from the built-in catalog, `--thinking off
 
 In the TUI: `enter` sends (while the agent works, it queues a steering message), `alt+enter` newline, `esc` aborts the turn, `ctrl-t` expands tool output, `pgup/pgdn` scrolls, `ctrl-c` quits.
 
+Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,cupel_agent=info` (per-request tokens/cost/duration, turns, tool timings, retries, compaction) or `cupel_core=trace` to include request bodies. Logs go to stderr in `--plain` mode and to a temp file (path printed at startup) in the TUI.
+
 ## Implementation milestones
 
 - Persistencey is currently missing from the project. Sessions will not survive after exiting `cupel`.

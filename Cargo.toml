@@ -53,6 +53,11 @@ similar = "2"
 thiserror = "2"
 tokio = { version = "1.52", features = ["full"] }
 tokio-util = "0.7"
+# Structured, span-based instrumentation. Libraries EMIT trace data with
+# these macros (near-zero cost when nobody listens); only the binary
+# installs a subscriber that actually formats and writes it.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Unicode NFKC normalization for the edit tool's fuzzy matching (models
 # sometimes echo smart quotes / odd spaces that differ from the file bytes).
 unicode-normalization = "0.1"

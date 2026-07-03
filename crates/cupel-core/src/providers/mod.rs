@@ -74,6 +74,24 @@ pub(crate) async fn with_cancel<T>(
     }
 }
 
+/// Log the terminal outcome of one provider request. This is THE
+/// observability record for cost accounting: one INFO line per request with
+/// exact token counts and dollars. Request duration comes from the enclosing
+/// provider span (emitted on span close when the subscriber enables span
+/// events), so it isn't duplicated here.
+pub(crate) fn log_completion(message: &AssistantMessage) {
+    tracing::info!(
+        stop_reason = ?message.stop_reason,
+        input_tokens = message.usage.input,
+        output_tokens = message.usage.output,
+        cache_read_tokens = message.usage.cache_read,
+        cache_write_tokens = message.usage.cache_write,
+        cost_usd = message.usage.cost.total,
+        response_id = message.response_id.as_deref().unwrap_or(""),
+        "provider request complete"
+    );
+}
+
 /// Apply model-level then option-level custom headers to a request builder
 /// (option-level wins, matching pi's merge order).
 pub(crate) fn apply_custom_headers(

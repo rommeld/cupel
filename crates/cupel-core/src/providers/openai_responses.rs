@@ -28,7 +28,9 @@ use crate::{
     model::{calculate_cost, clamp_thinking_level},
     options_util::clamp_max_tokens_to_context,
     provider::Provider,
-    providers::{apply_custom_headers, error_message, new_output_message, with_cancel},
+    providers::{
+        apply_custom_headers, error_message, log_completion, new_output_message, with_cancel,
+    },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
     types::{
@@ -83,6 +85,7 @@ impl Provider for OpenAiResponsesProvider {
                 } else {
                     StopReason::Error
                 };
+                tracing::warn!(error = %err, "provider request failed");
                 let msg = error_message(&model, reason, err.to_string());
                 let _ = sink.error(reason, msg);
             }
@@ -178,6 +181,7 @@ fn normalize_tool_call_id(id: &str, model: &Model, source: &AssistantMessage) ->
 // Worker
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(name = "openai_responses_request", skip_all, fields(model = %model.id, provider = %model.provider.as_str()))]
 async fn run(
     http: &reqwest::Client,
     model: &Model,
@@ -191,6 +195,8 @@ async fn run(
         .ok_or_else(|| InferenceError::MissingApiKey(model.provider.as_str().to_string()))?;
 
     let body = build_request_body(model, context, options);
+    // TRACE only: request bodies contain the user's code and prompts.
+    tracing::trace!(body = %body, "request body");
     let url = format!("{}/responses", model.base_url.trim_end_matches('/'));
 
     let mut req = http
@@ -587,6 +593,7 @@ async fn run(
     }
 
     let reason = output.stop_reason;
+    log_completion(&output);
     let _ = sink.done(reason, output);
     Ok(())
 }

@@ -170,6 +170,10 @@ pub async fn agent_loop_continue(
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_lines)]
+#[tracing::instrument(name = "agent_run", skip_all, fields(
+    model = %config.model.id,
+    session_id = config.session_id.as_deref().unwrap_or("")
+))]
 async fn run_loop(
     mut context: AgentContext,
     new_messages: &mut Vec<AgentMessage>,
@@ -241,6 +245,11 @@ async fn run_loop(
             new_messages.push(AgentMessage::Llm(Message::Assistant(message.clone())));
 
             if matches!(message.stop_reason, StopReason::Error | StopReason::Aborted) {
+                tracing::warn!(
+                    stop_reason = ?message.stop_reason,
+                    error = message.error_message.as_deref().unwrap_or(""),
+                    "turn failed"
+                );
                 sink.emit(AgentEvent::TurnEnd {
                     message: Box::new(AgentMessage::Llm(Message::Assistant(message.clone()))),
                     tool_results: Vec::new(),
@@ -289,6 +298,12 @@ async fn run_loop(
                 {
                     retry_attempt += 1;
                     let delay_ms = config.retry.base_delay_ms * 2_u64.pow(retry_attempt - 1);
+                    tracing::warn!(
+                        attempt = retry_attempt,
+                        max_attempts = config.retry.max_retries,
+                        delay_ms,
+                        "retrying after transient provider failure"
+                    );
                     sink.emit(AgentEvent::AutoRetry {
                         attempt: retry_attempt,
                         max_attempts: config.retry.max_retries,
@@ -325,6 +340,14 @@ async fn run_loop(
                 });
                 return;
             }
+            tracing::info!(
+                stop_reason = ?message.stop_reason,
+                input_tokens = message.usage.input,
+                output_tokens = message.usage.output,
+                cache_read_tokens = message.usage.cache_read,
+                cost_usd = message.usage.cost.total,
+                "turn complete"
+            );
             // A successful response closes the retry/overflow episode.
             retry_attempt = 0;
             overflow_compacted = false;
@@ -425,6 +448,13 @@ async fn run_compaction(
     .await
     {
         Ok(outcome) => {
+            tracing::info!(
+                ?reason,
+                tokens_before = outcome.tokens_before,
+                tokens_after = outcome.tokens_after,
+                summarized_messages = outcome.summarized_messages,
+                "context compacted"
+            );
             sink.emit(AgentEvent::CompactionEnd {
                 tokens_before: outcome.tokens_before,
                 tokens_after: outcome.tokens_after,
@@ -433,6 +463,7 @@ async fn run_compaction(
             true
         }
         Err(err) => {
+            tracing::warn!(?reason, error = %err, "compaction failed");
             sink.emit(AgentEvent::CompactionEnd {
                 tokens_before,
                 tokens_after: tokens_before,
@@ -886,13 +917,22 @@ async fn execute_prepared(
         });
     });
 
-    match tool
+    let started = std::time::Instant::now();
+    tracing::debug!(tool = %tool_call.name, tool_call_id = %tool_call.id, "tool execution start");
+    let (result, is_error) = match tool
         .execute(&tool_call.id, args, cancel.clone(), Some(on_update))
         .await
     {
         Ok(result) => (result, false),
         Err(err) => (AgentToolResult::text(err.to_string()), true),
-    }
+    };
+    tracing::info!(
+        tool = %tool_call.name,
+        duration_ms = started.elapsed().as_millis() as u64,
+        is_error,
+        "tool executed"
+    );
+    (result, is_error)
 }
 
 async fn finalize_executed(

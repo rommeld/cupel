@@ -56,9 +56,10 @@ impl Registry {
         context: Context,
         options: StreamOptions,
     ) -> Result<AssistantMessageStream> {
-        let provider = self
-            .get(model.api.as_str())
-            .ok_or_else(|| InferenceError::NoProvider(model.api.as_str().to_string()))?;
+        let provider = self.get(model.api.as_str()).ok_or_else(|| {
+            tracing::warn!(api = %model.api, model = %model.id, "no provider registered");
+            InferenceError::NoProvider(model.api.as_str().to_string())
+        })?;
         Ok(provider.stream(model, context, options))
     }
 
