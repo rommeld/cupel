@@ -48,8 +48,9 @@ pub fn calculate_cost(model: &Model, usage: &mut Usage) {
     usage.cost.output = model.cost.output / PER_M * usage.output as f64;
     usage.cost.cache_read = model.cost.cached_read / PER_M * usage.cache_read as f64;
     // 1h writes cost 2x base input; short writes use the cache-write rate.
+    // The division by tokens-per-million applies to the WHOLE sum.
     usage.cost.cache_write =
-        model.cost.cached_write * short_write + model.cost.input * 2.0 * long_write / PER_M;
+        (model.cost.cached_write * short_write + model.cost.input * 2.0 * long_write) / PER_M;
     usage.cost.total =
         usage.cost.input + usage.cost.output + usage.cost.cache_read + usage.cost.cache_write;
 }

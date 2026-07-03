@@ -17,8 +17,10 @@ use tokio_util::sync::CancellationToken;
 pub struct Api(pub String);
 
 impl Api {
-    pub const ANTHROPIC_MESSAGE: &'static str = "anthropic-message";
-    pub const OPENAI_RESPONSE: &'static str = "open-response";
+    // These strings must match pi's API identifiers exactly so persisted
+    // sessions stay interchangeable between the two implementations.
+    pub const ANTHROPIC_MESSAGES: &'static str = "anthropic-messages";
+    pub const OPENAI_RESPONSES: &'static str = "openai-responses";
     pub const BEDROCK_CONVERSE_STREAM: &'static str = "bedrock-converse-stream";
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -45,6 +47,8 @@ pub struct Provider(pub String);
 
 impl Provider {
     pub const ANTHROPIC: &'static str = "anthropic";
+    pub const OPENAI: &'static str = "openai";
+    pub const AMAZON_BEDROCK: &'static str = "amazon-bedrock";
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -58,18 +62,29 @@ impl From<&str> for Provider {
 }
 
 /// A run of assistant/user text. `text_signature` is opaque provider metadata
-/// (e.g. an `OpenAI` Repsonses message id) preserved for multi-turn replay.
+/// (e.g. an `OpenAI` Responses message id) preserved for multi-turn replay.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TextContext {
+pub struct TextContent {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub text_signature: Option<String>,
 }
 
+impl TextContent {
+    /// Plain text without provider metadata - the overwhelmingly common case.
+    #[must_use]
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            text_signature: None,
+        }
+    }
+}
+
 /// Extended-thinking content. `thinking_signature` is the cryptographic
 /// signature some providers require to *replay* a thinking block on the next
-/// turn. `redacted` marks thinking the provider hid behind a safty filter -
+/// turn. `redacted` marks thinking the provider hid behind a safety filter -
 /// the encrypted blob still rides along in the signature for continuity.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,7 +96,7 @@ pub struct ThinkingContent {
     pub redacted: Option<bool>,
 }
 
-/// A base64-endcoded inline image (no URLs, images always bytes).
+/// A base64-encoded inline image (no URLs, images always bytes).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageContent {
@@ -107,7 +122,7 @@ pub struct ToolCall {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum UserContent {
-    Text(TextContext),
+    Text(TextContent),
     Image(ImageContent),
 }
 
@@ -115,7 +130,7 @@ pub enum UserContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AssistantContent {
-    Text(TextContext),
+    Text(TextContent),
     Thinking(ThinkingContent),
     ToolCall(ToolCall),
 }
@@ -124,7 +139,7 @@ pub enum AssistantContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ToolResultContent {
-    Text(TextContext),
+    Text(TextContent),
     Image(ImageContent),
 }
 
@@ -225,14 +240,18 @@ pub struct Usage {
     pub cache_read: u64,
     pub cache_write: u64,
     /// Subset of `cache_write` written with 1h retention. Anthropic-only; it
-    /// changes the cost formula (1h writes costs 2x base input).
+    /// changes the cost formula (1h writes cost 2x base input).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cache_write1h: Option<u64>,
-    pub total_cost: u64,
+    /// Reasoning/thinking tokens, when the provider reports them separately.
+    /// They are a *subset* of `output`, not an addition to it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reasoning: Option<u64>,
+    pub total_tokens: u64,
     pub cost: Cost,
 }
 
-/// `error`/`aboard` own terminal states (the provider maps vendor-specific
+/// `Error`/`Aborted` are terminal states (the provider maps vendor-specific
 /// reasons onto these).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -284,6 +303,18 @@ impl ModelThinkingLevel {
 }
 
 pub type ThinkingLevelMap = BTreeMap<String, Option<String>>;
+
+/// Per-level thinking token budgets for budget-based thinking models.
+/// `None` fields fall back to the built-in defaults (1024/2048/8192/16384).
+/// There is no `xhigh` budget: budget-based models clamp `xhigh` to `high`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingBudgets {
+    pub minimal: Option<u64>,
+    pub low: Option<u64>,
+    pub medium: Option<u64>,
+    pub high: Option<u64>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -363,6 +394,19 @@ pub struct StreamOptions {
     pub env: Option<BTreeMap<String, String>>,
     /// Unified reasoning level; the provider maps it to its own thinking config.
     pub reasoning: Option<ThinkingLevel>,
+    /// Custom per-level thinking budgets (budget-based thinking models only).
+    pub thinking_budgets: Option<ThinkingBudgets>,
+}
+
+/// Current Unix time in milliseconds. Messages carry creation timestamps
+/// (pi uses `Date.now()`); this is the Rust equivalent.
+#[must_use]
+pub fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

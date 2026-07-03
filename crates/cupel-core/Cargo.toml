@@ -1,29 +1,26 @@
 [package]
-name = "cupel-inference"
+name = "cupel-core"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-chrono.workspace = true
+# Bedrock speaks a binary AWS event-stream protocol (not SSE) and requires
+# SigV4 request signing. The official SDK handles both, plus credential and
+# region resolution from the environment / ~/.aws config.
+aws-config.workspace = true
+aws-sdk-bedrockruntime.workspace = true
+aws-smithy-types.workspace = true
+base64.workspace = true
 futures-core.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-
-[features]
-default = ["provider-faux", "provider-openai-compat", "provider-openai-responses"]
-provider-faux = []
-provider-openai-compat = []
-provider-openai-responses = []
-provider-anthropic = []
-provider-google = []
-provider-mistral = []
-provider-bedrock = []
 
 [lints]
 workspace = true
