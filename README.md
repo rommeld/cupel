@@ -9,3 +9,11 @@ A cupel is a small vessel for refining precious metal. This project borrows that
 ### 1. `cupel-core`
 
 The inference crate builds the foundation.
+
+### 2. `cupel-agent`
+
+Includes the basic agent definition and defines an agent loop primitive.
+
+### 3. `cupel-coding-agent`
+
+Use the `ripgrep` crate as the underlying for the **grep tool**. The crate also includes a simple `cuple CLI` to call functionality from the terminal. `ratatui` is the TUI crate of choice.
