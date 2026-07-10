@@ -1,15 +1,5 @@
 //! Interactive mode: the ratatui frontend.
 //!
-//! ## Why this replaces pi's `tui` package instead of porting it
-//!
-//! pi ships its own terminal UI framework (~12k lines: a differential
-//! renderer, a component tree, an editor widget) because nothing equivalent
-//! exists in the npm ecosystem at the quality bar it needs. The Rust
-//! ecosystem HAS that library: ratatui does the double-buffered diffing and
-//! widget layer. So the rewrite boundary moves - we port pi's interactive
-//! *UX* (streaming transcript, tool display, steering, scrollback) and let
-//! ratatui own everything pi's framework code did.
-//!
 //! ## Event architecture
 //!
 //! Two async event sources feed one state struct ([`app::App`]):

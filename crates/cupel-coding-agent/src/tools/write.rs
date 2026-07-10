@@ -1,4 +1,4 @@
-//! The `write` tool. Port of pi's `tools/write.ts`.
+//! The `write` tool.
 //!
 //! Deliberately blunt: create-or-overwrite the whole file, making parent
 //! directories as needed. The system prompt steers the model toward `edit`

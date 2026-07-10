@@ -1,7 +1,5 @@
 //! Request-option helpers shared by all providers: token estimation,
 //! `max_tokens` clamping, and thinking-budget arithmetic.
-//!
-//! Port of pi's `utils/estimate.ts` and `api/simple-options.ts`.
 
 use crate::types::{
     AssistantContent, Context, Message, StopReason, ThinkingBudgets, ThinkingLevel,

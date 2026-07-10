@@ -10,7 +10,7 @@
 //! - [`bedrock`] - AWS Bedrock `ConverseStream` (binary event stream via the
 //!   official AWS SDK)
 //!
-//! All providers follow the same contract as pi's stream functions:
+//! All providers follow the same stream functions:
 //! `stream()` returns immediately; the network work happens on a spawned
 //! Tokio task; *every* failure after that point is delivered as an `Error`
 //! event on the stream, never as a panic.

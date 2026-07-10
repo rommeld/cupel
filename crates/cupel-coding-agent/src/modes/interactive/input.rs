@@ -1,10 +1,5 @@
 //! The input editor: a small text buffer with a cursor and prompt history.
 //!
-//! pi ships a full editor component (kill ring, word navigation, undo,
-//! bracketed paste). This is the deliberately-minimal core of that: insert,
-//! delete, horizontal movement, Alt+Enter newlines, and Up/Down history.
-//! Each of pi's extras can be layered on later without changing the shape.
-//!
 //! Implementation note: the cursor is a CHAR index into the buffer, not a
 //! byte index. Rust strings are UTF-8, so byte-indexing at arbitrary
 //! positions panics on multi-byte characters; converting at the edges keeps

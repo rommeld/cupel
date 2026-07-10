@@ -1,4 +1,4 @@
-//! Tools the coding agent exposes to the model - ports of pi's core tools.
+//! Tools the coding agent exposes to the model.
 //!
 //! - [`read`] - file contents with offset/limit paging and image attachments
 //! - [`grep`] - content search over the [`crate::search`] backend

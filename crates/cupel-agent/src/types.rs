@@ -1,19 +1,4 @@
 //! Agent-level types: messages, tools, events, hooks.
-//!
-//! Port of pi's `agent/src/types.ts`, adapted to Rust idioms where the
-//! TypeScript relies on structural typing:
-//!
-//! - pi extends `AgentMessage` via *declaration merging* (apps add custom
-//!   message kinds at compile time). Rust has no such mechanism, so
-//!   [`AgentMessage`] is an enum with a `Custom` variant carrying a tagged
-//!   JSON payload - same capability, explicit instead of magical.
-//! - pi's hook bag (`beforeToolCall`, `afterToolCall`, ...) becomes the
-//!   [`AgentHooks`] trait with default no-op implementations: implement only
-//!   what you need, exactly like passing a partial config object.
-//! - pi validates tool arguments against a TypeBox schema at the loop level.
-//!   In Rust the natural place is the tool itself: `execute` receives raw
-//!   JSON and deserializes it with `serde` into its typed argument struct,
-//!   which *is* the validation.
 
 use std::sync::Arc;
 

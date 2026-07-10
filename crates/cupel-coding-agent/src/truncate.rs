@@ -1,5 +1,3 @@
-//! Shared truncation utilities for tool outputs. Port of pi's `truncate.ts`.
-//!
 //! Tool output flows straight into the model's context window, so every tool
 //! caps its output. Two independent limits apply - whichever is hit first
 //! wins:

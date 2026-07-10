@@ -2,16 +2,6 @@
 //! calls, feed the results back, repeat until the model stops asking for
 //! tools (and no queued messages remain).
 //!
-//! Port of pi's `agent-loop.ts`. Structure map:
-//!
-//! | pi                        | here                          |
-//! |---------------------------|-------------------------------|
-//! | `agentLoop()`             | [`agent_loop`]                |
-//! | `agentLoopContinue()`     | [`agent_loop_continue`]       |
-//! | `runLoop()`               | `run_loop`                    |
-//! | `streamAssistantResponse` | `stream_assistant_response`   |
-//! | `executeToolCalls*`       | `execute_tool_calls_*`        |
-//!
 //! One deliberate difference: pi mutates the shared context with a *partial*
 //! assistant message on every stream delta so `agent.state.streamingMessage`
 //! always holds the latest snapshot. Cloning the whole message per delta is

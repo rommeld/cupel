@@ -1,4 +1,4 @@
-//! The `read` tool. Port of pi's `tools/read.ts`.
+//! The `read` tool.
 //!
 //! Text files stream back with head truncation (2000 lines / 50 KB) and
 //! *actionable* continuation notices - "use offset=N to continue" teaches

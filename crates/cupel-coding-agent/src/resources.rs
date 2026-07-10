@@ -1,5 +1,4 @@
-//! Project-context and skill loading. Port of pi's `resource-loader.ts` +
-//! the discovery half of `skills.ts`.
+//! Project-context and skill loading.
 //!
 //! Two kinds of resources, two loading strategies - the difference matters:
 //!

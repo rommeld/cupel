@@ -17,8 +17,6 @@
 //!    that would be rejected on replay).
 //! 5. Inserts synthetic error tool-results for tool calls that never got an
 //!    answer, because every provider requires call/result pairing.
-//!
-//! Port of pi's `transform-messages.ts`.
 
 use crate::types::{
     AssistantContent, AssistantMessage, InputModality, Message, Model, StopReason, TextContent,

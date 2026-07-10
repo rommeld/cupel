@@ -1,4 +1,4 @@
-//! Per-file mutation serialization. Port of pi's `file-mutation-queue.ts`.
+//! Per-file mutation serialization.
 //!
 //! The agent loop runs tool calls in PARALLEL by default. Two edits to the
 //! same file racing each other means the second one reads stale content and

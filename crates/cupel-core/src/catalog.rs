@@ -1,8 +1,5 @@
 //! A small built-in model catalog.
 //!
-//! pi ships a large *generated* catalog (`models.generated.ts`, produced from
-//! provider metadata). Generating that is out of scope for the first
-//! iteration, so we hand-maintain a few known-good models per provider.
 //! Prices are USD per million tokens and are a snapshot - treat them as
 //! defaults, not truth; callers can always register their own [`Model`]s in
 //! the [`ModelRegistry`](crate::model::ModelRegistry).

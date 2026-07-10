@@ -1,5 +1,4 @@
-//! Transient-error classification for failed assistant messages. Port of
-//! pi's `utils/retry.ts`.
+//! Transient-error classification for failed assistant messages.
 //!
 //! When a turn ends with `stop_reason: Error`, the agent needs to decide:
 //! is this worth retrying (a 529 "overloaded", a dropped connection), or

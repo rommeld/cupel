@@ -1,15 +1,10 @@
 //! Stateful wrapper around the low-level agent loop.
 //!
-//! Port of pi's `agent.ts` `Agent` class. It owns the transcript, tracks
-//! streaming state, and exposes the queueing API (steer / follow-up).
-//!
-//! Concurrency model, since this is the one place the Rust design must
-//! diverge from a JS class: the run executes on a spawned Tokio task, so
+//! Concurrency model: the run executes on a spawned Tokio task, so
 //! everything the run touches lives behind `Arc`s. State sits in
-//! `Arc<Mutex<...>>` with short lock scopes; the queues likewise. Instead of
-//! pi's awaited listener callbacks, [`Agent::prompt`] hands back an
-//! [`AgentEventStream`] - the caller consumes events at its own pace while
-//! the internal forwarder keeps [`AgentState`] up to date.
+//! `Arc<Mutex<...>>` with short lock scopes; the queues likewise. [`Agent::prompt`] 
+//! hands back an [`AgentEventStream`] - the caller consumes events at its 
+//! own pace while the internal forwarder keeps [`AgentState`] up to date.
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};

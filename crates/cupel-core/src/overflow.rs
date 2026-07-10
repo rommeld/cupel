@@ -1,4 +1,4 @@
-//! Context-overflow detection. Port of pi's `utils/overflow.ts`.
+//! Context-overflow detection.
 //!
 //! When the transcript outgrows the model's context window, providers fail
 //! in three different ways - and the caller must recognize all of them to
@@ -14,9 +14,7 @@
 //!    `stop_reason: Length` with zero output and a full window.
 //!
 //! Pattern matching uses the same compression trick as [`crate::retry`]
-//! (lowercase, alphanumerics only) instead of regexes. pi's patterns with
-//! `.*` gaps become multi-part patterns: every part must appear in the
-//! message.
+//! (lowercase, alphanumerics only) instead of regexes.
 
 use crate::types::{AssistantMessage, StopReason};
 

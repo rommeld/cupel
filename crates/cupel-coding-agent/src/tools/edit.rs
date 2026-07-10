@@ -1,6 +1,3 @@
-//! The `edit` tool. Port of pi's `tools/edit.ts` (the TUI preview rendering
-//! stays behind; our TUI renders tool results generically).
-//!
 //! One call carries one file path and one or more `{oldText, newText}`
 //! replacements. All matching subtleties (fuzzy matching, uniqueness,
 //! overlap detection, BOM/CRLF round-tripping) live in

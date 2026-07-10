@@ -1,14 +1,13 @@
 //! AWS Bedrock `ConverseStream` provider.
 //!
-//! Port of pi's `bedrock-converse-stream.ts`. Unlike Anthropic/`OpenAI`,
-//! Bedrock does not speak SSE: responses use AWS's binary event-stream
-//! encoding, and requests must be SigV4-signed. Rather than hand-rolling
+//! Unlike Anthropic/`OpenAI`, Bedrock does not speak SSE:
+//! responses use AWS's binary event-stream encoding, and requests
+//! must be SigV4-signed. Rather than hand-rolling
 //! either (both are security-sensitive and finicky), we use the official
-//! `aws-sdk-bedrockruntime` crate - the same decision pi makes with
-//! `@aws-sdk/client-bedrock-runtime`. The SDK also gives us the standard
+//! `aws-sdk-bedrockruntime` crate. The SDK also gives us the standard
 //! credential chain (env vars, `~/.aws/credentials`, SSO, IMDS) for free.
 //!
-//! Intentional first-iteration simplifications vs. pi (documented, not
+//! Intentional first-iteration simplifications (documented, not
 //! forgotten): no bearer-token auth, no HTTP proxy override, no GovCloud
 //! schema workaround, no 1h cache TTL (the Rust SDK exposes cache points but
 //! not their TTL yet).

@@ -1,5 +1,4 @@
-//! Fuzzy matching for the file autocomplete. Port of pi's `fuzzy.ts`,
-//! constants verified against the source.
+//! Fuzzy matching for the file autocomplete.
 //!
 //! The shape is the classic editor-completion matcher: a query matches when
 //! all of its characters appear IN ORDER in the candidate (not necessarily

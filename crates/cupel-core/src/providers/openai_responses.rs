@@ -2,8 +2,7 @@
 //!
 //! Flow: build JSON request -> POST `{base_url}/responses` with
 //! `stream: true` -> decode the SSE body -> translate Responses events into
-//! unified [`AssistantMessageEvent`]s. Port of pi's `openai-responses.ts` +
-//! `openai-responses-shared.ts`.
+//! unified [`AssistantMessageEvent`]s.
 //!
 //! The Responses API differs from Anthropic's in two ways that shape this
 //! code:

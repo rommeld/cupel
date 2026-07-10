@@ -9,10 +9,6 @@
 //! 2. UI-only state (tool results attached to their calls, expansion,
 //!    "queued" markers) has an obvious home that the agent knows nothing
 //!    about.
-//!
-//! pi's TUI does the same thing with its component tree; ratatui is
-//! immediate-mode, so our "components" are plain data plus a `to_lines`
-//! function.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};

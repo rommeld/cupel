@@ -1,4 +1,4 @@
-//! The `grep` tool. Port of pi's `coding-agent/src/core/tools/grep.ts`.
+//! The `grep` tool.
 //!
 //! Split of responsibilities:
 //! - [`crate::search`] finds matching lines (the pluggable backend);

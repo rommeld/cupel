@@ -1,30 +1,5 @@
 //! Context compaction: keep long sessions inside the model's context window
 //! by replacing old history with an LLM-generated summary.
-//!
-//! Port of pi's `harness/compaction/compaction.ts`, simplified where
-//! documented. The moving parts:
-//!
-//! - **Estimation** anchors on the last successful assistant message's
-//!   provider-reported usage (exact) and only estimates what came after -
-//!   far more accurate than estimating the whole transcript.
-//! - **The threshold**: compaction fires when estimated tokens exceed
-//!   `context_window - reserve_tokens`. The reserve leaves room for the
-//!   summarization prompt AND the next turn's output.
-//! - **The cut point** walks back from the end accumulating
-//!   ~`keep_recent_tokens` of recent messages, then cuts at a user-message
-//!   boundary. Cutting elsewhere could separate a tool call from its result;
-//!   user messages always start a fresh turn. (pi additionally summarizes a
-//!   split turn's prefix separately - deferred; our fallback cuts at the
-//!   nearest user boundary even if that keeps a little more than the
-//!   budget.)
-//! - **The summary** is one non-streaming LLM call using pi's structured
-//!   checkpoint format (Goal / Progress / Decisions / Next Steps). When a
-//!   previous summary exists (second-or-later compaction), it is UPDATED
-//!   rather than regenerated, so long sessions don't lose early context.
-//! - The summary re-enters the transcript as a plain user message with a
-//!   marker header. pi uses a dedicated `compactionSummary` role that
-//!   converts to a user message at the LLM boundary; ours IS that user
-//!   message (the marker makes it recognizable for iterative updates).
 
 use std::sync::Arc;
 

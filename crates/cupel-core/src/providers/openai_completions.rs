@@ -1,17 +1,10 @@
 //! `OpenAI` Chat Completions API provider.
 //!
-//! Port of pi's `openai-completions.ts`. This is the oldest and most widely
+//! This is the oldest and most widely
 //! cloned LLM wire protocol - Fireworks, Groq, Together, `DeepSeek`, and
 //! dozens of other providers expose "OpenAI-compatible" endpoints that speak
 //! it. That ubiquity is also its curse: every clone deviates a little, so
 //! this file is half protocol and half compatibility knobs.
-//!
-//! Scope note vs. pi: pi *auto-detects* vendor quirks from the base URL
-//! (`detectCompat`) and supports seven thinking formats (zai, qwen,
-//! together, openrouter, ...). We keep the protocol core plus the knobs our
-//! catalog actually needs (standard `OpenAI` + `DeepSeek` thinking formats),
-//! all driven explicitly by `model.compat` - no URL sniffing. New vendors
-//! mean new compat entries, not new code.
 //!
 //! Protocol shape: POST `{base_url}/chat/completions` with `stream: true`;
 //! the SSE body carries `ChatCompletionChunk` JSON. Unlike Anthropic's

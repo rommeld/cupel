@@ -1,5 +1,4 @@
 //! File-reference autocomplete: the state machine behind the `@path` popup.
-//! Port of the file-completion half of pi's `tui/src/autocomplete.ts`.
 //!
 //! Life of a session: the user types `@` at a token start ->
 //! [`Autocomplete::refresh`] finds the token, walks the project tree once

@@ -1,4 +1,4 @@
-//! System prompt construction. Port of pi's `system-prompt.ts`: tool list,
+//! System prompt construction. Tool list,
 //! per-tool guidelines, project context files (eager), a skills catalog
 //! (lazy - see [`crate::resources`]), and date/cwd last.
 

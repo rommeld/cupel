@@ -1,6 +1,3 @@
-//! Text matching and diff engine for the `edit` tool. Port of pi's
-//! `edit-diff.ts`.
-//!
 //! Why so much machinery for "replace old text with new text"? Because
 //! models are imperfect copyists. They echo file content with smart quotes
 //! flattened, trailing whitespace dropped, or Unicode dashes swapped - and a

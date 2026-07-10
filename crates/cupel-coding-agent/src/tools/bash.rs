@@ -1,5 +1,3 @@
-//! The `bash` tool. Port of pi's `tools/bash.ts` + `output-accumulator.ts`.
-//!
 //! Runs `$SHELL -c <command>` in the agent's working directory, streaming
 //! stdout+stderr into a bounded accumulator. The design constraints all come
 //! from real agent behavior:
@@ -16,9 +14,6 @@
 //!   - one extra process spawn on the rare abort path is a fine trade.
 //! - **Exit codes are errors.** A non-zero exit becomes an error tool result
 //!   (with the output attached) so the model *sees* failure as failure.
-//!
-//! Unix-only for now: process groups and `kill` don't exist on Windows
-//! (pi handles Windows via taskkill; add when a Windows user appears).
 
 use std::path::PathBuf;
 use std::time::Duration;

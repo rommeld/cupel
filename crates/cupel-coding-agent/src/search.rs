@@ -1,23 +1,4 @@
 //! Code search abstraction + the grep-based default backend.
-//!
-//! ## Why a trait, not just a grep function
-//!
-//! pi finds code exclusively by shelling out to ripgrep. cupel plans a second
-//! backend in iteration two: a persistent index (see `crates/cupel-index/
-//! CONCEPT.md`) built on `fff` for fast fuzzy path/content retrieval and
-//! ranking. The [`CodeSearch`] trait is the seam between those iterations:
-//! the grep *tool* (what the model calls) is written against this trait, so
-//! swapping `GrepSearch` for an index-backed implementation - or a hybrid
-//! that consults the index first and falls back to a scan - requires zero
-//! changes to the tool or agent layers.
-//!
-//! ## Why ripgrep-as-a-library
-//!
-//! pi spawns an `rg` binary (auto-downloading it when missing) and parses its
-//! `--json` output. Rust can link ripgrep's actual engine (the `grep-*` and
-//! `ignore` crates are ripgrep's internals published as libraries), which
-//! removes the external binary, the download step, and the JSON parsing while
-//! keeping identical search semantics.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
