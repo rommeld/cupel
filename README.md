@@ -2,7 +2,7 @@
 
 A cupel is a small vessel for refining precious metal. This project borrows that idea: separate useful code context from repository noise, then feed the refined signal into fast local agent workflows.
 
-`cupel` is a lean Rust coding harness focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval. Search and reranking will lean on [fff](https://github.com/dmtrKovalenko/fff), with parts of the architecture inspired by [pi.dev](https://pi.dev) and parts shaped around my own coding workflows.
+`cupel` is a lean Rust coding harness focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval.
 
 ## Crates definition
 
@@ -33,17 +33,17 @@ Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and F
 
 ```sh
 export FIREWORKS_API_KEY=fw-...
-cargo run -p cupel-coding-agent -- 
+cargo run -p cupel-coding-agent --
 ```
 
 ```sh
 # credentials: first provider found wins (or pick one with --model)
 export FIREWORKS_API_KEY=fw-...   # or OPENAI_API_KEY / ANTHROPIC_API_KEY / AWS credentials
 
-cupel            # TUI in the current directory
-cupel --help     # flags + built-in model list
-cupel --model accounts/fireworks/models/kimi-k2p7-code # for model selection
-cupel --model <id> --thinking off|minimal|low|medium|high|xhigh
+cupel                                                           # runs agent in current directory
+cupel --help                                                    # built-in model list
+cupel --model accounts/fireworks/models/kimi-k2p7-code          # select model from list
+cupel --model <id> --thinking off|minimal|low|medium|high|xhigh # define thinking mode
 ```
 
 Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory or next to the installed binary is loaded into the system prompt on every request. Skills are discovered under `skills/<name>/SKILL.md` in the same two locations; only their name/description enter the prompt, and the agent reads the full skill file on demand when a task matches.
@@ -54,9 +54,10 @@ Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,
 
 ### What works today?
 - Multi-provider inference layer with build-in model catalog
-- CLI: `--model <id>`, `--thinking <mode>
+- CLI: `--model <id>`, `--thinking <mode>`
 - Agent tools: read, grep, write, edit, bash
 - TUI based on `ratatui`
+- File referencing via `@file-path` using fuzzy search
 - Context management: proactive compaction + reactive provider truncation
 - Auto-retry, tracing/observability, and system-prompt project context
 
