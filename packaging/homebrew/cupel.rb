@@ -9,28 +9,28 @@
 # Users then install with:
 #   brew install rommeld/tap/cupel
 #
-# The checksums below are the REAL values for v0.1.2-beta, fetched from that
+# The checksums below are the REAL values for v0.1.3-beta, fetched from that
 # release's sha256sums.txt - this formula is publishable as-is.
 
 class Cupel < Formula
   desc "Lean Rust coding agent with provider-neutral inference and a TUI"
   homepage "https://github.com/rommeld/cupel"
-  version "0.1.2-beta"
+  version "0.1.3-beta"
   license "MIT"
 
   on_macos do
     url "https://github.com/rommeld/cupel/releases/download/v#{version}/cupel-macos-universal.tar.gz"
-    sha256 "cb92b6a07f778d289792a49a954c7296a191c1acce3ff7f47c75aa473f8b6e2a"
+    sha256 "26ea08bed6631c92dfdaafa228d205cb601daf745d10c24ab80e0ba06b344e36"
   end
 
   on_linux do
     on_intel do
       url "https://github.com/rommeld/cupel/releases/download/v#{version}/cupel-linux-x86_64.tar.gz"
-      sha256 "7441f25341d0a153938b3cf88887d34d8e6bd1abe05a885ca100580daec56df4"
+      sha256 "6b3c76cfe479256737838efe33356af953143ffc9c0db9d90441fe67afda8857"
     end
     on_arm do
       url "https://github.com/rommeld/cupel/releases/download/v#{version}/cupel-linux-aarch64.tar.gz"
-      sha256 "9b0303a8b8b652d66219674e3705a04adde2d36a840994e453ee62ce3c3f7f8b"
+      sha256 "db4634c57468607d1492f601ca7c21e189368ec860300a43762ce4fddad34fa3"
     end
   end
 

@@ -1,8 +1,8 @@
 # Releasing and packaging cupel
 
-Current state: `v0.1.2-beta` is live on GitHub Releases with all three
-platform archives, and the `install.sh` one-liner resolves against it via
-`releases/latest/download/`.
+Current state: `v0.1.3-beta` (adds `@path` file references in the TUI) is
+live on GitHub Releases with all three platform archives, and the
+`install.sh` one-liner resolves against it via `releases/latest/download/`.
 
 ## Cutting a release
 
@@ -13,12 +13,12 @@ Pre-flight, in order:
    gets before release).
 2. Optionally bump the crate `version` fields in `crates/*/Cargo.toml` to
    match the tag. The binaries don't read it, but drift is confusing
-   (tags are at 0.1.2-beta while the crates still say 0.1.0).
+   (tags are at 0.1.3-beta while the crates still say 0.1.0).
 
 Then the tag IS the release (scheme in use: `vX.Y.Z-beta`):
 
 ```sh
-git tag v0.1.3-beta && git push origin v0.1.3-beta
+git tag v0.1.4-beta && git push origin v0.1.4-beta
 ```
 
 `.github/workflows/release.yml` builds the macOS universal binary and both
@@ -31,23 +31,34 @@ therefore `install.sh` - point at it. Users install with:
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
-## Homebrew tap
+## Homebrew tap (automated)
 
-One-time setup: create a GitHub repository named `homebrew-tap` and copy
-`packaging/homebrew/cupel.rb` to `Formula/cupel.rb` in it. The formula in
-this repo carries the real checksums for the current release, so the first
-copy is publishable as-is.
+The formula bump is AUTOMATED: after every release, the `homebrew` job in
+`release.yml` regenerates `cupel.rb` (via `packaging/update-formula.sh`)
+with the new version + checksums and pushes it to the tap repository.
+Users install with `brew install rommeld/tap/cupel`.
 
-Per release, bump `version` and refresh the three `sha256` values. The
-checksums come straight from the release:
+One-time setup (until then the job skips with a notice, never failing a
+release):
+
+1. Create a GitHub repository named `homebrew-tap`; copy
+   `packaging/homebrew/cupel.rb` to `Formula/cupel.rb` in it (the formula
+   here carries the real checksums for the current release, so the first
+   copy is publishable as-is).
+2. Create a fine-grained personal access token with `Contents:
+   Read and write` permission on ONLY the `homebrew-tap` repository. The
+   workflow's default `GITHUB_TOKEN` cannot push to other repos - that's
+   why a dedicated token is needed.
+3. Add it to the `cupel` repository as an Actions secret named
+   `HOMEBREW_TAP_TOKEN`.
+
+Manual fallback (or local dry-run) for any release:
 
 ```sh
-curl -fsSL https://github.com/rommeld/cupel/releases/latest/download/sha256sums.txt
+curl -fsSL https://github.com/rommeld/cupel/releases/latest/download/sha256sums.txt -o /tmp/sums.txt
+packaging/update-formula.sh 0.1.4-beta /tmp/sums.txt
+# then copy packaging/homebrew/cupel.rb into the tap's Formula/ and push
 ```
-
-Paste each hash into the matching `sha256` line, push the tap. Users
-install with `brew install rommeld/tap/cupel`. (Automating this bump is
-what `cargo-dist` or a small release-workflow step can do later.)
 
 ## macOS signing and notarization (optional)
 

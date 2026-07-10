@@ -2,8 +2,8 @@
 //!
 //! Concurrency model: the run executes on a spawned Tokio task, so
 //! everything the run touches lives behind `Arc`s. State sits in
-//! `Arc<Mutex<...>>` with short lock scopes; the queues likewise. [`Agent::prompt`] 
-//! hands back an [`AgentEventStream`] - the caller consumes events at its 
+//! `Arc<Mutex<...>>` with short lock scopes; the queues likewise. [`Agent::prompt`]
+//! hands back an [`AgentEventStream`] - the caller consumes events at its
 //! own pace while the internal forwarder keeps [`AgentState`] up to date.
 
 use std::collections::{HashSet, VecDeque};

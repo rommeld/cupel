@@ -4,7 +4,7 @@
 //! decode the SSE body -> translate Anthropic events into unified
 //! [`AssistantMessageEvent`]s. Port of pi's `anthropic-messages.ts`.
 //!
-//! `stream` with raw Anthropic options and `streamSimple` that maps a 
+//! `stream` with raw Anthropic options and `streamSimple` that maps a
 //! unified reasoning level onto them, this
 //! provider folds the `streamSimple` mapping in: callers set
 //! `StreamOptions::reasoning` and the provider derives the right thinkingw
