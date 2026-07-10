@@ -26,6 +26,8 @@
 //! `App`, then the loop redraws. That's the whole architecture.
 
 pub mod app;
+pub mod autocomplete;
+pub mod fuzzy;
 pub mod input;
 pub mod transcript;
 pub mod ui;

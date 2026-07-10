@@ -13,6 +13,7 @@ use cupel_core::types::{
 };
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use super::autocomplete::Autocomplete;
 use super::input::InputState;
 use super::transcript::{Cell, ToolOutcome, Transcript};
 use crate::modes::SessionMeta;
@@ -31,6 +32,8 @@ pub struct App {
     pub meta: SessionMeta,
     pub transcript: Transcript,
     pub input: InputState,
+    /// The `@path` file-reference popup (see `autocomplete.rs`).
+    pub autocomplete: Autocomplete,
     pub totals: Totals,
     /// Event stream of the active run; `None` when idle.
     pub run_events: Option<AgentEventStream>,
@@ -47,11 +50,13 @@ pub struct App {
 impl App {
     #[must_use]
     pub fn new(agent: Agent, meta: SessionMeta) -> Self {
+        let autocomplete = Autocomplete::new(&meta.cwd);
         Self {
             agent,
             meta,
             transcript: Transcript::default(),
             input: InputState::default(),
+            autocomplete,
             totals: Totals::default(),
             run_events: None,
             scroll_from_bottom: 0,
@@ -74,7 +79,11 @@ impl App {
         match event {
             // Windows terminals report key releases too; only act on press.
             Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key),
-            Event::Paste(text) => self.input.insert_str(&text),
+            Event::Paste(text) => {
+                self.input.insert_str(&text);
+                self.autocomplete
+                    .refresh(self.input.text(), self.input.cursor());
+            }
             // Resize is handled implicitly: the next draw uses the new size.
             _ => {}
         }
@@ -83,6 +92,46 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+        // ---- autocomplete popup takes precedence while open -----------------
+        // It consumes ONLY the keys it needs; everything else (Ctrl-C
+        // included) falls through so session control never changes meaning.
+        if self.autocomplete.is_open() {
+            match (key.code, ctrl, alt) {
+                // Esc closes the popup - it does NOT abort the run. A second
+                // Esc (popup now closed) aborts as usual.
+                (KeyCode::Esc, ..) => {
+                    self.autocomplete.close();
+                    return;
+                }
+                // Up/Down move the selection, NOT the prompt history.
+                (KeyCode::Up, ..) => {
+                    self.autocomplete.move_up();
+                    return;
+                }
+                (KeyCode::Down, ..) => {
+                    self.autocomplete.move_down();
+                    return;
+                }
+                // Tab or Enter accept - Enter does NOT submit while open.
+                (KeyCode::Tab, ..) | (KeyCode::Enter, false, false) => {
+                    if let Some(completion) = self.autocomplete.accept(self.input.cursor()) {
+                        self.input.replace_range(
+                            completion.start,
+                            completion.end,
+                            &completion.insert,
+                        );
+                    }
+                    // Refresh decides what happens next: a completed FILE no
+                    // longer forms a token (trailing space) so the popup
+                    // closes; a DIRECTORY still does, so it keeps completing.
+                    self.autocomplete
+                        .refresh(self.input.text(), self.input.cursor());
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         match (key.code, ctrl, alt) {
             // ---- session control -----------------------------------------
@@ -100,9 +149,6 @@ impl App {
             (KeyCode::Esc, ..) if self.is_running() => self.agent.abort(),
 
             // ---- view control --------------------------------------------
-            (KeyCode::Char('t'), true, _) => {
-                self.transcript.expand_tools = !self.transcript.expand_tools;
-            }
             (KeyCode::PageUp, ..) => {
                 self.scroll_by(i64::from(self.last_transcript_height / 2).max(1));
             }
@@ -113,18 +159,67 @@ impl App {
             // ---- editing --------------------------------------------------
             // Alt+Enter inserts a newline (Shift+Enter is indistinguishable
             // from Enter in most terminals, so Alt is the portable choice).
-            (KeyCode::Enter, _, true) => self.input.insert('\n'),
+            (KeyCode::Enter, _, true) => {
+                self.input.insert('\n');
+                self.refresh_autocomplete();
+            }
             (KeyCode::Enter, ..) => self.submit(),
-            (KeyCode::Backspace, ..) => self.input.delete_back(),
-            (KeyCode::Delete, ..) => self.input.delete_forward(),
-            (KeyCode::Left, ..) => self.input.move_left(),
-            (KeyCode::Right, ..) => self.input.move_right(),
-            (KeyCode::Home, ..) | (KeyCode::Char('a'), true, _) => self.input.move_home(),
-            (KeyCode::End, ..) | (KeyCode::Char('e'), true, _) => self.input.move_end(),
-            (KeyCode::Up, ..) => self.input.history_prev(),
-            (KeyCode::Down, ..) => self.input.history_next(),
-            (KeyCode::Char(c), false, false) => self.input.insert(c),
+            (KeyCode::Backspace, ..) => {
+                self.input.delete_back();
+                self.refresh_autocomplete();
+            }
+            (KeyCode::Delete, ..) => {
+                self.input.delete_forward();
+                self.refresh_autocomplete();
+            }
+            (KeyCode::Left, ..) => {
+                self.input.move_left();
+                self.refresh_autocomplete_if_open();
+            }
+            (KeyCode::Right, ..) => {
+                self.input.move_right();
+                self.refresh_autocomplete_if_open();
+            }
+            (KeyCode::Home, ..) | (KeyCode::Char('a'), true, _) => {
+                self.input.move_home();
+                self.refresh_autocomplete_if_open();
+            }
+            (KeyCode::End, ..) | (KeyCode::Char('e'), true, _) => {
+                self.input.move_end();
+                self.refresh_autocomplete_if_open();
+            }
+            // History recall closes the popup instead of refreshing: a
+            // recalled prompt containing `@src/x` must not surprise-open the
+            // menu. Completion triggers on TYPING (pi behaves the same).
+            (KeyCode::Up, ..) => {
+                self.input.history_prev();
+                self.autocomplete.close();
+            }
+            (KeyCode::Down, ..) => {
+                self.input.history_next();
+                self.autocomplete.close();
+            }
+            (KeyCode::Char(c), false, false) => {
+                self.input.insert(c);
+                self.refresh_autocomplete();
+            }
             _ => {}
+        }
+    }
+
+    /// Edits (typing, deleting, pasting) re-evaluate the popup and may OPEN
+    /// a session - completion is typing-driven.
+    fn refresh_autocomplete(&mut self) {
+        self.autocomplete
+            .refresh(self.input.text(), self.input.cursor());
+    }
+
+    /// Cursor motion only keeps an ALREADY-OPEN session accurate (or closes
+    /// it when the cursor leaves the token). Moving into an existing
+    /// `@token` never surprise-opens the popup - pi behaves the same.
+    fn refresh_autocomplete_if_open(&mut self) {
+        if self.autocomplete.is_open() {
+            self.refresh_autocomplete();
         }
     }
 
@@ -138,6 +233,9 @@ impl App {
 
     /// Enter: start a run when idle, queue a steering message when busy.
     fn submit(&mut self) {
+        // Enter is consumed by the popup while open, so this is normally a
+        // no-op - it exists so no code path can submit with a live session.
+        self.autocomplete.close();
         let text = self.input.submit();
         let trimmed = text.trim();
         if trimmed.is_empty() {

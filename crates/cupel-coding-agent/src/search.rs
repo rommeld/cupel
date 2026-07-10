@@ -95,6 +95,10 @@ pub trait CodeSearch: Send + Sync {
 /// through, `~` expands, everything else is joined onto the root.
 #[must_use]
 pub fn resolve_to_root(path: &str, root: &Path) -> PathBuf {
+    // pi's stripAtPrefix: prompts reference files as `@path`, and models
+    // sometimes echo that convention verbatim into tool calls
+    // (read("@src/main.rs")). Tolerate exactly one leading `@`.
+    let path = path.strip_prefix('@').unwrap_or(path);
     if let Some(rest) = path.strip_prefix("~/")
         && let Some(home) = std::env::home_dir()
     {
@@ -293,6 +297,28 @@ fn search_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_to_root_strips_one_at_prefix() {
+        let root = Path::new("/project");
+        // `@path` references from prompts resolve like plain paths.
+        assert_eq!(
+            resolve_to_root("@src/main.rs", root),
+            PathBuf::from("/project/src/main.rs")
+        );
+        assert_eq!(resolve_to_root("@/abs/x", root), PathBuf::from("/abs/x"));
+        // Plain paths are untouched; only ONE @ is stripped (a literal
+        // `@@weird` file stays reachable as `@@weird` -> `@weird`... rare
+        // enough that pi accepts the same trade).
+        assert_eq!(
+            resolve_to_root("src/main.rs", root),
+            PathBuf::from("/project/src/main.rs")
+        );
+        assert_eq!(
+            resolve_to_root("@@weird", root),
+            PathBuf::from("/project/@weird")
+        );
+    }
 
     fn write_tree(dir: &Path, files: &[(&str, &str)]) {
         for (name, content) in files {

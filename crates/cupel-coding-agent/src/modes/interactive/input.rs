@@ -35,6 +35,23 @@ impl InputState {
         self.buffer.is_empty()
     }
 
+    /// Cursor position as a CHAR index (see module doc for why chars).
+    #[must_use]
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Replace the char range `[start, end)` with `replacement`; the cursor
+    /// lands after the inserted text. Used by autocomplete acceptance to
+    /// swap the typed `@quer` for the completed `@path `.
+    pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str) {
+        let start_byte = self.byte_index(start);
+        let end_byte = self.byte_index(end.max(start));
+        self.buffer.replace_range(start_byte..end_byte, replacement);
+        self.cursor = start + replacement.chars().count();
+        self.history_index = None;
+    }
+
     /// Cursor position as (line, column) in display terms, for placing the
     /// terminal cursor.
     #[must_use]
@@ -204,6 +221,17 @@ mod tests {
         assert_eq!(input.text(), "two");
         input.history_next();
         assert_eq!(input.text(), "draft"); // stash restored
+    }
+
+    #[test]
+    fn replace_range_is_char_safe_and_places_cursor() {
+        let mut input = InputState::default();
+        input.insert_str("sée @qué tail");
+        // Replace the "@qué" token (chars 4..8) with a completion.
+        input.replace_range(4, 8, "@querétaro.rs ");
+        assert_eq!(input.text(), "sée @querétaro.rs  tail");
+        let (line, col) = input.cursor_line_col();
+        assert_eq!((line, col), (0, 4 + "@querétaro.rs ".chars().count()));
     }
 
     #[test]

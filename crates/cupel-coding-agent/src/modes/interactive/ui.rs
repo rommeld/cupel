@@ -9,7 +9,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use super::app::App;
 
@@ -26,6 +26,61 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     render_transcript(frame, app, transcript_area);
     render_input(frame, app, input_area);
     render_footer(frame, app, footer_area);
+    // Drawn LAST so it overdraws the transcript's bottom rows - in
+    // immediate-mode rendering, paint order IS the z-order.
+    render_autocomplete(frame, app, transcript_area, input_area);
+}
+
+/// The `@path` completion popup, anchored just above the input box at the
+/// column of the token's `@`.
+fn render_autocomplete(frame: &mut Frame<'_>, app: &App, transcript_area: Rect, input_area: Rect) {
+    let Some((rows, selected)) = app.autocomplete.visible() else {
+        return;
+    };
+    if transcript_area.height == 0 {
+        return;
+    }
+
+    let height = (rows.len() as u16).min(transcript_area.height);
+    // Anchor x to the `@` column when it's on the input's visible first
+    // line; degrade gracefully to the input's left edge otherwise.
+    let anchor_col = app.autocomplete.token_start().map_or(0, |start| {
+        app.input.text()[..]
+            .chars()
+            .take(start)
+            .filter(|c| *c != '\n')
+            .count() as u16
+    });
+    let width = rows
+        .iter()
+        .map(|r| r.display.len() as u16 + 2)
+        .max()
+        .unwrap_or(10)
+        .min(frame.area().width);
+    let x = (input_area.x + 1 + anchor_col).min(frame.area().width.saturating_sub(width));
+
+    let popup = Rect {
+        x,
+        y: input_area.y.saturating_sub(height),
+        width,
+        height,
+    };
+
+    // Clear blanks the transcript underneath, then the rows paint on top.
+    frame.render_widget(Clear, popup);
+    let lines: Vec<Line<'_>> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let style = if i == selected {
+                Style::new().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::new().fg(Color::Cyan)
+            };
+            Line::from(Span::styled(format!(" {} ", row.display), style))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), popup);
 }
 
 fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
@@ -107,7 +162,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         app.totals.cache_read,
         app.totals.cost,
     );
-    let right = "enter send · alt+enter newline · esc abort · ctrl-t tools · pgup/pgdn scroll ";
+    let right = "enter send · alt+enter newline · @ file · esc abort · pgup/pgdn scroll ";
 
     // Left-align the status, right-align the key hints; drop the hints when
     // the terminal is too narrow for both.
@@ -142,6 +197,12 @@ mod tests {
     use std::sync::Arc;
 
     fn test_app() -> App {
+        test_app_in("/tmp")
+    }
+
+    /// App rooted at a specific cwd - the autocomplete tests point this at
+    /// a temp tree with known files.
+    fn test_app_in(cwd: &str) -> App {
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let agent = Agent::new(AgentOptions::new(model, registry));
@@ -150,9 +211,28 @@ mod tests {
             SessionMeta {
                 model_name: "Test Model".into(),
                 provider: "test".into(),
-                cwd: "/tmp".into(),
+                cwd: cwd.into(),
             },
         )
+    }
+
+    /// A temp project for autocomplete render tests.
+    fn autocomplete_cwd(name: &str) -> String {
+        let root = std::env::temp_dir().join(format!("cupel-ui-autocomplete-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("notes.md"), "# notes").unwrap();
+        root.display().to_string()
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Char(c),
+                KeyModifiers::NONE,
+            )));
+        }
     }
 
     fn draw(app: &mut App, width: u16, height: u16) -> String {
@@ -254,5 +334,62 @@ mod tests {
             KeyModifiers::CONTROL,
         )));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn typing_at_query_renders_popup_above_input() {
+        let mut app = test_app_in(&autocomplete_cwd("popup"));
+        type_text(&mut app, "@ma");
+        assert!(app.autocomplete.is_open());
+        let screen = draw(&mut app, 80, 20);
+        assert!(screen.contains("src/main.rs"), "popup missing:\n{screen}");
+    }
+
+    #[test]
+    fn enter_with_popup_open_inserts_instead_of_submitting() {
+        let mut app = test_app_in(&autocomplete_cwd("enter"));
+        type_text(&mut app, "@ma");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        // The reference is now in the buffer; nothing was submitted (no run
+        // started, no user cell in the transcript).
+        assert_eq!(app.input.text(), "@src/main.rs ");
+        assert!(!app.is_running());
+        assert!(app.transcript.cells.is_empty());
+        // The completed file token closed the popup (trailing space).
+        assert!(!app.autocomplete.is_open());
+    }
+
+    #[test]
+    fn esc_with_popup_open_closes_popup_not_the_app() {
+        let mut app = test_app_in(&autocomplete_cwd("esc"));
+        type_text(&mut app, "@ma");
+        assert!(app.autocomplete.is_open());
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(!app.autocomplete.is_open());
+        assert!(!app.should_quit);
+        let screen = draw(&mut app, 80, 20);
+        assert!(
+            !screen.contains("src/main.rs"),
+            "popup should be gone:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn up_down_with_popup_open_move_selection_not_history() {
+        let mut app = test_app_in(&autocomplete_cwd("nav"));
+        // Prime history directly on the input (App::submit would spawn agent
+        // tasks, which needs a tokio runtime this sync test doesn't have).
+        app.input.insert_str("old prompt");
+        let _ = app.input.submit();
+        type_text(&mut app, "@");
+        assert!(app.autocomplete.is_open());
+        let buffer_before = app.input.text().to_string();
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
+        assert_eq!(app.input.text(), buffer_before, "history must not fire");
+        assert!(app.autocomplete.is_open());
     }
 }

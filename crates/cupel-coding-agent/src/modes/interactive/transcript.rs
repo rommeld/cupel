@@ -59,8 +59,6 @@ pub struct ToolOutcome {
 #[derive(Default)]
 pub struct Transcript {
     pub cells: Vec<Cell>,
-    /// Global toggle: show full tool results instead of a preview.
-    pub expand_tools: bool,
 }
 
 impl Transcript {
@@ -163,22 +161,17 @@ impl Transcript {
                             } else {
                                 Style::new().add_modifier(Modifier::DIM)
                             };
+                            // Tool results show a fixed preview; the FULL
+                            // output already went to the model (and to the
+                            // trace log) - the transcript view is a digest.
                             let total = outcome.text.lines().count();
-                            let shown = if self.expand_tools {
-                                total
-                            } else {
-                                TOOL_PREVIEW_LINES
-                            };
-                            for line in outcome.text.lines().take(shown) {
+                            for line in outcome.text.lines().take(TOOL_PREVIEW_LINES) {
                                 push_wrapped(&mut out, &format!("  {line}"), width, style);
                             }
-                            if total > shown {
+                            if total > TOOL_PREVIEW_LINES {
                                 push_wrapped(
                                     &mut out,
-                                    &format!(
-                                        "  ... ({} more lines, ctrl-t to expand)",
-                                        total - shown
-                                    ),
+                                    &format!("  ... ({} more lines)", total - TOOL_PREVIEW_LINES),
                                     width,
                                     Style::new().add_modifier(Modifier::DIM),
                                 );

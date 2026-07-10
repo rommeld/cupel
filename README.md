@@ -20,38 +20,31 @@ Use the `ripgrep` crate as the underlying for the **grep tool**. The crate also 
 
 ## Install
 
-No Rust required - the installer downloads a prebuilt binary for macOS
-(universal) or Linux (x86_64/aarch64, static musl) and puts `cupel` on your PATH:
+No Rust required - currently support for macOS
+(Intel & Silicon) or Linux (x86_64/aarch64, static musl) and puts `cupel` on your PATH:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
-Alternatives: download an archive from the [releases page](https://github.com/rommeld/cupel/releases),
-`brew install rommeld/tap/cupel` (once the tap is published - see `packaging/README.md`),
-or build from source with `cargo build --release -p cupel-coding-agent`.
-Windows is not supported yet (the bash tool is Unix-only).
-
 ## Usage
 
-```sh
-# credentials: first provider found wins (or pick one with --model)
-export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY / FIREWORKS_API_KEY / AWS credentials
-
-cupel            # TUI in the current directory
-cupel --help     # flags + built-in model list
-```
-
-Supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and Fireworks, e.g.:
+Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and Fireworks, e.g.:
 
 ```sh
 export FIREWORKS_API_KEY=fw-...
-cargo run -p cupel-coding-agent -- --model accounts/fireworks/models/kimi-k2p7-code
+cargo run -p cupel-coding-agent -- 
 ```
 
-Options: `--model <id>` picks a model from the built-in catalog, `--thinking off|minimal|low|medium|high|xhigh` sets the reasoning level, `--plain` forces the line-based REPL (used automatically when output is piped).
+```sh
+# credentials: first provider found wins (or pick one with --model)
+export FIREWORKS_API_KEY=fw-...   # or OPENAI_API_KEY / ANTHROPIC_API_KEY / AWS credentials
 
-In the TUI: `enter` sends (while the agent works, it queues a steering message), `alt+enter` newline, `esc` aborts the turn, `ctrl-t` expands tool output, `pgup/pgdn` scrolls, `ctrl-c` quits.
+cupel            # TUI in the current directory
+cupel --help     # flags + built-in model list
+cupel --model accounts/fireworks/models/kimi-k2p7-code # for model selection
+cupel --model <id> --thinking off|minimal|low|medium|high|xhigh
+```
 
 Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory or next to the installed binary is loaded into the system prompt on every request. Skills are discovered under `skills/<name>/SKILL.md` in the same two locations; only their name/description enter the prompt, and the agent reads the full skill file on demand when a task matches.
 
@@ -59,6 +52,17 @@ Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,
 
 ## Implementation milestones
 
-- Persistencey is currently missing from the project. Sessions will not survive after exiting `cupel`.
-- Alternative to `grep` will be implemented in `cupel-index` using a combination of `fff` and `entire`'s code search.
-- Expand existing model providers (e.g., integrate local models via `ollama`).
+### What works today?
+- Multi-provider inference layer with build-in model catalog
+- CLI: `--model <id>`, `--thinking <mode>
+- Agent tools: read, grep, write, edit, bash
+- TUI based on `ratatui`
+- Context management: proactive compaction + reactive provider truncation
+- Auto-retry, tracing/observability, and system-prompt project context
+
+### What is missing?
+- Persistencey: sessions will not survive after exiting `cupel`.
+- `cupel-index` as an alternative to `grep`(combination of `fff` and `entire`'s code search)
+- No local models (e.g. `ollama` support)
+- No Windows support
+- No MCP integration
