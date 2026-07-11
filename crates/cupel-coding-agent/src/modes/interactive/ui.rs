@@ -162,7 +162,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         app.totals.cache_read,
         app.totals.cost,
     );
-    let right = "enter send · alt+enter newline · @ file · esc abort · pgup/pgdn scroll ";
+    let right = "enter send · alt+enter newline · @ file · / cmds · esc abort · pgup/pgdn scroll ";
 
     // Left-align the status, right-align the key hints; drop the hints when
     // the terminal is too narrow for both.
@@ -212,6 +212,7 @@ mod tests {
                 model_name: "Test Model".into(),
                 provider: "test".into(),
                 cwd: cwd.into(),
+                templates: Vec::new(),
             },
         )
     }
@@ -375,6 +376,48 @@ mod tests {
             !screen.contains("src/main.rs"),
             "popup should be gone:\n{screen}"
         );
+    }
+
+    #[test]
+    fn slash_help_produces_a_local_notice_without_prompting() {
+        let mut app = test_app();
+        type_text(&mut app, "/help");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        // Handled locally: no run started, a Notice cell lists the commands.
+        assert!(!app.is_running());
+        let notice = app.transcript.cells.iter().any(|c| {
+            matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage"))
+        });
+        assert!(notice, "expected /help notice");
+    }
+
+    #[test]
+    fn slash_quit_quits_and_slash_typing_opens_command_popup() {
+        let mut app = test_app();
+        type_text(&mut app, "/he");
+        assert!(app.autocomplete.is_open(), "command popup should open");
+        let screen = draw(&mut app, 80, 20);
+        assert!(screen.contains("help"), "popup missing:\n{screen}");
+        // Accept via Enter: inserts, does not submit.
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.input.text(), "/help ");
+
+        // Now /quit end-to-end.
+        let mut app = test_app();
+        type_text(&mut app, "/quit");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.should_quit);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! The `cupel` binary in `main.rs` wires everything into a minimal terminal
 //! chat loop.
 
+pub mod commands;
 pub mod modes;
 pub mod resources;
 pub mod search;

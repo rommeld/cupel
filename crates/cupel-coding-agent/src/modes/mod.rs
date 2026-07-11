@@ -9,9 +9,12 @@
 pub mod interactive;
 pub mod plain;
 
-/// Static session info the frontends display (header/footer).
+/// Static session info the frontends display (header/footer), plus the
+/// command resources both frontends dispatch against.
 pub struct SessionMeta {
     pub model_name: String,
     pub provider: String,
     pub cwd: String,
+    /// `/name`-invocable prompt templates (see [`crate::commands`]).
+    pub templates: Vec<crate::commands::PromptTemplate>,
 }

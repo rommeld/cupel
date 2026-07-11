@@ -82,16 +82,33 @@ pub fn file_token_at_cursor(text: &str, cursor: usize) -> Option<FileToken> {
     None
 }
 
+/// The `/command`-name token under construction, if any: the input must
+/// START with `/` and the cursor must still be inside the first
+/// whitespace-free run (once a space is typed, the command name is settled
+/// and the rest is arguments). Returns the fuzzy query after the `/`.
+#[must_use]
+pub fn command_token_at_cursor(text: &str, cursor: usize) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    if chars.first() != Some(&'/') || cursor == 0 {
+        return None;
+    }
+    let segment = &chars[1..cursor];
+    (!segment.iter().any(|c| c.is_whitespace())).then(|| segment.iter().collect())
+}
+
 // ---------------------------------------------------------------------------
 // File enumeration
 // ---------------------------------------------------------------------------
 
-/// One completable entry. `display` is the path relative to the project
-/// root; directories carry a trailing `/` so they read (and complete) as
-/// prefixes.
+/// One completable entry. `display` is the popup label; `value` is what
+/// completion actually inserts (for files they are the same relative path,
+/// for commands the label carries the description too). Directories carry
+/// a trailing `/` so they read (and complete) as prefixes.
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub display: String,
+    pub value: String,
     pub is_dir: bool,
 }
 
@@ -130,7 +147,11 @@ pub fn list_candidates(root: &Path, prefix: &str, cap: usize) -> Vec<Candidate> 
         if is_dir {
             display.push('/');
         }
-        out.push(Candidate { display, is_dir });
+        out.push(Candidate {
+            value: display.clone(),
+            display,
+            is_dir,
+        });
     }
     out
 }
@@ -151,7 +172,15 @@ pub struct Completion {
     pub is_dir: bool,
 }
 
+/// What a session is completing - decides token detection and insertion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionKind {
+    Files,
+    Commands,
+}
+
 struct Session {
+    kind: SessionKind,
     token: FileToken,
     /// The directory prefix the cached walk was rooted at.
     walked_prefix: String,
@@ -164,6 +193,9 @@ struct Session {
 /// Owned by the `App`; consulted from key handling and the render pass.
 pub struct Autocomplete {
     root: PathBuf,
+    /// `/command` candidates (built-ins + prompt templates), set once by
+    /// the frontend at startup.
+    commands: Vec<Candidate>,
     session: Option<Session>,
 }
 
@@ -172,8 +204,16 @@ impl Autocomplete {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
+            commands: Vec::new(),
             session: None,
         }
+    }
+
+    /// Provide the `/command` catalog (built-ins + prompt templates).
+    #[must_use]
+    pub fn with_commands(mut self, commands: Vec<Candidate>) -> Self {
+        self.commands = commands;
+        self
     }
 
     #[must_use]
@@ -212,9 +252,15 @@ impl Autocomplete {
     }
 
     /// Recompute from the current buffer state: opens a session when the
-    /// cursor sits in an `@`-token, re-filters while it does, closes when
-    /// it no longer does (e.g. backspacing past the `@`).
+    /// cursor sits in a `/command` or `@file` token, re-filters while it
+    /// does, closes when it no longer does (e.g. backspacing past the `@`).
     pub fn refresh(&mut self, text: &str, cursor: usize) {
+        // Command completion first: it only ever triggers at input start,
+        // so the two kinds can never both match.
+        if let Some(query) = command_token_at_cursor(text, cursor) {
+            self.refresh_commands(query);
+            return;
+        }
         let Some(token) = file_token_at_cursor(text, cursor) else {
             self.session = None;
             return;
@@ -235,6 +281,7 @@ impl Autocomplete {
         if needs_walk {
             let candidates = list_candidates(&self.root, &prefix, WALK_CAP);
             self.session = Some(Session {
+                kind: SessionKind::Files,
                 token: token.clone(),
                 walked_prefix: prefix,
                 candidates,
@@ -246,7 +293,7 @@ impl Autocomplete {
         let session = self.session.as_mut().expect("session ensured above");
         session.token = token;
         session.matches = fuzzy_filter(&session.token.query, &session.candidates, |candidate| {
-            &candidate.display
+            &candidate.value
         })
         .into_iter()
         .take(MAX_VISIBLE)
@@ -257,6 +304,41 @@ impl Autocomplete {
             .min(session.matches.len().saturating_sub(1));
     }
 
+    /// (Re)build a command session for the query after the `/`.
+    fn refresh_commands(&mut self, query: String) {
+        if self.commands.is_empty() {
+            self.session = None;
+            return;
+        }
+        let matches: Vec<Candidate> =
+            fuzzy_filter(&query, &self.commands, |candidate| &candidate.value)
+                .into_iter()
+                .take(MAX_VISIBLE)
+                .cloned()
+                .collect();
+        let selected = match &self.session {
+            Some(session) if session.kind == SessionKind::Commands => session.selected,
+            _ => 0,
+        };
+        self.session = Some(Session {
+            kind: SessionKind::Commands,
+            token: FileToken {
+                start: 0,
+                query,
+                quoted: false,
+            },
+            walked_prefix: String::new(),
+            candidates: Vec::new(),
+            matches,
+            selected: selected.min(MAX_VISIBLE.saturating_sub(1)),
+        });
+        if let Some(session) = &mut self.session {
+            session.selected = session
+                .selected
+                .min(session.matches.len().saturating_sub(1));
+        }
+    }
+
     /// Completion for the selected row. The session itself is closed (or
     /// kept, for directories) by the follow-up `refresh` after the caller
     /// applies the edit.
@@ -265,16 +347,27 @@ impl Autocomplete {
         let session = self.session.as_ref()?;
         let candidate = session.matches.get(session.selected)?;
 
+        // Commands replace the whole `/query` with `/name ` - the trailing
+        // space settles the name and moves typing on to the arguments.
+        if session.kind == SessionKind::Commands {
+            return Some(Completion {
+                start: 0,
+                end: cursor,
+                insert: format!("/{} ", candidate.value),
+                is_dir: false,
+            });
+        }
+
         // Quote when the path demands it or the token was opened quoted.
-        let needs_quotes = session.token.quoted || candidate.display.contains(' ');
+        let needs_quotes = session.token.quoted || candidate.value.contains(' ');
         let mut insert = if needs_quotes && !candidate.is_dir {
-            format!("@\"{}\"", candidate.display)
+            format!("@\"{}\"", candidate.value)
         } else if needs_quotes {
             // Directory in quote mode: leave the quote open so the session
             // keeps completing inside it.
-            format!("@\"{}", candidate.display)
+            format!("@\"{}", candidate.value)
         } else {
-            format!("@{}", candidate.display)
+            format!("@{}", candidate.value)
         };
         // A trailing space after a FILE lets typing resume naturally (pi
         // does the same); directories keep completing instead.
@@ -429,6 +522,59 @@ mod tests {
         assert!(ac.is_open(), "directory prefix keeps the session open");
         let (rows, _) = ac.visible().expect("rows");
         assert_eq!(rows[0].display, "src/main.rs");
+    }
+
+    // ---- command completion -----------------------------------------------
+
+    fn command_list() -> Vec<Candidate> {
+        ["help", "model", "thinking"]
+            .iter()
+            .map(|name| Candidate {
+                display: format!("{name}  - description"),
+                value: (*name).to_string(),
+                is_dir: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn command_token_only_at_input_start_before_whitespace() {
+        assert_eq!(command_token_at_cursor("/he", 3), Some("he".to_string()));
+        assert_eq!(command_token_at_cursor("/", 1), Some(String::new()));
+        // Once a space is typed, the name is settled - no more completion.
+        assert_eq!(command_token_at_cursor("/model gpt", 10), None);
+        // Not at input start: no trigger.
+        assert_eq!(command_token_at_cursor("a /he", 5), None);
+        // Cursor before the slash: no trigger.
+        assert_eq!(command_token_at_cursor("/he", 0), None);
+    }
+
+    #[test]
+    fn command_session_filters_and_accepts() {
+        let root = temp_tree("cmd");
+        let mut ac = Autocomplete::new(&root).with_commands(command_list());
+
+        ac.refresh("/th", 3);
+        assert!(ac.is_open());
+        let (rows, selected) = ac.visible().expect("rows");
+        assert_eq!(rows[selected].value, "thinking");
+
+        let completion = ac.accept(3).expect("completion");
+        assert_eq!(completion.start, 0);
+        assert_eq!(completion.end, 3);
+        assert_eq!(completion.insert, "/thinking ");
+        assert!(!completion.is_dir);
+    }
+
+    #[test]
+    fn slash_mid_text_still_file_completes() {
+        let root = temp_tree("slashfile");
+        let mut ac = Autocomplete::new(&root).with_commands(command_list());
+        // `@src/` contains a slash but is a FILE token, not a command.
+        ac.refresh("@src/", 5);
+        assert!(ac.is_open());
+        let (rows, _) = ac.visible().expect("rows");
+        assert_eq!(rows[0].value, "src/main.rs");
     }
 
     #[test]

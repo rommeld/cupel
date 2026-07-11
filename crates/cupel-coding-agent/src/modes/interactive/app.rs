@@ -13,9 +13,10 @@ use cupel_core::types::{
 };
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use super::autocomplete::Autocomplete;
+use super::autocomplete::{Autocomplete, Candidate};
 use super::input::InputState;
 use super::transcript::{Cell, ToolOutcome, Transcript};
+use crate::commands;
 use crate::modes::SessionMeta;
 
 /// Cumulative token/cost counters across the whole session.
@@ -50,7 +51,24 @@ pub struct App {
 impl App {
     #[must_use]
     pub fn new(agent: Agent, meta: SessionMeta) -> Self {
-        let autocomplete = Autocomplete::new(&meta.cwd);
+        // The /command autocomplete catalog: built-ins and prompt
+        // templates, each labeled with its description.
+        let mut command_candidates: Vec<Candidate> = commands::BUILTIN_COMMANDS
+            .iter()
+            .map(|c| Candidate {
+                display: format!("{}  - {}", c.name, c.description),
+                value: c.name.to_string(),
+                is_dir: false,
+            })
+            .collect();
+        for template in &meta.templates {
+            command_candidates.push(Candidate {
+                display: format!("{}  - {}", template.name, template.description),
+                value: template.name.clone(),
+                is_dir: false,
+            });
+        }
+        let autocomplete = Autocomplete::new(&meta.cwd).with_commands(command_candidates);
         Self {
             agent,
             meta,
@@ -231,13 +249,14 @@ impl App {
         self.scroll_from_bottom = usize::try_from(next.max(0)).unwrap_or(0).min(max);
     }
 
-    /// Enter: start a run when idle, queue a steering message when busy.
+    /// Enter: dispatch commands locally, expand templates, or send
+    /// the text as a prompt (steering when a run is active).
     fn submit(&mut self) {
         // Enter is consumed by the popup while open, so this is normally a
         // no-op - it exists so no code path can submit with a live session.
         self.autocomplete.close();
         let text = self.input.submit();
-        let trimmed = text.trim();
+        let trimmed = text.trim().to_string();
         if trimmed.is_empty() {
             return;
         }
@@ -246,16 +265,36 @@ impl App {
             return;
         }
 
+        // /command dispatch, pi's order: built-ins are UI-local and never
+        // reach the model; prompt templates expand into the prompt;
+        // anything else falls through as literal text (a typo becomes a
+        // question, not an error).
+        if let Some(rest) = trimmed.strip_prefix('/') {
+            if self.handle_builtin(rest) {
+                self.scroll_from_bottom = 0;
+                return;
+            }
+            let expanded = commands::expand_prompt_template(&trimmed, &self.meta.templates);
+            if let Some(expanded) = expanded {
+                self.send(&expanded);
+                return;
+            }
+        }
+        self.send(&trimmed);
+    }
+
+    /// Route a prompt to the agent: new run when idle, steering when busy.
+    fn send(&mut self, text: &str) {
         if self.is_running() {
             // The agent injects steering messages after the current turn;
             // the transcript gets a real User cell when that happens (via
             // MessageEnd), so this marker only bridges the wait.
-            self.agent.steer(AgentMessage::user_text(trimmed));
+            self.agent.steer(AgentMessage::user_text(text));
             self.transcript.cells.push(Cell::Queued {
-                text: trimmed.to_string(),
+                text: text.to_string(),
             });
         } else {
-            match self.agent.prompt_text(trimmed) {
+            match self.agent.prompt_text(text) {
                 Ok(events) => self.run_events = Some(events),
                 Err(err) => self.transcript.cells.push(Cell::Error {
                     text: err.to_string(),
@@ -264,6 +303,95 @@ impl App {
         }
         // New activity: snap back to following the output.
         self.scroll_from_bottom = 0;
+    }
+
+    fn notice(&mut self, text: impl Into<String>) {
+        self.transcript
+            .cells
+            .push(Cell::Notice { text: text.into() });
+    }
+
+    /// Handle a built-in `/command`. Returns false when the name isn't a
+    /// built-in (the caller then tries prompt templates).
+    fn handle_builtin(&mut self, rest: &str) -> bool {
+        let (name, args) = rest
+            .split_once(char::is_whitespace)
+            .map_or((rest, ""), |(n, a)| (n, a.trim()));
+
+        match name {
+            "help" => {
+                let mut lines = vec!["commands:".to_string()];
+                for c in commands::BUILTIN_COMMANDS {
+                    lines.push(format!("  /{}  - {}", c.name, c.description));
+                }
+                if !self.meta.templates.is_empty() {
+                    lines.push("prompt templates:".to_string());
+                    for t in &self.meta.templates {
+                        lines.push(format!("  /{}  - {}", t.name, t.description));
+                    }
+                }
+                self.notice(lines.join("\n"));
+            }
+            "usage" => {
+                self.notice(format!(
+                    "session totals: {} in / {} out / {} cached, ${:.4}",
+                    self.totals.input, self.totals.output, self.totals.cache_read, self.totals.cost
+                ));
+            }
+            "new" => {
+                if self.is_running() {
+                    self.notice("cannot clear while the agent is working (esc to abort first)");
+                } else {
+                    self.agent.reset();
+                    self.transcript.cells.clear();
+                    self.totals = Totals::default();
+                    self.notice("conversation cleared");
+                }
+            }
+            "model" => {
+                if args.is_empty() {
+                    let mut lines = vec!["available models (/model <id>):".to_string()];
+                    for m in cupel_core::catalog::builtin_models() {
+                        lines.push(format!("  {}  ({})", m.id, m.provider.as_str()));
+                    }
+                    self.notice(lines.join("\n"));
+                } else if let Some(model) = cupel_core::catalog::builtin_models()
+                    .into_iter()
+                    .find(|m| m.id == args)
+                {
+                    self.meta.model_name = model.name.clone();
+                    self.meta.provider = model.provider.as_str().to_string();
+                    self.agent.set_model(model);
+                    self.notice(format!(
+                        "model switched to {args} (takes effect next request)"
+                    ));
+                } else {
+                    self.notice(format!("unknown model: {args} (/model lists them)"));
+                }
+            }
+            "thinking" => {
+                let level = match args {
+                    "off" => Some(None),
+                    "minimal" => Some(Some(cupel_core::types::ThinkingLevel::Minimal)),
+                    "low" => Some(Some(cupel_core::types::ThinkingLevel::Low)),
+                    "medium" => Some(Some(cupel_core::types::ThinkingLevel::Medium)),
+                    "high" => Some(Some(cupel_core::types::ThinkingLevel::High)),
+                    "xhigh" => Some(Some(cupel_core::types::ThinkingLevel::XHigh)),
+                    _ => None,
+                };
+                match level {
+                    Some(level) => {
+                        self.agent.set_thinking_level(level);
+                        self.notice(format!("thinking level set to {args}"));
+                    }
+                    None => self
+                        .notice("usage: /thinking off|minimal|low|medium|high|xhigh".to_string()),
+                }
+            }
+            "quit" => self.should_quit = true,
+            _ => return false,
+        }
+        true
     }
 
     // -----------------------------------------------------------------------

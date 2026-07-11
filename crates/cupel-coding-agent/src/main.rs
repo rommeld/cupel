@@ -197,11 +197,12 @@ async fn run() -> Result<(), String> {
         Arc::new(WriteTool::new(&cwd)),
         Arc::new(GrepTool::new(&cwd, backend)),
     ];
-    // Project context (AGENTS.md/CLAUDE.md, eager) and skills (SKILL.md,
-    // lazy catalog) come from the binary's install dir and the project cwd.
+    // Project context (AGENTS.md/CLAUDE.md, eager) comes from the binary's
+    // install dir and the project cwd.
     let roots = cupel_coding_agent::resources::default_roots(&cwd);
     let context_files = cupel_coding_agent::resources::load_context_files(&roots);
-    let skills = cupel_coding_agent::resources::discover_skills(&roots);
+    // `/name`-invocable prompt templates from <root>/prompts/*.md.
+    let templates = cupel_coding_agent::commands::load_prompt_templates(&roots);
 
     // Name + one-line snippet per tool, shown in the system prompt (the full
     // descriptions travel in the tool schemas).
@@ -222,7 +223,6 @@ async fn run() -> Result<(), String> {
             ),
         ],
         &context_files,
-        &skills,
     );
 
     let mut options = AgentOptions::new(model.clone(), Arc::new(cupel_core::default_registry()));
@@ -238,6 +238,7 @@ async fn run() -> Result<(), String> {
         model_name: model.name.clone(),
         provider: model.provider.as_str().to_string(),
         cwd: cwd.display().to_string(),
+        templates,
     };
 
     // ---- Pick a frontend ------------------------------------------------------

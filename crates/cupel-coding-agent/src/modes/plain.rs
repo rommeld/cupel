@@ -37,7 +37,37 @@ pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
             break;
         }
 
-        let mut events = agent.prompt_text(input).map_err(|e| e.to_string())?;
+        // Slash commands: a minimal built-in set for plain mode (the TUI
+        // has the full one), plus prompt-template expansion. Unknown
+        // /commands pass through to the model as literal text.
+        let mut prompt = input.to_string();
+        if let Some(rest) = input.strip_prefix('/') {
+            match rest
+                .split_once(char::is_whitespace)
+                .map_or(rest, |(n, _)| n)
+            {
+                "quit" => break,
+                "help" => {
+                    for c in crate::commands::BUILTIN_COMMANDS {
+                        println!("  /{}  - {}", c.name, c.description);
+                    }
+                    for t in &meta.templates {
+                        println!("  /{}  - {}", t.name, t.description);
+                    }
+                    println!();
+                    continue;
+                }
+                _ => {
+                    if let Some(expanded) =
+                        crate::commands::expand_prompt_template(input, &meta.templates)
+                    {
+                        prompt = expanded;
+                    }
+                }
+            }
+        }
+
+        let mut events = agent.prompt_text(&prompt).map_err(|e| e.to_string())?;
 
         // Render the event stream. Text deltas print incrementally; thinking
         // is dimmed; tool calls appear as one-liners.

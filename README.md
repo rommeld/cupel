@@ -2,7 +2,7 @@
 
 A cupel is a small vessel for refining precious metal. This project borrows that idea: separate useful code context from repository noise, then feed the refined signal into fast local agent workflows.
 
-`cupel` is a lean Rust coding harness focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval.
+`cupel` is a lean Rust coding harness focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval. I build it on taking insights from my former favourit agent `pi` (a masterpiece).
 
 ## Crates definition
 
@@ -46,7 +46,9 @@ cupel --model accounts/fireworks/models/kimi-k2p7-code          # select model f
 cupel --model <id> --thinking off|minimal|low|medium|high|xhigh # define thinking mode
 ```
 
-Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory or next to the installed binary is loaded into the system prompt on every request. Skills are discovered under `skills/<name>/SKILL.md` in the same two locations; only their name/description enter the prompt, and the agent reads the full skill file on demand when a task matches.
+Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory or next to the binary) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. Typing `/` opens autocomplete.
+
+Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory or next to the installed binary is loaded into the system prompt on every request.
 
 Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,cupel_agent=info` (per-request tokens/cost/duration, turns, tool timings, retries, compaction) or `cupel_core=trace` to include request bodies. Logs go to stderr in `--plain` mode and to a temp file (path printed at startup) in the TUI.
 

@@ -62,6 +62,10 @@ impl PendingQueue {
         }
     }
 
+    fn clear(&mut self) {
+        self.messages.clear();
+    }
+
     fn drain(&mut self) -> Vec<AgentMessage> {
         match self.mode {
             QueueMode::All => self.messages.drain(..).collect(),
@@ -179,6 +183,40 @@ impl Agent {
             .lock()
             .expect("agent state lock poisoned")
             .clone()
+    }
+
+    /// Switch the model for FUTURE requests (an in-flight run keeps the
+    /// model it started with; the next run picks this up).
+    pub fn set_model(&self, model: Model) {
+        self.state.lock().expect("agent state lock poisoned").model = model;
+    }
+
+    /// Set the thinking level for future requests (`None` = off).
+    pub fn set_thinking_level(&self, level: Option<ThinkingLevel>) {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .thinking_level = level;
+    }
+
+    /// Clear the transcript and queued messages - a fresh conversation with
+    /// the same configuration. Only meaningful while idle; callers should
+    /// check [`Agent::is_running`]... which doesn't exist on Agent itself -
+    /// frontends track the active run - so this simply clears state.
+    pub fn reset(&self) {
+        {
+            let mut state = self.state.lock().expect("agent state lock poisoned");
+            state.messages.clear();
+            state.error_message = None;
+        }
+        self.steering
+            .lock()
+            .expect("steering queue lock poisoned")
+            .clear();
+        self.follow_up
+            .lock()
+            .expect("follow-up queue lock poisoned")
+            .clear();
     }
 
     /// Queue a message to be injected after the current assistant turn.
