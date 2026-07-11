@@ -38,27 +38,38 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+/// What `--resume` asked for: the newest session of this project, or one
+/// named by id.
+enum ResumeTarget {
+    Latest,
+    Id(String),
+}
+
 struct CliArgs {
     model: Option<String>,
     thinking: Option<ThinkingLevel>,
     plain: bool,
+    resume: Option<ResumeTarget>,
 }
 
-fn parse_args() -> Result<CliArgs, String> {
-    let mut args = CliArgs {
+/// Parameterized on the iterator (instead of reading `std::env::args`
+/// internally) so tests can drive it without process-global state.
+fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
+    let mut parsed = CliArgs {
         model: None,
         thinking: None,
         plain: false,
+        resume: None,
     };
-    let mut iter = std::env::args().skip(1);
+    let mut iter = args.peekable();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--model" | "-m" => {
-                args.model = Some(iter.next().ok_or("--model requires a value")?);
+                parsed.model = Some(iter.next().ok_or("--model requires a value")?);
             }
             "--thinking" | "-t" => {
                 let value = iter.next().ok_or("--thinking requires a value")?;
-                args.thinking = match value.as_str() {
+                parsed.thinking = match value.as_str() {
                     "off" => None,
                     "minimal" => Some(ThinkingLevel::Minimal),
                     "low" => Some(ThinkingLevel::Low),
@@ -68,10 +79,20 @@ fn parse_args() -> Result<CliArgs, String> {
                     other => return Err(format!("unknown thinking level: {other}")),
                 };
             }
-            "--plain" => args.plain = true,
+            "--plain" => parsed.plain = true,
+            // The id is optional: a bare `--resume` (next arg missing or
+            // another flag) means "the newest session of this project".
+            "--resume" | "-r" => {
+                parsed.resume = match iter.peek() {
+                    Some(next) if !next.starts_with('-') => {
+                        Some(ResumeTarget::Id(iter.next().expect("peeked")))
+                    }
+                    _ => Some(ResumeTarget::Latest),
+                };
+            }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh] [--plain]\n\nbuilt-in models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh] [--resume [id]] [--plain]\n\nbuilt-in models:\n",
                 );
                 for model in cupel_core::catalog::builtin_models() {
                     help.push_str(&format!("  {} ({})\n", model.id, model.provider.as_str()));
@@ -87,7 +108,7 @@ fn parse_args() -> Result<CliArgs, String> {
             other => return Err(format!("unknown argument: {other}")),
         }
     }
-    Ok(args)
+    Ok(parsed)
 }
 
 /// Pick a model + API key from CLI args and environment.
@@ -177,7 +198,7 @@ fn init_tracing(interactive: bool) -> Option<std::path::PathBuf> {
 }
 
 async fn run() -> Result<(), String> {
-    let args = parse_args()?;
+    let args = parse_args(std::env::args().skip(1))?;
     let use_plain = args.plain || !std::io::stdout().is_terminal();
     if let Some(log_path) = init_tracing(!use_plain) {
         // Announced BEFORE the TUI takes the screen; visible in scrollback.
@@ -229,13 +250,41 @@ async fn run() -> Result<(), String> {
         &context_files,
     );
 
+    // ---- Session identity: fresh or resumed ---------------------------------
+    // Resume keeps the ORIGINAL session id, so the recorder appends to the
+    // same transcript file and external consumers see one continuous
+    // session. The seeded messages flow into AgentOptions.messages below.
+    let home = cupel_coding_agent::resources::config_home();
+    let (session_id, seeded_messages) = match &args.resume {
+        None => (format!("cupel-{}", cupel_core::types::now_ms()), Vec::new()),
+        Some(target) => {
+            let path = match target {
+                ResumeTarget::Id(id) => {
+                    cupel_coding_agent::session::sessions_dir(home.as_deref(), &cwd)
+                        .map(|dir| dir.join(format!("{id}.jsonl")))
+                        .filter(|p| p.exists())
+                        .ok_or_else(|| format!("no session named {id} for this project"))?
+                }
+                ResumeTarget::Latest => {
+                    cupel_coding_agent::session::find_latest(home.as_deref(), &cwd)
+                        .ok_or("no previous session to resume for this project")?
+                }
+            };
+            let (header, messages) = cupel_coding_agent::session::load_transcript(&path)?;
+            (header.session_id, messages)
+        }
+    };
+    let recorder =
+        cupel_coding_agent::session::SessionRecorder::new(home, &cwd, &session_id, &model.id);
+
     let mut options = AgentOptions::new(model.clone(), Arc::new(cupel_core::default_registry()));
     options.system_prompt = system_prompt;
     options.tools = tools;
     options.api_key = api_key;
     options.thinking_level = args.thinking;
     options.tool_execution = ToolExecutionMode::Parallel;
-    options.session_id = Some(format!("cupel-{}", cupel_core::types::now_ms()));
+    options.session_id = Some(session_id);
+    options.messages = seeded_messages;
     let agent = Agent::new(options);
 
     let meta = SessionMeta {
@@ -249,10 +298,44 @@ async fn run() -> Result<(), String> {
     // The TUI takes over the whole screen; that only makes sense on a real
     // terminal. Piped output (cupel < script, CI logs) gets plain mode.
     if use_plain {
-        modes::plain::run(agent, &meta).await
+        modes::plain::run(agent, &meta, recorder).await
     } else {
-        modes::interactive::run(agent, meta)
+        modes::interactive::run(agent, meta, recorder)
             .await
             .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<CliArgs, String> {
+        parse_args(args.iter().map(ToString::to_string))
+    }
+
+    #[test]
+    fn resume_flag_with_and_without_an_id() {
+        assert!(parse(&[]).unwrap().resume.is_none());
+        // Bare --resume = newest session of this project.
+        assert!(matches!(
+            parse(&["--resume"]).unwrap().resume,
+            Some(ResumeTarget::Latest)
+        ));
+        // With an id.
+        match parse(&["--resume", "cupel-123"]).unwrap().resume {
+            Some(ResumeTarget::Id(id)) => assert_eq!(id, "cupel-123"),
+            other => panic!("expected Id, got {:?}", other.is_some()),
+        }
+        // Followed by another flag: the flag is NOT eaten as an id.
+        let args = parse(&["--resume", "--plain"]).unwrap();
+        assert!(matches!(args.resume, Some(ResumeTarget::Latest)));
+        assert!(args.plain);
+    }
+
+    #[test]
+    fn unknown_arguments_still_error() {
+        assert!(parse(&["--bogus"]).is_err());
+        assert!(parse(&["--model"]).is_err(), "--model needs a value");
     }
 }

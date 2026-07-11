@@ -8,15 +8,17 @@ A cupel is a small vessel for refining precious metal. This project borrows that
 
 ### 1. `cupel-core`
 
-The inference crate builds the foundation.
+The inference crate builds the foundation. It contains a provider-neutral chat-completion abstraction, a built-in model catalog (Anthropic, OpenAI, AWS Bedrock, Fireworks), token/cost tracking, request/response tracing, and retry/backoff logic. Other crates depend on it for all LLM calls.
 
 ### 2. `cupel-agent`
 
-Includes the basic agent definition and defines an agent loop primitive.
+Includes the basic agent definition and defines an agent loop primitive. It wires a system prompt, message history, and a set of tool definitions into a loop that repeatedly calls the inference layer, parses model tool calls, executes them, and feeds the results back to the model. It also provides context compaction hooks and the `AgentHooks` extension point for intercepting or overriding tool calls mid-flight.
 
 ### 3. `cupel-coding-agent`
 
 Use the `ripgrep` crate as the underlying for the **grep tool**. The crate also includes a simple `cuple CLI` to call functionality from the terminal. `ratatui` is the TUI crate of choice.
+
+It implements the concrete coding-agent experience: a terminal UI, `@file-path` fuzzy file referencing, slash commands (`/new`, `/model`, `/thinking`, `/usage`, `/quit`), prompt templates loaded from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools (`read`, `grep`, `write`, `edit`, `bash`).
 
 ### 4. `cupel-index`
 
@@ -55,11 +57,17 @@ cupel                                                           # runs agent in 
 cupel --help                                                    # built-in model list
 cupel --model accounts/fireworks/models/kimi-k2p7-code          # select model from list
 cupel --model <id> --thinking off|minimal|low|medium|high|xhigh # define thinking mode
+cupel --resume                                                  # continue this project's newest session
+cupel --resume cupel-1720000000000                              # continue a specific session by id
 ```
 
 Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision the most specific location wins: working directory > `.cupel/` > `~/.cupel`. Typing `/` opens autocomplete.
 
 Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory, in its `.cupel/` subdirectory (handy for keeping cupel files out of the repository root), or in `~/.cupel` is loaded into the system prompt on every request; all found files are included, most specific last. `~/.cupel` is cupel's home (override with `CUPEL_HOME`): the installer puts the binary in `~/.cupel/bin`, global prompt templates in `~/.cupel/prompts/`, and the future memory feature will live in `~/.cupel/memory/`.
+
+Sessions & resume: every conversation is persisted as a JSONL transcript in `~/.cupel/sessions/<project-slug>/<session-id>.jsonl` (created on the first prompt, never on a bare launch; line 1 is a header object, every following line one message). `cupel --resume` reloads this project's newest session - full history back in context and on screen - and keeps appending to the same file; `cupel --resume <session-id>` picks a specific one. Compaction never rewrites the transcript, so it is always the complete conversation. Don't resume the same session from two terminals at once - appends would interleave.
+
+Hooks: drop an executable into `~/.cupel/hooks/<event>/` (global) or `<project>/.cupel/hooks/<event>/` (per project) and cupel runs it on that event with a JSON payload on stdin: `{"event", "sessionId", "sessionRef" (transcript path), "cwd", "timestamp", "prompt"?}`. Events: `session-start`, `user-prompt-submit`, `stop` (run finished), `session-end`. Hooks observe, never veto: failures and timeouts (60s per hook) are logged and ignored. This file-based contract is what external integrations (e.g. the entire CLI) install into.
 
 Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,cupel_agent=info` (per-request tokens/cost/duration, turns, tool timings, retries, compaction) or `cupel_core=trace` to include request bodies. Logs go to stderr in `--plain` mode and to a temp file (path printed at startup) in the TUI.
 
@@ -82,6 +90,5 @@ Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,
 - Local models (e.g. `ollama` support)
 - Windows support
 - MCP integration
-- `AgentHooks`: hooks invoked while the agent is doing work, letting developers inject themselves into the agent's workflow (e.g., vetoing a tool call or overriding its result) rather than only reviewing output after the fact.
 - `AgentMemory`: alongside compaction, a mechanism for an agent to retain and recall memory within a single session or across multiple sessions.
 - `websearch`: no built-in web search tool for retrieving live information beyond the local repository context.

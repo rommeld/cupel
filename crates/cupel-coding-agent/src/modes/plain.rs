@@ -12,13 +12,27 @@ use cupel_agent::{Agent, AgentEvent, AgentMessage};
 use cupel_core::types::{AssistantMessageEvent, Message, ToolResultContent};
 
 use crate::modes::SessionMeta;
+use crate::session::SessionRecorder;
 
-pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
+pub async fn run(
+    mut agent: Agent,
+    meta: &SessionMeta,
+    mut recorder: SessionRecorder,
+) -> Result<(), String> {
     println!("cupel - {} ({})", meta.model_name, meta.provider);
     println!(
         "tools: read, bash, edit, write, grep | cwd: {} | 'exit' to quit\n",
         meta.cwd
     );
+    // Non-empty history at startup = a resumed session (seeded via
+    // AgentOptions.messages in main).
+    let restored = agent.state().messages.len();
+    if restored > 0 {
+        println!(
+            "resumed session {} ({restored} messages)\n",
+            recorder.session_id()
+        );
+    }
 
     let stdin = std::io::stdin();
     loop {
@@ -71,6 +85,10 @@ pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
         // directory (idempotent, never fails). Deferred to here - not
         // startup - so `cupel --plain < /dev/null` etc. leave no trace.
         crate::resources::ensure_project_dot_cupel(std::path::Path::new(&meta.cwd));
+        // Transcript + hooks: creates the transcript lazily, settles any
+        // pending stop hook, fires session-start (once) and
+        // user-prompt-submit before the run begins.
+        recorder.before_prompt(&prompt).await;
 
         let mut events = agent.prompt_text(&prompt).map_err(|e| e.to_string())?;
 
@@ -79,6 +97,10 @@ pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
         let mut in_thinking = false;
         while let Some(event) = events.next().await {
             match event {
+                // Every finalized message (user, assistant, tool result)
+                // rides into the transcript; display still renders from the
+                // streaming deltas below.
+                AgentEvent::MessageEnd { message } => recorder.record(&message),
                 AgentEvent::MessageUpdate { event } => match event {
                     AssistantMessageEvent::TextDelta { delta, .. } => {
                         if in_thinking {
@@ -177,7 +199,12 @@ pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
                         delay_ms as f64 / 1000.0
                     );
                 }
-                AgentEvent::AgentEnd { .. } => break,
+                AgentEvent::AgentEnd { .. } => {
+                    // Fire the `stop` hook without holding up the prompt
+                    // loop; the next before_prompt settles it.
+                    recorder.on_agent_end();
+                    break;
+                }
                 _ => {}
             }
         }
@@ -185,5 +212,7 @@ pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
         println!();
     }
 
+    // Normal exit (EOF, `exit`, `/quit`): announce session-end to hooks.
+    recorder.end_session().await;
     Ok(())
 }

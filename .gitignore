@@ -27,7 +27,8 @@
 
 !clippy.toml
 
-!AGENTS.md
+!/.cupel
+!/.cupel/AGENTS.md
 
 !CHANGELOG.md
 !CONTRIBUTION.md

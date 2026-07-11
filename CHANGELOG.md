@@ -7,6 +7,24 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
+<<<<<<< HEAD
+## [Unreleased]
+
+- persist every session as a JSONL transcript under
+  `~/.cupel/sessions/<project-slug>/` (created on first prompt, crash-safe
+  per-message flushing)
+- add `--resume [id]`: reload a session's transcript, replay it in the TUI,
+  and continue in the same transcript file
+- add lifecycle hooks: executables in `~/.cupel/hooks/<event>/` or
+  `.cupel/hooks/<event>/` run on `session-start`, `user-prompt-submit`,
+  `stop`, and `session-end` with a JSON payload on stdin
+
+=======
+>>>>>>> d5e914b (changelog: v0.1.10-beta)
+## [v0.1.10-beta] - 2026-07-12
+
+- fix CI break while creating changelog
+
 ## [v0.1.8-beta] - 2026-07-11
 
 - cupel now adds .cupel to root to keep project clean

@@ -31,7 +31,11 @@ use crate::modes::SessionMeta;
 /// Run the interactive session until the user quits.
 ///
 /// Errors are terminal I/O failures; agent failures surface inside the UI.
-pub async fn run(agent: Agent, meta: SessionMeta) -> std::io::Result<()> {
+pub async fn run(
+    agent: Agent,
+    meta: SessionMeta,
+    recorder: crate::session::SessionRecorder,
+) -> std::io::Result<()> {
     // `ratatui::init` enters raw mode + the alternate screen and installs a
     // panic hook that restores the terminal - without that, a panic would
     // leave the user's shell in raw mode (no echo, no line editing).
@@ -47,7 +51,7 @@ pub async fn run(agent: Agent, meta: SessionMeta) -> std::io::Result<()> {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
         ratatui_hook(info);
     }));
-    let result = event_loop(&mut terminal, agent, meta).await;
+    let result = event_loop(&mut terminal, agent, meta, recorder).await;
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
@@ -76,8 +80,9 @@ async fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     agent: Agent,
     meta: SessionMeta,
+    recorder: crate::session::SessionRecorder,
 ) -> std::io::Result<()> {
-    let mut app = app::App::new(agent, meta);
+    let mut app = app::App::new(agent, meta, recorder);
     let mut terminal_events = spawn_input_thread();
 
     loop {
@@ -97,6 +102,14 @@ async fn event_loop(
             }
         }
 
+        // A prompt accepted by the (synchronous) key handler starts here:
+        // the prompt-path hooks are awaited first, so a pending `stop` hook
+        // from the previous run is guaranteed to have finished.
+        if let Some(prompt) = app.pending_prompt.take() {
+            app.recorder.before_prompt(&prompt).await;
+            app.start_run(&prompt);
+        }
+
         if app.should_quit {
             // Don't leave a run mid-flight: abort and let it settle so the
             // terminal restore doesn't race provider output.
@@ -107,5 +120,7 @@ async fn event_loop(
             break;
         }
     }
+    // Normal exit: drain the hook chain and announce session-end.
+    app.recorder.end_session().await;
     Ok(())
 }

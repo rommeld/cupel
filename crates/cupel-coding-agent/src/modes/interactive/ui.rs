@@ -275,6 +275,13 @@ mod tests {
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let agent = Agent::new(AgentOptions::new(model, registry));
+        // home: None disables persistence + hooks - tests touch no disk.
+        let recorder = crate::session::SessionRecorder::new(
+            None,
+            std::path::Path::new(cwd),
+            "cupel-test",
+            "test-model",
+        );
         App::new(
             agent,
             SessionMeta {
@@ -283,6 +290,7 @@ mod tests {
                 cwd: cwd.into(),
                 templates: Vec::new(),
             },
+            recorder,
         )
     }
 
@@ -533,6 +541,84 @@ mod tests {
         assert!(
             !screen.contains("line0"),
             "scrolled-out line must be hidden:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn resumed_history_replays_into_transcript_cells() {
+        use cupel_agent::AgentMessage;
+        use cupel_core::types::{
+            Api, AssistantContent, AssistantMessage as CoreAssistant, Message, StopReason,
+            TextContent, ToolCall, ToolResultMessage, Usage, now_ms,
+        };
+
+        // Seed an Agent the way --resume does, then build the App around it.
+        let model = cupel_core::catalog::builtin_models().remove(0);
+        let registry = Arc::new(cupel_core::provider::Registry::new());
+        let assistant = CoreAssistant {
+            content: vec![
+                AssistantContent::Text(TextContent::plain("the answer")),
+                AssistantContent::ToolCall(ToolCall {
+                    id: "call_1".into(),
+                    name: "grep".into(),
+                    arguments: serde_json::json!({"pattern": "bug"}),
+                    thought_signature: None,
+                }),
+            ],
+            api: Api::from("mock"),
+            provider: cupel_core::types::Provider::from("mock"),
+            model: "mock".into(),
+            response_model: None,
+            response_id: None,
+            usage: Usage::default(),
+            stop_reason: StopReason::Stop,
+            error_message: None,
+            timestamp: now_ms(),
+        };
+        let tool_result = ToolResultMessage {
+            tool_call_id: "call_1".into(),
+            tool_name: "grep".into(),
+            content: vec![cupel_core::types::ToolResultContent::Text(
+                TextContent::plain("src/main.rs:1: bug"),
+            )],
+            details: None,
+            is_error: false,
+            timestamp: now_ms(),
+        };
+        let mut options = AgentOptions::new(model, registry);
+        options.messages = vec![
+            AgentMessage::user_text("old question"),
+            AgentMessage::Llm(Message::Assistant(assistant)),
+            AgentMessage::Llm(Message::ToolResult(tool_result)),
+        ];
+        let agent = Agent::new(options);
+        let recorder = crate::session::SessionRecorder::new(
+            None,
+            std::path::Path::new("/tmp"),
+            "cupel-resumed",
+            "test-model",
+        );
+        let mut app = App::new(
+            agent,
+            SessionMeta {
+                model_name: "Test Model".into(),
+                provider: "test".into(),
+                cwd: "/tmp".into(),
+                templates: Vec::new(),
+            },
+            recorder,
+        );
+
+        let screen = draw(&mut app, 80, 24);
+        assert!(
+            screen.contains("resumed session cupel-resumed (3 messages)"),
+            "resume notice missing:\n{screen}"
+        );
+        assert!(screen.contains("old question"), "user cell:\n{screen}");
+        assert!(screen.contains("the answer"), "assistant cell:\n{screen}");
+        assert!(
+            screen.contains("src/main.rs:1: bug"),
+            "tool result attached:\n{screen}"
         );
     }
 

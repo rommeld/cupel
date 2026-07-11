@@ -9,7 +9,8 @@ use futures_util::StreamExt as _;
 
 use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
 use cupel_core::types::{
-    AssistantMessageEvent, Message, StopReason, ToolResultContent, UserContentBody,
+    AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
+    UserContentBody,
 };
 use ratatui::crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
@@ -20,6 +21,7 @@ use super::input::InputState;
 use super::transcript::{Cell, ToolOutcome, Transcript};
 use crate::commands;
 use crate::modes::SessionMeta;
+use crate::session::SessionRecorder;
 
 /// Cumulative token/cost counters across the whole session.
 #[derive(Default)]
@@ -48,11 +50,17 @@ pub struct App {
     pub last_transcript_height: u16,
     pub last_total_lines: usize,
     pub should_quit: bool,
+    /// Transcript writer + lifecycle-hook dispatcher for this session.
+    pub recorder: SessionRecorder,
+    /// A prompt accepted by `send()` but not yet started. The async event
+    /// loop picks it up and awaits the prompt-path hooks first - key
+    /// handling stays fully synchronous (and so do its tests).
+    pub pending_prompt: Option<String>,
 }
 
 impl App {
     #[must_use]
-    pub fn new(agent: Agent, meta: SessionMeta) -> Self {
+    pub fn new(agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
         // The /command autocomplete catalog: built-ins and prompt
         // templates, each labeled with its description.
         let mut command_candidates: Vec<Candidate> = commands::BUILTIN_COMMANDS
@@ -71,7 +79,10 @@ impl App {
             });
         }
         let autocomplete = Autocomplete::new(&meta.cwd).with_commands(command_candidates);
-        Self {
+        // Restored history (a --resume session) exists before the App does;
+        // snapshot it so the transcript can replay it as cells.
+        let history = agent.state().messages;
+        let mut app = Self {
             agent,
             meta,
             transcript: Transcript::default(),
@@ -83,6 +94,102 @@ impl App {
             last_transcript_height: 0,
             last_total_lines: 0,
             should_quit: false,
+            recorder,
+            pending_prompt: None,
+        };
+        app.replay_history(&history);
+        app
+    }
+
+    /// Rebuild transcript cells from restored history so a resumed session
+    /// looks like it never ended. Mirrors the live `MessageEnd` /
+    /// `ToolExecutionEnd` handling in `on_agent_event`, but reads finalized
+    /// messages instead of streaming events.
+    fn replay_history(&mut self, messages: &[AgentMessage]) {
+        if messages.is_empty() {
+            return;
+        }
+        self.transcript.cells.push(Cell::Notice {
+            text: format!(
+                "resumed session {} ({} messages)",
+                self.recorder.session_id(),
+                messages.len()
+            ),
+        });
+        for message in messages {
+            match message {
+                AgentMessage::Llm(Message::User(user)) => {
+                    let text = match &user.content {
+                        UserContentBody::Text(text) => text.clone(),
+                        UserContentBody::Blocks(_) => "(rich message)".to_string(),
+                    };
+                    self.transcript.cells.push(Cell::User { text });
+                }
+                AgentMessage::Llm(Message::Assistant(assistant)) => {
+                    for content in &assistant.content {
+                        let cell = match content {
+                            AssistantContent::Thinking(t) => Cell::Thinking {
+                                text: t.thinking.clone(),
+                            },
+                            AssistantContent::Text(t) => Cell::Assistant {
+                                text: t.text.clone(),
+                            },
+                            AssistantContent::ToolCall(call) => Cell::Tool {
+                                id: call.id.clone(),
+                                name: call.name.clone(),
+                                args: compact(&call.arguments.to_string(), 200),
+                                result: None,
+                            },
+                        };
+                        self.transcript.cells.push(cell);
+                    }
+                    // Same error/usage bookkeeping as the live path, so
+                    // /usage stays truthful across a resume.
+                    if matches!(
+                        assistant.stop_reason,
+                        StopReason::Error | StopReason::Aborted
+                    ) {
+                        self.transcript.cells.push(Cell::Error {
+                            text: assistant
+                                .error_message
+                                .clone()
+                                .unwrap_or_else(|| "unknown error".to_string()),
+                        });
+                    } else {
+                        let usage = &assistant.usage;
+                        self.totals.input += usage.input;
+                        self.totals.output += usage.output;
+                        self.totals.cache_read += usage.cache_read;
+                        self.totals.cost += usage.cost.total;
+                        self.transcript.cells.push(Cell::Usage {
+                            text: format!(
+                                "[{} in / {} out / {} cached, ${:.4}]",
+                                usage.input, usage.output, usage.cache_read, usage.cost.total
+                            ),
+                        });
+                    }
+                }
+                AgentMessage::Llm(Message::ToolResult(result)) => {
+                    let text: String = result
+                        .content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ToolResultContent::Text(t) => Some(t.text.as_str()),
+                            ToolResultContent::Image(_) => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.transcript.attach_tool_result(
+                        &result.tool_call_id,
+                        ToolOutcome {
+                            text,
+                            is_error: result.is_error,
+                        },
+                    );
+                }
+                // Custom messages are internal bookkeeping, not display.
+                AgentMessage::Custom { .. } => {}
+            }
         }
     }
 
@@ -307,19 +414,30 @@ impl App {
             // the transcript gets a real User cell when that happens (via
             // MessageEnd), so this marker only bridges the wait.
             self.agent.steer(AgentMessage::user_text(text));
+            self.recorder.on_steer(text); // hook fires in the background
             self.transcript.cells.push(Cell::Queued {
                 text: text.to_string(),
             });
         } else {
-            match self.agent.prompt_text(text) {
-                Ok(events) => self.run_events = Some(events),
-                Err(err) => self.transcript.cells.push(Cell::Error {
-                    text: err.to_string(),
-                }),
-            }
+            // Not started here: the event loop takes it via
+            // `take_pending_prompt`, awaits the prompt-path hooks
+            // (session-start / user-prompt-submit, plus settling a pending
+            // stop hook), THEN calls `start_run`. Keeping this method sync
+            // keeps every key handler - and their tests - sync.
+            self.pending_prompt = Some(text.to_string());
         }
         // New activity: snap back to following the output.
         self.scroll_from_bottom = 0;
+    }
+
+    /// Start the agent run for a prompt (the async half of `send`).
+    pub fn start_run(&mut self, text: &str) {
+        match self.agent.prompt_text(text) {
+            Ok(events) => self.run_events = Some(events),
+            Err(err) => self.transcript.cells.push(Cell::Error {
+                text: err.to_string(),
+            }),
+        }
     }
 
     fn notice(&mut self, text: impl Into<String>) {
@@ -453,40 +571,44 @@ impl App {
 
             // User messages (initial prompt and drained steering messages)
             // come back to us as events - the loop is the source of truth.
-            AgentEvent::MessageEnd { message } => match message {
-                AgentMessage::Llm(Message::User(user)) => {
-                    let text = match user.content {
-                        UserContentBody::Text(text) => text,
-                        UserContentBody::Blocks(_) => "(rich message)".to_string(),
-                    };
-                    self.transcript.cells.push(Cell::User { text });
-                }
-                AgentMessage::Llm(Message::Assistant(assistant)) => {
-                    if matches!(
-                        assistant.stop_reason,
-                        StopReason::Error | StopReason::Aborted
-                    ) {
-                        self.transcript.cells.push(Cell::Error {
-                            text: assistant
-                                .error_message
-                                .unwrap_or_else(|| "unknown error".to_string()),
-                        });
-                    } else {
-                        let usage = &assistant.usage;
-                        self.totals.input += usage.input;
-                        self.totals.output += usage.output;
-                        self.totals.cache_read += usage.cache_read;
-                        self.totals.cost += usage.cost.total;
-                        self.transcript.cells.push(Cell::Usage {
-                            text: format!(
-                                "[{} in / {} out / {} cached, ${:.4}]",
-                                usage.input, usage.output, usage.cache_read, usage.cost.total
-                            ),
-                        });
+            AgentEvent::MessageEnd { message } => {
+                // Every finalized message rides into the transcript file.
+                self.recorder.record(&message);
+                match message {
+                    AgentMessage::Llm(Message::User(user)) => {
+                        let text = match user.content {
+                            UserContentBody::Text(text) => text,
+                            UserContentBody::Blocks(_) => "(rich message)".to_string(),
+                        };
+                        self.transcript.cells.push(Cell::User { text });
                     }
+                    AgentMessage::Llm(Message::Assistant(assistant)) => {
+                        if matches!(
+                            assistant.stop_reason,
+                            StopReason::Error | StopReason::Aborted
+                        ) {
+                            self.transcript.cells.push(Cell::Error {
+                                text: assistant
+                                    .error_message
+                                    .unwrap_or_else(|| "unknown error".to_string()),
+                            });
+                        } else {
+                            let usage = &assistant.usage;
+                            self.totals.input += usage.input;
+                            self.totals.output += usage.output;
+                            self.totals.cache_read += usage.cache_read;
+                            self.totals.cost += usage.cost.total;
+                            self.transcript.cells.push(Cell::Usage {
+                                text: format!(
+                                    "[{} in / {} out / {} cached, ${:.4}]",
+                                    usage.input, usage.output, usage.cache_read, usage.cost.total
+                                ),
+                            });
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
 
             AgentEvent::ToolExecutionEnd {
                 tool_call_id,
@@ -557,6 +679,9 @@ impl App {
 
     async fn finish_run(&mut self) {
         self.run_events = None;
+        // Fire the `stop` hook without blocking the UI; the next prompt's
+        // before_prompt (or session end) settles it.
+        self.recorder.on_agent_end();
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
     }

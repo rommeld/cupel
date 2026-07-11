@@ -95,6 +95,12 @@ pub struct AgentOptions {
     pub compaction: crate::compaction::CompactionConfig,
     pub steering_mode: QueueMode,
     pub follow_up_mode: QueueMode,
+    /// Conversation history to start from - the RESUME seeding path. Restored
+    /// messages are the full, uncompacted transcript (persisted history is
+    /// never rewritten by compaction, which only mutates each run's private
+    /// context snapshot); the loop simply re-compacts when the seeded
+    /// history pushes the next request over the threshold.
+    pub messages: Vec<AgentMessage>,
 }
 
 impl AgentOptions {
@@ -117,6 +123,7 @@ impl AgentOptions {
             compaction: crate::compaction::CompactionConfig::default(),
             steering_mode: QueueMode::default(),
             follow_up_mode: QueueMode::default(),
+            messages: Vec::new(),
         }
     }
 }
@@ -155,7 +162,7 @@ impl Agent {
                 system_prompt: options.system_prompt,
                 model: options.model,
                 thinking_level: options.thinking_level,
-                messages: Vec::new(),
+                messages: options.messages,
                 is_streaming: false,
                 pending_tool_calls: HashSet::new(),
                 error_message: None,

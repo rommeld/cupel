@@ -8,8 +8,10 @@
 //! They come from three source roots, searched in order:
 //! 1. the cupel home (`~/.cupel`, override with `CUPEL_HOME`) - the cargo
 //!    layout: the same directory also holds `bin/cupel` (the installed
-//!    binary), `prompts/` (global `/command` templates), and the reserved
-//!    `memory/` for the future memory feature,
+//!    binary), `prompts/` (global `/command` templates), `sessions/`
+//!    (JSONL transcripts, see `session.rs`), `hooks/` (lifecycle hook
+//!    scripts, see `hooks.rs`), and the reserved `memory/` for the future
+//!    memory feature,
 //! 2. the project's `.cupel/` directory (`<cwd>/.cupel`) - for keeping
 //!    cupel-specific files out of the repository root,
 //! 3. the project working directory itself (most specific, wins by coming
