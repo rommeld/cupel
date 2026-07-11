@@ -57,9 +57,9 @@ cupel --model accounts/fireworks/models/kimi-k2p7-code          # select model f
 cupel --model <id> --thinking off|minimal|low|medium|high|xhigh # define thinking mode
 ```
 
-Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. Typing `/` opens autocomplete.
+Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision the most specific location wins: working directory > `.cupel/` > `~/.cupel`. Typing `/` opens autocomplete.
 
-Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory or in `~/.cupel` is loaded into the system prompt on every request. `~/.cupel` is cupel's home (override with `CUPEL_HOME`): the installer puts the binary in `~/.cupel/bin`, global prompt templates in `~/.cupel/prompts/`, and the future memory feature will live in `~/.cupel/memory/`.
+Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory, in its `.cupel/` subdirectory (handy for keeping cupel files out of the repository root), or in `~/.cupel` is loaded into the system prompt on every request; all found files are included, most specific last. `~/.cupel` is cupel's home (override with `CUPEL_HOME`): the installer puts the binary in `~/.cupel/bin`, global prompt templates in `~/.cupel/prompts/`, and the future memory feature will live in `~/.cupel/memory/`.
 
 Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,cupel_agent=info` (per-request tokens/cost/duration, turns, tool timings, retries, compaction) or `cupel_core=trace` to include request bodies. Logs go to stderr in `--plain` mode and to a temp file (path printed at startup) in the TUI.
 

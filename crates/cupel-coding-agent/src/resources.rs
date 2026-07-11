@@ -5,13 +5,15 @@
 //! project instructions ("run clippy after edits", "tests live in tests/")
 //! that must always be visible.
 //!
-//! They come from two source roots, searched in order:
+//! They come from three source roots, searched in order:
 //! 1. the cupel home (`~/.cupel`, override with `CUPEL_HOME`) - the cargo
 //!    layout: the same directory also holds `bin/cupel` (the installed
 //!    binary), `prompts/` (global `/command` templates), and the reserved
 //!    `memory/` for the future memory feature,
-//! 2. the project working directory (project-specific, wins by coming last
-//!    in the prompt).
+//! 2. the project's `.cupel/` directory (`<cwd>/.cupel`) - for keeping
+//!    cupel-specific files out of the repository root,
+//! 3. the project working directory itself (most specific, wins by coming
+//!    last in the prompt).
 
 use std::path::{Path, PathBuf};
 
@@ -38,16 +40,38 @@ fn resolve_config_home(env_value: Option<String>, home: Option<PathBuf>) -> Opti
     }
 }
 
-/// The source roots to search: cupel home first, project cwd second (later
-/// roots' instructions appear AFTER earlier ones in the prompt, so project
-/// context effectively overrides global context).
+/// The source roots to search: cupel home, then the project's `.cupel/`
+/// directory, then the project cwd itself. Later roots are MORE specific:
+/// their instructions appear after earlier ones in the prompt, and their
+/// prompt templates replace same-named earlier ones.
 #[must_use]
 pub fn default_roots(cwd: &Path) -> Vec<PathBuf> {
+    resolve_default_roots(config_home(), cwd)
+}
+
+/// The pure core of [`default_roots`], parameterized on the home so tests
+/// can exercise the ordering and dedup logic without touching env vars.
+fn resolve_default_roots(home: Option<PathBuf>, cwd: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(home) = config_home() {
-        roots.push(home);
+    // Each candidate is pushed only if not already present: running cupel
+    // from `$HOME` makes `<cwd>/.cupel` equal to the cupel home, and
+    // `CUPEL_HOME=$PWD` makes the home equal to the cwd - without the guard
+    // the same AGENTS.md would ride in the prompt twice. Plain path equality
+    // is enough here; the roots are built from the same cwd/home values, so
+    // no symlink canonicalization (which would need filesystem access) is
+    // required.
+    let mut push_unique = |candidate: PathBuf| {
+        if !roots.contains(&candidate) {
+            roots.push(candidate);
+        }
+    };
+    if let Some(home) = home {
+        push_unique(home);
     }
-    roots.push(cwd.to_path_buf());
+    // `.cupel/` is pushed without checking it exists - the loaders already
+    // skip missing files and directories, and this keeps the function pure.
+    push_unique(cwd.join(".cupel"));
+    push_unique(cwd.to_path_buf());
     roots
 }
 
@@ -163,7 +187,51 @@ mod tests {
     fn default_roots_end_with_the_project_cwd() {
         let roots = default_roots(Path::new("/proj"));
         assert_eq!(roots.last(), Some(&PathBuf::from("/proj")));
-        // First root is the cupel home whenever one resolves.
-        assert!(roots.len() <= 2);
+        // At most three roots: cupel home (when one resolves), the project
+        // `.cupel/` directory, and the cwd itself.
+        assert!(roots.len() <= 3);
+    }
+
+    #[test]
+    fn resolve_default_roots_orders_home_dot_cupel_then_cwd() {
+        let roots = resolve_default_roots(Some(PathBuf::from("/u/.cupel")), Path::new("/proj"));
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/u/.cupel"),
+                PathBuf::from("/proj/.cupel"),
+                PathBuf::from("/proj"),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_default_roots_dedups_overlapping_roots() {
+        // Running cupel from `$HOME`: `<cwd>/.cupel` IS the cupel home.
+        let roots = resolve_default_roots(Some(PathBuf::from("/u/.cupel")), Path::new("/u"));
+        assert_eq!(roots, vec![PathBuf::from("/u/.cupel"), PathBuf::from("/u")]);
+
+        // `CUPEL_HOME=$PWD`: the home IS the cwd. The cwd is claimed by the
+        // home slot, so `.cupel/` ends up last - an accepted quirk of a
+        // degenerate configuration; the point is nothing loads twice.
+        let roots = resolve_default_roots(Some(PathBuf::from("/proj")), Path::new("/proj"));
+        assert_eq!(
+            roots,
+            vec![PathBuf::from("/proj"), PathBuf::from("/proj/.cupel")]
+        );
+    }
+
+    #[test]
+    fn context_file_in_dot_cupel_loads_alongside_root() {
+        let root = temp_root("dot-cupel");
+        std::fs::create_dir_all(root.join(".cupel")).unwrap();
+        std::fs::write(root.join(".cupel/AGENTS.md"), "tucked-away instructions").unwrap();
+        std::fs::write(root.join("AGENTS.md"), "root instructions").unwrap();
+        // Same root order default_roots produces: `.cupel/` before the cwd,
+        // so the repo-root file lands last (most authoritative) in the prompt.
+        let files = load_context_files(&[root.join(".cupel"), root]);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].content, "tucked-away instructions");
+        assert_eq!(files[1].content, "root instructions");
     }
 }

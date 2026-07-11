@@ -29,7 +29,9 @@
 
 !AGENTS.md
 
+!CHANGELOG.md
 !CONTRIBUTION.md
+!TODO.md
 
 !README.md
 
@@ -41,5 +43,3 @@
 
 !/packaging/
 !/packaging/**
-
-!TODO.md

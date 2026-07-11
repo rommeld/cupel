@@ -5,7 +5,8 @@
 //! 1. **Built-ins** (`/help`, `/new`, `/model`, ...) - intercepted by the UI
 //!    and never sent to the model.
 //! 2. **Prompt templates** - markdown files in `<root>/prompts/*.md` (same
-//!    two resource roots as AGENTS.md). `/name args` expands the file's
+//!    resource roots as AGENTS.md: cupel home, project `.cupel/`, project
+//!    root). `/name args` expands the file's
 //!    body with bash-style argument substitution and sends THAT as the
 //!    prompt. This is how users package reusable prompts.
 //!
@@ -308,8 +309,11 @@ mod tests {
     fn templates_load_expand_and_project_overrides() {
         let global = std::env::temp_dir().join("cupel-commands-global");
         let project = std::env::temp_dir().join("cupel-commands-project");
-        for dir in [&global, &project] {
-            let _ = std::fs::remove_dir_all(dir);
+        // The project's `.cupel/` directory - a root between home and cwd.
+        let dot_cupel = project.join(".cupel");
+        let _ = std::fs::remove_dir_all(&global);
+        let _ = std::fs::remove_dir_all(&project);
+        for dir in [&global, &dot_cupel, &project] {
             std::fs::create_dir_all(dir.join("prompts")).unwrap();
         }
         std::fs::write(
@@ -318,10 +322,12 @@ mod tests {
         )
         .unwrap();
         std::fs::write(global.join("prompts/global-only.md"), "Global body.").unwrap();
-        // Project overrides the global template with the same name.
+        // `.cupel/` overrides the global template with the same name...
+        std::fs::write(dot_cupel.join("prompts/review.md"), "Dot-cupel review.").unwrap();
+        // ...and the project root, being the LAST root, overrides both.
         std::fs::write(project.join("prompts/review.md"), "Project review of $@.").unwrap();
 
-        let templates = load_prompt_templates(&[global, project]);
+        let templates = load_prompt_templates(&[global, dot_cupel, project]);
         assert_eq!(templates.len(), 2);
         let review = templates.iter().find(|t| t.name == "review").unwrap();
         assert_eq!(review.content, "Project review of $@.");
