@@ -18,6 +18,14 @@ Includes the basic agent definition and defines an agent loop primitive.
 
 Use the `ripgrep` crate as the underlying for the **grep tool**. The crate also includes a simple `cuple CLI` to call functionality from the terminal. `ratatui` is the TUI crate of choice.
 
+### 4. `cupel-index`
+
+Placehoalder for code searching
+
+### 5. `cupel-memory`
+
+Placehoalder to manage agent memory
+
 ## Install
 
 No Rust required - currently support for macOS
@@ -63,12 +71,17 @@ Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,
 - Agent tools: read, grep, write, edit, bash
 - TUI based on `ratatui`
 - File referencing via `@file-path` using fuzzy search
+- Slash commands via `/command`
 - Context management: proactive compaction + reactive provider truncation
 - Auto-retry, tracing/observability, and system-prompt project context
+- HOMEPATH directory for file definitions
 
 ### What is missing?
 - Persistencey: sessions will not survive after exiting `cupel`.
 - `cupel-index` as an alternative to `grep`(combination of `fff` and `entire`'s code search)
-- No local models (e.g. `ollama` support)
-- No Windows support
-- No MCP integration
+- Local models (e.g. `ollama` support)
+- Windows support
+- MCP integration
+- `AgentHooks`: hooks invoked while the agent is doing work, letting developers inject themselves into the agent's workflow (e.g., vetoing a tool call or overriding its result) rather than only reviewing output after the fact.
+- `AgentMemory`: alongside compaction, a mechanism for an agent to retain and recall memory within a single session or across multiple sessions.
+- `websearch`: no built-in web search tool for retrieving live information beyond the local repository context.
