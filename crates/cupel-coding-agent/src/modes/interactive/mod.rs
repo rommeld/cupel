@@ -23,7 +23,8 @@ pub mod transcript;
 pub mod ui;
 
 use cupel_agent::Agent;
-use ratatui::crossterm::event::Event;
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event};
+use ratatui::crossterm::execute;
 
 use crate::modes::SessionMeta;
 
@@ -35,7 +36,19 @@ pub async fn run(agent: Agent, meta: SessionMeta) -> std::io::Result<()> {
     // panic hook that restores the terminal - without that, a panic would
     // leave the user's shell in raw mode (no echo, no line editing).
     let mut terminal = ratatui::init();
+    // Mouse capture (for wheel-scrolling the transcript) is opt-in and NOT
+    // covered by ratatui's init/restore or its panic hook. It must be
+    // released on every exit path: a terminal left in mouse mode swallows
+    // normal wheel scrolling and text selection even after cupel exits. The
+    // panic hook is chained so the release runs BEFORE ratatui's restore.
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    let ratatui_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        ratatui_hook(info);
+    }));
     let result = event_loop(&mut terminal, agent, meta).await;
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }

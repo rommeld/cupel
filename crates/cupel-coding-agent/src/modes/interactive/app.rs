@@ -11,7 +11,9 @@ use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
 use cupel_core::types::{
     AssistantMessageEvent, Message, StopReason, ToolResultContent, UserContentBody,
 };
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 
 use super::autocomplete::{Autocomplete, Candidate};
 use super::input::InputState;
@@ -102,6 +104,15 @@ impl App {
                 self.autocomplete
                     .refresh(self.input.text(), self.input.cursor());
             }
+            // The wheel scrolls the transcript wherever the pointer is -
+            // same clamped movement as PgUp/PgDn, at the conventional
+            // 3-lines-per-notch step. (Mouse events only arrive because
+            // mod.rs enables mouse capture.)
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp => self.scroll_by(3),
+                MouseEventKind::ScrollDown => self.scroll_by(-3),
+                _ => {}
+            },
             // Resize is handled implicitly: the next draw uses the new size.
             _ => {}
         }

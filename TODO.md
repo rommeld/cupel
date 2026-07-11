@@ -1,6 +1,6 @@
 ## TUI
-- [ ] automatic line break
-- [ ] scrollable
+- [x] automatic line break
+- [x] scrollable
 
 ## Agent
 - [ ] Subagents
@@ -9,4 +9,4 @@
 - [ ] settings.json
 
 ## Project
-- [ ] Changelog
+- [x] Changelog

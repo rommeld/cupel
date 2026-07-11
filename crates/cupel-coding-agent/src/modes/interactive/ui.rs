@@ -12,10 +12,20 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use super::app::App;
+use super::transcript;
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App) {
-    // Input grows with its content (up to 5 lines) + 2 border rows.
-    let input_lines = app.input.text().split('\n').count().clamp(1, 5) as u16;
+    // Input grows with its content (explicit newlines + wrapped lines),
+    // capped at 5 visible lines, + 2 border rows. The inner width is the
+    // full frame width minus the left/right borders.
+    let inner_width = frame.area().width.saturating_sub(2).max(1) as usize;
+    let input_lines = app
+        .input
+        .text()
+        .split('\n')
+        .map(|line| transcript::wrap_line(line, inner_width).len())
+        .sum::<usize>()
+        .clamp(1, 5) as u16;
     let [transcript_area, input_area, footer_area] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(input_lines + 2),
@@ -117,6 +127,50 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
 }
 
+/// Cursor position as (visual line, visual column) in the wrapped input
+/// text. Derived from the SAME `wrap_line` output that renders the text: a
+/// second, parallel wrapping computation would inevitably disagree with it
+/// (word wrap vs. plain column wrap) and paint the cursor away from where
+/// the next keystroke actually lands.
+///
+/// `cursor` is a CHAR index (see `InputState`). `wrap_line` preserves every
+/// character of its input across the chunks it returns, so char offsets map
+/// 1:1 onto the wrapped output and locating the cursor is just counting.
+fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
+    use unicode_width::UnicodeWidthChar;
+
+    let mut remaining = cursor; // chars between the start of `text` and the cursor
+    let mut visual_line = 0;
+    for logical in text.split('\n') {
+        let chunks = transcript::wrap_line(logical, width);
+        let line_chars = logical.chars().count();
+        if remaining <= line_chars {
+            // The cursor sits on this logical line: walk its wrapped chunks
+            // until the offset falls inside one.
+            for (i, chunk) in chunks.iter().enumerate() {
+                let chunk_chars = chunk.chars().count();
+                // Landing exactly on a chunk boundary means "before the
+                // first char of the NEXT chunk" - inserting there joins the
+                // next chunk's word, so that is where the char will appear.
+                // Only at the very end of the line does the cursor trail
+                // the last chunk instead.
+                if remaining < chunk_chars || i + 1 == chunks.len() {
+                    let col = chunk
+                        .chars()
+                        .take(remaining)
+                        .map(|c| c.width().unwrap_or(0))
+                        .sum();
+                    return (visual_line + i, col);
+                }
+                remaining -= chunk_chars;
+            }
+        }
+        remaining -= line_chars + 1; // +1 consumes the '\n'
+        visual_line += chunks.len();
+    }
+    (visual_line, 0) // unreachable: the last logical line always contains the cursor
+}
+
 fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let border_style = if app.is_running() {
         Style::new().fg(Color::Yellow)
@@ -138,15 +192,29 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let text: Vec<Line<'_>> = app.input.text().split('\n').map(Line::from).collect();
-    frame.render_widget(Paragraph::new(text), inner);
+    let inner_width = inner.width.max(1) as usize;
+    let text: Vec<Line<'_>> = app
+        .input
+        .text()
+        .split('\n')
+        .flat_map(|line| transcript::wrap_line(line, inner_width))
+        .map(Line::from)
+        .collect();
+
+    // Scroll the viewport so the cursor's line stays visible once the text
+    // outgrows the height-capped box - otherwise the user would be typing
+    // into rows that render off-screen.
+    let (cursor_line, cursor_col) =
+        visual_cursor(app.input.text(), app.input.cursor(), inner_width);
+    let visible = inner.height.max(1) as usize;
+    let scroll = cursor_line.saturating_sub(visible - 1);
+    frame.render_widget(Paragraph::new(text).scroll((scroll as u16, 0)), inner);
 
     // Place the real terminal cursor at the editing position. (ratatui hides
     // it unless the app explicitly positions it each frame.)
-    let (line, col) = app.input.cursor_line_col();
     frame.set_cursor_position(Position {
-        x: inner.x + (col as u16).min(inner.width.saturating_sub(1)),
-        y: inner.y + (line as u16).min(inner.height.saturating_sub(1)),
+        x: inner.x + (cursor_col as u16).min(inner.width.saturating_sub(1)),
+        y: inner.y + ((cursor_line - scroll) as u16).min(inner.height.saturating_sub(1)),
     });
 }
 
@@ -162,7 +230,8 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         app.totals.cache_read,
         app.totals.cost,
     );
-    let right = "enter send · alt+enter newline · @ file · / cmds · esc abort · pgup/pgdn scroll ";
+    let right =
+        "enter send · alt+enter newline · @ file · / cmds · esc abort · wheel/pgup/pgdn scroll ";
 
     // Left-align the status, right-align the key hints; drop the hints when
     // the terminal is too narrow for both.
@@ -418,6 +487,81 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn visual_cursor_matches_word_wrapping() {
+        // width 10 word-wraps "hello world" as ["hello ", "world"]. A plain
+        // column-wrap computation would report (1, 1) here - the regression
+        // this test pins down.
+        assert_eq!(visual_cursor("hello world", 11, 10), (1, 5));
+        // On the chunk boundary (after "hello "): inserting there joins the
+        // word "world", so the cursor belongs at the start of line 1.
+        assert_eq!(visual_cursor("hello world", 6, 10), (1, 0));
+        // Mid-first-chunk stays on line 0.
+        assert_eq!(visual_cursor("hello world", 3, 10), (0, 3));
+    }
+
+    #[test]
+    fn visual_cursor_handles_hard_splits_newlines_and_wide_chars() {
+        // A single long word hard-splits by columns: "abcd" / "efgh" / "ij".
+        assert_eq!(visual_cursor("abcdefghij", 10, 4), (2, 2));
+        // Explicit newlines start fresh visual lines.
+        assert_eq!(visual_cursor("ab\nxyz", 6, 4), (1, 3));
+        assert_eq!(visual_cursor("ab\n", 3, 4), (1, 0));
+        // CJK chars are 2 columns wide: width 4 fits two, the third wraps.
+        assert_eq!(visual_cursor("日本語", 3, 4), (1, 2));
+        // After the second char = boundary = start of the wrapped chunk.
+        assert_eq!(visual_cursor("日本語", 2, 4), (1, 0));
+        // Empty buffer.
+        assert_eq!(visual_cursor("", 0, 4), (0, 0));
+    }
+
+    #[test]
+    fn input_viewport_follows_the_cursor_past_the_height_cap() {
+        let mut app = test_app();
+        // 8 explicit lines; the input box caps at 5 visible rows, so the
+        // viewport must scroll to keep the cursor's line (the last one) on
+        // screen.
+        app.input
+            .insert_str("line0\nline1\nline2\nline3\nline4\nline5\nline6\nline7");
+        let screen = draw(&mut app, 80, 20);
+        assert!(
+            screen.contains("line7"),
+            "cursor line must be visible:\n{screen}"
+        );
+        assert!(
+            !screen.contains("line0"),
+            "scrolled-out line must be hidden:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_the_transcript() {
+        use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+
+        let mut app = test_app();
+        for i in 0..50 {
+            app.transcript.cells.push(Cell::Assistant {
+                text: format!("line {i}"),
+            });
+        }
+        // Render once so the app learns the viewport geometry.
+        let _ = draw(&mut app, 40, 10);
+
+        let wheel = |kind| {
+            Event::Mouse(MouseEvent {
+                kind,
+                column: 5,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        app.on_terminal_event(wheel(MouseEventKind::ScrollUp));
+        assert_eq!(app.scroll_from_bottom, 3, "one notch = three lines");
+        app.on_terminal_event(wheel(MouseEventKind::ScrollDown));
+        app.on_terminal_event(wheel(MouseEventKind::ScrollDown)); // clamps at 0
+        assert_eq!(app.scroll_from_bottom, 0);
     }
 
     #[test]
