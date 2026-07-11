@@ -7,11 +7,9 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
-## [Unreleased]
+## [v0.1.8-beta] - 2026-07-11
 
-- add a project-level `.cupel/` resource root: `AGENTS.md` and `prompts/*.md`
-  can live in `<project>/.cupel/` to keep the repository root clean
-  (precedence: project root > `.cupel/` > `~/.cupel`)
+- cupel now adds .cupel to root to keep project clean
 - update project documentation
 
 ## [v0.1.7-beta] - 2026-07-11
