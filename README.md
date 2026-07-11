@@ -21,7 +21,10 @@ Use the `ripgrep` crate as the underlying for the **grep tool**. The crate also 
 ## Install
 
 No Rust required - currently support for macOS
-(Intel & Silicon) or Linux (x86_64/aarch64, static musl) and puts `cupel` on your PATH:
+(Intel & Silicon) or Linux (x86_64/aarch64, static musl). Everything installs
+into one home directory, `~/.cupel` (cargo-style): the binary at
+`~/.cupel/bin/cupel` (added to your PATH), global `AGENTS.md` and
+`prompts/*.md` beside it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
@@ -46,9 +49,9 @@ cupel --model accounts/fireworks/models/kimi-k2p7-code          # select model f
 cupel --model <id> --thinking off|minimal|low|medium|high|xhigh # define thinking mode
 ```
 
-Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory or next to the binary) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. Typing `/` opens autocomplete.
+Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. Typing `/` opens autocomplete.
 
-Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory or next to the installed binary is loaded into the system prompt on every request.
+Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory or in `~/.cupel` is loaded into the system prompt on every request. `~/.cupel` is cupel's home (override with `CUPEL_HOME`): the installer puts the binary in `~/.cupel/bin`, global prompt templates in `~/.cupel/prompts/`, and the future memory feature will live in `~/.cupel/memory/`.
 
 Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,cupel_agent=info` (per-request tokens/cost/duration, turns, tool timings, retries, compaction) or `cupel_core=trace` to include request bodies. Logs go to stderr in `--plain` mode and to a temp file (path printed at startup) in the TUI.
 

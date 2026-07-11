@@ -3,8 +3,17 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 #
-# No Rust toolchain required. Installs to ~/.local/bin by default; override
-# with CUPEL_INSTALL_DIR. POSIX sh (not bash) so it runs on stock Debian,
+# No Rust toolchain required. Everything lives in ONE home directory
+# (cargo-style), so backup and uninstall are a single path:
+#
+#   ~/.cupel/
+#   ├── bin/cupel      the binary (this dir goes on PATH)
+#   ├── AGENTS.md      global context, loaded into every session (optional)
+#   ├── prompts/*.md   global /command prompt templates
+#   └── memory/        reserved for the future memory feature
+#
+# Override the home with CUPEL_HOME, or just the binary location with
+# CUPEL_INSTALL_DIR. POSIX sh (not bash) so it runs on stock Debian,
 # Alpine, and macOS alike.
 #
 # Nice side effect on macOS: curl downloads don't get the Gatekeeper
@@ -14,7 +23,8 @@
 set -eu
 
 REPO="rommeld/cupel"
-INSTALL_DIR="${CUPEL_INSTALL_DIR:-$HOME/.local/bin}"
+CUPEL_HOME="${CUPEL_HOME:-$HOME/.cupel}"
+INSTALL_DIR="${CUPEL_INSTALL_DIR:-$CUPEL_HOME/bin}"
 
 # ---- Pick the release asset for this platform ------------------------------
 os="$(uname -s)"
@@ -77,6 +87,16 @@ tar -xzf "$tmp/$asset.tar.gz" -C "$tmp"
 mkdir -p "$INSTALL_DIR"
 install -m 755 "$tmp/cupel" "$INSTALL_DIR/cupel"
 echo "installed cupel to $INSTALL_DIR/cupel"
+
+# Scaffold the config side of the home (mkdir -p never overwrites anything).
+mkdir -p "$CUPEL_HOME/prompts"
+echo "cupel home: $CUPEL_HOME (global AGENTS.md and prompts/*.md live here)"
+
+# Releases before v0.1.4-beta installed to ~/.local/bin; a stale binary
+# there would shadow or be shadowed depending on PATH order.
+if [ "$INSTALL_DIR" != "$HOME/.local/bin" ] && [ -x "$HOME/.local/bin/cupel" ]; then
+    echo "warning: an older cupel install exists at ~/.local/bin/cupel - consider removing it" >&2
+fi
 
 # ---- Make `cupel` work as a bare command ------------------------------------
 case ":$PATH:" in

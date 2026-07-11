@@ -197,8 +197,8 @@ async fn run() -> Result<(), String> {
         Arc::new(WriteTool::new(&cwd)),
         Arc::new(GrepTool::new(&cwd, backend)),
     ];
-    // Project context (AGENTS.md/CLAUDE.md, eager) comes from the binary's
-    // install dir and the project cwd.
+    // Project context (AGENTS.md/CLAUDE.md, eager) comes from the cupel
+    // home (~/.cupel, override CUPEL_HOME) and the project cwd.
     let roots = cupel_coding_agent::resources::default_roots(&cwd);
     let context_files = cupel_coding_agent::resources::load_context_files(&roots);
     // `/name`-invocable prompt templates from <root>/prompts/*.md.
