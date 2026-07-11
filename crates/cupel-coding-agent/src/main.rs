@@ -185,6 +185,9 @@ async fn run() -> Result<(), String> {
     }
     let (model, api_key) = select_model(&args)?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    // NOTE: the project .cupel/ directory is NOT scaffolded here - the
+    // frontends create it on the first agent interaction (resources::
+    // ensure_project_dot_cupel), so just launching cupel leaves no trace.
 
     // ---- Wire the agent -----------------------------------------------------
     // The grep tool talks to a CodeSearch backend; today that's GrepSearch,

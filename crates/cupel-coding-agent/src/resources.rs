@@ -75,6 +75,37 @@ fn resolve_default_roots(home: Option<PathBuf>, cwd: &Path) -> Vec<PathBuf> {
     roots
 }
 
+/// Create the project's `.cupel/` directory if it is missing. Called on the
+/// FIRST agent interaction rather than at startup, so merely launching (and
+/// quitting) cupel in a directory leaves no trace on disk.
+///
+/// Never fails: `.cupel/` is a convenience scaffold, not a requirement -
+/// the loaders skip a missing directory gracefully. A read-only location is
+/// an expected environment (mounted volume, CI checkout), so it is skipped
+/// quietly at debug level; any other failure gets a visible warning but
+/// still never blocks the session.
+pub fn ensure_project_dot_cupel(cwd: &Path) {
+    let dot_cupel = cwd.join(".cupel");
+    // No exists() pre-check: create_dir_all is already idempotent (Ok when
+    // the directory exists), and attempting unconditionally both avoids a
+    // check-then-act race and surfaces a `.cupel` FILE squatting on the
+    // name (the create fails instead of silently looking successful).
+    match std::fs::create_dir_all(&dot_cupel) {
+        Ok(()) => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ) =>
+        {
+            tracing::debug!(path = %dot_cupel.display(), "skipping .cupel creation: {e}");
+        }
+        Err(e) => {
+            tracing::warn!(path = %dot_cupel.display(), "could not create .cupel directory: {e}");
+        }
+    }
+}
+
 /// Candidate context-file names, in preference order. Only the FIRST match
 /// per root is loaded: `CLAUDE.md` is conventionally a copy of `AGENTS.md`,
 /// and loading both would duplicate every instruction. (Same rule as pi.)
@@ -219,6 +250,42 @@ mod tests {
             roots,
             vec![PathBuf::from("/proj"), PathBuf::from("/proj/.cupel")]
         );
+    }
+
+    #[test]
+    fn ensure_project_dot_cupel_creates_and_preserves() {
+        let cwd = temp_root("ensure-create");
+        ensure_project_dot_cupel(&cwd);
+        assert!(cwd.join(".cupel").is_dir());
+
+        // A second call must leave existing contents untouched.
+        std::fs::write(cwd.join(".cupel/AGENTS.md"), "instructions").unwrap();
+        ensure_project_dot_cupel(&cwd);
+        assert_eq!(
+            std::fs::read_to_string(cwd.join(".cupel/AGENTS.md")).unwrap(),
+            "instructions"
+        );
+    }
+
+    #[test]
+    fn ensure_project_dot_cupel_never_panics_on_conflicts_or_readonly() {
+        // `.cupel` squatted by a FILE: warned about, file left intact.
+        let cwd = temp_root("ensure-file");
+        std::fs::write(cwd.join(".cupel"), "not a directory").unwrap();
+        ensure_project_dot_cupel(&cwd);
+        assert!(cwd.join(".cupel").is_file());
+
+        // Read-only cwd: creation is skipped, not an error.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let cwd = temp_root("ensure-readonly");
+            std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o555)).unwrap();
+            ensure_project_dot_cupel(&cwd);
+            // Restore write permission FIRST so the next run's cleanup works.
+            std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(!cwd.join(".cupel").exists());
+        }
     }
 
     #[test]

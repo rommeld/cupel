@@ -67,6 +67,11 @@ pub async fn run(mut agent: Agent, meta: &SessionMeta) -> Result<(), String> {
             }
         }
 
+        // First real agent interaction: scaffold the project .cupel/
+        // directory (idempotent, never fails). Deferred to here - not
+        // startup - so `cupel --plain < /dev/null` etc. leave no trace.
+        crate::resources::ensure_project_dot_cupel(std::path::Path::new(&meta.cwd));
+
         let mut events = agent.prompt_text(&prompt).map_err(|e| e.to_string())?;
 
         // Render the event stream. Text deltas print incrementally; thinking

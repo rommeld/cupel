@@ -296,6 +296,12 @@ impl App {
 
     /// Route a prompt to the agent: new run when idle, steering when busy.
     fn send(&mut self, text: &str) {
+        // A prompt is headed for the agent - the "first interaction" moment
+        // that scaffolds the project .cupel/ directory. Deliberately NOT at
+        // startup (launching + quitting cupel must leave no trace), and not
+        // for local built-ins like /help. Idempotent and never fails, so
+        // calling it on every send is fine.
+        crate::resources::ensure_project_dot_cupel(std::path::Path::new(&self.meta.cwd));
         if self.is_running() {
             // The agent injects steering messages after the current turn;
             // the transcript gets a real User cell when that happens (via
