@@ -1,7 +1,7 @@
 #!/bin/sh
-# Prepend a release section to Changelog.md from git history:
+# Prepend a release section to CHANGELOG.md from git history:
 #
-#   packaging/update-changelog.sh v0.1.8-beta [Changelog.md]
+#   packaging/update-changelog.sh v0.1.8-beta [CHANGELOG.md]
 #
 # The section lists the commit subjects between the previous tag and <tag>,
 # dated from the tag's commit. Used by the `changelog` job in
@@ -23,7 +23,7 @@ if [ $# -lt 1 ]; then
 fi
 
 TAG="$1"
-CHANGELOG="${2:-Changelog.md}"
+CHANGELOG="${2:-CHANGELOG.md}"
 
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || {
     echo "error: tag $TAG not found" >&2
