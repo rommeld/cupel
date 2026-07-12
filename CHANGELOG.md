@@ -13,6 +13,7 @@ that section is replaced by the generated one when the next tag ships.
   submitting at every newline) and Ctrl+Y selection mode - temporarily
   releases the mouse so text can be selected and copied natively, toggle
   back for wheel scrolling
+- add entire-agent-cupel: an external-agent shim (protocol v1) that lets the Entire CLI manage cupel sessions - session/transcript plumbing, hook forwarding via install-hooks, and transcript analysis
 - persist every session as a JSONL transcript under
   `~/.cupel/sessions/<project-slug>/` (created on first prompt, crash-safe
   per-message flushing)
