@@ -9,14 +9,9 @@ that section is replaced by the generated one when the next tag ships.
 
 ## [v0.1.11-beta] - 2026-07-12
 
-- add entire to current project
 - add selection mode Ctrl+Y to use copy/paste in TUI
 - add entire-agent-cupel: Entire CLI external-agent shim (protocol v1)
-- fix CHANGELOG.md and remove HEAD
 - cupel got persistency through session transcripts, lifecycle hooks, and session resuming
-- cupel got persistency through session transcripts, lifecycle hooks, and session resuming
-- changelog: v0.1.10-beta
-- Remove TODO.md
 
 ## [v0.1.10-beta] - 2026-07-12
 
