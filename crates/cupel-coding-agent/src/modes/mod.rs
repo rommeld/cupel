@@ -17,4 +17,9 @@ pub struct SessionMeta {
     pub cwd: String,
     /// `/name`-invocable prompt templates (see [`crate::commands`]).
     pub templates: Vec<crate::commands::PromptTemplate>,
+    /// The merged model catalog (built-ins + models.json layers + ollama
+    /// discovery), resolved ONCE at startup by `main::run()`. Frontends
+    /// read models from here, never from `cupel_core::catalog` directly -
+    /// discovery is async and must not run inside sync key handlers.
+    pub models: Vec<cupel_core::types::Model>,
 }

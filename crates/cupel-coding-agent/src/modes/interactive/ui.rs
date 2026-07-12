@@ -294,6 +294,9 @@ mod tests {
                 provider: "test".into(),
                 cwd: cwd.into(),
                 templates: Vec::new(),
+                // Real builtin catalog so /model and /provider tests exercise
+                // the same data the app ships with.
+                models: cupel_core::catalog::builtin_models(),
             },
             recorder,
         )
@@ -610,6 +613,9 @@ mod tests {
                 provider: "test".into(),
                 cwd: "/tmp".into(),
                 templates: Vec::new(),
+                // Real builtin catalog so /model and /provider tests exercise
+                // the same data the app ships with.
+                models: cupel_core::catalog::builtin_models(),
             },
             recorder,
         );

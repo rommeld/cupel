@@ -827,6 +827,7 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "ratatui",
+ "reqwest",
  "serde",
  "serde_json",
  "similar",

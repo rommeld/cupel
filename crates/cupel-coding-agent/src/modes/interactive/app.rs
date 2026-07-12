@@ -92,7 +92,10 @@ impl App {
         }
         // Argument value sets: after `/model ` the popup offers the catalog,
         // after `/thinking ` the levels - no more typing ids from memory.
-        let model_candidates: Vec<Candidate> = cupel_core::catalog::builtin_models()
+        // meta.models is the MERGED catalog (builtins + models.json +
+        // discovered ollama models), resolved once at startup.
+        let model_candidates: Vec<Candidate> = meta
+            .models
             .iter()
             .map(|model| Candidate {
                 display: format!("{}  ({})", model.id, model.provider.as_str()),
@@ -115,7 +118,7 @@ impl App {
             is_dir: false,
         })
         .collect();
-        let provider_candidates: Vec<Candidate> = crate::providers::catalog_providers()
+        let provider_candidates: Vec<Candidate> = crate::providers::catalog_providers(&meta.models)
             .into_iter()
             .map(|(provider, model)| Candidate {
                 display: format!("{provider}  (default {})", model.id),
@@ -552,13 +555,17 @@ impl App {
 
         if name.is_empty() {
             let mut lines = vec!["providers (/provider <name> [api-key]):".to_string()];
-            for (provider, model) in crate::providers::catalog_providers() {
+            for (provider, model) in crate::providers::catalog_providers(&self.meta.models) {
                 let status = if provider == "amazon-bedrock" {
                     if crate::providers::has_aws_credentials() {
                         "AWS credentials found".to_string()
                     } else {
                         "no AWS credentials".to_string()
                     }
+                } else if crate::providers::provider_is_keyless(&self.meta.models, &provider) {
+                    // Local endpoints (ollama, llama-server): requests go
+                    // out anonymously, nothing to configure.
+                    "local endpoint - no key required".to_string()
                 } else if self.session_keys.contains_key(&provider) {
                     "key entered this session".to_string()
                 } else {
@@ -575,7 +582,7 @@ impl App {
             return;
         }
 
-        let Some((provider, model)) = crate::providers::catalog_providers()
+        let Some((provider, model)) = crate::providers::catalog_providers(&self.meta.models)
             .into_iter()
             .find(|(p, _)| p == name)
         else {
@@ -584,10 +591,12 @@ impl App {
         };
 
         if let Some(key) = entered_key {
-            if crate::providers::env_var_name(&provider).is_none() {
-                self.notice(format!(
-                    "{provider} does not take an API key (AWS credential chain) - key ignored"
-                ));
+            // Neither Bedrock (AWS chain) nor keyless local endpoints have
+            // anywhere to put a key.
+            if crate::providers::env_var_name(&provider).is_none()
+                || crate::providers::provider_is_keyless(&self.meta.models, &provider)
+            {
+                self.notice(format!("{provider} does not take an API key - key ignored"));
             } else {
                 // Session memory only, never persisted; deliberately not
                 // echoed back into the transcript either.
@@ -598,6 +607,8 @@ impl App {
         // Describe where the credential comes from WITHOUT echoing it.
         let key_source = if provider == "amazon-bedrock" {
             "AWS credential chain".to_string()
+        } else if crate::providers::provider_is_keyless(&self.meta.models, &provider) {
+            "local endpoint - no key required".to_string()
         } else if self.session_keys.contains_key(&provider) {
             "using the key entered this session".to_string()
         } else if crate::providers::env_api_key(&provider).is_some() {
@@ -655,13 +666,11 @@ impl App {
             "model" => {
                 if args.is_empty() {
                     let mut lines = vec!["available models (/model <id>):".to_string()];
-                    for m in cupel_core::catalog::builtin_models() {
+                    for m in &self.meta.models {
                         lines.push(format!("  {}  ({})", m.id, m.provider.as_str()));
                     }
                     self.notice(lines.join("\n"));
-                } else if let Some(model) = cupel_core::catalog::builtin_models()
-                    .into_iter()
-                    .find(|m| m.id == args)
+                } else if let Some(model) = self.meta.models.iter().find(|m| m.id == args).cloned()
                 {
                     self.switch_model(model);
                     self.notice(format!(
