@@ -92,9 +92,16 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh] [--resume [id]] [--plain]\n\nbuilt-in models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh] [--resume [id]] [--plain]\n\navailable models:\n",
                 );
-                for model in cupel_core::catalog::builtin_models() {
+                // Built-ins + models.json layers; deliberately NOT the
+                // ollama probe - help must be instant and never touch the
+                // network. Discovered models appear in the TUI's /model.
+                let home = cupel_coding_agent::resources::config_home();
+                let cwd = std::env::current_dir().unwrap_or_default();
+                for model in
+                    cupel_coding_agent::models::build_catalog_offline(home.as_deref(), &cwd)
+                {
                     help.push_str(&format!("  {} ({})\n", model.id, model.provider.as_str()));
                 }
                 // `print!` PANICS when stdout is a pipe whose reader closed
@@ -111,39 +118,49 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
     Ok(parsed)
 }
 
-/// Pick a model + API key from CLI args and environment. (Credential
-/// knowledge lives in `providers.rs`, shared with the TUI's `/provider`
-/// command - which can also switch providers and take a key at runtime.)
-fn select_model(args: &CliArgs) -> Result<(Model, Option<String>), String> {
+/// Pick a model + API key from CLI args and the MERGED catalog (built-ins,
+/// models.json layers, discovered local models). Credential knowledge
+/// lives in `providers.rs`, shared with the TUI's `/provider` command.
+fn select_model(args: &CliArgs, catalog: &[Model]) -> Result<(Model, Option<String>), String> {
     use cupel_coding_agent::providers;
-
-    let catalog = cupel_core::catalog::builtin_models();
 
     if let Some(wanted) = &args.model {
         let model = catalog
-            .into_iter()
+            .iter()
             .find(|m| m.id == *wanted)
+            .cloned()
             .ok_or_else(|| format!("unknown model: {wanted} (see --help for the list)"))?;
         let key = providers::env_api_key(model.provider.as_str());
         return Ok((model, key));
     }
 
-    // No --model: first provider with credentials wins, in catalog order
-    // (Anthropic, OpenAI, Bedrock, then Fireworks). Bedrock carries no key
-    // through StreamOptions - the AWS chain resolves inside the provider.
+    // No --model, pass 1: first provider with CLOUD credentials wins, in
+    // catalog order. Bedrock carries no key through StreamOptions - the
+    // AWS chain resolves inside the provider. Keyless local models fall
+    // through here (their env var is None), so an exported cloud key
+    // always beats a merely-running ollama.
     for model in catalog {
         match model.provider.as_str() {
-            "amazon-bedrock" if providers::has_aws_credentials() => return Ok((model, None)),
+            "amazon-bedrock" if providers::has_aws_credentials() => {
+                return Ok((model.clone(), None));
+            }
             provider => {
                 if let Some(key) = providers::env_api_key(provider) {
-                    return Ok((model, Some(key)));
+                    return Ok((model.clone(), Some(key)));
                 }
             }
         }
     }
+    // Pass 2: no cloud credentials anywhere - a keyless local model
+    // (discovered ollama, models.json entry) is the last resort before
+    // giving up.
+    if let Some(model) = catalog.iter().find(|m| providers::is_keyless(m)) {
+        return Ok((model.clone(), None));
+    }
     Err(
         "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, FIREWORKS_API_KEY, \
-         or AWS credentials - or start with an explicit `--model <id>` and enter a key in \
+         or AWS credentials, start a local server (ollama / llama-server - see README \
+         'Local models'), or start with an explicit `--model <id>` and enter a key in \
          the TUI via `/provider <name> <api-key>`"
             .to_string(),
     )
@@ -196,11 +213,20 @@ async fn run() -> Result<(), String> {
         // Announced BEFORE the TUI takes the screen; visible in scrollback.
         eprintln!("logging to {}", log_path.display());
     }
-    let (model, api_key) = select_model(&args)?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     // NOTE: the project .cupel/ directory is NOT scaffolded here - the
     // frontends create it on the first agent interaction (resources::
     // ensure_project_dot_cupel), so just launching cupel leaves no trace.
+
+    // ---- Resolve the model catalog ONCE ---------------------------------------
+    // Built-ins + models.json layers + ollama discovery (bounded network
+    // probe, hence async and done here, never in the frontends' sync key
+    // handlers). Everything downstream - model selection, /model,
+    // /provider, autocomplete - reads THIS list.
+    let registry = Arc::new(cupel_core::default_registry());
+    let home = cupel_coding_agent::resources::config_home();
+    let models = cupel_coding_agent::models::build_catalog(&registry, home.as_deref(), &cwd).await;
+    let (model, api_key) = select_model(&args, &models)?;
 
     // ---- Wire the agent -----------------------------------------------------
     // The grep tool talks to a CodeSearch backend; today that's GrepSearch,
@@ -246,7 +272,6 @@ async fn run() -> Result<(), String> {
     // Resume keeps the ORIGINAL session id, so the recorder appends to the
     // same transcript file and external consumers see one continuous
     // session. The seeded messages flow into AgentOptions.messages below.
-    let home = cupel_coding_agent::resources::config_home();
     let (session_id, seeded_messages) = match &args.resume {
         None => (format!("cupel-{}", cupel_core::types::now_ms()), Vec::new()),
         Some(target) => {
@@ -269,7 +294,7 @@ async fn run() -> Result<(), String> {
     let recorder =
         cupel_coding_agent::session::SessionRecorder::new(home, &cwd, &session_id, &model.id);
 
-    let mut options = AgentOptions::new(model.clone(), Arc::new(cupel_core::default_registry()));
+    let mut options = AgentOptions::new(model.clone(), registry);
     options.system_prompt = system_prompt;
     options.tools = tools;
     options.api_key = api_key;
@@ -284,6 +309,7 @@ async fn run() -> Result<(), String> {
         provider: model.provider.as_str().to_string(),
         cwd: cwd.display().to_string(),
         templates,
+        models,
     };
 
     // ---- Pick a frontend ------------------------------------------------------
@@ -329,5 +355,38 @@ mod tests {
     fn unknown_arguments_still_error() {
         assert!(parse(&["--bogus"]).is_err());
         assert!(parse(&["--model"]).is_err(), "--model needs a value");
+    }
+
+    /// A keyless local model (the ollama-discovery shape). Tests use ONLY
+    /// keyless catalogs so pass 1 of select_model (which reads real env
+    /// vars - process-global, unmockable without unsafe) can never match,
+    /// keeping the tests environment-independent.
+    fn keyless_model(id: &str) -> Model {
+        let mut model = cupel_core::catalog::builtin_models().remove(0);
+        model.id = id.to_string();
+        model.provider = cupel_core::types::Provider::from("ollama");
+        model.compat = Some(serde_json::json!({"requiresApiKey": false}));
+        model
+    }
+
+    #[test]
+    fn select_model_falls_back_to_keyless_local_models() {
+        let args = parse(&[]).unwrap();
+        let catalog = vec![keyless_model("qwen3:8b"), keyless_model("llama3:8b")];
+        // Pass 2: first keyless model wins, with no key.
+        let (model, key) = select_model(&args, &catalog).unwrap();
+        assert_eq!(model.id, "qwen3:8b");
+        assert!(key.is_none());
+
+        // Explicit --model on a keyless entry also carries no key.
+        let args = parse(&["--model", "llama3:8b"]).unwrap();
+        let (model, key) = select_model(&args, &catalog).unwrap();
+        assert_eq!(model.id, "llama3:8b");
+        assert!(key.is_none());
+
+        // Empty catalog: the error mentions the local-server escape hatch.
+        let args = parse(&[]).unwrap();
+        let err = select_model(&args, &[]).unwrap_err();
+        assert!(err.contains("ollama"), "{err}");
     }
 }

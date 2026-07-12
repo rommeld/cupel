@@ -5,7 +5,9 @@
 
 pub mod commands;
 pub mod hooks;
+pub mod models;
 pub mod modes;
+pub mod ollama;
 pub mod providers;
 pub mod resources;
 pub mod search;

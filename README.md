@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 
 ## Usage
 
-Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and Fireworks, e.g.:
+Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and Fireworks - plus any OpenAI-compatible local server (ollama, llama-server; see "Local models" below), e.g.:
 
 ```sh
 export FIREWORKS_API_KEY=fw-...
@@ -62,6 +62,30 @@ cupel --resume cupel-1720000000000                              # continue a spe
 ```
 
 Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/provider <name> [api-key]`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision the most specific location wins: working directory > `.cupel/` > `~/.cupel`. Typing `/` opens autocomplete; `/model `, `/provider `, and `/thinking ` continue into value completion (the model catalog, the providers, the thinking levels), so ids never have to be typed from memory.
+
+Local models: with `ollama serve` running, every pulled model appears automatically in `--help`, `/model`, and `/provider` (probed at `OLLAMA_HOST` or `http://localhost:11434` with a 500ms budget; silently skipped when ollama is down). With no cloud keys exported, cupel defaults to the first discovered model - local requests need no API key. Discovered models assume a conservative 4096-token context window (ollama's own default); to raise it, or to add any other OpenAI-compatible endpoint (llama-server, LM Studio, a proxy), define the model in a `models.json` in `~/.cupel/` or `<project>/.cupel/`. Entries are a JSON array of model descriptors (camelCase, `input` values `"text"`/`"image"`) merged over the built-in catalog by `id` - project overrides home overrides built-ins, and any explicit entry beats a discovered one:
+
+```json
+[
+  {
+    "id": "qwen3:8b",
+    "name": "Qwen 3 8B (ollama)",
+    "api": "openai-completions",
+    "provider": "ollama",
+    "baseUrl": "http://localhost:11434/v1",
+    "reasoning": false,
+    "input": ["text"],
+    "cost": { "input": 0, "output": 0, "cachedRead": 0, "cachedWrite": 0 },
+    "contextWindow": 32768,
+    "maxTokens": 8192,
+    "compat": { "requiresApiKey": false, "supportsStore": false,
+                "supportsDeveloperRole": false, "supportsStrictMode": false,
+                "maxTokensField": "max_tokens" }
+  }
+]
+```
+
+(For llama-server, the same entry with `"baseUrl": "http://localhost:8080/v1"` works. `api` must be one of the four registered protocols - unknown ones are warned about and skipped. `requiresApiKey: false` marks a keyless local endpoint.)
 
 Providers at runtime: `/provider` lists every provider with its default model and credential status; `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` hands over a key when nothing is exported - equivalent to the `export` route, but scoped to this session: the key lives in process memory only, is never persisted or echoed, and wins over the environment variable. Switching models across providers via `/model` re-resolves the key the same way.
 

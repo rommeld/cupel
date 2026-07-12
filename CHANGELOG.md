@@ -7,6 +7,16 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
+## [Unreleased]
+
+- local models: a `models.json` in `~/.cupel/` or `.cupel/` defines custom
+  models (any OpenAI-compatible endpoint - llama-server, LM Studio,
+  proxies) merged over the built-in catalog by id
+- ollama auto-discovery: pulled models appear in `--help`, `/model`, and
+  `/provider` automatically and become the default when no cloud keys are
+  exported; keyless local endpoints supported via the new
+  `requiresApiKey: false` compat flag
+
 ## [v0.1.12-beta] - 2026-07-12
 
 - change model provider in the TUI via /provider slash command

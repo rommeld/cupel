@@ -77,6 +77,10 @@ struct CompletionsCompat {
     /// Send session headers so requests hit the same cache shard.
     send_session_affinity_headers: bool,
     thinking_format: ThinkingFormat,
+    /// Endpoint requires a Bearer API key. Local servers (ollama,
+    /// llama-server) accept anonymous requests - `requiresApiKey: false`
+    /// lets a keyless request proceed without an Authorization header.
+    requires_api_key: bool,
 }
 
 impl Default for CompletionsCompat {
@@ -93,6 +97,7 @@ impl Default for CompletionsCompat {
             requires_thinking_as_text: false,
             send_session_affinity_headers: false,
             thinking_format: ThinkingFormat::Openai,
+            requires_api_key: true,
         }
     }
 }
@@ -172,12 +177,21 @@ async fn run(
     options: &StreamOptions,
     sink: &EventSink,
 ) -> Result<()> {
-    let api_key = options
-        .api_key
-        .clone()
-        .ok_or_else(|| InferenceError::MissingApiKey(model.provider.as_str().to_string()))?;
-
+    // Compat is parsed BEFORE key resolution: `requiresApiKey: false`
+    // (local servers) turns a missing key from a hard error into a keyless
+    // request. A key that IS present is always sent - ollama ignores it,
+    // and authenticated proxies keep working.
     let compat = completions_compat(model);
+    let api_key = match options.api_key.clone() {
+        Some(key) => Some(key),
+        None if !compat.requires_api_key => None,
+        None => {
+            return Err(InferenceError::MissingApiKey(
+                model.provider.as_str().to_string(),
+            ));
+        }
+    };
+
     let body = build_request_body(model, context, options, &compat);
     // TRACE only: request bodies contain the user's code and prompts.
     tracing::trace!(body = %body, "request body");
@@ -185,9 +199,11 @@ async fn run(
 
     let mut req = http
         .post(&url)
-        .header("authorization", format!("Bearer {api_key}"))
         .header("content-type", "application/json")
         .header("accept", "application/json");
+    if let Some(key) = &api_key {
+        req = req.header("authorization", format!("Bearer {key}"));
+    }
     if compat.send_session_affinity_headers
         && let Some(session_id) = &options.session_id
     {
@@ -868,4 +884,64 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
     }
 
     Value::Array(params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{InputModality, ModelCost, Provider as ProviderName};
+
+    fn model_with_compat(compat: Option<serde_json::Value>) -> Model {
+        Model {
+            id: "local".into(),
+            name: "Local".into(),
+            api: Api::from(Api::OPENAI_COMPLETIONS),
+            provider: ProviderName::from("ollama"),
+            base_url: "http://localhost:11434/v1".into(),
+            reasoning: false,
+            thinking_level_map: None,
+            input: vec![InputModality::Text],
+            cost: ModelCost {
+                input: 0.0,
+                output: 0.0,
+                cached_read: 0.0,
+                cached_write: 0.0,
+            },
+            context_window: 4096,
+            max_tokens: 4096,
+            headers: None,
+            compat,
+        }
+    }
+
+    #[test]
+    fn requires_api_key_defaults_to_true() {
+        // No compat at all: a well-behaved cloud endpoint wants a key.
+        let compat = completions_compat(&model_with_compat(None));
+        assert!(compat.requires_api_key);
+    }
+
+    #[test]
+    fn requires_api_key_false_parses_from_camel_case() {
+        let compat = completions_compat(&model_with_compat(Some(serde_json::json!({
+            "requiresApiKey": false,
+            "supportsStore": false,
+        }))));
+        assert!(!compat.requires_api_key);
+        assert!(!compat.supports_store);
+        // Unmentioned flags keep their defaults.
+        assert!(compat.supports_strict_mode);
+    }
+
+    #[test]
+    fn malformed_compat_falls_back_to_all_defaults() {
+        // A type error fails the WHOLE parse, which `.ok()` turns into the
+        // defaults - so a typo'd requiresApiKey silently demands a key
+        // again. Pinned here so a future change to per-field tolerance is
+        // a conscious decision.
+        let compat = completions_compat(&model_with_compat(Some(serde_json::json!({
+            "requiresApiKey": "nope",
+        }))));
+        assert!(compat.requires_api_key);
+    }
 }
