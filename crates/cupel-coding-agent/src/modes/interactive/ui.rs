@@ -694,6 +694,44 @@ mod tests {
     }
 
     #[test]
+    fn model_and_thinking_arguments_autocomplete_end_to_end() {
+        let mut app = test_app();
+        // Accepting `/model ` from the command popup rolls straight into
+        // the model list - no extra keystroke needed.
+        type_text(&mut app, "/mod");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        assert_eq!(app.input.text(), "/model ");
+        assert!(app.autocomplete.is_open(), "model list should open");
+        let screen = draw(&mut app, 100, 24);
+        assert!(
+            screen.contains("claude-sonnet-4-5  (anthropic)"),
+            "catalog rows missing:\n{screen}"
+        );
+
+        // Narrow to one model, accept, and the command is ready to submit.
+        type_text(&mut app, "haiku");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.input.text(), "/model claude-haiku-4-5 ");
+        assert!(app.pending_prompt.is_none(), "accept must not submit");
+
+        // Same flow for /thinking.
+        let mut app = test_app();
+        type_text(&mut app, "/thinking of");
+        let (rows, selected) = app.autocomplete.visible().expect("levels");
+        assert_eq!(rows[selected].value, "off");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.input.text(), "/thinking off ");
+        // The settled argument closed the popup; Enter now submits.
+        assert!(!app.autocomplete.is_open());
+    }
+
+    #[test]
     fn up_down_with_popup_open_move_selection_not_history() {
         let mut app = test_app_in(&autocomplete_cwd("nav"));
         // Prime history directly on the input (App::submit would spawn agent

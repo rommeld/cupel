@@ -97,6 +97,40 @@ pub fn command_token_at_cursor(text: &str, cursor: usize) -> Option<String> {
     (!segment.iter().any(|c| c.is_whitespace())).then(|| segment.iter().collect())
 }
 
+/// The FIRST-argument token of a settled `/command`, if the cursor is in
+/// it: `/model son|` yields `("model", "son", 7)`. Picks up exactly where
+/// [`command_token_at_cursor`] stops (a space settles the name), and stops
+/// itself once the first argument is settled the same way - `/model x y`
+/// completes nothing. Returns `(command name, argument query, CHAR index
+/// where the argument starts)`.
+#[must_use]
+pub fn command_arg_token_at_cursor(text: &str, cursor: usize) -> Option<(String, String, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    if chars.first() != Some(&'/') {
+        return None;
+    }
+    // The name ends at the first whitespace; without one the user is still
+    // typing the name and command completion owns the popup.
+    let name_end = chars.iter().position(|c| c.is_whitespace())?;
+    if name_end <= 1 || cursor <= name_end {
+        return None; // empty name (`/ `), or cursor still inside the name
+    }
+    let name: String = chars[1..name_end].iter().collect();
+
+    // The argument starts at the first non-space after the name; with only
+    // spaces so far it starts AT the cursor (empty query = show everything).
+    let arg_start = (name_end..chars.len())
+        .find(|i| !chars[*i].is_whitespace())
+        .unwrap_or(chars.len())
+        .min(cursor);
+    let segment = &chars[arg_start..cursor];
+    if segment.iter().any(|c| c.is_whitespace()) {
+        return None; // the first argument is settled; no completion beyond it
+    }
+    Some((name, segment.iter().collect(), arg_start))
+}
+
 // ---------------------------------------------------------------------------
 // File enumeration
 // ---------------------------------------------------------------------------
@@ -177,6 +211,9 @@ pub struct Completion {
 enum SessionKind {
     Files,
     Commands,
+    /// The first argument of a command with a known value set, e.g. the
+    /// model catalog after `/model `.
+    CommandArgs,
 }
 
 struct Session {
@@ -196,6 +233,10 @@ pub struct Autocomplete {
     /// `/command` candidates (built-ins + prompt templates), set once by
     /// the frontend at startup.
     commands: Vec<Candidate>,
+    /// Per-command FIRST-argument value sets (`model` -> the catalog,
+    /// `thinking` -> the levels). Commands without an entry keep their
+    /// arguments completion-free.
+    command_args: Vec<(String, Vec<Candidate>)>,
     session: Option<Session>,
 }
 
@@ -205,6 +246,7 @@ impl Autocomplete {
         Self {
             root: root.into(),
             commands: Vec::new(),
+            command_args: Vec::new(),
             session: None,
         }
     }
@@ -213,6 +255,13 @@ impl Autocomplete {
     #[must_use]
     pub fn with_commands(mut self, commands: Vec<Candidate>) -> Self {
         self.commands = commands;
+        self
+    }
+
+    /// Register the selectable values for one command's first argument.
+    #[must_use]
+    pub fn with_command_args(mut self, name: &str, candidates: Vec<Candidate>) -> Self {
+        self.command_args.push((name.to_string(), candidates));
         self
     }
 
@@ -256,9 +305,19 @@ impl Autocomplete {
     /// does, closes when it no longer does (e.g. backspacing past the `@`).
     pub fn refresh(&mut self, text: &str, cursor: usize) {
         // Command completion first: it only ever triggers at input start,
-        // so the two kinds can never both match.
+        // so the kinds can never both match.
         if let Some(query) = command_token_at_cursor(text, cursor) {
             self.refresh_commands(query);
+            return;
+        }
+        // A settled command name with a REGISTERED value set completes its
+        // first argument. Unregistered commands (prompt templates, /help)
+        // fall through, so `@file` references in their arguments keep
+        // working.
+        if let Some((name, query, arg_start)) = command_arg_token_at_cursor(text, cursor)
+            && let Some(index) = self.command_args.iter().position(|(n, _)| *n == name)
+        {
+            self.refresh_command_args(index, query, arg_start);
             return;
         }
         let Some(token) = file_token_at_cursor(text, cursor) else {
@@ -339,6 +398,34 @@ impl Autocomplete {
         }
     }
 
+    /// (Re)build a first-argument session from the registered value set.
+    fn refresh_command_args(&mut self, index: usize, query: String, arg_start: usize) {
+        let candidates = &self.command_args[index].1;
+        let matches: Vec<Candidate> =
+            fuzzy_filter(&query, candidates, |candidate| &candidate.value)
+                .into_iter()
+                .take(MAX_VISIBLE)
+                .cloned()
+                .collect();
+        // Keep the highlighted row across keystrokes within one session.
+        let selected = match &self.session {
+            Some(session) if session.kind == SessionKind::CommandArgs => session.selected,
+            _ => 0,
+        };
+        self.session = Some(Session {
+            kind: SessionKind::CommandArgs,
+            token: FileToken {
+                start: arg_start, // anchors the popup under the argument
+                query,
+                quoted: false,
+            },
+            walked_prefix: String::new(),
+            candidates: Vec::new(),
+            selected: selected.min(matches.len().saturating_sub(1)),
+            matches,
+        });
+    }
+
     /// Completion for the selected row. The session itself is closed (or
     /// kept, for directories) by the follow-up `refresh` after the caller
     /// applies the edit.
@@ -354,6 +441,17 @@ impl Autocomplete {
                 start: 0,
                 end: cursor,
                 insert: format!("/{} ", candidate.value),
+                is_dir: false,
+            });
+        }
+
+        // Arguments replace the partial value; the trailing space settles
+        // it, which also closes the popup on the follow-up refresh.
+        if session.kind == SessionKind::CommandArgs {
+            return Some(Completion {
+                start: session.token.start,
+                end: cursor,
+                insert: format!("{} ", candidate.value),
                 is_dir: false,
             });
         }
@@ -564,6 +662,66 @@ mod tests {
         assert_eq!(completion.end, 3);
         assert_eq!(completion.insert, "/thinking ");
         assert!(!completion.is_dir);
+    }
+
+    #[test]
+    fn arg_token_needs_a_settled_name_and_stops_after_the_first_arg() {
+        // Name settled by the space, cursor in the (partial) argument.
+        assert_eq!(
+            command_arg_token_at_cursor("/model son", 10),
+            Some(("model".to_string(), "son".to_string(), 7))
+        );
+        // Right after the space: empty query = offer everything.
+        assert_eq!(
+            command_arg_token_at_cursor("/model ", 7),
+            Some(("model".to_string(), String::new(), 7))
+        );
+        // Still typing the name: command completion owns the popup.
+        assert_eq!(command_arg_token_at_cursor("/model", 6), None);
+        // First argument settled by its own trailing space: done.
+        assert_eq!(command_arg_token_at_cursor("/model x ", 9), None);
+        assert_eq!(command_arg_token_at_cursor("/model x y", 10), None);
+        // Not a command at all.
+        assert_eq!(command_arg_token_at_cursor("model son", 9), None);
+        assert_eq!(command_arg_token_at_cursor("/ x", 3), None);
+    }
+
+    #[test]
+    fn registered_command_args_complete_and_accept() {
+        let root = temp_tree("args");
+        let levels = ["off", "high", "xhigh"]
+            .iter()
+            .map(|level| Candidate {
+                display: format!("{level}  - description"),
+                value: (*level).to_string(),
+                is_dir: false,
+            })
+            .collect();
+        let mut ac = Autocomplete::new(&root)
+            .with_commands(command_list())
+            .with_command_args("thinking", levels);
+
+        // The space after the name flips straight into argument completion.
+        ac.refresh("/thinking ", 10);
+        let (rows, _) = ac.visible().expect("all levels offered");
+        assert_eq!(rows.len(), 3);
+
+        // Typing narrows; accepting replaces ONLY the argument.
+        ac.refresh("/thinking of", 12);
+        let (rows, selected) = ac.visible().expect("rows");
+        assert_eq!(rows[selected].value, "off");
+        let completion = ac.accept(12).expect("completion");
+        assert_eq!(completion.start, 10, "argument start, not input start");
+        assert_eq!(completion.end, 12);
+        assert_eq!(completion.insert, "off ");
+
+        // The trailing space settles the argument: popup closes.
+        ac.refresh("/thinking off ", 14);
+        assert!(ac.visible().is_none());
+
+        // Unregistered commands don't intercept - their args stay free-form.
+        ac.refresh("/help top", 9);
+        assert!(!ac.is_open());
     }
 
     #[test]

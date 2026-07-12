@@ -85,7 +85,35 @@ impl App {
                 is_dir: false,
             });
         }
-        let autocomplete = Autocomplete::new(&meta.cwd).with_commands(command_candidates);
+        // Argument value sets: after `/model ` the popup offers the catalog,
+        // after `/thinking ` the levels - no more typing ids from memory.
+        let model_candidates: Vec<Candidate> = cupel_core::catalog::builtin_models()
+            .iter()
+            .map(|model| Candidate {
+                display: format!("{}  ({})", model.id, model.provider.as_str()),
+                value: model.id.clone(),
+                is_dir: false,
+            })
+            .collect();
+        let thinking_candidates: Vec<Candidate> = [
+            ("off", "no extended thinking"),
+            ("minimal", "shortest thinking budget"),
+            ("low", "small thinking budget"),
+            ("medium", "moderate thinking budget"),
+            ("high", "large thinking budget"),
+            ("xhigh", "maximum thinking budget"),
+        ]
+        .iter()
+        .map(|(level, description)| Candidate {
+            display: format!("{level}  - {description}"),
+            value: (*level).to_string(),
+            is_dir: false,
+        })
+        .collect();
+        let autocomplete = Autocomplete::new(&meta.cwd)
+            .with_commands(command_candidates)
+            .with_command_args("model", model_candidates)
+            .with_command_args("thinking", thinking_candidates);
         // Restored history (a --resume session) exists before the App does;
         // snapshot it so the transcript can replay it as cells.
         let history = agent.state().messages;

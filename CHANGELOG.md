@@ -7,6 +7,12 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
+## [Unreleased]
+
+- TUI: `/model` and `/thinking` arguments now autocomplete - accepting the
+  command (or typing its trailing space) opens the model catalog / thinking
+  levels in the same popup, fuzzy-filtered while you type
+
 ## [v0.1.11-beta] - 2026-07-12
 
 - add selection mode Ctrl+Y to use copy/paste in TUI
