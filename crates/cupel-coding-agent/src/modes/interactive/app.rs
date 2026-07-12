@@ -63,6 +63,11 @@ pub struct App {
     /// Set by the Ctrl+Y key handler; the event loop applies it (only the
     /// loop owns the terminal and can issue the crossterm commands).
     pub mouse_toggle_requested: bool,
+    /// API keys entered via `/provider <name> <key>` this session. They
+    /// take precedence over exported env vars and are NEVER persisted -
+    /// process memory only (writing env vars back is impossible here:
+    /// set_var is unsafe in edition 2024 and the workspace forbids unsafe).
+    pub session_keys: std::collections::HashMap<String, String>,
 }
 
 impl App {
@@ -110,10 +115,19 @@ impl App {
             is_dir: false,
         })
         .collect();
+        let provider_candidates: Vec<Candidate> = crate::providers::catalog_providers()
+            .into_iter()
+            .map(|(provider, model)| Candidate {
+                display: format!("{provider}  (default {})", model.id),
+                value: provider,
+                is_dir: false,
+            })
+            .collect();
         let autocomplete = Autocomplete::new(&meta.cwd)
             .with_commands(command_candidates)
             .with_command_args("model", model_candidates)
-            .with_command_args("thinking", thinking_candidates);
+            .with_command_args("thinking", thinking_candidates)
+            .with_command_args("provider", provider_candidates);
         // Restored history (a --resume session) exists before the App does;
         // snapshot it so the transcript can replay it as cells.
         let history = agent.state().messages;
@@ -133,6 +147,7 @@ impl App {
             pending_prompt: None,
             mouse_captured: true, // mod.rs enables capture at startup
             mouse_toggle_requested: false,
+            session_keys: std::collections::HashMap::new(),
         };
         app.replay_history(&history);
         app
@@ -266,10 +281,13 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-        // ---- autocomplete popup takes precedence while open -----------------
+        // ---- autocomplete popup takes precedence while VISIBLE --------------
         // It consumes ONLY the keys it needs; everything else (Ctrl-C
         // included) falls through so session control never changes meaning.
-        if self.autocomplete.is_open() {
+        // Visible - not merely open: a session with zero matches renders
+        // nothing, and an invisible popup swallowing Enter would make a
+        // typo'd `/model xyz` un-submittable.
+        if self.autocomplete.visible().is_some() {
             match (key.code, ctrl, alt) {
                 // Esc closes the popup - it does NOT abort the run. A second
                 // Esc (popup now closed) aborts as usual.
@@ -503,6 +521,100 @@ impl App {
             .push(Cell::Notice { text: text.into() });
     }
 
+    /// The API key for `provider`: a key entered this session wins, then
+    /// the exported env var. Bedrock returns `None` - its AWS credential
+    /// chain resolves inside the provider itself.
+    fn resolve_key(&self, provider: &str) -> Option<String> {
+        self.session_keys
+            .get(provider)
+            .cloned()
+            .or_else(|| crate::providers::env_api_key(provider))
+    }
+
+    /// Point the agent at `model` AND re-resolve the API key for its
+    /// provider. Model and key must travel together: switching providers
+    /// while keeping the old key would sign requests with the wrong
+    /// credential.
+    fn switch_model(&mut self, model: cupel_core::types::Model) {
+        let provider = model.provider.as_str().to_string();
+        self.meta.model_name = model.name.clone();
+        self.meta.provider = provider.clone();
+        self.agent.set_api_key(self.resolve_key(&provider));
+        self.agent.set_model(model);
+    }
+
+    /// `/provider` - list providers, or switch to one (optionally handing
+    /// over an API key for this session).
+    fn handle_provider_command(&mut self, args: &str) {
+        let mut parts = args.split_whitespace();
+        let name = parts.next().unwrap_or("");
+        let entered_key = parts.next();
+
+        if name.is_empty() {
+            let mut lines = vec!["providers (/provider <name> [api-key]):".to_string()];
+            for (provider, model) in crate::providers::catalog_providers() {
+                let status = if provider == "amazon-bedrock" {
+                    if crate::providers::has_aws_credentials() {
+                        "AWS credentials found".to_string()
+                    } else {
+                        "no AWS credentials".to_string()
+                    }
+                } else if self.session_keys.contains_key(&provider) {
+                    "key entered this session".to_string()
+                } else {
+                    let var = crate::providers::env_var_name(&provider).unwrap_or("env");
+                    if crate::providers::env_api_key(&provider).is_some() {
+                        format!("{var} exported")
+                    } else {
+                        format!("no key ({var} unset)")
+                    }
+                };
+                lines.push(format!("  {provider}  - default {}, {status}", model.id));
+            }
+            self.notice(lines.join("\n"));
+            return;
+        }
+
+        let Some((provider, model)) = crate::providers::catalog_providers()
+            .into_iter()
+            .find(|(p, _)| p == name)
+        else {
+            self.notice(format!("unknown provider: {name} (/provider lists them)"));
+            return;
+        };
+
+        if let Some(key) = entered_key {
+            if crate::providers::env_var_name(&provider).is_none() {
+                self.notice(format!(
+                    "{provider} does not take an API key (AWS credential chain) - key ignored"
+                ));
+            } else {
+                // Session memory only, never persisted; deliberately not
+                // echoed back into the transcript either.
+                self.session_keys.insert(provider.clone(), key.to_string());
+            }
+        }
+
+        // Describe where the credential comes from WITHOUT echoing it.
+        let key_source = if provider == "amazon-bedrock" {
+            "AWS credential chain".to_string()
+        } else if self.session_keys.contains_key(&provider) {
+            "using the key entered this session".to_string()
+        } else if crate::providers::env_api_key(&provider).is_some() {
+            format!(
+                "using exported {}",
+                crate::providers::env_var_name(&provider).unwrap_or("env")
+            )
+        } else {
+            format!("NO KEY - requests will fail; set one with /provider {provider} <api-key>")
+        };
+        let model_id = model.id.clone();
+        self.switch_model(model);
+        self.notice(format!(
+            "provider switched to {provider} (model {model_id}; {key_source})"
+        ));
+    }
+
     /// Handle a built-in `/command`. Returns false when the name isn't a
     /// built-in (the caller then tries prompt templates).
     fn handle_builtin(&mut self, rest: &str) -> bool {
@@ -551,9 +663,7 @@ impl App {
                     .into_iter()
                     .find(|m| m.id == args)
                 {
-                    self.meta.model_name = model.name.clone();
-                    self.meta.provider = model.provider.as_str().to_string();
-                    self.agent.set_model(model);
+                    self.switch_model(model);
                     self.notice(format!(
                         "model switched to {args} (takes effect next request)"
                     ));
@@ -561,6 +671,7 @@ impl App {
                     self.notice(format!("unknown model: {args} (/model lists them)"));
                 }
             }
+            "provider" => self.handle_provider_command(args),
             "thinking" => {
                 let level = match args {
                     "off" => Some(None),

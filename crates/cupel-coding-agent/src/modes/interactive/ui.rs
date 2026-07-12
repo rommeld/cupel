@@ -732,6 +732,63 @@ mod tests {
     }
 
     #[test]
+    fn provider_command_lists_switches_and_takes_a_session_key() {
+        let mut app = test_app();
+
+        // `/provider ` opens the provider list via argument autocomplete.
+        type_text(&mut app, "/provider ");
+        let (rows, _) = app.autocomplete.visible().expect("provider rows");
+        let values: Vec<&str> = rows.iter().map(|r| r.value.as_str()).collect();
+        assert!(values.contains(&"anthropic"), "{values:?}");
+        assert!(values.contains(&"fireworks"), "{values:?}");
+
+        // Bare /provider prints the list with credential status.
+        let mut app = test_app();
+        type_text(&mut app, "/provider");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        let listing = app.transcript.cells.iter().any(|c| {
+            matches!(c, Cell::Notice { text }
+                if text.contains("anthropic") && text.contains("amazon-bedrock"))
+        });
+        assert!(listing, "expected provider listing notice");
+
+        // Switching with an explicit key: session key wins, no echo of the
+        // secret, meta + footer follow the new provider's default model.
+        let mut app = test_app();
+        type_text(&mut app, "/provider fireworks fw-secret-123");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.meta.provider, "fireworks");
+        let switched = app.transcript.cells.iter().any(|c| {
+            matches!(c, Cell::Notice { text }
+                if text.contains("provider switched to fireworks")
+                    && text.contains("key entered this session")
+                    && !text.contains("fw-secret-123"))
+        });
+        assert!(switched, "expected switch notice without the secret");
+
+        // Unknown provider: a helpful error, no state change.
+        type_text(&mut app, "/provider nope");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.meta.provider, "fireworks", "unchanged");
+        let unknown =
+            app.transcript.cells.iter().any(
+                |c| matches!(c, Cell::Notice { text } if text.contains("unknown provider: nope")),
+            );
+        assert!(unknown);
+    }
+
+    #[test]
     fn up_down_with_popup_open_move_selection_not_history() {
         let mut app = test_app_in(&autocomplete_cwd("nav"));
         // Prime history directly on the input (App::submit would spawn agent

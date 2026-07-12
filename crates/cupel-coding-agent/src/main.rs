@@ -111,48 +111,40 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
     Ok(parsed)
 }
 
-/// Pick a model + API key from CLI args and environment.
+/// Pick a model + API key from CLI args and environment. (Credential
+/// knowledge lives in `providers.rs`, shared with the TUI's `/provider`
+/// command - which can also switch providers and take a key at runtime.)
 fn select_model(args: &CliArgs) -> Result<(Model, Option<String>), String> {
-    let catalog = cupel_core::catalog::builtin_models();
+    use cupel_coding_agent::providers;
 
-    let api_key_for = |provider: &str| -> Option<String> {
-        match provider {
-            "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
-            "openai" => std::env::var("OPENAI_API_KEY").ok(),
-            "fireworks" => std::env::var("FIREWORKS_API_KEY").ok(),
-            // Bedrock auth runs through the AWS credential chain inside the
-            // provider; no key travels through StreamOptions.
-            _ => None,
-        }
-    };
+    let catalog = cupel_core::catalog::builtin_models();
 
     if let Some(wanted) = &args.model {
         let model = catalog
             .into_iter()
             .find(|m| m.id == *wanted)
             .ok_or_else(|| format!("unknown model: {wanted} (see --help for the list)"))?;
-        let key = api_key_for(model.provider.as_str());
+        let key = providers::env_api_key(model.provider.as_str());
         return Ok((model, key));
     }
 
     // No --model: first provider with credentials wins, in catalog order
-    // (Anthropic, OpenAI, Bedrock, then Fireworks).
-    let has_aws =
-        std::env::var("AWS_ACCESS_KEY_ID").is_ok() || std::env::var("AWS_PROFILE").is_ok();
+    // (Anthropic, OpenAI, Bedrock, then Fireworks). Bedrock carries no key
+    // through StreamOptions - the AWS chain resolves inside the provider.
     for model in catalog {
         match model.provider.as_str() {
-            "anthropic" | "openai" | "fireworks" => {
-                if let Some(key) = api_key_for(model.provider.as_str()) {
+            "amazon-bedrock" if providers::has_aws_credentials() => return Ok((model, None)),
+            provider => {
+                if let Some(key) = providers::env_api_key(provider) {
                     return Ok((model, Some(key)));
                 }
             }
-            "amazon-bedrock" if has_aws => return Ok((model, None)),
-            _ => {}
         }
     }
     Err(
         "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, FIREWORKS_API_KEY, \
-         or AWS credentials"
+         or AWS credentials - or start with an explicit `--model <id>` and enter a key in \
+         the TUI via `/provider <name> <api-key>`"
             .to_string(),
     )
 }

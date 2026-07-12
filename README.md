@@ -61,7 +61,9 @@ cupel --resume                                                  # continue this 
 cupel --resume cupel-1720000000000                              # continue a specific session by id
 ```
 
-Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision the most specific location wins: working directory > `.cupel/` > `~/.cupel`. Typing `/` opens autocomplete; `/model ` and `/thinking ` continue into value completion (the model catalog and the thinking levels), so ids never have to be typed from memory.
+Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/provider <name> [api-key]`, `/thinking <level>`, `/usage`, `/quit`) are handled locally; markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision the most specific location wins: working directory > `.cupel/` > `~/.cupel`. Typing `/` opens autocomplete; `/model `, `/provider `, and `/thinking ` continue into value completion (the model catalog, the providers, the thinking levels), so ids never have to be typed from memory.
+
+Providers at runtime: `/provider` lists every provider with its default model and credential status; `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` hands over a key when nothing is exported - equivalent to the `export` route, but scoped to this session: the key lives in process memory only, is never persisted or echoed, and wins over the environment variable. Switching models across providers via `/model` re-resolves the key the same way.
 
 Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory, in its `.cupel/` subdirectory (handy for keeping cupel files out of the repository root), or in `~/.cupel` is loaded into the system prompt on every request; all found files are included, most specific last. `~/.cupel` is cupel's home (override with `CUPEL_HOME`): the installer puts the binary in `~/.cupel/bin`, global prompt templates in `~/.cupel/prompts/`, and the future memory feature will live in `~/.cupel/memory/`.
 
@@ -75,17 +77,15 @@ Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,
 
 ### What works today?
 - Multi-provider inference layer with build-in model catalog
-- CLI: `--model <id>`, `--thinking <mode>`
+- CLI mode: `--model <id>`, `--thinking <mode>`
 - Agent tools: read, grep, write, edit, bash
-- TUI based on `ratatui`
 - File referencing via `@file-path` using fuzzy search
-- Slash commands via `/command`
+- Slash commands via `/<command>`
 - Context management: proactive compaction + reactive provider truncation
 - Auto-retry, tracing/observability, and system-prompt project context
-- HOMEPATH directory for file definitions
+- Persistencey: sessions will not survive after exiting `cupel`.
 
 ### What is missing?
-- Persistencey: sessions will not survive after exiting `cupel`.
 - `cupel-index` as an alternative to `grep`(combination of `fff` and `entire`'s code search)
 - Local models (e.g. `ollama` support)
 - Windows support

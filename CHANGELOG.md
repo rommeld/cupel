@@ -9,6 +9,10 @@ that section is replaced by the generated one when the next tag ships.
 
 ## [Unreleased]
 
+- TUI: `/provider` switches the model provider at runtime - lists providers
+  with credential status, switches model + API key together, and accepts a
+  session-scoped key (`/provider <name> <api-key>`) when nothing is
+  exported; `/model` now re-resolves the key on cross-provider switches
 - TUI: `/model` and `/thinking` arguments now autocomplete - accepting the
   command (or typing its trailing space) opens the model catalog / thinking
   levels in the same popup, fuzzy-filtered while you type

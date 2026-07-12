@@ -250,6 +250,10 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Switch model: /model <id> (no argument lists them)",
     },
     BuiltinCommand {
+        name: "provider",
+        description: "Switch provider: /provider <name> [api-key] (no argument lists them)",
+    },
+    BuiltinCommand {
         name: "thinking",
         description: "Set thinking level: /thinking off|minimal|low|medium|high|xhigh",
     },

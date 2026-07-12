@@ -198,6 +198,13 @@ impl Agent {
         self.state.lock().expect("agent state lock poisoned").model = model;
     }
 
+    /// Swap the fallback API key used by FUTURE runs (the TUI's /provider
+    /// and cross-provider /model switches). A run already in flight keeps
+    /// the key it was started with; hook-provided keys still win.
+    pub fn set_api_key(&mut self, api_key: Option<String>) {
+        self.api_key = api_key;
+    }
+
     /// Set the thinking level for future requests (`None` = off).
     pub fn set_thinking_level(&self, level: Option<ThinkingLevel>) {
         self.state
