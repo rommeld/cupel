@@ -8,6 +8,7 @@ change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 ## [Unreleased]
 
 - persist every session as a JSONL transcript under
@@ -19,6 +20,8 @@ that section is replaced by the generated one when the next tag ships.
   `.cupel/hooks/<event>/` run on `session-start`, `user-prompt-submit`,
   `stop`, and `session-end` with a JSON payload on stdin
 
+=======
+>>>>>>> d5e914b (changelog: v0.1.10-beta)
 =======
 >>>>>>> d5e914b (changelog: v0.1.10-beta)
 ## [v0.1.10-beta] - 2026-07-12
