@@ -34,6 +34,9 @@
 !/.cupel
 !/.cupel/AGENTS.md
 
+!/.entire
+!/.entire/**
+
 !CHANGELOG.md
 !CONTRIBUTION.md
 !TODO.md
