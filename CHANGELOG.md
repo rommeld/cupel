@@ -7,15 +7,12 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
-## [Unreleased]
+## [v0.1.12-beta] - 2026-07-12
 
-- TUI: `/provider` switches the model provider at runtime - lists providers
-  with credential status, switches model + API key together, and accepts a
-  session-scoped key (`/provider <name> <api-key>`) when nothing is
-  exported; `/model` now re-resolves the key on cross-provider switches
-- TUI: `/model` and `/thinking` arguments now autocomplete - accepting the
-  command (or typing its trailing space) opens the model catalog / thinking
-  levels in the same popup, fuzzy-filtered while you type
+- change model provider in the TUI via /provider slash command
+- choose model by leveraging slash command /model via a popup
+- add auto-complete for model selection and thinking mode
+- changelog: v0.1.11-beta
 
 ## [v0.1.11-beta] - 2026-07-12
 
