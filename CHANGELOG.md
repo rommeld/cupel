@@ -7,21 +7,16 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
-## [Unreleased]
+## [v0.1.11-beta] - 2026-07-12
 
-- TUI: bracketed paste (multi-line pastes insert as text instead of
-  submitting at every newline) and Ctrl+Y selection mode - temporarily
-  releases the mouse so text can be selected and copied natively, toggle
-  back for wheel scrolling
-- add entire-agent-cupel: an external-agent shim (protocol v1) that lets the Entire CLI manage cupel sessions - session/transcript plumbing, hook forwarding via install-hooks, and transcript analysis
-- persist every session as a JSONL transcript under
-  `~/.cupel/sessions/<project-slug>/` (created on first prompt, crash-safe
-  per-message flushing)
-- add `--resume [id]`: reload a session's transcript, replay it in the TUI,
-  and continue in the same transcript file
-- add lifecycle hooks: executables in `~/.cupel/hooks/<event>/` or
-  `.cupel/hooks/<event>/` run on `session-start`, `user-prompt-submit`,
-  `stop`, and `session-end` with a JSON payload on stdin
+- add entire to current project
+- add selection mode Ctrl+Y to use copy/paste in TUI
+- add entire-agent-cupel: Entire CLI external-agent shim (protocol v1)
+- fix CHANGELOG.md and remove HEAD
+- cupel got persistency through session transcripts, lifecycle hooks, and session resuming
+- cupel got persistency through session transcripts, lifecycle hooks, and session resuming
+- changelog: v0.1.10-beta
+- Remove TODO.md
 
 ## [v0.1.10-beta] - 2026-07-12
 
