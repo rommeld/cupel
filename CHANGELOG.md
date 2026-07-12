@@ -9,6 +9,10 @@ that section is replaced by the generated one when the next tag ships.
 
 ## [Unreleased]
 
+- TUI: bracketed paste (multi-line pastes insert as text instead of
+  submitting at every newline) and Ctrl+Y selection mode - temporarily
+  releases the mouse so text can be selected and copied natively, toggle
+  back for wheel scrolling
 - persist every session as a JSONL transcript under
   `~/.cupel/sessions/<project-slug>/` (created on first prompt, crash-safe
   per-message flushing)

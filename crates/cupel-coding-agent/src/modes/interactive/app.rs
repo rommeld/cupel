@@ -56,6 +56,13 @@ pub struct App {
     /// loop picks it up and awaits the prompt-path hooks first - key
     /// handling stays fully synchronous (and so do its tests).
     pub pending_prompt: Option<String>,
+    /// Whether the terminal currently reports mouse events to cupel. ON =
+    /// wheel scrolls the transcript; OFF ("selection mode") = the terminal
+    /// handles the mouse natively, so text can be selected and copied.
+    pub mouse_captured: bool,
+    /// Set by the Ctrl+Y key handler; the event loop applies it (only the
+    /// loop owns the terminal and can issue the crossterm commands).
+    pub mouse_toggle_requested: bool,
 }
 
 impl App {
@@ -96,6 +103,8 @@ impl App {
             should_quit: false,
             recorder,
             pending_prompt: None,
+            mouse_captured: true, // mod.rs enables capture at startup
+            mouse_toggle_requested: false,
         };
         app.replay_history(&history);
         app
@@ -285,6 +294,11 @@ impl App {
             (KeyCode::Esc, ..) if self.is_running() => self.agent.abort(),
 
             // ---- view control --------------------------------------------
+            // Ctrl+Y toggles "selection mode": mouse capture off so the
+            // TERMINAL owns the mouse again (select + copy text natively),
+            // then back on for wheel scrolling. Only requested here - the
+            // event loop owns the terminal and issues the actual commands.
+            (KeyCode::Char('y'), true, _) => self.mouse_toggle_requested = true,
             (KeyCode::PageUp, ..) => {
                 self.scroll_by(i64::from(self.last_transcript_height / 2).max(1));
             }
@@ -357,6 +371,21 @@ impl App {
         if self.autocomplete.is_open() {
             self.refresh_autocomplete();
         }
+    }
+
+    /// Flip the mouse-capture state and tell the user what changed. Called
+    /// by the event loop AFTER it issued the matching crossterm command;
+    /// split from the key handler so the state logic is testable without a
+    /// terminal. Returns the new state.
+    pub fn apply_mouse_toggle(&mut self) -> bool {
+        self.mouse_toggle_requested = false;
+        self.mouse_captured = !self.mouse_captured;
+        self.notice(if self.mouse_captured {
+            "mouse capture on - wheel scrolls; ctrl+y to select/copy text"
+        } else {
+            "selection mode - select and copy with the mouse; ctrl+y to re-enable wheel scrolling"
+        });
+        self.mouse_captured
     }
 
     fn scroll_by(&mut self, delta: i64) {

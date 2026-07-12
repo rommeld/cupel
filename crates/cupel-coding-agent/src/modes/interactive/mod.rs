@@ -23,7 +23,9 @@ pub mod transcript;
 pub mod ui;
 
 use cupel_agent::Agent;
-use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event};
+use ratatui::crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+};
 use ratatui::crossterm::execute;
 
 use crate::modes::SessionMeta;
@@ -40,19 +42,31 @@ pub async fn run(
     // panic hook that restores the terminal - without that, a panic would
     // leave the user's shell in raw mode (no echo, no line editing).
     let mut terminal = ratatui::init();
-    // Mouse capture (for wheel-scrolling the transcript) is opt-in and NOT
-    // covered by ratatui's init/restore or its panic hook. It must be
+    // Mouse capture (wheel-scrolling) and bracketed paste are opt-in and NOT
+    // covered by ratatui's init/restore or its panic hook. Both must be
     // released on every exit path: a terminal left in mouse mode swallows
     // normal wheel scrolling and text selection even after cupel exits. The
     // panic hook is chained so the release runs BEFORE ratatui's restore.
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    //
+    // Bracketed paste makes a terminal paste arrive as ONE Event::Paste
+    // instead of a stream of key presses - without it, every newline in the
+    // pasted text would hit the Enter handler and submit a partial prompt.
+    let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let ratatui_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        let _ = execute!(
+            std::io::stdout(),
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
         ratatui_hook(info);
     }));
     let result = event_loop(&mut terminal, agent, meta, recorder).await;
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    let _ = execute!(
+        std::io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste
+    );
     ratatui::restore();
     result
 }
@@ -99,6 +113,23 @@ async fn event_loop(
             }
             event = app.next_agent_event() => {
                 app.on_agent_event(event).await;
+            }
+        }
+
+        // Ctrl+Y requested a selection-mode toggle: release the mouse so
+        // the terminal can select/copy text natively, or recapture it for
+        // wheel scrolling. The command goes to the terminal FIRST; state
+        // (and the user-facing notice) only flips when it succeeded.
+        if app.mouse_toggle_requested {
+            let command = if app.mouse_captured {
+                execute!(std::io::stdout(), DisableMouseCapture)
+            } else {
+                execute!(std::io::stdout(), EnableMouseCapture)
+            };
+            if command.is_ok() {
+                app.apply_mouse_toggle();
+            } else {
+                app.mouse_toggle_requested = false;
             }
         }
 

@@ -230,8 +230,13 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         app.totals.cache_read,
         app.totals.cost,
     );
-    let right =
-        "enter send · alt+enter newline · @ file · / cmds · esc abort · wheel/pgup/pgdn scroll ";
+    // The mouse hint tracks selection mode, so it never lies about what
+    // the wheel currently does.
+    let right = if app.mouse_captured {
+        "enter send · alt+enter newline · @ file · / cmds · esc abort · wheel scroll · ctrl+y copy "
+    } else {
+        "enter send · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+y scroll "
+    };
 
     // Left-align the status, right-align the key hints; drop the hints when
     // the terminal is too narrow for both.
@@ -620,6 +625,44 @@ mod tests {
             screen.contains("src/main.rs:1: bug"),
             "tool result attached:\n{screen}"
         );
+    }
+
+    #[test]
+    fn ctrl_y_toggles_selection_mode_and_updates_the_footer() {
+        let mut app = test_app();
+        assert!(app.mouse_captured);
+        let screen = draw(&mut app, 200, 20);
+        assert!(screen.contains("ctrl+y copy"), "hint missing:\n{screen}");
+
+        // Ctrl+Y only REQUESTS the toggle (the event loop owns the
+        // terminal); applying flips state and posts a notice.
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('y'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.mouse_toggle_requested);
+        assert!(!app.apply_mouse_toggle(), "capture now off");
+        assert!(!app.mouse_toggle_requested);
+
+        let screen = draw(&mut app, 200, 20);
+        assert!(screen.contains("SELECTION MODE"), "hint:\n{screen}");
+        assert!(
+            screen.contains("selection mode - select and copy"),
+            "notice cell missing:\n{screen}"
+        );
+        // And back on.
+        assert!(app.apply_mouse_toggle(), "capture on again");
+    }
+
+    #[test]
+    fn multi_line_paste_inserts_without_submitting() {
+        let mut app = test_app();
+        // Bracketed paste delivers the whole clipboard as ONE event; the
+        // embedded newline must become buffer content, not an Enter press.
+        app.on_terminal_event(Event::Paste("line one\nline two".to_string()));
+        assert_eq!(app.input.text(), "line one\nline two");
+        assert!(app.pending_prompt.is_none(), "paste must not submit");
+        assert!(app.transcript.cells.is_empty());
     }
 
     #[test]
