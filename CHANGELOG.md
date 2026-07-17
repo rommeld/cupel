@@ -7,23 +7,13 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
-## [Unreleased]
+## [v0.1.14-beta] - 2026-07-17
 
-- guardrails: bash commands are checked against a deny list before
-  executing - `rm -rf` and variants are blocked by default, and users add
-  their own regex rules in `~/.cupel/bash-deny` or `.cupel/bash-deny`
-  (union with the defaults; the model gets an error naming the rule)
-
-## [Unreleased]
-
-- TUI: `/hot-reload` re-reads every `.cupel` layer (AGENTS.md, prompts,
-  models.json, bash-deny) into a rebuilt agent - bare starts a fresh
-  session, `/hot-reload <session-id>` resumes that session with the new
-  configuration; session ids autocomplete from disk
-- TUI: the footer shows the current session id, and `/session-id` lists
-  this project's sessions - id, date, message count, model, and the first
-  prompt as label (transcripts store no summary, so the opening prompt is
-  the label), current session marked with `*`
+- add /hot-reload: apply .cupel changes to a rebuilt session
+- show session ids in the TUI: footer id + /session-id listing
+- gitignore: whitelist cupel-coding-agent/tests (carries the guard e2e test)
+- add bash denylist guard: block rm -rf via the AgentHooks veto point
+- changelog: v0.1.13-beta
 
 ## [v0.1.13-beta] - 2026-07-12
 
