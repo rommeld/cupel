@@ -647,6 +647,42 @@ impl App {
                 }
                 self.notice(lines.join("\n"));
             }
+            "session-id" => {
+                // Transcripts carry no stored summary (compaction output is
+                // never persisted), so each session's FIRST PROMPT serves as
+                // its human-readable label.
+                let mut lines = vec![format!(
+                    "current session: {} (resume later with `cupel --resume {}`)",
+                    self.recorder.session_id(),
+                    self.recorder.session_id()
+                )];
+                match self.recorder.sessions_dir() {
+                    None => lines.push(
+                        "session persistence is disabled (no cupel home) - nothing to list"
+                            .to_string(),
+                    ),
+                    Some(dir) => {
+                        let sessions = crate::session::list_sessions_in(dir);
+                        lines.push(format!("sessions for this project ({}):", sessions.len()));
+                        for s in &sessions {
+                            let marker = if s.id == self.recorder.session_id() {
+                                "*"
+                            } else {
+                                " "
+                            };
+                            lines.push(format!(
+                                "{marker} {}  {}  {} msgs  {}  {}",
+                                s.id,
+                                crate::session::date_ymd(s.started_at),
+                                s.message_count,
+                                s.model,
+                                s.label,
+                            ));
+                        }
+                    }
+                }
+                self.notice(lines.join("\n"));
+            }
             "usage" => {
                 self.notice(format!(
                     "session totals: {} in / {} out / {} cached, ${:.4}",

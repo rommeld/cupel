@@ -220,10 +220,13 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let state = if app.is_running() { "working" } else { "idle" };
+    // The session id sits in the always-visible left half so `--resume
+    // <id>` (or /hot-reload <id>) can be typed from what's on screen.
     let left = format!(
-        " {} ({}) | {} | {} in / {} out / {} cached | ${:.4}",
+        " {} ({}) | {} | {} | {} in / {} out / {} cached | ${:.4}",
         app.meta.model_name,
         app.meta.provider,
+        app.recorder.session_id(),
         state,
         app.totals.input,
         app.totals.output,
@@ -334,6 +337,78 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    fn footer_shows_the_current_session_id() {
+        let mut app = test_app();
+        let screen = draw(&mut app, 100, 20);
+        assert!(
+            screen.contains("cupel-test"),
+            "session id missing from footer:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn session_id_command_lists_this_projects_sessions() {
+        // A home-backed recorder (unlike test_app's disabled one) so the
+        // listing has a real sessions dir to read.
+        let root = std::env::temp_dir().join("cupel-ui-session-list");
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, cwd) = (root.join("home"), root.join("proj"));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let recorder =
+            crate::session::SessionRecorder::new(Some(home), &cwd, "cupel-current", "test-model");
+        // Pre-write an OLDER session the listing must show alongside.
+        let dir = recorder.sessions_dir().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cupel-old.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({"version": 1, "sessionId": "cupel-old", "cwd": cwd.display().to_string(), "model": "test-model", "startedAt": 1_000}),
+                serde_json::to_string(&cupel_agent::AgentMessage::user_text("find the bug")).unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let model = cupel_core::catalog::builtin_models().remove(0);
+        let registry = Arc::new(cupel_core::provider::Registry::new());
+        let mut app = App::new(
+            Agent::new(AgentOptions::new(model, registry)),
+            SessionMeta {
+                model_name: "Test Model".into(),
+                provider: "test".into(),
+                cwd: cwd.display().to_string(),
+                templates: Vec::new(),
+                models: cupel_core::catalog::builtin_models(),
+            },
+            recorder,
+        );
+
+        type_text(&mut app, "/session-id");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+
+        let notice = app
+            .transcript
+            .cells
+            .iter()
+            .find_map(|c| match c {
+                Cell::Notice { text } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("listing notice");
+        assert!(
+            notice.contains("current session: cupel-current"),
+            "{notice}"
+        );
+        assert!(notice.contains("cupel-old"), "{notice}");
+        assert!(notice.contains("find the bug"), "label = first prompt");
+        assert!(notice.contains("1970-01-01"), "startedAt 1000ms date");
     }
 
     #[test]

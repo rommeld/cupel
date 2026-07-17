@@ -14,6 +14,13 @@ that section is replaced by the generated one when the next tag ships.
   their own regex rules in `~/.cupel/bash-deny` or `.cupel/bash-deny`
   (union with the defaults; the model gets an error naming the rule)
 
+## [Unreleased]
+
+- TUI: the footer shows the current session id, and `/session-id` lists
+  this project's sessions - id, date, message count, model, and the first
+  prompt as label (transcripts store no summary, so the opening prompt is
+  the label), current session marked with `*`
+
 ## [v0.1.13-beta] - 2026-07-12
 
 - add local model support: models.json catalog layers + ollama discovery

@@ -258,6 +258,10 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Set thinking level: /thinking off|minimal|low|medium|high|xhigh",
     },
     BuiltinCommand {
+        name: "session-id",
+        description: "Show the current session id and list this project's sessions",
+    },
+    BuiltinCommand {
         name: "usage",
         description: "Show session token and cost totals",
     },
