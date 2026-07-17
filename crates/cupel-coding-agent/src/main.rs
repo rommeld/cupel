@@ -13,13 +13,8 @@
 use std::io::IsTerminal as _;
 use std::sync::Arc;
 
-use cupel_agent::{Agent, AgentOptions, ToolExecutionMode, types::AgentTool};
+use cupel_agent::{Agent, AgentOptions, ToolExecutionMode};
 use cupel_coding_agent::modes::{self, SessionMeta};
-use cupel_coding_agent::search::GrepSearch;
-use cupel_coding_agent::system_prompt::build_system_prompt;
-use cupel_coding_agent::tools::{
-    bash::BashTool, edit::EditTool, grep::GrepTool, read::ReadTool, write::WriteTool,
-};
 use cupel_core::types::{Model, ThinkingLevel};
 
 fn main() -> std::process::ExitCode {
@@ -218,55 +213,15 @@ async fn run() -> Result<(), String> {
     // frontends create it on the first agent interaction (resources::
     // ensure_project_dot_cupel), so just launching cupel leaves no trace.
 
-    // ---- Resolve the model catalog ONCE ---------------------------------------
-    // Built-ins + models.json layers + ollama discovery (bounded network
-    // probe, hence async and done here, never in the frontends' sync key
-    // handlers). Everything downstream - model selection, /model,
-    // /provider, autocomplete - reads THIS list.
+    // ---- Load the session ingredients ONCE ------------------------------------
+    // bootstrap::load reads everything reloadable (context files, prompt
+    // templates, model catalog incl. the bounded ollama probe, bash-deny
+    // rules, tools) in one place - the TUI's /hot-reload runs the SAME
+    // loader, so a reload can never drift from a fresh start.
     let registry = Arc::new(cupel_core::default_registry());
     let home = cupel_coding_agent::resources::config_home();
-    let models = cupel_coding_agent::models::build_catalog(&registry, home.as_deref(), &cwd).await;
-    let (model, api_key) = select_model(&args, &models)?;
-
-    // ---- Wire the agent -----------------------------------------------------
-    // The grep tool talks to a CodeSearch backend; today that's GrepSearch,
-    // in iteration two an index-backed one from cupel-index slots in here.
-    let backend = Arc::new(GrepSearch::new(&cwd));
-    let tools: Vec<Arc<dyn AgentTool>> = vec![
-        Arc::new(ReadTool::new(&cwd)),
-        Arc::new(BashTool::new(&cwd)),
-        Arc::new(EditTool::new(&cwd)),
-        Arc::new(WriteTool::new(&cwd)),
-        Arc::new(GrepTool::new(&cwd, backend)),
-    ];
-    // Project context (AGENTS.md/CLAUDE.md, eager) comes from the cupel
-    // home (~/.cupel, override CUPEL_HOME), the project's .cupel/ directory,
-    // and the project cwd - later roots are more specific and win.
-    let roots = cupel_coding_agent::resources::default_roots(&cwd);
-    let context_files = cupel_coding_agent::resources::load_context_files(&roots);
-    // `/name`-invocable prompt templates from <root>/prompts/*.md.
-    let templates = cupel_coding_agent::commands::load_prompt_templates(&roots);
-
-    // Name + one-line snippet per tool, shown in the system prompt (the full
-    // descriptions travel in the tool schemas).
-    let system_prompt = build_system_prompt(
-        &cwd,
-        &[
-            ("read", "Read file contents"),
-            ("bash", "Execute bash commands (ls, find, cargo, etc.)"),
-            (
-                "edit",
-                "Make precise file edits with exact text replacement, including multiple \
-                 disjoint edits in one call",
-            ),
-            ("write", "Create or overwrite files"),
-            (
-                "grep",
-                "Search file contents for patterns (respects .gitignore)",
-            ),
-        ],
-        &context_files,
-    );
+    let ingredients = cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry).await;
+    let (model, api_key) = select_model(&args, &ingredients.models)?;
 
     // ---- Session identity: fresh or resumed ---------------------------------
     // Resume keeps the ORIGINAL session id, so the recorder appends to the
@@ -291,30 +246,33 @@ async fn run() -> Result<(), String> {
             (header.session_id, messages)
         }
     };
-    // The bash denylist guard rides the agent loop's before_tool_call veto
-    // point: built-in rm -rf protection plus user rules from
-    // ~/.cupel/bash-deny and <cwd>/.cupel/bash-deny (see guard.rs).
-    let guard = cupel_coding_agent::guard::BashGuard::from_config(home.as_deref(), &cwd);
-    let recorder =
-        cupel_coding_agent::session::SessionRecorder::new(home, &cwd, &session_id, &model.id);
+    let recorder = cupel_coding_agent::session::SessionRecorder::new(
+        home.clone(),
+        &cwd,
+        &session_id,
+        &model.id,
+    );
 
     let mut options = AgentOptions::new(model.clone(), registry);
-    options.system_prompt = system_prompt;
-    options.tools = tools;
+    options.system_prompt = ingredients.system_prompt;
+    options.tools = ingredients.tools;
     options.api_key = api_key;
     options.thinking_level = args.thinking;
     options.tool_execution = ToolExecutionMode::Parallel;
     options.session_id = Some(session_id);
     options.messages = seeded_messages;
-    options.hooks = Arc::new(guard);
+    // The bash denylist guard rides the agent loop's before_tool_call veto
+    // point (see guard.rs).
+    options.hooks = Arc::new(ingredients.guard);
     let agent = Agent::new(options);
 
     let meta = SessionMeta {
         model_name: model.name.clone(),
         provider: model.provider.as_str().to_string(),
         cwd: cwd.display().to_string(),
-        templates,
-        models,
+        templates: ingredients.templates,
+        models: ingredients.models,
+        home,
     };
 
     // ---- Pick a frontend ------------------------------------------------------

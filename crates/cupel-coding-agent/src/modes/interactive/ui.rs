@@ -300,6 +300,7 @@ mod tests {
                 // Real builtin catalog so /model and /provider tests exercise
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
+                home: None,
             },
             recorder,
         )
@@ -382,6 +383,7 @@ mod tests {
                 cwd: cwd.display().to_string(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
+                home: None,
             },
             recorder,
         );
@@ -409,6 +411,131 @@ mod tests {
         assert!(notice.contains("cupel-old"), "{notice}");
         assert!(notice.contains("find the bug"), "label = first prompt");
         assert!(notice.contains("1970-01-01"), "startedAt 1000ms date");
+    }
+
+    /// App with a REAL home + cwd on disk, for reload/resume tests.
+    fn test_app_with_home(root: &std::path::Path, session_id: &str) -> App {
+        let (home, cwd) = (root.join("home"), root.join("proj"));
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let recorder = crate::session::SessionRecorder::new(
+            Some(home.clone()),
+            &cwd,
+            session_id,
+            "test-model",
+        );
+        let model = cupel_core::catalog::builtin_models().remove(0);
+        let registry = Arc::new(cupel_core::provider::Registry::new());
+        App::new(
+            Agent::new(AgentOptions::new(model, registry)),
+            SessionMeta {
+                model_name: "Test Model".into(),
+                provider: "test".into(),
+                cwd: cwd.display().to_string(),
+                templates: Vec::new(),
+                models: cupel_core::catalog::builtin_models(),
+                home: Some(home),
+            },
+            recorder,
+        )
+    }
+
+    #[test]
+    fn hot_reload_command_sets_the_pending_target() {
+        let mut app = test_app();
+        type_text(&mut app, "/hot-reload");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(
+            app.pending_reload,
+            Some(crate::modes::interactive::app::ReloadTarget::New)
+        );
+
+        let mut app = test_app();
+        type_text(&mut app, "/hot-reload cupel-42");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(
+            app.pending_reload,
+            Some(crate::modes::interactive::app::ReloadTarget::Resume(
+                "cupel-42".into()
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn hot_reload_new_session_rereads_cupel_config() {
+        use crate::modes::interactive::app::ReloadTarget;
+
+        let root = std::env::temp_dir().join("cupel-ui-hotreload-new");
+        let _ = std::fs::remove_dir_all(&root);
+        let app = test_app_with_home(&root, "cupel-before");
+        // AGENTS.md appears AFTER startup - exactly what /hot-reload is for.
+        std::fs::write(root.join("home/AGENTS.md"), "NEW RULES APPLY").unwrap();
+
+        let app = app.hot_reload(ReloadTarget::New).await;
+
+        assert_ne!(app.recorder.session_id(), "cupel-before", "fresh id");
+        assert!(
+            app.agent.state().system_prompt.contains("NEW RULES APPLY"),
+            "reloaded context is in the system prompt"
+        );
+        assert!(app.agent.state().messages.is_empty(), "fresh history");
+        assert!(
+            app.transcript.cells.iter().any(|c| matches!(
+                c,
+                Cell::Notice { text } if text.contains("fresh session")
+            )),
+            "reload notice shown"
+        );
+    }
+
+    #[tokio::test]
+    async fn hot_reload_resumes_a_session_by_id_and_rejects_unknown_ids() {
+        use crate::modes::interactive::app::ReloadTarget;
+
+        let root = std::env::temp_dir().join("cupel-ui-hotreload-resume");
+        let _ = std::fs::remove_dir_all(&root);
+        let app = test_app_with_home(&root, "cupel-current");
+        // A finished older session on disk.
+        let dir = app.recorder.sessions_dir().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cupel-old.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({"version": 1, "sessionId": "cupel-old", "cwd": "x", "model": "test-model", "startedAt": 1_000}),
+                serde_json::to_string(&cupel_agent::AgentMessage::user_text("old prompt")).unwrap(),
+            ),
+        )
+        .unwrap();
+
+        // Unknown id: old app comes back intact, with an error notice.
+        let app = app
+            .hot_reload(ReloadTarget::Resume("cupel-nope".into()))
+            .await;
+        assert_eq!(app.recorder.session_id(), "cupel-current");
+        assert!(app.transcript.cells.iter().any(|c| matches!(
+            c,
+            Cell::Notice { text } if text.contains("no session named cupel-nope")
+        )));
+
+        // Known id: history seeded, cells replayed, same id continued.
+        let app = app
+            .hot_reload(ReloadTarget::Resume("cupel-old".into()))
+            .await;
+        assert_eq!(app.recorder.session_id(), "cupel-old");
+        assert_eq!(app.agent.state().messages.len(), 1);
+        assert!(app.transcript.cells.iter().any(|c| matches!(
+            c,
+            Cell::User { text } if text == "old prompt"
+        )));
     }
 
     #[test]
@@ -691,6 +818,7 @@ mod tests {
                 // Real builtin catalog so /model and /provider tests exercise
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
+                home: None,
             },
             recorder,
         );

@@ -68,6 +68,19 @@ pub struct App {
     /// process memory only (writing env vars back is impossible here:
     /// set_var is unsafe in edition 2024 and the workspace forbids unsafe).
     pub session_keys: std::collections::HashMap<String, String>,
+    /// Set by `/hot-reload`; the async event loop performs the actual
+    /// rebuild (it re-runs the bootstrap loader, which probes ollama and
+    /// awaits hooks - nothing a sync key handler may do).
+    pub pending_reload: Option<ReloadTarget>,
+}
+
+/// What `/hot-reload` asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReloadTarget {
+    /// Fresh session with a new id.
+    New,
+    /// Resume the given session id (same transcript file, history seeded).
+    Resume(String),
 }
 
 impl App {
@@ -126,11 +139,18 @@ impl App {
                 is_dir: false,
             })
             .collect();
+        // `/hot-reload <id>` completes from the transcripts on disk. Only
+        // file stems are read (no parsing) - App::new must stay fast.
+        let session_candidates: Vec<Candidate> = recorder
+            .sessions_dir()
+            .map(list_session_id_candidates)
+            .unwrap_or_default();
         let autocomplete = Autocomplete::new(&meta.cwd)
             .with_commands(command_candidates)
             .with_command_args("model", model_candidates)
             .with_command_args("thinking", thinking_candidates)
-            .with_command_args("provider", provider_candidates);
+            .with_command_args("provider", provider_candidates)
+            .with_command_args("hot-reload", session_candidates);
         // Restored history (a --resume session) exists before the App does;
         // snapshot it so the transcript can replay it as cells.
         let history = agent.state().messages;
@@ -151,6 +171,7 @@ impl App {
             mouse_captured: true, // mod.rs enables capture at startup
             mouse_toggle_requested: false,
             session_keys: std::collections::HashMap::new(),
+            pending_reload: None,
         };
         app.replay_history(&history);
         app
@@ -420,6 +441,93 @@ impl App {
         if self.autocomplete.is_open() {
             self.refresh_autocomplete();
         }
+    }
+
+    /// Rebuild the session with freshly loaded `.cupel` configuration -
+    /// the implementation of `/hot-reload`. Consumes the old App and
+    /// returns its replacement (the event loop rebinds); on failure the
+    /// OLD app comes back with an error notice, nothing torn down.
+    ///
+    /// What carries over: the current model + thinking level (runtime
+    /// switches survive a reload), session-entered API keys, and the
+    /// mouse-capture state. Everything else - system prompt (AGENTS.md),
+    /// prompt templates, model catalog, bash-deny rules, tools - is
+    /// re-read from disk via the SAME bootstrap loader startup uses.
+    pub async fn hot_reload(mut self, target: ReloadTarget) -> Self {
+        let cwd = std::path::PathBuf::from(&self.meta.cwd);
+
+        // Resolve the target session BEFORE tearing anything down.
+        let (session_id, seeded) = match &target {
+            ReloadTarget::New => (format!("cupel-{}", cupel_core::types::now_ms()), Vec::new()),
+            ReloadTarget::Resume(id) => {
+                let Some(path) = self
+                    .recorder
+                    .sessions_dir()
+                    .map(|dir| dir.join(format!("{id}.jsonl")))
+                    .filter(|p| p.exists())
+                else {
+                    self.notice(format!(
+                        "no session named {id} for this project (/session-id lists them)"
+                    ));
+                    return self;
+                };
+                match crate::session::load_transcript(&path) {
+                    Ok((header, messages)) => (header.session_id, messages),
+                    Err(e) => {
+                        self.notice(format!("cannot resume {id}: {e}"));
+                        return self;
+                    }
+                }
+            }
+        };
+
+        // Close the old session cleanly: settles pending hooks and fires
+        // session-end, so external consumers see a real boundary.
+        self.recorder.end_session().await;
+
+        let state = self.agent.state();
+        let registry = self.agent.registry();
+        let ingredients = crate::bootstrap::load(&cwd, self.meta.home.clone(), &registry).await;
+
+        let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
+        options.system_prompt = ingredients.system_prompt;
+        options.tools = ingredients.tools;
+        options.hooks = std::sync::Arc::new(ingredients.guard);
+        // The key is re-resolved for the CURRENT provider: session-entered
+        // keys win, then env - same rule as /provider switching.
+        options.api_key = self.resolve_key(state.model.provider.as_str());
+        options.thinking_level = state.thinking_level;
+        options.tool_execution = cupel_agent::ToolExecutionMode::Parallel;
+        options.session_id = Some(session_id.clone());
+        options.messages = seeded;
+
+        let recorder = crate::session::SessionRecorder::new(
+            self.meta.home.clone(),
+            &cwd,
+            &session_id,
+            &state.model.id,
+        );
+        let meta = crate::modes::SessionMeta {
+            model_name: state.model.name.clone(),
+            provider: state.model.provider.as_str().to_string(),
+            cwd: self.meta.cwd.clone(),
+            templates: ingredients.templates,
+            models: ingredients.models,
+            home: self.meta.home.clone(),
+        };
+
+        let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
+        app.session_keys = self.session_keys;
+        app.mouse_captured = self.mouse_captured;
+        app.notice(match target {
+            ReloadTarget::New => {
+                format!(".cupel configuration reloaded - fresh session {session_id}")
+            }
+            ReloadTarget::Resume(_) => {
+                format!(".cupel configuration reloaded - resumed session {session_id}")
+            }
+        });
+        app
     }
 
     /// Flip the mouse-capture state and tell the user what changed. Called
@@ -717,6 +825,21 @@ impl App {
                 }
             }
             "provider" => self.handle_provider_command(args),
+            "hot-reload" => {
+                if self.is_running() {
+                    self.notice(
+                        "cannot hot-reload while the agent is working (esc to abort first)",
+                    );
+                } else {
+                    // The event loop picks this up and rebuilds the session
+                    // (async work); see App::hot_reload.
+                    self.pending_reload = Some(if args.is_empty() {
+                        ReloadTarget::New
+                    } else {
+                        ReloadTarget::Resume(args.to_string())
+                    });
+                }
+            }
             "thinking" => {
                 let level = match args {
                     "off" => Some(None),
@@ -898,6 +1021,34 @@ impl App {
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
     }
+}
+
+/// Session-id completion candidates: transcript file stems, newest first
+/// by modification time. Deliberately does NOT parse the transcripts -
+/// this runs in `App::new`.
+fn list_session_id_candidates(dir: &std::path::Path) -> Vec<Candidate> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut stems: Vec<(std::time::SystemTime, String)> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
+        .filter_map(|p| {
+            let stem = p.file_stem()?.to_str()?.to_string();
+            let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok()?;
+            Some((modified, stem))
+        })
+        .collect();
+    stems.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    stems
+        .into_iter()
+        .map(|(_, stem)| Candidate {
+            display: stem.clone(),
+            value: stem,
+            is_dir: false,
+        })
+        .collect()
 }
 
 /// Truncate a one-line summary to at most `max_chars` characters.

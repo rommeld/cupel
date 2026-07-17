@@ -51,6 +51,14 @@ pub fn default_roots(cwd: &Path) -> Vec<PathBuf> {
     resolve_default_roots(config_home(), cwd)
 }
 
+/// [`default_roots`] with an EXPLICIT home instead of the env lookup -
+/// for callers that resolved the home once and thread it around (the
+/// bootstrap loader, /hot-reload), and for env-free tests.
+#[must_use]
+pub fn roots_for(home: Option<PathBuf>, cwd: &Path) -> Vec<PathBuf> {
+    resolve_default_roots(home, cwd)
+}
+
 /// The pure core of [`default_roots`], parameterized on the home so tests
 /// can exercise the ordering and dedup logic without touching env vars.
 fn resolve_default_roots(home: Option<PathBuf>, cwd: &Path) -> Vec<PathBuf> {

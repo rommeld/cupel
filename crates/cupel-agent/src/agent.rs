@@ -205,6 +205,14 @@ impl Agent {
         self.api_key = api_key;
     }
 
+    /// The provider registry this agent dispatches through. Cheap (Arc
+    /// clone); lets a frontend REBUILD an agent - the TUI's /hot-reload -
+    /// without re-plumbing the registry from startup.
+    #[must_use]
+    pub fn registry(&self) -> Arc<Registry> {
+        Arc::clone(&self.registry)
+    }
+
     /// Set the thinking level for future requests (`None` = off).
     pub fn set_thinking_level(&self, level: Option<ThinkingLevel>) {
         self.state

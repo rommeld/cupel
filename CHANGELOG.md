@@ -16,6 +16,10 @@ that section is replaced by the generated one when the next tag ships.
 
 ## [Unreleased]
 
+- TUI: `/hot-reload` re-reads every `.cupel` layer (AGENTS.md, prompts,
+  models.json, bash-deny) into a rebuilt agent - bare starts a fresh
+  session, `/hot-reload <session-id>` resumes that session with the new
+  configuration; session ids autocomplete from disk
 - TUI: the footer shows the current session id, and `/session-id` lists
   this project's sessions - id, date, message count, model, and the first
   prompt as label (transcripts store no summary, so the opening prompt is

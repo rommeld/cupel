@@ -22,4 +22,8 @@ pub struct SessionMeta {
     /// read models from here, never from `cupel_core::catalog` directly -
     /// discovery is async and must not run inside sync key handlers.
     pub models: Vec<cupel_core::types::Model>,
+    /// The resolved cupel home (`CUPEL_HOME` or `~/.cupel`). Threaded so
+    /// runtime reloads (/hot-reload) rebuild from the SAME home the
+    /// session started with - env-free and testable.
+    pub home: Option<std::path::PathBuf>,
 }
