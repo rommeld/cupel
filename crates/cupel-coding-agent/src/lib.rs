@@ -4,6 +4,7 @@
 //! chat loop.
 
 pub mod commands;
+pub mod guard;
 pub mod hooks;
 pub mod models;
 pub mod modes;

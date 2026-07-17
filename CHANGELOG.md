@@ -7,6 +7,13 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
+## [Unreleased]
+
+- guardrails: bash commands are checked against a deny list before
+  executing - `rm -rf` and variants are blocked by default, and users add
+  their own regex rules in `~/.cupel/bash-deny` or `.cupel/bash-deny`
+  (union with the defaults; the model gets an error naming the rule)
+
 ## [v0.1.13-beta] - 2026-07-12
 
 - add local model support: models.json catalog layers + ollama discovery

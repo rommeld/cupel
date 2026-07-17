@@ -15,6 +15,8 @@
 !/crates/cupel-coding-agent/
 !/crates/cupel-coding-agent/src/
 !/crates/cupel-coding-agent/src/**
+!/crates/cupel-coding-agent/tests/
+!/crates/cupel-coding-agent/tests/**
 
 !/crates/cupel-index/
 !/crates/cupel-index/src/
