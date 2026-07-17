@@ -82,6 +82,93 @@ pub fn find_latest(home: Option<&Path>, cwd: &Path) -> Option<PathBuf> {
         })
 }
 
+/// One row of the `/session-id` listing. There is NO stored summary in a
+/// transcript (compaction summaries live only inside a run's context
+/// snapshot and are never persisted), so the closest human-readable label
+/// is the session's FIRST USER PROMPT, plus countable facts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionSummary {
+    pub id: String,
+    pub started_at: u64,
+    pub model: String,
+    pub message_count: usize,
+    /// First user prompt, truncated; empty when the session has none.
+    pub label: String,
+}
+
+/// How many chars of the first prompt the listing shows.
+const LABEL_MAX_CHARS: usize = 60;
+
+/// Summarize every readable transcript in `dir`, newest first (by header
+/// start time). Unreadable files are skipped with a warning - one corrupt
+/// transcript must not hide the rest of the listing.
+#[must_use]
+pub fn list_sessions_in(dir: &Path) -> Vec<SessionSummary> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new(); // no sessions dir yet = nothing to list
+    };
+    let mut sessions: Vec<SessionSummary> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
+        .filter_map(|path| match load_transcript(&path) {
+            Ok((header, messages)) => Some(summarize(&header, &messages)),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), "skipping unreadable transcript: {e}");
+                None
+            }
+        })
+        .collect();
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.started_at));
+    sessions
+}
+
+/// Derive a listing row from a parsed transcript.
+fn summarize(header: &TranscriptHeader, messages: &[AgentMessage]) -> SessionSummary {
+    // The first LLM user message is the session's opening prompt.
+    let label = messages
+        .iter()
+        .find_map(|m| match m {
+            AgentMessage::Llm(cupel_core::types::Message::User(user)) => match &user.content {
+                cupel_core::types::UserContentBody::Text(text) => Some(text.as_str()),
+                cupel_core::types::UserContentBody::Blocks(_) => None,
+            },
+            _ => None,
+        })
+        .unwrap_or("");
+    // Truncate on CHAR boundaries (a byte slice could split a multi-byte
+    // character and panic) and flatten newlines for a one-line listing.
+    let mut label: String = label.chars().take(LABEL_MAX_CHARS).collect();
+    label = label.replace('\n', " ");
+    SessionSummary {
+        id: header.session_id.clone(),
+        started_at: header.started_at,
+        model: header.model.clone(),
+        message_count: messages.len(),
+        label,
+    }
+}
+
+/// Unix milliseconds -> `YYYY-MM-DD` (UTC), for the session listing.
+/// Hand-rolled instead of a chrono dependency: the civil-from-days
+/// algorithm (Howard Hinnant's) is ~10 lines and easily tested.
+#[must_use]
+pub fn date_ymd(ms: u64) -> String {
+    let days = (ms / 86_400_000).cast_signed();
+    // Shift the epoch from 1970-01-01 to 0000-03-01 so leap days land at
+    // the END of the counting year, making month lengths regular.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097); // day of 400-year era
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153; // March-based month 0..11
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 /// Parse a transcript: header off line 1, one message per following line.
 /// Malformed MESSAGE lines are skipped with a warning (a crash mid-append
 /// can truncate the last line); a malformed or wrong-version HEADER is an
@@ -163,6 +250,14 @@ impl SessionRecorder {
     #[must_use]
     pub fn session_id(&self) -> &str {
         &self.header.session_id
+    }
+
+    /// The directory holding this project's transcripts (parent of this
+    /// session's file); `None` when persistence is disabled. Threading it
+    /// from here keeps the TUI's session listing env-free and testable.
+    #[must_use]
+    pub fn sessions_dir(&self) -> Option<&Path> {
+        self.path.as_deref().and_then(Path::parent)
     }
 
     /// A prompt is about to start a run. Settles any pending `stop` hook
@@ -295,6 +390,69 @@ mod tests {
 
     fn recorder(home: &Path, cwd: &Path) -> SessionRecorder {
         SessionRecorder::new(Some(home.to_path_buf()), cwd, "cupel-42", "mock-model")
+    }
+
+    #[test]
+    fn date_ymd_converts_known_dates() {
+        assert_eq!(date_ymd(0), "1970-01-01");
+        // 2026-07-13 00:00:00 UTC (verified against `date -u`) and a leap day.
+        assert_eq!(date_ymd(1_783_900_800_000), "2026-07-13");
+        assert_eq!(date_ymd(1_709_164_800_000), "2024-02-29");
+    }
+
+    #[test]
+    fn session_listing_is_newest_first_with_first_prompt_labels() {
+        let root = temp_root("listing");
+        let dir = root.join("sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Two hand-written transcripts with different start times.
+        let write = |id: &str, started: u64, prompt: &str| {
+            let header = serde_json::to_string(&TranscriptHeader {
+                version: TRANSCRIPT_VERSION,
+                session_id: id.into(),
+                cwd: "/proj".into(),
+                model: "mock-model".into(),
+                started_at: started,
+            })
+            .unwrap();
+            let user = serde_json::to_string(&AgentMessage::user_text(prompt)).unwrap();
+            let reply = serde_json::to_string(&assistant_message("done")).unwrap();
+            std::fs::write(
+                dir.join(format!("{id}.jsonl")),
+                format!("{header}\n{user}\n{reply}\n"),
+            )
+            .unwrap();
+        };
+        write(
+            "cupel-1",
+            1_000,
+            "fix the login bug in a very long prompt that should be truncated at sixty characters exactly",
+        );
+        write("cupel-2", 2_000, "short one");
+        // A corrupt file must not break the listing.
+        std::fs::write(dir.join("cupel-3.jsonl"), "{broken").unwrap();
+
+        let sessions = list_sessions_in(&dir);
+        assert_eq!(sessions.len(), 2, "corrupt transcript skipped");
+        assert_eq!(sessions[0].id, "cupel-2", "newest first");
+        assert_eq!(sessions[0].label, "short one");
+        assert_eq!(sessions[0].message_count, 2);
+        assert_eq!(sessions[1].id, "cupel-1");
+        assert_eq!(sessions[1].label.chars().count(), 60, "label truncated");
+        assert_eq!(sessions[1].model, "mock-model");
+        // No sessions dir at all: empty, not an error.
+        assert!(list_sessions_in(&root.join("missing")).is_empty());
+    }
+
+    #[test]
+    fn recorder_exposes_its_sessions_dir() {
+        let root = temp_root("dir");
+        let rec = recorder(&root.join("home"), &root.join("proj"));
+        let dir = rec.sessions_dir().expect("home given, dir known");
+        assert!(dir.ends_with(format!("sessions/{}", project_slug(&root.join("proj")))));
+        // Disabled persistence (no home): no dir either.
+        let disabled = SessionRecorder::new(None, &root.join("proj"), "cupel-1", "m");
+        assert!(disabled.sessions_dir().is_none());
     }
 
     #[test]
