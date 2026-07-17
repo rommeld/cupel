@@ -133,6 +133,13 @@ async fn event_loop(
             }
         }
 
+        // /hot-reload requested a session rebuild: the loader re-reads
+        // every .cupel layer, so this must run here in async context. The
+        // old App is consumed and its replacement rebound in place.
+        if let Some(target) = app.pending_reload.take() {
+            app = app.hot_reload(target).await;
+        }
+
         // A prompt accepted by the (synchronous) key handler starts here:
         // the prompt-path hooks are awaited first, so a pending `stop` hook
         // from the previous run is guaranteed to have finished.

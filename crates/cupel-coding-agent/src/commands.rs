@@ -262,6 +262,10 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Show the current session id and list this project's sessions",
     },
     BuiltinCommand {
+        name: "hot-reload",
+        description: "Reload .cupel config into a fresh session, or resume one: /hot-reload [session-id]",
+    },
+    BuiltinCommand {
         name: "usage",
         description: "Show session token and cost totals",
     },
