@@ -2,7 +2,7 @@
 
 A cupel is a small vessel for refining precious metal. This project borrows that idea: separate useful code context from repository noise, then feed the refined signal into fast local agent workflows.
 
-`cupel` is a lean Rust coding harness focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval. I build it on taking insights from my former favourit agent `pi` (a masterpiece).
+`cupel` is a lean Rust coding agent focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval. I build it on my former favourit agent [pi](https://pi.dev) (a **MASTERPIECE**).
 
 ## Crates definition
 
@@ -95,6 +95,8 @@ Sessions & resume: every conversation is persisted as a JSONL transcript in `~/.
 
 Hooks: drop an executable into `~/.cupel/hooks/<event>/` (global) or `<project>/.cupel/hooks/<event>/` (per project) and cupel runs it on that event with a JSON payload on stdin: `{"event", "sessionId", "sessionRef" (transcript path), "cwd", "timestamp", "prompt"?}`. Events: `session-start`, `user-prompt-submit`, `stop` (run finished), `session-end`. Hooks observe, never veto: failures and timeouts (60s per hook) are logged and ignored. This file-based contract is what external integrations install into - the [entire CLI](https://github.com/entireio/cli) is supported out of the box via the [`entire-agent-cupel`](crates/entire-agent-cupel/README.md) shim.
 
+Guardrails: bash commands run through a deny list before they execute. `rm -rf` (and its spellings: `-fr`, combined flag groups, behind `sudo` or `&&`) is blocked out of the box; the model receives an error naming the rule instead of the command running. Add your own rules - one regex per line, `#` comments - in `~/.cupel/bash-deny` (global) or `<project>/.cupel/bash-deny` (per project); files EXTEND the defaults (union - deny rules never cancel each other). Matching is deliberately conservative: any line of the command matching anywhere blocks, even inside quotes, because a false positive costs one retry while a false negative costs your files. Invalid patterns are warned about and skipped.
+
 Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,cupel_agent=info` (per-request tokens/cost/duration, turns, tool timings, retries, compaction) or `cupel_core=trace` to include request bodies. Logs go to stderr in `--plain` mode and to a temp file (path printed at startup) in the TUI.
 
 ## Implementation milestones
@@ -108,10 +110,10 @@ Observability: set `RUST_LOG` to enable tracing, e.g. `RUST_LOG=cupel_core=info,
 - Context management: proactive compaction + reactive provider truncation
 - Auto-retry, tracing/observability, and system-prompt project context
 - Persistencey: sessions will not survive after exiting `cupel`.
+- Local models (e.g. `ollama` support)
 
 ### What is missing?
 - `cupel-index` as an alternative to `grep`(combination of `fff` and `entire`'s code search)
-- Local models (e.g. `ollama` support)
 - Windows support
 - MCP integration
 - `AgentMemory`: alongside compaction, a mechanism for an agent to retain and recall memory within a single session or across multiple sessions.

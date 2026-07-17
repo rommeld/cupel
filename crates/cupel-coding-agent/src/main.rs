@@ -291,6 +291,10 @@ async fn run() -> Result<(), String> {
             (header.session_id, messages)
         }
     };
+    // The bash denylist guard rides the agent loop's before_tool_call veto
+    // point: built-in rm -rf protection plus user rules from
+    // ~/.cupel/bash-deny and <cwd>/.cupel/bash-deny (see guard.rs).
+    let guard = cupel_coding_agent::guard::BashGuard::from_config(home.as_deref(), &cwd);
     let recorder =
         cupel_coding_agent::session::SessionRecorder::new(home, &cwd, &session_id, &model.id);
 
@@ -302,6 +306,7 @@ async fn run() -> Result<(), String> {
     options.tool_execution = ToolExecutionMode::Parallel;
     options.session_id = Some(session_id);
     options.messages = seeded_messages;
+    options.hooks = Arc::new(guard);
     let agent = Agent::new(options);
 
     let meta = SessionMeta {
