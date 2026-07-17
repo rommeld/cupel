@@ -7,6 +7,14 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
+## [v0.1.15-beta] - 2026-07-17
+
+- add /hot-reload: apply .cupel changes to a rebuilt session
+- show session ids in the TUI: footer id + /session-id listing
+- gitignore: whitelist cupel-coding-agent/tests (carries the guard e2e test)
+- add bash denylist guard: block rm -rf via the AgentHooks veto point
+- changelog: v0.1.13-beta
+
 ## [v0.1.14-beta] - 2026-07-17
 
 - add /hot-reload: apply .cupel changes to a rebuilt session
