@@ -514,6 +514,9 @@ impl App {
             templates: ingredients.templates,
             models: ingredients.models,
             home: self.meta.home.clone(),
+            // Limits come from the FRESH settings.json read - raising a
+            // limit and hot-reloading is the intended unblock path.
+            limits: ingredients.settings.limits,
         };
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
@@ -589,6 +592,17 @@ impl App {
 
     /// Route a prompt to the agent: new run when idle, steering when busy.
     fn send(&mut self, text: &str) {
+        // Usage limits (settings.json) gate every prompt - new runs AND
+        // steering. A run already in flight finishes; the ceiling stops
+        // the NEXT request. /new or /hot-reload starts a fresh budget.
+        let total_tokens = self.totals.input + self.totals.output;
+        if let Some(reason) = self.meta.limits.exceeded(self.totals.cost, total_tokens) {
+            self.notice(format!(
+                "{reason} - start a fresh session (/new or /hot-reload) or raise the limit \
+                 in settings.json"
+            ));
+            return;
+        }
         // A prompt is headed for the agent - the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately NOT at
         // startup (launching + quitting cupel must leave no trace), and not

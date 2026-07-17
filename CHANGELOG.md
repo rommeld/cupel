@@ -16,6 +16,10 @@ that section is replaced by the generated one when the next tag ships.
 
 ## [Unreleased]
 
+- settings.json (`~/.cupel` or `.cupel`, project wins per field): default
+  model and thinking level (CLI flags still win), plus per-session usage
+  limits (maxCostUsd, maxTotalTokens) that stop new prompts once crossed;
+  loaded at startup and by /hot-reload
 - TUI: `/hot-reload` re-reads every `.cupel` layer (AGENTS.md, prompts,
   models.json, bash-deny) into a rebuilt agent - bare starts a fresh
   session, `/hot-reload <session-id>` resumes that session with the new

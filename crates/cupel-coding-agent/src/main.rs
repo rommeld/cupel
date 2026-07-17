@@ -42,7 +42,12 @@ enum ResumeTarget {
 
 struct CliArgs {
     model: Option<String>,
-    thinking: Option<ThinkingLevel>,
+    /// Outer None = flag absent (settings/defaults apply); Some(None) = an
+    /// explicit `--thinking off` (which must NOT be overridden by a
+    /// settings-file default). The nesting IS the three-state semantics -
+    /// a custom enum would restate Option's own vocabulary.
+    #[allow(clippy::option_option)]
+    thinking: Option<Option<ThinkingLevel>>,
     plain: bool,
     resume: Option<ResumeTarget>,
 }
@@ -64,15 +69,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--thinking" | "-t" => {
                 let value = iter.next().ok_or("--thinking requires a value")?;
-                parsed.thinking = match value.as_str() {
-                    "off" => None,
-                    "minimal" => Some(ThinkingLevel::Minimal),
-                    "low" => Some(ThinkingLevel::Low),
-                    "medium" => Some(ThinkingLevel::Medium),
-                    "high" => Some(ThinkingLevel::High),
-                    "xhigh" => Some(ThinkingLevel::XHigh),
-                    other => return Err(format!("unknown thinking level: {other}")),
-                };
+                // The vocabulary lives in settings.rs, shared with the
+                // settings.json "thinking" field.
+                parsed.thinking = Some(cupel_coding_agent::settings::parse_thinking(&value)?);
             }
             "--plain" => parsed.plain = true,
             // The id is optional: a bare `--resume` (next arg missing or
@@ -113,16 +112,44 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
     Ok(parsed)
 }
 
-/// Pick a model + API key from CLI args and the MERGED catalog (built-ins,
-/// models.json layers, discovered local models). Credential knowledge
-/// lives in `providers.rs`, shared with the TUI's `/provider` command.
-fn select_model(args: &CliArgs, catalog: &[Model]) -> Result<(Model, Option<String>), String> {
+/// The model id to look up, if any: the CLI flag wins; otherwise a
+/// settings.json default - but only when it exists in the catalog (a
+/// typo'd config default warns and falls back to the auto-pick instead of
+/// refusing to start, unlike an explicit --model).
+fn effective_model_request(
+    cli: Option<String>,
+    settings: Option<String>,
+    catalog: &[Model],
+) -> Option<String> {
+    if cli.is_some() {
+        return cli;
+    }
+    let wanted = settings?;
+    if catalog.iter().any(|m| m.id == wanted) {
+        Some(wanted)
+    } else {
+        eprintln!(
+            "warning: settings.json default model \"{wanted}\" is not in the catalog - \
+             falling back to automatic selection"
+        );
+        None
+    }
+}
+
+/// Pick a model + API key from the requested id (CLI or settings) and the
+/// MERGED catalog (built-ins, models.json layers, discovered local
+/// models). Credential knowledge lives in `providers.rs`, shared with the
+/// TUI's `/provider` command.
+fn select_model(
+    wanted: Option<&str>,
+    catalog: &[Model],
+) -> Result<(Model, Option<String>), String> {
     use cupel_coding_agent::providers;
 
-    if let Some(wanted) = &args.model {
+    if let Some(wanted) = wanted {
         let model = catalog
             .iter()
-            .find(|m| m.id == *wanted)
+            .find(|m| m.id == wanted)
             .cloned()
             .ok_or_else(|| format!("unknown model: {wanted} (see --help for the list)"))?;
         let key = providers::env_api_key(model.provider.as_str());
@@ -221,7 +248,28 @@ async fn run() -> Result<(), String> {
     let registry = Arc::new(cupel_core::default_registry());
     let home = cupel_coding_agent::resources::config_home();
     let ingredients = cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry).await;
-    let (model, api_key) = select_model(&args, &ingredients.models)?;
+
+    // settings.json defaults slot BETWEEN the CLI and the built-ins:
+    // --model/--thinking always win; a settings default beats the
+    // credential-order auto-pick / thinking-off defaults.
+    let wanted_model = effective_model_request(
+        args.model.clone(),
+        ingredients.settings.model.clone(),
+        &ingredients.models,
+    );
+    let (model, api_key) = select_model(wanted_model.as_deref(), &ingredients.models)?;
+    let thinking_level = match args.thinking {
+        Some(explicit) => explicit, // incl. an explicit `--thinking off`
+        None => match ingredients.settings.thinking.as_deref() {
+            None => None,
+            Some(value) => {
+                cupel_coding_agent::settings::parse_thinking(value).unwrap_or_else(|e| {
+                    eprintln!("warning: settings.json: {e} - thinking stays off");
+                    None
+                })
+            }
+        },
+    };
 
     // ---- Session identity: fresh or resumed ---------------------------------
     // Resume keeps the ORIGINAL session id, so the recorder appends to the
@@ -257,7 +305,7 @@ async fn run() -> Result<(), String> {
     options.system_prompt = ingredients.system_prompt;
     options.tools = ingredients.tools;
     options.api_key = api_key;
-    options.thinking_level = args.thinking;
+    options.thinking_level = thinking_level;
     options.tool_execution = ToolExecutionMode::Parallel;
     options.session_id = Some(session_id);
     options.messages = seeded_messages;
@@ -273,6 +321,7 @@ async fn run() -> Result<(), String> {
         templates: ingredients.templates,
         models: ingredients.models,
         home,
+        limits: ingredients.settings.limits,
     };
 
     // ---- Pick a frontend ------------------------------------------------------
@@ -334,22 +383,59 @@ mod tests {
 
     #[test]
     fn select_model_falls_back_to_keyless_local_models() {
-        let args = parse(&[]).unwrap();
         let catalog = vec![keyless_model("qwen3:8b"), keyless_model("llama3:8b")];
         // Pass 2: first keyless model wins, with no key.
-        let (model, key) = select_model(&args, &catalog).unwrap();
+        let (model, key) = select_model(None, &catalog).unwrap();
         assert_eq!(model.id, "qwen3:8b");
         assert!(key.is_none());
 
-        // Explicit --model on a keyless entry also carries no key.
-        let args = parse(&["--model", "llama3:8b"]).unwrap();
-        let (model, key) = select_model(&args, &catalog).unwrap();
+        // An explicit request for a keyless entry also carries no key.
+        let (model, key) = select_model(Some("llama3:8b"), &catalog).unwrap();
         assert_eq!(model.id, "llama3:8b");
         assert!(key.is_none());
 
         // Empty catalog: the error mentions the local-server escape hatch.
-        let args = parse(&[]).unwrap();
-        let err = select_model(&args, &[]).unwrap_err();
+        let err = select_model(None, &[]).unwrap_err();
         assert!(err.contains("ollama"), "{err}");
+    }
+
+    #[test]
+    fn settings_model_is_a_default_the_cli_overrides() {
+        let catalog = vec![keyless_model("from-settings"), keyless_model("from-cli")];
+        // CLI beats settings.
+        assert_eq!(
+            effective_model_request(
+                Some("from-cli".into()),
+                Some("from-settings".into()),
+                &catalog
+            )
+            .as_deref(),
+            Some("from-cli")
+        );
+        // Settings apply when the CLI is silent.
+        assert_eq!(
+            effective_model_request(None, Some("from-settings".into()), &catalog).as_deref(),
+            Some("from-settings")
+        );
+        // A typo'd settings default falls back to auto-pick (None) instead
+        // of failing startup - unlike an explicit --model.
+        assert_eq!(
+            effective_model_request(None, Some("no-such-model".into()), &catalog),
+            None
+        );
+        assert_eq!(effective_model_request(None, None, &catalog), None);
+    }
+
+    #[test]
+    fn thinking_flag_distinguishes_absent_from_off() {
+        // Absent: settings may fill it in later.
+        assert_eq!(parse(&[]).unwrap().thinking, None);
+        // Explicit off: outer Some pins it against settings defaults.
+        assert_eq!(parse(&["--thinking", "off"]).unwrap().thinking, Some(None));
+        assert_eq!(
+            parse(&["--thinking", "high"]).unwrap().thinking,
+            Some(Some(ThinkingLevel::High))
+        );
+        assert!(parse(&["--thinking", "turbo"]).is_err());
     }
 }

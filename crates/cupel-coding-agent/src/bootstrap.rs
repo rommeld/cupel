@@ -47,6 +47,8 @@ pub struct Ingredients {
     pub models: Vec<Model>,
     /// Bash denylist rebuilt from the current bash-deny files.
     pub guard: BashGuard,
+    /// settings.json layers (default model/thinking, usage limits).
+    pub settings: crate::settings::Settings,
 }
 
 /// Load every ingredient fresh from disk (and the bounded ollama probe).
@@ -62,6 +64,7 @@ pub async fn load(
     let templates = crate::commands::load_prompt_templates(&roots);
     let models = crate::models::build_catalog(registry, home.as_deref(), cwd).await;
     let guard = BashGuard::from_config(home.as_deref(), cwd);
+    let settings = crate::settings::load_settings(home.as_deref(), cwd);
 
     // The grep tool talks to a CodeSearch backend; today that's GrepSearch,
     // in iteration two an index-backed one from cupel-index slots in here.
@@ -80,6 +83,7 @@ pub async fn load(
         templates,
         models,
         guard,
+        settings,
     }
 }
 
@@ -110,10 +114,17 @@ mod tests {
         )
         .unwrap();
         std::fs::write(cwd.join(".cupel/bash-deny"), "git\\s+push\\s+--force\n").unwrap();
+        std::fs::write(
+            cwd.join(".cupel/settings.json"),
+            r#"{"model": "local-test", "limits": {"maxCostUsd": 3.5}}"#,
+        )
+        .unwrap();
 
         let registry = cupel_core::default_registry();
         let ingredients = load(&cwd, Some(home), &registry).await;
 
+        assert_eq!(ingredients.settings.model.as_deref(), Some("local-test"));
+        assert_eq!(ingredients.settings.limits.max_cost_usd, Some(3.5));
         assert!(ingredients.system_prompt.contains("ALWAYS SAY PING"));
         assert!(ingredients.templates.iter().any(|t| t.name == "greet"));
         assert!(ingredients.models.iter().any(|m| m.id == "local-test"));

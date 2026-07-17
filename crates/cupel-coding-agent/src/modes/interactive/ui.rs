@@ -301,6 +301,7 @@ mod tests {
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
+                limits: crate::settings::UsageLimits::default(),
             },
             recorder,
         )
@@ -384,6 +385,7 @@ mod tests {
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
+                limits: crate::settings::UsageLimits::default(),
             },
             recorder,
         );
@@ -435,9 +437,40 @@ mod tests {
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
                 home: Some(home),
+                limits: crate::settings::UsageLimits::default(),
             },
             recorder,
         )
+    }
+
+    #[test]
+    fn usage_limits_block_new_prompts_with_a_notice() {
+        let mut app = test_app();
+        app.meta.limits = crate::settings::UsageLimits {
+            max_cost_usd: Some(1.0),
+            max_total_tokens: None,
+        };
+        // Under budget: the prompt goes through (pending_prompt set).
+        type_text(&mut app, "hello");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.pending_prompt.is_some());
+        app.pending_prompt = None;
+
+        // Over budget: refused with a notice, nothing queued.
+        app.totals.cost = 1.5;
+        type_text(&mut app, "one more");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.pending_prompt.is_none(), "limit must block the send");
+        assert!(app.transcript.cells.iter().any(|c| matches!(
+            c,
+            Cell::Notice { text } if text.contains("cost limit") && text.contains("settings.json")
+        )));
     }
 
     #[test]
@@ -819,6 +852,7 @@ mod tests {
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
+                limits: crate::settings::UsageLimits::default(),
             },
             recorder,
         );

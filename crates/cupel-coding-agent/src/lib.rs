@@ -14,6 +14,7 @@ pub mod providers;
 pub mod resources;
 pub mod search;
 pub mod session;
+pub mod settings;
 pub mod system_prompt;
 pub mod tools;
 pub mod truncate;

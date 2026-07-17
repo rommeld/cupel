@@ -26,4 +26,7 @@ pub struct SessionMeta {
     /// runtime reloads (/hot-reload) rebuild from the SAME home the
     /// session started with - env-free and testable.
     pub home: Option<std::path::PathBuf>,
+    /// Per-session usage ceilings from settings.json; the TUI refuses new
+    /// prompts once one is crossed.
+    pub limits: crate::settings::UsageLimits,
 }

@@ -93,6 +93,18 @@ Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory, in it
 
 Sessions & resume: every conversation is persisted as a JSONL transcript in `~/.cupel/sessions/<project-slug>/<session-id>.jsonl` (created on the first prompt, never on a bare launch; line 1 is a header object, every following line one message). The current session id is always visible in the TUI footer, and `/session-id` lists this project's sessions - newest first, with date, message count, model, and each session's first prompt as its label (the current one marked `*`). `cupel --resume` reloads this project's newest session - full history back in context and on screen - and keeps appending to the same file; `cupel --resume <session-id>` picks a specific one. Compaction never rewrites the transcript, so it is always the complete conversation. Don't resume the same session from two terminals at once - appends would interleave.
 
+Settings: a `settings.json` in `~/.cupel` (global) or `<project>/.cupel` (per project, wins field by field) sets session defaults - loaded at startup and by `/hot-reload`:
+
+```json
+{
+  "model": "claude-haiku-4-5",
+  "thinking": "medium",
+  "limits": { "maxCostUsd": 5.0, "maxTotalTokens": 2000000 }
+}
+```
+
+`model` is the default when no `--model` is given (CLI flags always win; a typo'd id warns and falls back to automatic selection). `thinking` fills in when `--thinking` is absent - an explicit `--thinking off` is respected. `limits` are per-session ceilings: once the running cost or summed input+output tokens cross one, the TUI refuses further prompts until a fresh session (`/new`, `/hot-reload`) or a raised limit (`/hot-reload` re-reads the file). Malformed files warn and are skipped.
+
 Hot reload: edits to `~/.cupel` or `<project>/.cupel` (an updated `AGENTS.md`, new prompt templates, models.json changes, bash-deny rules) normally apply on the next launch - `/hot-reload` applies them NOW by rebuilding the agent through the same loader startup uses. Bare `/hot-reload` starts a fresh session (new id, empty history); `/hot-reload <session-id>` reloads the configuration AND resumes that session - its id autocompletes from the transcripts on disk. The current model, thinking level, and any session-entered API keys carry over; the old session is closed cleanly (its `session-end` hook fires).
 
 Hooks: drop an executable into `~/.cupel/hooks/<event>/` (global) or `<project>/.cupel/hooks/<event>/` (per project) and cupel runs it on that event with a JSON payload on stdin: `{"event", "sessionId", "sessionRef" (transcript path), "cwd", "timestamp", "prompt"?}`. Events: `session-start`, `user-prompt-submit`, `stop` (run finished), `session-end`. Hooks observe, never veto: failures and timeouts (60s per hook) are logged and ignored. This file-based contract is what external integrations install into - the [entire CLI](https://github.com/entireio/cli) is supported out of the box via the [`entire-agent-cupel`](crates/entire-agent-cupel/README.md) shim.
