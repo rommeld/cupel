@@ -7,6 +7,12 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
+## [v0.1.16-beta] - 2026-07-18
+
+- start the TUI without credentials: warning notice instead of a fatal error
+- changelog: v0.1.15-beta
+- changelog: v0.1.14-beta
+
 ## [v0.1.17-beta] - 2026-07-18
 
 - start the TUI without credentials: warning notice instead of a fatal error
