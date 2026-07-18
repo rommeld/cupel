@@ -301,6 +301,7 @@ mod tests {
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
+                startup_warning: None,
             },
             recorder,
         )
@@ -338,6 +339,51 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    fn startup_warning_leads_the_transcript_as_a_notice() {
+        let model = cupel_core::catalog::builtin_models().remove(0);
+        let registry = Arc::new(cupel_core::provider::Registry::new());
+        let recorder = crate::session::SessionRecorder::new(
+            None,
+            std::path::Path::new("/tmp"),
+            "cupel-test",
+            "test-model",
+        );
+        let mut app = App::new(
+            Agent::new(AgentOptions::new(model, registry)),
+            SessionMeta {
+                model_name: "Test Model".into(),
+                provider: "test".into(),
+                cwd: "/tmp".into(),
+                templates: Vec::new(),
+                models: cupel_core::catalog::builtin_models(),
+                home: None,
+                startup_warning: Some(
+                    "no credentials found - use /provider <name> <api-key>".into(),
+                ),
+            },
+            recorder,
+        );
+        // First cell is the warning notice - the session is usable, not
+        // blocked.
+        assert!(matches!(
+            &app.transcript.cells[0],
+            Cell::Notice { text } if text.contains("no credentials found")
+        ));
+        let screen = draw(&mut app, 100, 20);
+        assert!(
+            screen.contains("no credentials found"),
+            "warning must render:\n{screen}"
+        );
+        // Typing and submitting still works (the prompt is queued).
+        type_text(&mut app, "hello");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.pending_prompt.is_some(), "session accepts prompts");
     }
 
     #[test]
@@ -384,6 +430,7 @@ mod tests {
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
+                startup_warning: None,
             },
             recorder,
         );
@@ -435,6 +482,7 @@ mod tests {
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
                 home: Some(home),
+                startup_warning: None,
             },
             recorder,
         )
@@ -819,6 +867,7 @@ mod tests {
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
+                startup_warning: None,
             },
             recorder,
         );

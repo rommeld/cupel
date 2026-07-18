@@ -7,6 +7,13 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
+## [Unreleased]
+
+- starting without credentials is no longer fatal in the TUI: cupel opens
+  on a fallback model with a leading warning notice, recoverable at
+  runtime via `/provider <name> <api-key>` or `/model`; plain mode (no
+  recovery commands) and an explicit `--model` typo still error hard
+
 ## [v0.1.15-beta] - 2026-07-17
 
 - add /hot-reload: apply .cupel changes to a rebuilt session

@@ -26,4 +26,8 @@ pub struct SessionMeta {
     /// runtime reloads (/hot-reload) rebuild from the SAME home the
     /// session started with - env-free and testable.
     pub home: Option<std::path::PathBuf>,
+    /// A startup condition worth telling the user about (e.g. "no
+    /// credentials found") - the TUI shows it as the first transcript
+    /// notice instead of refusing to start.
+    pub startup_warning: Option<String>,
 }

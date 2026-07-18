@@ -87,6 +87,8 @@ Local models: with `ollama serve` running, every pulled model appears automatica
 
 (For llama-server, the same entry with `"baseUrl": "http://localhost:8080/v1"` works. `api` must be one of the four registered protocols - unknown ones are warned about and skipped. `requiresApiKey: false` marks a keyless local endpoint.)
 
+Starting without credentials: the TUI opens anyway - on a fallback model, with a warning as the first transcript notice - because everything is fixable at runtime: `/provider <name> <api-key>` hands over a key, `/model` switches to a local model. Plain mode still exits with an error (it has no recovery commands), and a typo'd explicit `--model` stays fatal in both modes.
+
 Providers at runtime: `/provider` lists every provider with its default model and credential status; `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` hands over a key when nothing is exported - equivalent to the `export` route, but scoped to this session: the key lives in process memory only, is never persisted or echoed, and wins over the environment variable. Switching models across providers via `/model` re-resolves the key the same way.
 
 Project context: an `AGENTS.md` (or `CLAUDE.md`) in the working directory, in its `.cupel/` subdirectory (handy for keeping cupel files out of the repository root), or in `~/.cupel` is loaded into the system prompt on every request; all found files are included, most specific last. `~/.cupel` is cupel's home (override with `CUPEL_HOME`): the installer puts the binary in `~/.cupel/bin`, global prompt templates in `~/.cupel/prompts/`, and the future memory feature will live in `~/.cupel/memory/`.
