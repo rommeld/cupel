@@ -7,12 +7,11 @@ and commits it back to `main` - so commit subjects should read as user-facing
 change descriptions. Changes not yet in a release live under `[Unreleased]`;
 that section is replaced by the generated one when the next tag ships.
 
-## [Unreleased]
+## [v0.1.17-beta] - 2026-07-18
 
-- starting without credentials is no longer fatal in the TUI: cupel opens
-  on a fallback model with a leading warning notice, recoverable at
-  runtime via `/provider <name> <api-key>` or `/model`; plain mode (no
-  recovery commands) and an explicit `--model` typo still error hard
+- start the TUI without credentials: warning notice instead of a fatal error
+- changelog: v0.1.15-beta
+- changelog: v0.1.14-beta
 
 ## [v0.1.15-beta] - 2026-07-17
 
