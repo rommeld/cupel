@@ -174,6 +174,12 @@ impl App {
             pending_reload: None,
         };
         app.replay_history(&history);
+        // A startup condition (e.g. keyless start) leads the transcript, so
+        // it is the first thing the user reads - and scrolls away like any
+        // other notice instead of blocking the session.
+        if let Some(warning) = app.meta.startup_warning.take() {
+            app.notice(warning);
+        }
         app
     }
 
@@ -514,6 +520,9 @@ impl App {
             templates: ingredients.templates,
             models: ingredients.models,
             home: self.meta.home.clone(),
+            // A reload is user-initiated; the startup condition was already
+            // shown once and does not repeat.
+            startup_warning: None,
         };
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);

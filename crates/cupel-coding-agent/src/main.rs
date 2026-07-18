@@ -221,7 +221,31 @@ async fn run() -> Result<(), String> {
     let registry = Arc::new(cupel_core::default_registry());
     let home = cupel_coding_agent::resources::config_home();
     let ingredients = cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry).await;
-    let (model, api_key) = select_model(&args, &ingredients.models)?;
+
+    // No credentials is FATAL only where it is unrecoverable. The TUI can
+    // fix it at runtime (`/provider <name> <api-key>`, `/model`), so it
+    // starts anyway on a fallback model and shows the message as its first
+    // notice. Plain mode has no such commands - it keeps the hard error.
+    // An explicit `--model` that fails stays fatal in both modes: a typo
+    // should not silently start something else.
+    let (model, api_key, startup_warning) = match select_model(&args, &ingredients.models) {
+        Ok((model, key)) => (model, key, None),
+        Err(e) if !use_plain && args.model.is_none() => {
+            let fallback = ingredients
+                .models
+                .first()
+                .cloned()
+                .ok_or_else(|| e.clone())?;
+            let warning = format!(
+                "{e}\n\nstarted without credentials on {} - requests will fail until you \
+                 `/provider <name> <api-key>`, switch to a local model via /model, or \
+                 restart with a key exported",
+                fallback.id
+            );
+            (fallback, None, Some(warning))
+        }
+        Err(e) => return Err(e),
+    };
 
     // ---- Session identity: fresh or resumed ---------------------------------
     // Resume keeps the ORIGINAL session id, so the recorder appends to the
@@ -273,6 +297,7 @@ async fn run() -> Result<(), String> {
         templates: ingredients.templates,
         models: ingredients.models,
         home,
+        startup_warning,
     };
 
     // ---- Pick a frontend ------------------------------------------------------
