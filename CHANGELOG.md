@@ -12,11 +12,7 @@ from v0.2.0-beta, minor = features, patch = fixes.
 
 ## [v0.2.0-beta] - 2026-07-19
 
-- fix CHANGELOG.md
-- cupel is now able to do file or diff based reviews with just writing /review     - add bash-deny example to current project     - add built-in slash command /review as part of cupel with possible target definition [path] or [diff]     - also possible in plain-mode (sync)
-- cupel is now able to do file or diff based reviews with just writing /review     - add bash-deny example to current project     - add built-in slash command /review as part of cupel with possible target definition [path] or [diff]     - also possible in plain-mode (sync)
-- changelog: v0.1.16-beta
-- changelog: v0.1.17-beta
+- cupel is now able to do file or diff based reviews with just writing /review
 
 ## [v0.1.16-beta] - 2026-07-18
 
