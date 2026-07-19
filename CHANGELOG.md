@@ -13,14 +13,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.1.16-beta] - 2026-07-18
 
 - start the TUI without credentials: warning notice instead of a fatal error
-- changelog: v0.1.15-beta
-- changelog: v0.1.14-beta
-
-## [v0.1.17-beta] - 2026-07-18
-
-- start the TUI without credentials: warning notice instead of a fatal error
-- changelog: v0.1.15-beta
-- changelog: v0.1.14-beta
 
 ## [v0.1.15-beta] - 2026-07-17
 
