@@ -71,6 +71,24 @@ pub async fn run(
                     println!();
                     continue;
                 }
+                // Same builder as the TUI; here the whole path is
+                // synchronous - gather, then fall through to the ordinary
+                // (blocking) prompt round-trip below.
+                "review" => {
+                    let review_args = crate::commands::parse_command_args(
+                        rest.split_once(char::is_whitespace).map_or("", |(_, a)| a),
+                    );
+                    match crate::review::build_review_prompt(
+                        std::path::Path::new(&meta.cwd),
+                        &review_args,
+                    ) {
+                        Ok(built) => prompt = built,
+                        Err(e) => {
+                            println!("{e}");
+                            continue;
+                        }
+                    }
+                }
                 _ => {
                     if let Some(expanded) =
                         crate::commands::expand_prompt_template(input, &meta.templates)

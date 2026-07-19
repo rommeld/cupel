@@ -1,4 +1,4 @@
-//! Slash commands: `/name args` in the input, pi-style.
+//! Slash commands: `/name args` in the input.
 //!
 //! Two kinds, dispatched in this order by the frontends:
 //!
@@ -16,10 +16,6 @@
 use std::path::{Path, PathBuf};
 
 use crate::resources::split_frontmatter;
-
-// ---------------------------------------------------------------------------
-// Argument parsing + substitution
-// ---------------------------------------------------------------------------
 
 /// Split a command's argument string bash-style: whitespace separates,
 /// single or double quotes group.
@@ -143,10 +139,6 @@ fn substitute_braced(inner: &str, args: &[String]) -> Option<String> {
     None
 }
 
-// ---------------------------------------------------------------------------
-// Prompt templates
-// ---------------------------------------------------------------------------
-
 /// One `/name`-invocable prompt loaded from `<root>/prompts/<name>.md`.
 #[derive(Debug, Clone)]
 pub struct PromptTemplate {
@@ -225,10 +217,6 @@ pub fn expand_prompt_template(text: &str, templates: &[PromptTemplate]) -> Optio
     Some(substitute_args(&template.content, &args))
 }
 
-// ---------------------------------------------------------------------------
-// Built-ins
-// ---------------------------------------------------------------------------
-
 /// A UI-handled command: never sent to the model. The frontends match on
 /// the name; this table exists for `/help` and autocomplete.
 pub struct BuiltinCommand {
@@ -272,6 +260,10 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
         name: "quit",
         description: "Quit cupel",
+    },
+    BuiltinCommand {
+        name: "review",
+        description: "Code review: /review [path ...] for explicit file, [diff ...], or whole project",
     },
 ];
 

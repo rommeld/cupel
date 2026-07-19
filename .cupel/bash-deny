@@ -1,0 +1,5 @@
+# Project-specific bash deny rules. One regex per line; # comments and blank lines are ignored.
+# These rules extend the built-in defaults (currently rm -rf and variants).
+
+# Example: block force-pushing git refs
+# git\s+push\s+--force

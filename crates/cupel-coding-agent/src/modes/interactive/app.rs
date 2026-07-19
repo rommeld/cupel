@@ -800,6 +800,19 @@ impl App {
                 }
                 self.notice(lines.join("\n"));
             }
+            "review" => {
+                // Builds the (truncated) code bundle synchronously - cheap
+                // local fs/git work - then SENDS it like any prompt, so the
+                // model call rides the normal async run path.
+                let review_args = commands::parse_command_args(args);
+                match crate::review::build_review_prompt(
+                    std::path::Path::new(&self.meta.cwd),
+                    &review_args,
+                ) {
+                    Ok(prompt) => self.send(&prompt),
+                    Err(e) => self.notice(e),
+                }
+            }
             "usage" => {
                 self.notice(format!(
                     "session totals: {} in / {} out / {} cached, ${:.4}",

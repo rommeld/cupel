@@ -12,6 +12,7 @@ pub mod modes;
 pub mod ollama;
 pub mod providers;
 pub mod resources;
+pub mod review;
 pub mod search;
 pub mod session;
 pub mod system_prompt;

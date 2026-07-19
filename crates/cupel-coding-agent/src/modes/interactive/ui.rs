@@ -387,6 +387,39 @@ mod tests {
     }
 
     #[test]
+    fn review_command_queues_a_bundled_prompt_or_notices_errors() {
+        let root = std::env::temp_dir().join("cupel-ui-review");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("code.rs"), "fn main() {}").unwrap();
+        let mut app = test_app_in(root.to_str().unwrap());
+
+        // A reviewable path: the built bundle is queued as the prompt.
+        type_text(&mut app, "/review code.rs");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        let prompt = app.pending_prompt.take().expect("review prompt queued");
+        assert!(prompt.contains("=== file: code.rs ==="));
+        assert!(prompt.contains("fn main() {}"));
+
+        // A bad path: error notice, nothing queued or sent.
+        type_text(&mut app, "/review missing.rs");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(app.pending_prompt.is_none());
+        assert!(app.transcript.cells.iter().any(|c| matches!(
+            c,
+            Cell::Notice { text } if text.contains("path not found: missing.rs")
+        )));
+    }
+
+    #[test]
     fn footer_shows_the_current_session_id() {
         let mut app = test_app();
         let screen = draw(&mut app, 100, 20);
