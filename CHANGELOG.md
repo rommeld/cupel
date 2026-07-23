@@ -10,16 +10,13 @@ that section is replaced by the generated one when the next tag ships.
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
-## [Unreleased]
+## [v0.3.0-beta] - 2026-07-23
 
-- remove the Entire CLI integration: the entire-agent-cupel shim crate and
-  the repo's .entire/ config are gone (lifecycle hooks stay - they are a
-  general cupel feature; any external tool can still install into
-  .cupel/hooks/)
-- compaction got a free tier: before paying for an LLM summary, stale
-  tool-result bodies (outside the keep window) are elided with a re-run
-  hint - when that alone brings the context back under the threshold, no
-  summarization call happens at all
+- drop the shim's orphaned cupel-coding-agent workspace dependency
+- remove the Entire CLI integration
+- compaction: free pruning tier before the summarization LLM call
+- update CHANGELOG.md with new release information
+- changelog: v0.2.0-beta
 
 ## [v0.2.0-beta] - 2026-07-19
 
