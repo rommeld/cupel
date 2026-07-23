@@ -16,7 +16,6 @@ repository = "https://github.com/rommeld/cupel"
 # Internal crates, so members can depend on each other by name.
 cupel-core = { path = "crates/cupel-core" }
 cupel-agent = { path = "crates/cupel-agent" }
-cupel-coding-agent = { path = "crates/cupel-coding-agent" }
 cupel-index = { path = "crates/cupel-index" }
 
 # `async_trait` lets us write `async fn` in traits that still support dynamic
