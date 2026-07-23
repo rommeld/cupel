@@ -10,6 +10,13 @@ that section is replaced by the generated one when the next tag ships.
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [Unreleased]
+
+- compaction got a free tier: before paying for an LLM summary, stale
+  tool-result bodies (outside the keep window) are elided with a re-run
+  hint - when that alone brings the context back under the threshold, no
+  summarization call happens at all
+
 ## [v0.2.0-beta] - 2026-07-19
 
 - cupel is now able to do file or diff based reviews with just writing /review
