@@ -32,6 +32,10 @@ use cupel_core::{
 /// request's message list. Optionally fails the first N turn requests.
 struct CompactionAwareProvider {
     turn_calls: AtomicU32,
+    /// Summarization requests served - the LLM cost of compaction. The
+    /// pruning tier exists to keep this at zero when tool output alone
+    /// caused the overflow.
+    summarization_calls: AtomicU32,
     fail_first_turns: u32,
     turn_error: &'static str,
     /// First-message text + message count of each turn request, for asserts.
@@ -42,6 +46,7 @@ impl CompactionAwareProvider {
     fn new(fail_first_turns: u32, turn_error: &'static str) -> Self {
         Self {
             turn_calls: AtomicU32::new(0),
+            summarization_calls: AtomicU32::new(0),
             fail_first_turns,
             turn_error,
             seen_turn_requests: Mutex::new(Vec::new()),
@@ -80,6 +85,7 @@ impl Provider for CompactionAwareProvider {
 
         // Summarization requests are recognizable by their system prompt.
         if context.system_prompt.as_deref() == Some(SUMMARIZATION_SYSTEM_PROMPT) {
+            self.summarization_calls.fetch_add(1, Ordering::SeqCst);
             let message = assistant(
                 model,
                 vec![AssistantContent::Text(TextContent::plain(
@@ -249,6 +255,63 @@ async fn threshold_compaction_shrinks_the_request() {
         *message_count <= 3,
         "5 history messages should have collapsed, got {message_count}"
     );
+    assert!(matches!(events.last(), Some(AgentEvent::AgentEnd { .. })));
+    // User-text history has nothing to prune, so this path DID pay one
+    // summarization call - the counterpart of the pruning test below.
+    assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 1);
+}
+
+/// ~1000 estimated tokens of TOOL RESULT filler per message, prefixed by a
+/// user message so the cut point has a boundary to land on.
+fn tool_heavy_history(count: usize) -> Vec<AgentMessage> {
+    let mut messages = vec![AgentMessage::user_text("please read the files")];
+    for i in 0..count {
+        messages.push(AgentMessage::Llm(Message::ToolResult(
+            cupel_core::types::ToolResultMessage {
+                tool_call_id: format!("call_{i}"),
+                tool_name: "read".into(),
+                content: vec![cupel_core::types::ToolResultContent::Text(
+                    TextContent::plain("y".repeat(4000)),
+                )],
+                details: None,
+                is_error: false,
+                timestamp: now_ms(),
+            },
+        )));
+    }
+    messages
+}
+
+#[tokio::test]
+async fn tool_heavy_history_compacts_without_a_summarization_call() {
+    let provider = Arc::new(CompactionAwareProvider::new(0, ""));
+    // Same threshold shape as above (window 3000, reserve 1000), but the
+    // bulk is tool output - the free pruning tier alone must reclaim it.
+    let config = CompactionConfig {
+        enabled: true,
+        reserve_tokens: 1000,
+        keep_recent_tokens: 500,
+    };
+    let events = run_with(Arc::clone(&provider), 3000, config, tool_heavy_history(5)).await;
+
+    // Compaction ran and succeeded...
+    assert_eq!(
+        compaction_events(&events),
+        vec![(CompactionReason::Threshold, true)]
+    );
+    // ...with ZERO LLM cost: no summarization request ever hit the provider.
+    assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 0);
+
+    // The turn request kept the full message COUNT (nothing summarized
+    // away - only bodies elided) and no summary message was spliced in.
+    let seen = provider.seen_turn_requests.lock().expect("test mutex");
+    assert_eq!(seen.len(), 1);
+    let (first_text, message_count) = &seen[0];
+    assert!(
+        !first_text.starts_with(COMPACTION_MARKER),
+        "no summary should exist on the pruning-only path"
+    );
+    assert_eq!(*message_count, 7, "1 user + 5 results + new prompt");
     assert!(matches!(events.last(), Some(AgentEvent::AgentEnd { .. })));
 }
 

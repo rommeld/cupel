@@ -443,6 +443,7 @@ async fn run_compaction(
                 tokens_before = outcome.tokens_before,
                 tokens_after = outcome.tokens_after,
                 summarized_messages = outcome.summarized_messages,
+                pruned_tool_results = outcome.pruned_tool_results,
                 "context compacted"
             );
             sink.emit(AgentEvent::CompactionEnd {

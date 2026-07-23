@@ -1,5 +1,13 @@
-//! Context compaction: keep long sessions inside the model's context window
-//! by replacing old history with an LLM-generated summary.
+//! Context compaction: keep long sessions inside the model's context window,
+//! in two tiers - cheapest first:
+//!
+//! 1. **Pruning (free)**: elide the BODIES of tool results outside the keep
+//!    window. In coding sessions tool output (file reads, grep, bash logs)
+//!    dominates the context and is mostly re-derivable - the agent can
+//!    re-run the tool. When pruning alone brings the estimate back under
+//!    the threshold, no LLM call happens at all.
+//! 2. **Summarization (one LLM call)**: replace the remaining old history
+//!    with a structured checkpoint summary.
 
 use std::sync::Arc;
 
@@ -168,7 +176,56 @@ fn find_cut_index(messages: &[AgentMessage], keep_recent_tokens: u64) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Summarization
+// Tier 1: tool-result pruning (free)
+// ---------------------------------------------------------------------------
+
+/// Replacement body for an elided tool result. Tells the model exactly how
+/// to recover: run the tool again.
+pub const ELIDED_TOOL_RESULT: &str =
+    "[tool output elided by compaction - re-run the tool if the output is needed again]";
+
+/// Results at or below this many content bytes are left alone: replacing a
+/// small result with the ~80-byte stub gains almost nothing and loses
+/// information. Also makes pruning idempotent for free - an already-elided
+/// result is itself below the floor.
+const PRUNE_MIN_BYTES: u64 = 256;
+
+/// Elide the bodies of all (large) tool results in `messages` - the caller
+/// passes only the slice OUTSIDE the keep window. Tool CALLS stay intact,
+/// so the conversation narrative ("the agent read foo.rs, then edited it")
+/// survives; only the bulky, re-derivable payloads go. Returns how many
+/// results were elided.
+fn elide_stale_tool_results(messages: &mut [AgentMessage]) -> usize {
+    let mut pruned = 0;
+    for message in messages {
+        let AgentMessage::Llm(Message::ToolResult(result)) = message else {
+            continue;
+        };
+        let content_bytes: u64 = result
+            .content
+            .iter()
+            .map(|block| match block {
+                ToolResultContent::Text(t) => t.text.len() as u64,
+                // Images are the biggest payloads of all.
+                ToolResultContent::Image(_) => ESTIMATED_IMAGE_CHARS,
+            })
+            .sum();
+        if content_bytes <= PRUNE_MIN_BYTES {
+            continue;
+        }
+        result.content = vec![ToolResultContent::Text(
+            cupel_core::types::TextContent::plain(ELIDED_TOOL_RESULT),
+        )];
+        // Details are tool-private metadata riding alongside the content -
+        // same re-derivable nature, same treatment.
+        result.details = None;
+        pruned += 1;
+    }
+    pruned
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2: summarization
 // ---------------------------------------------------------------------------
 
 // pi's prompts, verbatim - the structured format is what makes summaries
@@ -258,11 +315,17 @@ pub enum CompactionError {
 pub struct CompactionOutcome {
     pub tokens_before: u64,
     pub tokens_after: u64,
+    /// Messages replaced by the tier-2 summary; 0 when pruning sufficed.
     pub summarized_messages: usize,
+    /// Tool results elided by the free tier-1 pass.
+    pub pruned_tool_results: usize,
 }
 
-/// Compact `context.messages` in place: summarize everything before the cut
-/// point via one LLM call, then splice `[summary user message] + kept tail`.
+/// Compact `context.messages` in place, cheapest tier first:
+/// 1. elide stale tool-result bodies (free) - and STOP here when that
+///    alone brings the estimate back under the compaction threshold;
+/// 2. otherwise summarize everything before the cut point via one LLM
+///    call, then splice `[summary user message] + kept tail`.
 pub async fn compact(
     context: &mut AgentContext,
     registry: &Arc<Registry>,
@@ -276,6 +339,28 @@ pub async fn compact(
     if cut == 0 {
         return Err(CompactionError::NothingToCompact);
     }
+
+    // ---- Tier 1: free pruning ----------------------------------------------
+    // Elide only OUTSIDE the keep window (the recent tail stays verbatim -
+    // the model may be mid-task on those outputs). When this is enough,
+    // return before any LLM call: no summarization cost, no summary at all.
+    let pruned_tool_results = elide_stale_tool_results(&mut context.messages[..cut]);
+    if pruned_tool_results > 0 {
+        let tokens_after = estimate_context_tokens(context);
+        if !should_compact(tokens_after, model.context_window, config) {
+            return Ok(CompactionOutcome {
+                tokens_before,
+                tokens_after,
+                summarized_messages: 0,
+                pruned_tool_results,
+            });
+        }
+    }
+
+    // ---- Tier 2: summarize the (now pruned) old history ---------------------
+    // The summary is built from the pruned messages: elided bodies cost the
+    // summarization call almost nothing, and the key facts from tool output
+    // live in the assistant's own text anyway.
     let (to_summarize, kept) = context.messages.split_at(cut);
 
     // Iterative update: if a previous compaction summary is in the section
@@ -352,6 +437,7 @@ pub async fn compact(
         tokens_before,
         tokens_after: estimate_context_tokens(context),
         summarized_messages,
+        pruned_tool_results,
     })
 }
 
@@ -391,6 +477,135 @@ mod tests {
     fn cut_index_zero_when_everything_fits_budget() {
         let messages = vec![user("short"), user("also short")];
         assert_eq!(find_cut_index(&messages, 20_000), 0);
+    }
+
+    fn tool_result(bytes: usize) -> AgentMessage {
+        AgentMessage::Llm(Message::ToolResult(cupel_core::types::ToolResultMessage {
+            tool_call_id: "c".into(),
+            tool_name: "read".into(),
+            content: vec![ToolResultContent::Text(
+                cupel_core::types::TextContent::plain("y".repeat(bytes)),
+            )],
+            details: Some(serde_json::json!({"lines": 1})),
+            is_error: false,
+            timestamp: 0,
+        }))
+    }
+
+    fn result_text(message: &AgentMessage) -> &str {
+        let AgentMessage::Llm(Message::ToolResult(result)) = message else {
+            panic!("not a tool result");
+        };
+        match &result.content[0] {
+            ToolResultContent::Text(t) => &t.text,
+            ToolResultContent::Image(_) => panic!("unexpected image"),
+        }
+    }
+
+    #[test]
+    fn pruning_elides_large_results_and_spares_small_ones() {
+        let mut messages = vec![tool_result(10_000), tool_result(100), user("keep me")];
+        let pruned = elide_stale_tool_results(&mut messages);
+        assert_eq!(pruned, 1, "only the large result is elided");
+        assert_eq!(result_text(&messages[0]), ELIDED_TOOL_RESULT);
+        assert_eq!(result_text(&messages[1]).len(), 100, "small one intact");
+        // Idempotent: the stub itself is below the size floor.
+        assert_eq!(elide_stale_tool_results(&mut messages), 0);
+    }
+
+    /// A model whose api has NO registered provider: any summarization
+    /// attempt errors, so an Ok result PROVES no LLM call happened.
+    fn model_with_window(context_window: u64) -> Model {
+        Model {
+            id: "mock".into(),
+            name: "Mock".into(),
+            api: cupel_core::types::Api::from("unregistered"),
+            provider: cupel_core::types::Provider::from("mock"),
+            base_url: String::new(),
+            reasoning: false,
+            thinking_level_map: None,
+            input: vec![cupel_core::types::InputModality::Text],
+            cost: cupel_core::types::ModelCost {
+                input: 0.0,
+                output: 0.0,
+                cached_read: 0.0,
+                cached_write: 0.0,
+            },
+            context_window,
+            max_tokens: 4096,
+            headers: None,
+            compat: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn pruning_alone_can_avoid_the_summarization_call() {
+        // ~10k estimated tokens of tool output before a tiny keep window;
+        // window 6k with reserve 1k -> threshold 5k. Pruning drops the
+        // estimate to almost nothing, so tier 2 must not run - proven by
+        // the EMPTY registry, where any LLM call would error.
+        let mut context = AgentContext {
+            system_prompt: String::new(),
+            messages: vec![
+                user("old question"),
+                tool_result(40_000),
+                user("recent question"),
+            ],
+            tools: Vec::new(),
+        };
+        let config = CompactionConfig {
+            enabled: true,
+            reserve_tokens: 1000,
+            keep_recent_tokens: 100,
+        };
+        let outcome = compact(
+            &mut context,
+            &Arc::new(Registry::new()),
+            &model_with_window(6_000),
+            None,
+            &config,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("pruning suffices - no LLM needed");
+
+        assert_eq!(outcome.pruned_tool_results, 1);
+        assert_eq!(outcome.summarized_messages, 0, "tier 2 skipped");
+        assert!(outcome.tokens_after < outcome.tokens_before);
+        assert_eq!(result_text(&context.messages[1]), ELIDED_TOOL_RESULT);
+        // The kept tail and the old user message survive untouched.
+        assert_eq!(context.messages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn insufficient_pruning_still_reaches_the_summarizer() {
+        // The bulk is USER text, which pruning cannot touch - the estimate
+        // stays over the threshold, so tier 2 runs and (empty registry)
+        // fails with SummarizationFailed: proof the LLM call was attempted.
+        let big = "x".repeat(40_000);
+        let mut context = AgentContext {
+            system_prompt: String::new(),
+            messages: vec![user(&big), tool_result(10_000), user("recent")],
+            tools: Vec::new(),
+        };
+        let config = CompactionConfig {
+            enabled: true,
+            reserve_tokens: 1000,
+            keep_recent_tokens: 100,
+        };
+        let err = compact(
+            &mut context,
+            &Arc::new(Registry::new()),
+            &model_with_window(6_000),
+            None,
+            &config,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("still over threshold - summarization attempted");
+        assert!(matches!(err, CompactionError::SummarizationFailed(_)));
+        // Tier 1 still did its (kept) work before tier 2 failed.
+        assert_eq!(result_text(&context.messages[1]), ELIDED_TOOL_RESULT);
     }
 
     #[test]
