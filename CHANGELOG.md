@@ -8,11 +8,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - drop the shim's orphaned cupel-coding-agent workspace dependency
 - remove the Entire CLI integration
 - compaction: free pruning tier before the summarization LLM call
-<<<<<<< HEAD
-=======
-- update CHANGELOG.md with new release information
-- changelog: v0.2.0-beta
->>>>>>> 55330fe (changelog: v0.3.0-beta)
 
 ## [v0.2.0-beta] - 2026-07-19
 
