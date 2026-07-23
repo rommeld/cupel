@@ -22,10 +22,6 @@
 !/crates/cupel-index/src/
 !/crates/cupel-index/src/**
 
-!/crates/entire-agent-cupel/
-!/crates/entire-agent-cupel/src/
-!/crates/entire-agent-cupel/src/**
-
 !.gitignore
 
 !Cargo.toml
@@ -36,9 +32,6 @@
 !/.cupel
 !/.cupel/AGENTS.md
 !/.cupel/bash-deny
-
-!/.entire
-!/.entire/**
 
 !CHANGELOG.md
 !CONTRIBUTION.md

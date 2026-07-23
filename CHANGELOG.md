@@ -12,6 +12,10 @@ from v0.2.0-beta, minor = features, patch = fixes.
 
 ## [Unreleased]
 
+- remove the Entire CLI integration: the entire-agent-cupel shim crate and
+  the repo's .entire/ config are gone (lifecycle hooks stay - they are a
+  general cupel feature; any external tool can still install into
+  .cupel/hooks/)
 - compaction got a free tier: before paying for an LLM summary, stale
   tool-result bodies (outside the keep window) are elided with a re-run
   hint - when that alone brings the context back under the threshold, no
