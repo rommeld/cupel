@@ -1,25 +1,18 @@
 # Changelog
 
-All notable changes to cupel, newest first. On every release the `changelog`
-job in `.github/workflows/release.yml` runs `packaging/update-changelog.sh`,
-which prepends a section listing the commit subjects since the previous tag
-and commits it back to `main` - so commit subjects should read as user-facing
-change descriptions. Changes not yet in a release live under `[Unreleased]`;
-that section is replaced by the generated one when the next tag ships.
-
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
-## [Unreleased]
+## [v0.3.0-beta] - 2026-07-23
 
-- remove the Entire CLI integration: the entire-agent-cupel shim crate and
-  the repo's .entire/ config are gone (lifecycle hooks stay - they are a
-  general cupel feature; any external tool can still install into
-  .cupel/hooks/)
-- compaction got a free tier: before paying for an LLM summary, stale
-  tool-result bodies (outside the keep window) are elided with a re-run
-  hint - when that alone brings the context back under the threshold, no
-  summarization call happens at all
+- drop the shim's orphaned cupel-coding-agent workspace dependency
+- remove the Entire CLI integration
+- compaction: free pruning tier before the summarization LLM call
+<<<<<<< HEAD
+=======
+- update CHANGELOG.md with new release information
+- changelog: v0.2.0-beta
+>>>>>>> 55330fe (changelog: v0.3.0-beta)
 
 ## [v0.2.0-beta] - 2026-07-19
 
@@ -35,27 +28,16 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - show session ids in the TUI: footer id + /session-id listing
 - gitignore: whitelist cupel-coding-agent/tests (carries the guard e2e test)
 - add bash denylist guard: block rm -rf via the AgentHooks veto point
-- changelog: v0.1.13-beta
-
-## [v0.1.14-beta] - 2026-07-17
-
-- add /hot-reload: apply .cupel changes to a rebuilt session
-- show session ids in the TUI: footer id + /session-id listing
-- gitignore: whitelist cupel-coding-agent/tests (carries the guard e2e test)
-- add bash denylist guard: block rm -rf via the AgentHooks veto point
-- changelog: v0.1.13-beta
 
 ## [v0.1.13-beta] - 2026-07-12
 
 - add local model support: models.json catalog layers + ollama discovery
-- changelog: v0.1.12-beta
 
 ## [v0.1.12-beta] - 2026-07-12
 
 - change model provider in the TUI via /provider slash command
 - choose model by leveraging slash command /model via a popup
 - add auto-complete for model selection and thinking mode
-- changelog: v0.1.11-beta
 
 ## [v0.1.11-beta] - 2026-07-12
 

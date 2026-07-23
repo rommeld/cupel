@@ -98,9 +98,3 @@ Guardrails: bash commands run through a deny list before they execute. `rm -rf` 
 
 Observability: currently implemented through `RUST_LOG`, e.g. `RUST_LOG=cupel_core=info,cupel_agent=info` (per-request tokens/cost/duration, turns, tool timings, retries, compaction) or `cupel_core=trace` to include request bodies. Logs go to stderr in `--plain` mode and to a temp file (path printed at startup) in the TUI.
 
-## Implementation milestones
-
-### What is missing?
-- `cupel-index` as an alternative to `grep`(combination of `fff` and `entire`'s code search)
-- `AgentMemory`: alongside compaction, a mechanism for an agent to retain and recall memory within a single session or across multiple sessions.
-- `websearch`: no built-in web search tool for retrieving live information beyond the local repository context.
