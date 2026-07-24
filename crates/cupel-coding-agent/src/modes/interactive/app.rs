@@ -77,9 +77,13 @@ pub struct App {
 /// What `/hot-reload` asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReloadTarget {
-    /// Fresh session with a new id.
-    New,
-    /// Resume the given session id (same transcript file, history seeded).
+    /// Bare `/hot-reload`: update the RUNNING session in place - same id,
+    /// same history, same transcript file. Context-file changes arrive as
+    /// an appended DELTA message, never as a re-embedded full file.
+    Current,
+    /// Resume the given session id: full rebuild with freshly loaded
+    /// configuration (incl. a fresh system prompt), history seeded from
+    /// that session's transcript.
     Resume(String),
 }
 
@@ -449,41 +453,116 @@ impl App {
         }
     }
 
-    /// Rebuild the session with freshly loaded `.cupel` configuration -
-    /// the implementation of `/hot-reload`. Consumes the old App and
-    /// returns its replacement (the event loop rebinds); on failure the
+    /// `/hot-reload`: apply `.cupel` changes, consuming the old App and
+    /// returning its replacement (the event loop rebinds); on failure the
     /// OLD app comes back with an error notice, nothing torn down.
     ///
-    /// What carries over: the current model + thinking level (runtime
-    /// switches survive a reload), session-entered API keys, and the
-    /// mouse-capture state. Everything else - system prompt (AGENTS.md),
-    /// prompt templates, model catalog, bash-deny rules, tools - is
-    /// re-read from disk via the SAME bootstrap loader startup uses.
-    pub async fn hot_reload(mut self, target: ReloadTarget) -> Self {
+    /// What carries over in both modes: the current model + thinking level
+    /// (runtime switches survive a reload), session-entered API keys, and
+    /// the mouse-capture state.
+    pub async fn hot_reload(self, target: ReloadTarget) -> Self {
         let cwd = std::path::PathBuf::from(&self.meta.cwd);
+        match target {
+            ReloadTarget::Current => self.reload_in_place(&cwd).await,
+            ReloadTarget::Resume(id) => self.reload_resume(&cwd, &id).await,
+        }
+    }
 
+    /// Bare `/hot-reload`: the RUNNING session continues - same id, same
+    /// history, same transcript file, and no session-end hook (the session
+    /// is not ending). Fresh templates, models, bash-deny rules, and tools
+    /// are swapped in. Context files (AGENTS.md/CLAUDE.md) get DELTA
+    /// treatment: the system prompt keeps the text embedded at session
+    /// start, and only a unified diff of what changed on disk is appended
+    /// to the conversation - the full file is never sent twice.
+    async fn reload_in_place(self, cwd: &std::path::Path) -> Self {
+        let state = self.agent.state();
+        let registry = self.agent.registry();
+        let ingredients = crate::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
+
+        // The delta between what the session started with and what is on
+        // disk now, as a user message the NEXT request will carry.
+        let delta_message =
+            crate::resources::context_delta(&self.meta.context_files, &ingredients.context_files)
+                .map(AgentMessage::user_text);
+        let mut seeded = state.messages.clone();
+        if let Some(message) = &delta_message {
+            seeded.push(message.clone());
+        }
+
+        let session_id = self.recorder.session_id().to_string();
+        let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
+        // Deliberately the OLD system prompt: the original context stays
+        // embedded once; updates travel as the (small) delta message.
+        options.system_prompt = state.system_prompt.clone();
+        options.tools = ingredients.tools;
+        options.hooks = std::sync::Arc::new(ingredients.guard);
+        options.api_key = self.resolve_key(state.model.provider.as_str());
+        options.thinking_level = state.thinking_level;
+        options.tool_execution = cupel_agent::ToolExecutionMode::Parallel;
+        options.session_id = Some(session_id.clone());
+        options.messages = seeded;
+
+        // Same id -> the new recorder APPENDS to the same transcript file.
+        // The old recorder is dropped WITHOUT end_session: no session-end
+        // hook fires, because this session is not ending.
+        let recorder = crate::session::SessionRecorder::new(
+            self.meta.home.clone(),
+            cwd,
+            &session_id,
+            &state.model.id,
+        );
+        let meta = crate::modes::SessionMeta {
+            model_name: state.model.name.clone(),
+            provider: state.model.provider.as_str().to_string(),
+            cwd: self.meta.cwd.clone(),
+            templates: ingredients.templates,
+            models: ingredients.models,
+            home: self.meta.home.clone(),
+            startup_warning: None,
+            // The NEW files become the baseline, so the next reload diffs
+            // against what this one already applied.
+            context_files: ingredients.context_files,
+        };
+
+        let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
+        app.session_keys = self.session_keys;
+        app.mouse_captured = self.mouse_captured;
+        if let Some(message) = delta_message {
+            // The transcript file gets the update too - a later --resume
+            // replays the same conversation the model saw.
+            app.recorder.record(&message);
+            app.notice(
+                "configuration reloaded in place - context changes appended to the conversation",
+            );
+        } else {
+            app.notice("configuration reloaded in place - no context file changes");
+        }
+        app
+    }
+
+    /// `/hot-reload <session-id>`: full rebuild with freshly loaded
+    /// configuration (incl. a fresh system prompt - a resumed session gets
+    /// the CURRENT context files embedded), history seeded from that
+    /// session's transcript.
+    async fn reload_resume(mut self, cwd: &std::path::Path, id: &str) -> Self {
         // Resolve the target session BEFORE tearing anything down.
-        let (session_id, seeded) = match &target {
-            ReloadTarget::New => (format!("cupel-{}", cupel_core::types::now_ms()), Vec::new()),
-            ReloadTarget::Resume(id) => {
-                let Some(path) = self
-                    .recorder
-                    .sessions_dir()
-                    .map(|dir| dir.join(format!("{id}.jsonl")))
-                    .filter(|p| p.exists())
-                else {
-                    self.notice(format!(
-                        "no session named {id} for this project (/session-id lists them)"
-                    ));
-                    return self;
-                };
-                match crate::session::load_transcript(&path) {
-                    Ok((header, messages)) => (header.session_id, messages),
-                    Err(e) => {
-                        self.notice(format!("cannot resume {id}: {e}"));
-                        return self;
-                    }
-                }
+        let Some(path) = self
+            .recorder
+            .sessions_dir()
+            .map(|dir| dir.join(format!("{id}.jsonl")))
+            .filter(|p| p.exists())
+        else {
+            self.notice(format!(
+                "no session named {id} for this project (/session-id lists them)"
+            ));
+            return self;
+        };
+        let (session_id, seeded) = match crate::session::load_transcript(&path) {
+            Ok((header, messages)) => (header.session_id, messages),
+            Err(e) => {
+                self.notice(format!("cannot resume {id}: {e}"));
+                return self;
             }
         };
 
@@ -493,7 +572,7 @@ impl App {
 
         let state = self.agent.state();
         let registry = self.agent.registry();
-        let ingredients = crate::bootstrap::load(&cwd, self.meta.home.clone(), &registry).await;
+        let ingredients = crate::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
 
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
         options.system_prompt = ingredients.system_prompt;
@@ -509,7 +588,7 @@ impl App {
 
         let recorder = crate::session::SessionRecorder::new(
             self.meta.home.clone(),
-            &cwd,
+            cwd,
             &session_id,
             &state.model.id,
         );
@@ -523,19 +602,15 @@ impl App {
             // A reload is user-initiated; the startup condition was already
             // shown once and does not repeat.
             startup_warning: None,
+            context_files: ingredients.context_files,
         };
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
-        app.notice(match target {
-            ReloadTarget::New => {
-                format!(".cupel configuration reloaded - fresh session {session_id}")
-            }
-            ReloadTarget::Resume(_) => {
-                format!(".cupel configuration reloaded - resumed session {session_id}")
-            }
-        });
+        app.notice(format!(
+            ".cupel configuration reloaded - resumed session {session_id}"
+        ));
         app
     }
 
@@ -856,7 +931,7 @@ impl App {
                     // The event loop picks this up and rebuilds the session
                     // (async work); see App::hot_reload.
                     self.pending_reload = Some(if args.is_empty() {
-                        ReloadTarget::New
+                        ReloadTarget::Current
                     } else {
                         ReloadTarget::Resume(args.to_string())
                     });

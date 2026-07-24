@@ -47,6 +47,10 @@ pub struct Ingredients {
     pub models: Vec<Model>,
     /// Bash denylist rebuilt from the current bash-deny files.
     pub guard: BashGuard,
+    /// The context files (AGENTS.md/CLAUDE.md) as loaded - kept alongside
+    /// the system prompt they were embedded into, so a later in-place
+    /// `/hot-reload` can DIFF against them instead of re-reading blind.
+    pub context_files: Vec<crate::resources::ContextFile>,
 }
 
 /// Load every ingredient fresh from disk (and the bounded ollama probe).
@@ -76,6 +80,7 @@ pub async fn load(
 
     Ingredients {
         system_prompt: build_system_prompt(cwd, TOOL_SUMMARIES, &context_files),
+        context_files,
         tools,
         templates,
         models,

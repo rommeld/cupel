@@ -30,4 +30,8 @@ pub struct SessionMeta {
     /// credentials found") - the TUI shows it as the first transcript
     /// notice instead of refusing to start.
     pub startup_warning: Option<String>,
+    /// The context files as loaded at session start (already embedded in
+    /// the agent's system prompt). Bare `/hot-reload` diffs the files on
+    /// disk against THESE and appends only the delta to the conversation.
+    pub context_files: Vec<crate::resources::ContextFile>,
 }

@@ -298,6 +298,7 @@ async fn run() -> Result<(), String> {
         models: ingredients.models,
         home,
         startup_warning,
+        context_files: ingredients.context_files,
     };
 
     // ---- Pick a frontend ------------------------------------------------------
