@@ -302,6 +302,7 @@ mod tests {
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
                 startup_warning: None,
+                context_files: Vec::new(),
             },
             recorder,
         )
@@ -363,6 +364,7 @@ mod tests {
                 startup_warning: Some(
                     "no credentials found - use /provider <name> <api-key>".into(),
                 ),
+                context_files: Vec::new(),
             },
             recorder,
         );
@@ -464,6 +466,7 @@ mod tests {
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
                 startup_warning: None,
+                context_files: Vec::new(),
             },
             recorder,
         );
@@ -516,6 +519,7 @@ mod tests {
                 models: cupel_core::catalog::builtin_models(),
                 home: Some(home),
                 startup_warning: None,
+                context_files: Vec::new(),
             },
             recorder,
         )
@@ -532,7 +536,7 @@ mod tests {
         )));
         assert_eq!(
             app.pending_reload,
-            Some(crate::modes::interactive::app::ReloadTarget::New)
+            Some(crate::modes::interactive::app::ReloadTarget::Current)
         );
 
         let mut app = test_app();
@@ -551,30 +555,79 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hot_reload_new_session_rereads_cupel_config() {
+    async fn hot_reload_current_appends_only_the_agents_delta() {
         use crate::modes::interactive::app::ReloadTarget;
+        use crate::resources::{CONTEXT_UPDATE_MARKER, ContextFile};
 
-        let root = std::env::temp_dir().join("cupel-ui-hotreload-new");
+        let root = std::env::temp_dir().join("cupel-ui-hotreload-delta");
         let _ = std::fs::remove_dir_all(&root);
-        let app = test_app_with_home(&root, "cupel-before");
-        // AGENTS.md appears AFTER startup - exactly what /hot-reload is for.
-        std::fs::write(root.join("home/AGENTS.md"), "NEW RULES APPLY").unwrap();
+        // Ten rules: far enough apart that the unified diff's 2-line
+        // context radius provably excludes the untouched start of the file.
+        let original: String = (1..=10).fold(String::new(), |mut s, i| {
+            use std::fmt::Write as _;
+            let _ = writeln!(s, "RULE {i}");
+            s
+        });
+        let mut app = test_app_with_home(&root, "cupel-current");
+        std::fs::write(root.join("home/AGENTS.md"), &original).unwrap();
+        // The session-start baseline the delta will diff against.
+        app.meta.context_files = vec![ContextFile {
+            path: root.join("home/AGENTS.md"),
+            content: original.clone(),
+        }];
+        // Some history that must SURVIVE the reload.
+        app.agent = {
+            let model = cupel_core::catalog::builtin_models().remove(0);
+            let registry = Arc::new(cupel_core::provider::Registry::new());
+            let mut options = AgentOptions::new(model, registry);
+            options.messages = vec![cupel_agent::AgentMessage::user_text("earlier prompt")];
+            Agent::new(options)
+        };
 
-        let app = app.hot_reload(ReloadTarget::New).await;
+        // Edit ONE rule mid-session.
+        let edited = original.replace("RULE 6", "RULE 6 (amended)");
+        std::fs::write(root.join("home/AGENTS.md"), &edited).unwrap();
 
-        assert_ne!(app.recorder.session_id(), "cupel-before", "fresh id");
+        let app = app.hot_reload(ReloadTarget::Current).await;
+
+        // The session CONTINUES: same id, history intact.
+        assert_eq!(app.recorder.session_id(), "cupel-current");
+        let messages = app.agent.state().messages;
+        assert_eq!(messages.len(), 2, "history + appended delta");
+        // The system prompt was NOT rebuilt (test agent starts with an
+        // empty one - re-embedding would have injected the rules).
+        assert!(!app.agent.state().system_prompt.contains("RULE"));
+        // The appended message is the DELTA, not the whole file: the
+        // changed line travels, distant unchanged lines do not.
+        let cupel_agent::AgentMessage::Llm(cupel_core::types::Message::User(user)) = &messages[1]
+        else {
+            panic!("delta should be a user message");
+        };
+        let cupel_core::types::UserContentBody::Text(delta) = &user.content else {
+            panic!("delta should be text");
+        };
+        assert!(delta.starts_with(CONTEXT_UPDATE_MARKER));
+        assert!(delta.contains("+RULE 6 (amended)"), "{delta}");
+        assert!(delta.contains("-RULE 6\n"), "{delta}");
         assert!(
-            app.agent.state().system_prompt.contains("NEW RULES APPLY"),
-            "reloaded context is in the system prompt"
+            !delta.contains("RULE 1\n"),
+            "far lines must not travel: {delta}"
         );
-        assert!(app.agent.state().messages.is_empty(), "fresh history");
         assert!(
             app.transcript.cells.iter().any(|c| matches!(
                 c,
-                Cell::Notice { text } if text.contains("fresh session")
+                Cell::Notice { text } if text.contains("reloaded in place")
             )),
-            "reload notice shown"
+            "in-place notice shown"
         );
+
+        // Reload again with NO further edits: nothing new is appended.
+        let app = app.hot_reload(ReloadTarget::Current).await;
+        assert_eq!(app.agent.state().messages.len(), 2, "no duplicate delta");
+        assert!(app.transcript.cells.iter().any(|c| matches!(
+            c,
+            Cell::Notice { text } if text.contains("no context file changes")
+        )));
     }
 
     #[tokio::test]
@@ -901,6 +954,7 @@ mod tests {
                 models: cupel_core::catalog::builtin_models(),
                 home: None,
                 startup_warning: None,
+                context_files: Vec::new(),
             },
             recorder,
         );

@@ -140,6 +140,79 @@ pub fn load_context_files(roots: &[PathBuf]) -> Vec<ContextFile> {
     files
 }
 
+/// Marker prefixed to the context-update message bare `/hot-reload`
+/// appends when a context file changed mid-session.
+pub const CONTEXT_UPDATE_MARKER: &str =
+    "[context update - project instructions changed since session start]";
+
+/// Delta caps: a giant AGENTS.md rewrite must not flood the conversation.
+const DELTA_MAX_LINES: usize = 300;
+const DELTA_MAX_BYTES: usize = 12 * 1024;
+
+/// A compact delta between the context files loaded at session start and
+/// the ones on disk now - what bare `/hot-reload` appends to the RUNNING
+/// conversation instead of re-embedding whole files. `None` = nothing
+/// changed.
+///
+/// Unified diffs (two context lines around each change) keep the message
+/// small: only the changed instructions travel; the original full text
+/// stays where it already is - embedded in the system prompt at session
+/// start.
+#[must_use]
+pub fn context_delta(old: &[ContextFile], new: &[ContextFile]) -> Option<String> {
+    let mut sections: Vec<String> = Vec::new();
+
+    for file in new {
+        // A file that appeared since session start diffs against empty -
+        // its lines all arrive as additions, which is exactly the delta.
+        let old_content = old
+            .iter()
+            .find(|o| o.path == file.path)
+            .map_or("", |o| o.content.as_str());
+        if old_content == file.content {
+            continue;
+        }
+        let path = file.path.display().to_string();
+        let diff = similar::TextDiff::from_lines(old_content, &file.content)
+            .unified_diff()
+            .context_radius(2)
+            .header(&path, &path)
+            .to_string();
+        sections.push(diff);
+    }
+    for file in old {
+        if !new.iter().any(|n| n.path == file.path) {
+            sections.push(format!(
+                "(context file removed since session start: {})",
+                file.path.display()
+            ));
+        }
+    }
+    if sections.is_empty() {
+        return None;
+    }
+
+    let body = sections.join("\n");
+    let capped = crate::truncate::truncate_head(
+        &body,
+        crate::truncate::TruncationOptions {
+            max_lines: Some(DELTA_MAX_LINES),
+            max_bytes: Some(DELTA_MAX_BYTES),
+        },
+    );
+    let mut delta = format!(
+        "{CONTEXT_UPDATE_MARKER}\n\nApply these updated project instructions. The diff below is \
+         against the instructions given at session start; unchanged instructions still apply.\n\n{}",
+        capped.content
+    );
+    if capped.truncated {
+        delta.push_str(
+            "\n[delta truncated - the change is large; restart cupel to re-embed the full file]",
+        );
+    }
+    Some(delta)
+}
+
 /// Split `---`-fenced frontmatter into key/value pairs plus the body.
 /// A hand-rolled ~20-line parser instead of a YAML dependency: prompt
 /// template frontmatter is flat `key: value` lines by convention.
@@ -296,6 +369,48 @@ mod tests {
             std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o755)).unwrap();
             assert!(!cwd.join(".cupel").exists());
         }
+    }
+
+    fn ctx(path: &str, content: &str) -> ContextFile {
+        ContextFile {
+            path: PathBuf::from(path),
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn context_delta_carries_only_the_changed_region() {
+        let old: String = (1..=10).fold(String::new(), |mut s, i| {
+            use std::fmt::Write as _;
+            let _ = writeln!(s, "rule {i}");
+            s
+        });
+        let new = old.replace("rule 6", "rule six");
+        let delta = context_delta(&[ctx("/h/AGENTS.md", &old)], &[ctx("/h/AGENTS.md", &new)])
+            .expect("changed file yields a delta");
+
+        assert!(delta.starts_with(CONTEXT_UPDATE_MARKER));
+        assert!(delta.contains("+rule six"));
+        assert!(delta.contains("-rule 6"));
+        // Two lines of context around the change - distant lines stay home.
+        assert!(delta.contains("rule 4"), "context line inside the radius");
+        assert!(!delta.contains("rule 1\n"), "far lines must not travel");
+    }
+
+    #[test]
+    fn context_delta_none_when_unchanged_and_notes_added_or_removed_files() {
+        let same = ctx("/h/AGENTS.md", "stable rules");
+        assert!(context_delta(std::slice::from_ref(&same), std::slice::from_ref(&same)).is_none());
+        assert!(context_delta(&[], &[]).is_none());
+
+        // A file appearing mid-session arrives as pure additions.
+        let delta = context_delta(&[], &[ctx("/p/AGENTS.md", "fresh rule\n")]).unwrap();
+        assert!(delta.contains("+fresh rule"));
+
+        // A file vanishing is noted, not silently ignored.
+        let delta = context_delta(&[same], &[]).unwrap();
+        assert!(delta.contains("removed since session start"));
+        assert!(delta.contains("AGENTS.md"));
     }
 
     #[test]

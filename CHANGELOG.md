@@ -3,6 +3,14 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [Unreleased]
+
+- bare `/hot-reload` now updates the running session IN PLACE: same id,
+  history, and transcript; `AGENTS.md` changes are appended as a compact
+  unified diff ("[context update]") instead of re-embedding the whole
+  file (the original stays in the system prompt from session start).
+  `/hot-reload <session-id>` keeps the full-rebuild resume behavior
+
 ## [v0.3.0-beta] - 2026-07-23
 
 - drop the shim's orphaned cupel-coding-agent workspace dependency
