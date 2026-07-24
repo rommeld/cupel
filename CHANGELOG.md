@@ -3,13 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
-## [Unreleased]
+## [v0.4.0-beta] - 2026-07-24
 
-- bare `/hot-reload` now updates the running session IN PLACE: same id,
-  history, and transcript; `AGENTS.md` changes are appended as a compact
-  unified diff ("[context update]") instead of re-embedding the whole
-  file (the original stays in the system prompt from session start).
-  `/hot-reload <session-id>` keeps the full-rebuild resume behavior
+- hot-reload: append the AGENTS.md delta in place instead of rebuilding
+- define contribution details for feature requests and bug fixes
+- changelog: v0.3.0-beta
 
 ## [v0.3.0-beta] - 2026-07-23
 
