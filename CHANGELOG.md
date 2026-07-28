@@ -6,12 +6,11 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.5.2-beta] - 2026-07-28
 
 - fix interactive ui test to handle model catalog
-- changelog: v0.5.0-beta
+- fix catalog tests and adjust model number
 
 ## [v0.5.0-beta] - 2026-07-28
 
 - minor model updates to the default catalog
-- changelog: v0.4.0-beta
 
 ## [v0.4.0-beta] - 2026-07-24
 
