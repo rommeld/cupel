@@ -306,13 +306,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_all_sixteen_fireworks_models() {
+    fn catalog_has_all_twelve_fireworks_models() {
         let fireworks: Vec<Model> = builtin_models()
             .into_iter()
             .filter(|m| m.provider.as_str() == Provider::FIREWORKS)
             .collect();
-        assert_eq!(fireworks.len(), 16);
-        // 14 ride the Anthropic-compatible endpoint, 2 ride Chat Completions.
+        assert_eq!(fireworks.len(), 12);
+        // 10 ride the Anthropic-compatible endpoint, 2 ride Chat Completions.
         let anthropic = fireworks
             .iter()
             .filter(|m| m.api.as_str() == Api::ANTHROPIC_MESSAGES)
@@ -321,7 +321,7 @@ mod tests {
             .iter()
             .filter(|m| m.api.as_str() == Api::OPENAI_COMPLETIONS)
             .count();
-        assert_eq!((anthropic, completions), (14, 2));
+        assert_eq!((anthropic, completions), (10, 2));
     }
 
     #[test]
