@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.5.0-beta] - 2026-07-28
+
+- minor model updates to the default catalog
+- changelog: v0.4.0-beta
+
 ## [v0.4.0-beta] - 2026-07-24
 
 - hot-reload: append the AGENTS.md delta in place instead of rebuilding
