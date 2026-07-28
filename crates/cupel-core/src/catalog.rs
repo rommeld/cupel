@@ -1,7 +1,6 @@
 //! A small built-in model catalog.
 //!
-//! Prices are USD per million tokens and are a snapshot - treat them as
-//! defaults, not truth; callers can always register their own [`Model`]s in
+//! Prices are USD per million tokens; callers can always register their own [`Model`]s in
 //! the [`ModelRegistry`](crate::model::ModelRegistry).
 
 use std::collections::BTreeMap;
@@ -53,9 +52,6 @@ fn fireworks_anthropic(
         context_window,
         max_tokens,
         headers: None,
-        // Same quirks pi records for Fireworks' Anthropic-compatible
-        // endpoint: session affinity helps cache routing; eager tool input
-        // streaming, cache_control on tools, and 1h cache TTL are missing.
         compat: Some(serde_json::json!({
             "sendSessionAffinityHeaders": true,
             "supportsEagerToolInputStreaming": false,
@@ -108,7 +104,6 @@ fn fireworks_glm52(
     }
 }
 
-/// The models cupel knows out of the box.
 #[must_use]
 pub fn builtin_models() -> Vec<Model> {
     let mut models = vec![
@@ -116,8 +111,8 @@ pub fn builtin_models() -> Vec<Model> {
         // Anthropic (direct API)
         // ------------------------------------------------------------------
         Model {
-            id: "claude-sonnet-4-5".to_string(),
-            name: "Claude Sonnet 4.5".to_string(),
+            id: "claude-sonnet-5".to_string(),
+            name: "Claude Sonnet 5".to_string(),
             api: Api::from(Api::ANTHROPIC_MESSAGES),
             provider: Provider::from(Provider::ANTHROPIC),
             base_url: "https://api.anthropic.com".to_string(),
@@ -125,20 +120,21 @@ pub fn builtin_models() -> Vec<Model> {
             // Budget-based thinking; xhigh unsupported (entry -> null).
             thinking_level_map: Some(thinking_levels(&[("xhigh", None)])),
             input: vec![InputModality::Text, InputModality::Image],
+            // TODO: API request for token cost
             cost: ModelCost {
-                input: 3.0,
-                output: 15.0,
+                input: 2.0,
+                output: 10.0,
                 cached_read: 0.30,
                 cached_write: 3.75,
             },
-            context_window: 200_000,
-            max_tokens: 64_000,
+            context_window: 1_000_000,
+            max_tokens: 128_000,
             headers: None,
             compat: None,
         },
         Model {
-            id: "claude-opus-4-5".to_string(),
-            name: "Claude Opus 4.5".to_string(),
+            id: "claude-opus-5".to_string(),
+            name: "Claude Opus 5".to_string(),
             api: Api::from(Api::ANTHROPIC_MESSAGES),
             provider: Provider::from(Provider::ANTHROPIC),
             base_url: "https://api.anthropic.com".to_string(),
@@ -151,8 +147,8 @@ pub fn builtin_models() -> Vec<Model> {
                 cached_read: 0.50,
                 cached_write: 6.25,
             },
-            context_window: 200_000,
-            max_tokens: 64_000,
+            context_window: 1_000_000,
+            max_tokens: 128_000,
             headers: None,
             compat: None,
         },
@@ -180,8 +176,32 @@ pub fn builtin_models() -> Vec<Model> {
         // OpenAI (Responses API)
         // ------------------------------------------------------------------
         Model {
-            id: "gpt-5.1".to_string(),
-            name: "GPT-5.1".to_string(),
+            id: "gpt-5.6-sol".to_string(),
+            name: "GPT-5.6 Solar".to_string(),
+            api: Api::from(Api::OPENAI_RESPONSES),
+            provider: Provider::from(Provider::OPENAI),
+            base_url: "https://api.openai.com/v1".to_string(),
+            reasoning: true,
+            thinking_level_map: Some(thinking_levels(&[
+                ("off", Some("none")),
+                ("minimal", Some("low")),
+                ("xhigh", None),
+            ])),
+            input: vec![InputModality::Text, InputModality::Image],
+            cost: ModelCost {
+                input: 5.0,
+                output: 30.0,
+                cached_read: 0.5,
+                cached_write: 6.25,
+            },
+            context_window: 1_050_000,
+            max_tokens: 128_000,
+            headers: None,
+            compat: None,
+        },
+        Model {
+            id: "gpt-5.6-luna".to_string(),
+            name: "GPT-5.6 Luna".to_string(),
             api: Api::from(Api::OPENAI_RESPONSES),
             provider: Provider::from(Provider::OPENAI),
             base_url: "https://api.openai.com/v1".to_string(),
@@ -194,12 +214,37 @@ pub fn builtin_models() -> Vec<Model> {
             ])),
             input: vec![InputModality::Text, InputModality::Image],
             cost: ModelCost {
-                input: 1.25,
-                output: 10.0,
-                cached_read: 0.125,
-                cached_write: 0.0,
+                input: 1.0,
+                output: 6.0,
+                cached_read: 0.1,
+                cached_write: 1.25,
             },
-            context_window: 400_000,
+            context_window: 1_050_000,
+            max_tokens: 128_000,
+            headers: None,
+            compat: None,
+        },
+        Model {
+            id: "gpt-5.6-terra".to_string(),
+            name: "GPT-5.6 Terra".to_string(),
+            api: Api::from(Api::OPENAI_RESPONSES),
+            provider: Provider::from(Provider::OPENAI),
+            base_url: "https://api.openai.com/v1".to_string(),
+            reasoning: true,
+            // GPT-5.1 accepts effort "none" when reasoning is off.
+            thinking_level_map: Some(thinking_levels(&[
+                ("off", Some("none")),
+                ("minimal", Some("low")),
+                ("xhigh", None),
+            ])),
+            input: vec![InputModality::Text, InputModality::Image],
+            cost: ModelCost {
+                input: 2.50,
+                output: 15.0,
+                cached_read: 0.25,
+                cached_write: 3.125,
+            },
+            context_window: 1_050_000,
             max_tokens: 128_000,
             headers: None,
             compat: None,
@@ -233,8 +278,7 @@ pub fn builtin_models() -> Vec<Model> {
     ];
 
     // ----------------------------------------------------------------------
-    // Fireworks (https://fireworks.ai) - open-weight models. Mirrors pi's
-    // generated fireworks.models.ts snapshot: fourteen models on the
+    // Fireworks (https://fireworks.ai) - open-weight models: on the
     // Anthropic-compatible endpoint, two (GLM 5.2) on Chat Completions.
     // ----------------------------------------------------------------------
     #[rustfmt::skip]
@@ -242,19 +286,15 @@ pub fn builtin_models() -> Vec<Model> {
         //                   id                                                name                    vision  in     out   cache$  context    max_out
         fireworks_anthropic("accounts/fireworks/models/deepseek-v4-flash",    "DeepSeek V4 Flash",    false,  0.14,  0.28, 0.028, 1_000_000, 384_000),
         fireworks_anthropic("accounts/fireworks/models/deepseek-v4-pro",      "DeepSeek V4 Pro",      false,  1.74,  3.48, 0.145, 1_000_000, 384_000),
-        fireworks_anthropic("accounts/fireworks/models/glm-5p1",              "GLM 5.1",              false,  1.4,   4.4,  0.26,    202_800, 131_072),
-        fireworks_anthropic("accounts/fireworks/models/gpt-oss-120b",         "GPT OSS 120B",         false,  0.15,  0.6,  0.015,   131_072,  32_768),
-        fireworks_anthropic("accounts/fireworks/models/gpt-oss-20b",          "GPT OSS 20B",          false,  0.07,  0.3,  0.035,   131_072,  32_768),
         fireworks_anthropic("accounts/fireworks/models/kimi-k2p6",            "Kimi K2.6",            true,   0.95,  4.0,  0.16,    262_000, 262_000),
         fireworks_anthropic("accounts/fireworks/models/kimi-k2p7-code",       "Kimi K2.7 Code",       true,   0.95,  4.0,  0.19,    262_000, 262_000),
-        fireworks_anthropic("accounts/fireworks/models/minimax-m2p7",         "MiniMax-M2.7",         false,  0.3,   1.2,  0.06,    196_608, 196_608),
         fireworks_anthropic("accounts/fireworks/models/minimax-m3",           "MiniMax-M3",           false,  0.3,   1.2,  0.06,    512_000, 512_000),
         fireworks_anthropic("accounts/fireworks/models/qwen3p7-plus",         "Qwen 3.7 Plus",        true,   0.4,   1.6,  0.08,    262_144,  65_536),
-        fireworks_anthropic("accounts/fireworks/routers/glm-5p1-fast",        "GLM 5.1 Fast",         false,  2.8,   8.8,  0.52,    202_800, 131_072),
         fireworks_anthropic("accounts/fireworks/routers/kimi-k2p6-fast",      "Kimi K2.6 Fast",       true,   2.0,   8.0,  0.3,     262_000, 262_000),
         fireworks_anthropic("accounts/fireworks/routers/kimi-k2p6-turbo",     "Kimi K2.6 Turbo",      true,   2.0,   8.0,  0.3,     262_000, 262_000),
         fireworks_anthropic("accounts/fireworks/routers/kimi-k2p7-code-fast", "Kimi K2.7 Code Fast",  true,   1.9,   8.0,  0.38,    262_000, 262_000),
-        fireworks_glm52("accounts/fireworks/models/glm-5p2",       "GLM 5.2",      1.4, 4.4, 0.26),
+        fireworks_anthropic("accounts/fireworks/routers/kimi-k3",             "Kimi K3",              true,   3.0,   15.0,  0.3,     1_040_000, 1_040_000),
+        fireworks_glm52("accounts/fireworks/models/glm-5p2",       "GLM 5.2",      1.4, 4.4, 0.14),
         fireworks_glm52("accounts/fireworks/routers/glm-5p2-fast", "GLM 5.2 Fast", 2.1, 6.6, 0.21),
     ]);
 
