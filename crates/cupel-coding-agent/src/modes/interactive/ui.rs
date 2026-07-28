@@ -1049,7 +1049,7 @@ mod tests {
         assert!(app.autocomplete.is_open(), "model list should open");
         let screen = draw(&mut app, 100, 24);
         assert!(
-            screen.contains("claude-sonnet-4-5  (anthropic)"),
+            screen.contains("claude-sonnet-5  (anthropic)"),
             "catalog rows missing:\n{screen}"
         );
 

@@ -284,10 +284,10 @@ pub fn builtin_models() -> Vec<Model> {
     #[rustfmt::skip]
     models.extend([
         //                   id                                                name                    vision  in     out   cache$  context    max_out
+        fireworks_anthropic("accounts/fireworks/models/kimi-k2p7-code",       "Kimi K2.7 Code",       true,   0.95,  4.0,  0.19,    262_000, 262_000),
         fireworks_anthropic("accounts/fireworks/models/deepseek-v4-flash",    "DeepSeek V4 Flash",    false,  0.14,  0.28, 0.028, 1_000_000, 384_000),
         fireworks_anthropic("accounts/fireworks/models/deepseek-v4-pro",      "DeepSeek V4 Pro",      false,  1.74,  3.48, 0.145, 1_000_000, 384_000),
         fireworks_anthropic("accounts/fireworks/models/kimi-k2p6",            "Kimi K2.6",            true,   0.95,  4.0,  0.16,    262_000, 262_000),
-        fireworks_anthropic("accounts/fireworks/models/kimi-k2p7-code",       "Kimi K2.7 Code",       true,   0.95,  4.0,  0.19,    262_000, 262_000),
         fireworks_anthropic("accounts/fireworks/models/minimax-m3",           "MiniMax-M3",           false,  0.3,   1.2,  0.06,    512_000, 512_000),
         fireworks_anthropic("accounts/fireworks/models/qwen3p7-plus",         "Qwen 3.7 Plus",        true,   0.4,   1.6,  0.08,    262_144,  65_536),
         fireworks_anthropic("accounts/fireworks/routers/kimi-k2p6-fast",      "Kimi K2.6 Fast",       true,   2.0,   8.0,  0.3,     262_000, 262_000),
