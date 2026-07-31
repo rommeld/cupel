@@ -214,8 +214,8 @@ pub fn builtin_models() -> Vec<Model> {
             ])),
             input: vec![InputModality::Text, InputModality::Image],
             cost: ModelCost {
-                input: 1.0,
-                output: 6.0,
+                input: 0.2,
+                output: 1.2,
                 cached_read: 0.1,
                 cached_write: 1.25,
             },
@@ -239,8 +239,8 @@ pub fn builtin_models() -> Vec<Model> {
             ])),
             input: vec![InputModality::Text, InputModality::Image],
             cost: ModelCost {
-                input: 2.50,
-                output: 15.0,
+                input: 2.00,
+                output: 12.0,
                 cached_read: 0.25,
                 cached_write: 3.125,
             },
