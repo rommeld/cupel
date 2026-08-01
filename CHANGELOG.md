@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.5.3-beta] - 2026-07-31
+
+- adjust pricing for GPT-5.6 Terra and GPT-5.6 Luna
+- reduce CHANGELOG content
+- changelog: v0.5.2-beta
+
 ## [v0.5.2-beta] - 2026-07-28
 
 - fix interactive ui test to handle model catalog
