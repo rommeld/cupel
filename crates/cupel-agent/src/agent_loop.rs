@@ -2,9 +2,7 @@
 //! calls, feed the results back, repeat until the model stops asking for
 //! tools (and no queued messages remain).
 //!
-//! One deliberate difference: pi mutates the shared context with a *partial*
-//! assistant message on every stream delta so `agent.state.streamingMessage`
-//! always holds the latest snapshot. Cloning the whole message per delta is
+//! Cloning the whole message per delta is
 //! wasteful in Rust; instead [`AgentEvent::MessageUpdate`] carries the raw
 //! provider event and consumers accumulate exactly the state they render.
 
@@ -27,10 +25,6 @@ use crate::types::{
     AgentContext, AgentEvent, AgentHooks, AgentLoopConfig, AgentMessage, AgentTool,
     AgentToolResult, CompactionReason, ToolExecutionMode, ToolUpdateFn,
 };
-
-// ---------------------------------------------------------------------------
-// Event stream plumbing (same producer/consumer split as cupel-core)
-// ---------------------------------------------------------------------------
 
 /// Consumer handle for a run's events. `AgentEnd` is the final event.
 pub struct AgentEventStream {
@@ -56,8 +50,6 @@ pub struct AgentEventSink {
 
 impl AgentEventSink {
     pub fn emit(&self, event: AgentEvent) {
-        // A dropped consumer is not an error; the loop simply talks into the
-        // void until it finishes (matching pi, where listeners are optional).
         let _ = self.tx.send(event);
     }
 }
@@ -68,13 +60,6 @@ pub fn agent_event_channel() -> (AgentEventStream, AgentEventSink) {
     (AgentEventStream { rx }, AgentEventSink { tx })
 }
 
-// ---------------------------------------------------------------------------
-// Entry points
-// ---------------------------------------------------------------------------
-
-/// Start a run with new prompt messages: they are appended to the context,
-/// announced as events, and the loop takes over.
-///
 /// Returns all NEW messages the run produced (prompts included).
 pub async fn agent_loop(
     prompts: Vec<AgentMessage>,
@@ -88,15 +73,6 @@ pub async fn agent_loop(
     let mut new_messages: Vec<AgentMessage> = prompts.clone();
     context.messages.extend(prompts.iter().cloned());
 
-    sink.emit(AgentEvent::AgentStart);
-    sink.emit(AgentEvent::TurnStart);
-    for prompt in prompts {
-        sink.emit(AgentEvent::MessageStart {
-            message: prompt.clone(),
-        });
-        sink.emit(AgentEvent::MessageEnd { message: prompt });
-    }
-
     run_loop(
         context,
         &mut new_messages,
@@ -107,57 +83,12 @@ pub async fn agent_loop(
         &sink,
     )
     .await;
+
+    sink.emit(AgentEvent::AgentEnd {
+        messages: new_messages.clone(),
+    });
     new_messages
 }
-
-/// Errors from [`agent_loop_continue`]'s precondition checks.
-#[derive(Debug, thiserror::Error)]
-pub enum ContinueError {
-    #[error("cannot continue: no messages in context")]
-    Empty,
-    #[error("cannot continue from message role: assistant")]
-    EndsWithAssistant,
-}
-
-/// Continue from the existing context without adding a message (retries).
-/// The last message must convert to a user or tool-result message, or the
-/// provider will reject the request.
-pub async fn agent_loop_continue(
-    context: AgentContext,
-    config: AgentLoopConfig,
-    hooks: Arc<dyn AgentHooks>,
-    registry: Arc<Registry>,
-    cancel: CancellationToken,
-    sink: AgentEventSink,
-) -> Result<Vec<AgentMessage>, ContinueError> {
-    match context.messages.last() {
-        None => return Err(ContinueError::Empty),
-        Some(AgentMessage::Llm(Message::Assistant(_))) => {
-            return Err(ContinueError::EndsWithAssistant);
-        }
-        _ => {}
-    }
-
-    let mut new_messages: Vec<AgentMessage> = Vec::new();
-    sink.emit(AgentEvent::AgentStart);
-    sink.emit(AgentEvent::TurnStart);
-
-    run_loop(
-        context,
-        &mut new_messages,
-        config,
-        hooks,
-        registry,
-        cancel,
-        &sink,
-    )
-    .await;
-    Ok(new_messages)
-}
-
-// ---------------------------------------------------------------------------
-// Main loop
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_lines)]
 #[tracing::instrument(name = "agent_run", skip_all, fields(
@@ -167,7 +98,7 @@ pub async fn agent_loop_continue(
 async fn run_loop(
     mut context: AgentContext,
     new_messages: &mut Vec<AgentMessage>,
-    mut config: AgentLoopConfig,
+    config: AgentLoopConfig,
     hooks: Arc<dyn AgentHooks>,
     registry: Arc<Registry>,
     cancel: CancellationToken,
@@ -175,7 +106,7 @@ async fn run_loop(
 ) {
     let mut first_turn = true;
     // Consecutive transient-failure retries so far; any successful response
-    // resets it (pi's session does the same).
+    // resets it.
     let mut retry_attempt: u32 = 0;
     // Guard for reactive overflow compaction: at most once per failure
     // episode, or a provider that keeps rejecting would loop forever.
@@ -194,23 +125,14 @@ async fn run_loop(
         while has_more_tool_calls || !pending_messages.is_empty() {
             if first_turn {
                 first_turn = false;
-            } else {
-                sink.emit(AgentEvent::TurnStart);
             }
 
             // Inject queued messages before the next assistant response.
             for message in pending_messages.drain(..) {
-                sink.emit(AgentEvent::MessageStart {
-                    message: message.clone(),
-                });
-                sink.emit(AgentEvent::MessageEnd {
-                    message: message.clone(),
-                });
                 context.messages.push(message.clone());
                 new_messages.push(message);
             }
 
-            // ---- Proactive context management -----------------------------
             // Compact BEFORE the request that would overflow, not after it
             // fails: cheaper (no wasted request) and invisible to the model.
             let estimate = compaction::estimate_context_tokens(&context);
@@ -228,7 +150,6 @@ async fn run_loop(
                 .await;
             }
 
-            // ---- One assistant response --------------------------------
             let message =
                 stream_assistant_response(&mut context, &config, &hooks, &registry, &cancel, sink)
                     .await;
@@ -245,11 +166,9 @@ async fn run_loop(
                     tool_results: Vec::new(),
                 });
 
-                // ---- Reactive overflow handling ----------------------------
                 // The pre-turn estimate is a heuristic; when it undershoots,
                 // the provider rejects the request as too large. That error
-                // is checked BEFORE transient retry (pi's guidance: handle
-                // overflow first) - waiting and resending the same oversized
+                // is checked BEFORE transient retry  - waiting and resending the same oversized
                 // request could never succeed. Compact, then re-request
                 // immediately (no backoff: the failure wasn't load-related).
                 if cupel_core::overflow::is_context_overflow(&message, config.model.context_window)
@@ -276,9 +195,6 @@ async fn run_loop(
                     // to normal error handling.
                 }
 
-                // ---- Automatic retry for transient failures ---------------
-                // An "overloaded"/529/dropped-connection response should not
-                // kill the run; wait with exponential backoff and re-request.
                 // The errored message stays in the transcript for honesty -
                 // transform_messages already drops errored turns from what
                 // goes over the wire, so the replayed request is clean.
@@ -342,7 +258,6 @@ async fn run_loop(
             retry_attempt = 0;
             overflow_compacted = false;
 
-            // ---- Its tool calls ------------------------------------------
             let tool_calls: Vec<ToolCall> = message
                 .content
                 .iter()
@@ -374,21 +289,8 @@ async fn run_loop(
                 tool_results: tool_results.clone(),
             });
 
-            // ---- Between-turn hooks --------------------------------------
-            if let Some(update) = hooks.prepare_next_turn().await {
-                if let Some(model) = update.model {
-                    config.model = model;
-                }
-                if let Some(thinking_level) = update.thinking_level {
-                    config.thinking_level = thinking_level;
-                }
-            }
-
             if hooks.should_stop_after_turn(&message, &tool_results).await {
-                sink.emit(AgentEvent::AgentEnd {
-                    messages: new_messages.clone(),
-                });
-                return;
+                break;
             }
 
             pending_messages = hooks.steering_messages().await;
@@ -401,10 +303,6 @@ async fn run_loop(
         }
         pending_messages = follow_ups;
     }
-
-    sink.emit(AgentEvent::AgentEnd {
-        messages: new_messages.clone(),
-    });
 }
 
 /// Run one compaction attempt, emitting start/end events. Returns whether
@@ -465,16 +363,11 @@ async fn run_compaction(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Assistant streaming
-// ---------------------------------------------------------------------------
-
 /// Stream one assistant response. This is the only place `AgentMessage`s are
 /// converted to provider [`Message`]s.
 ///
 /// Failures never propagate as `Err`: they come back as an
-/// [`AssistantMessage`] with `stop_reason: Error | Aborted` (pi's `StreamFn`
-/// contract).
+/// [`AssistantMessage`] with `stop_reason: Error | Aborted`.
 async fn stream_assistant_response(
     context: &mut AgentContext,
     config: &AgentLoopConfig,
@@ -538,11 +431,6 @@ async fn stream_assistant_response(
         match event {
             AssistantMessageEvent::Start => {
                 started = true;
-                // Announce the in-flight assistant message with an empty
-                // shell; deltas follow as MessageUpdate events.
-                sink.emit(AgentEvent::MessageStart {
-                    message: AgentMessage::Llm(Message::Assistant(error_shell(config))),
-                });
             }
             AssistantMessageEvent::Done { message, .. } => {
                 final_message = Some(message);
@@ -595,24 +483,15 @@ fn emit_final_message(
     context: &mut AgentContext,
     sink: &AgentEventSink,
     message: AssistantMessage,
-    already_started: bool,
+    _already_started: bool,
 ) {
     context
         .messages
         .push(AgentMessage::Llm(Message::Assistant(message.clone())));
-    if !already_started {
-        sink.emit(AgentEvent::MessageStart {
-            message: AgentMessage::Llm(Message::Assistant(message.clone())),
-        });
-    }
     sink.emit(AgentEvent::MessageEnd {
         message: AgentMessage::Llm(Message::Assistant(message)),
     });
 }
-
-// ---------------------------------------------------------------------------
-// Tool execution
-// ---------------------------------------------------------------------------
 
 struct ExecutedToolCallBatch {
     messages: Vec<ToolResultMessage>,
@@ -663,12 +542,6 @@ async fn execute_tool_calls_sequential(
     let mut messages: Vec<ToolResultMessage> = Vec::new();
 
     for tool_call in tool_calls {
-        sink.emit(AgentEvent::ToolExecutionStart {
-            tool_call_id: tool_call.id.clone(),
-            tool_name: tool_call.name.clone(),
-            args: tool_call.arguments.clone(),
-        });
-
         let finalized = match prepare_tool_call(context, assistant, &tool_call, hooks, cancel).await
         {
             Preparation::Immediate { result, is_error } => FinalizedToolCall {
@@ -677,8 +550,8 @@ async fn execute_tool_calls_sequential(
                 is_error,
             },
             Preparation::Ready { tool, args } => {
-                let executed = execute_prepared(&tool, &tool_call, args, cancel, sink).await;
-                finalize_executed(assistant, tool_call, executed, hooks).await
+                let executed = execute_prepared(&tool, &tool_call, args, cancel).await;
+                finalize_executed(tool_call, executed)
             }
         };
 
@@ -689,12 +562,6 @@ async fn execute_tool_calls_sequential(
             is_error: finalized.is_error,
         });
         let message = tool_result_message(&finalized);
-        sink.emit(AgentEvent::MessageStart {
-            message: AgentMessage::Llm(Message::ToolResult(message.clone())),
-        });
-        sink.emit(AgentEvent::MessageEnd {
-            message: AgentMessage::Llm(Message::ToolResult(message.clone())),
-        });
         messages.push(message);
         finalized_calls.push(finalized);
 
@@ -731,12 +598,6 @@ async fn execute_tool_calls_parallel(
     let mut entries: Vec<Entry> = Vec::new();
 
     for tool_call in tool_calls {
-        sink.emit(AgentEvent::ToolExecutionStart {
-            tool_call_id: tool_call.id.clone(),
-            tool_name: tool_call.name.clone(),
-            args: tool_call.arguments.clone(),
-        });
-
         match prepare_tool_call(context, assistant, &tool_call, hooks, cancel).await {
             Preparation::Immediate { result, is_error } => {
                 // Preparation failures resolve immediately - emit their end
@@ -779,14 +640,11 @@ async fn execute_tool_calls_parallel(
             } => {
                 let slot = ordered.len();
                 ordered.push(None);
-                let hooks = Arc::clone(hooks);
                 let cancel = cancel.clone();
                 let sink = sink.clone();
-                let assistant = assistant.clone();
                 running.push(async move {
-                    let executed = execute_prepared(&tool, &tool_call, args, &cancel, &sink).await;
-                    let finalized =
-                        finalize_executed(&assistant, tool_call, executed, &hooks).await;
+                    let executed = execute_prepared(&tool, &tool_call, args, &cancel).await;
+                    let finalized = finalize_executed(tool_call, executed);
                     sink.emit(AgentEvent::ToolExecutionEnd {
                         tool_call_id: finalized.tool_call.id.clone(),
                         tool_name: finalized.tool_call.name.clone(),
@@ -808,12 +666,6 @@ async fn execute_tool_calls_parallel(
     let mut messages: Vec<ToolResultMessage> = Vec::new();
     for finalized in &finalized_calls {
         let message = tool_result_message(finalized);
-        sink.emit(AgentEvent::MessageStart {
-            message: AgentMessage::Llm(Message::ToolResult(message.clone())),
-        });
-        sink.emit(AgentEvent::MessageEnd {
-            message: AgentMessage::Llm(Message::ToolResult(message.clone())),
-        });
         messages.push(message);
     }
 
@@ -894,19 +746,8 @@ async fn execute_prepared(
     tool_call: &ToolCall,
     args: Value,
     cancel: &CancellationToken,
-    sink: &AgentEventSink,
 ) -> (AgentToolResult, bool) {
-    // Progress updates flow straight onto the event stream.
-    let update_sink = sink.clone();
-    let update_id = tool_call.id.clone();
-    let update_name = tool_call.name.clone();
-    let on_update: ToolUpdateFn = Arc::new(move |partial| {
-        update_sink.emit(AgentEvent::ToolExecutionUpdate {
-            tool_call_id: update_id.clone(),
-            tool_name: update_name.clone(),
-            partial,
-        });
-    });
+    let on_update: ToolUpdateFn = Arc::new(move |_partial| {});
 
     let started = std::time::Instant::now();
     tracing::debug!(tool = %tool_call.name, tool_call_id = %tool_call.id, "tool execution start");
@@ -926,30 +767,12 @@ async fn execute_prepared(
     (result, is_error)
 }
 
-async fn finalize_executed(
-    assistant: &AssistantMessage,
+fn finalize_executed(
+    // assistant: &AssistantMessage,
     tool_call: ToolCall,
-    (mut result, mut is_error): (AgentToolResult, bool),
-    hooks: &Arc<dyn AgentHooks>,
+    (result, is_error): (AgentToolResult, bool),
+    // hooks: &Arc<dyn AgentHooks>,
 ) -> FinalizedToolCall {
-    if let Some(after) = hooks
-        .after_tool_call(assistant, &tool_call, &result, is_error)
-        .await
-    {
-        // Field-by-field merge; omitted fields keep executed values.
-        if let Some(content) = after.content {
-            result.content = content;
-        }
-        if let Some(details) = after.details {
-            result.details = Some(details);
-        }
-        if let Some(terminate) = after.terminate {
-            result.terminate = terminate;
-        }
-        if let Some(override_error) = after.is_error {
-            is_error = override_error;
-        }
-    }
     FinalizedToolCall {
         tool_call,
         result,

@@ -20,14 +20,6 @@ Use the `ripgrep` crate as the underlying for the **grep tool**. The crate also 
 
 It implements the concrete coding-agent experience: a terminal UI, `@file-path` fuzzy file referencing, slash commands (`/new`, `/model`, `/thinking`, `/usage`, `/quit`), prompt templates loaded from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools (`read`, `grep`, `write`, `edit`, `bash`).
 
-### 4. `cupel-index`
-
-Placehoalder for code searching
-
-### 5. `cupel-memory`
-
-Placehoalder to manage agent memory
-
 ## Install
 
 No Rust required - currently support for macOS
@@ -46,17 +38,7 @@ export FIREWORKS_API_KEY=fw-...
 cargo run -p cupel-coding-agent --
 ```
 
-```sh
-# credentials: first provider found wins (or pick one with --model)
-export FIREWORKS_API_KEY=fw-...   # or OPENAI_API_KEY / ANTHROPIC_API_KEY / AWS credentials
-
-cupel                                                           # runs agent in current directory
-cupel --help                                                    # built-in model list
-cupel --model accounts/fireworks/models/kimi-k2p7-code          # select model from list
-cupel --model <id> --thinking off|minimal|low|medium|high|xhigh # define thinking mode
-cupel --resume                                                  # continue this project's newest session
-cupel --resume cupel-1720000000000                              # continue a specific session by id
-```
+Project context: `AGENTS.md` (or `CLAUDE.md`) lives either in  `~/.cupel` or `~/.cupel`.
 
 Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/provider <name> [api-key]`, `/thinking <level>`, `/usage`, `/quit`, `/hot-reload`) are handled locally; markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision the most specific location wins: working directory > `.cupel/` > `~/.cupel`.
 
@@ -84,9 +66,9 @@ Local models: with `ollama serve` running, every pulled model appears automatica
 
 (For llama-server, the same entry with `"baseUrl": "http://localhost:8080/v1"` works. `api` must be one of the four registered protocols - unknown ones are warned about and skipped. `requiresApiKey: false` marks a keyless local endpoint.)
 
-Providers: `/provider` lists every provider; `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` hands over a key when nothing is exported - scoped to this session: the key lives in process memory only, is never persisted or echoed, and wins over the environment variable. Switching models across providers via `/model` re-resolves the key the same way.
+## Slash-commands
 
-Project context: `AGENTS.md` (or `CLAUDE.md`) lives either in  `~/.cupel` or `~/.cupel`.
+Providers: `/provider` lists every provider; `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` hands over a key when nothing is exported - scoped to this session: the key lives in process memory only, is never persisted or echoed, and wins over the environment variable. Switching models across providers via `/model` re-resolves the key the same way.
 
 Sessions management: every conversation is persisted as a JSONL transcript in `~/.cupel/sessions/<project-slug>/<session-id>.jsonl`. The current session id is always visible in the TUI footer, and `/session-id` lists this project's sessions. `cupel --resume` reloads this project's newest session - full history back in context and on screen - and keeps appending to the same file; `cupel --resume <session-id>` picks a specific one. Compaction never rewrites the transcript, so it is always the complete conversation. Don't resume the same session from two terminals at once - appends would interleave.
 

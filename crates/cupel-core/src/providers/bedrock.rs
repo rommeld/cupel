@@ -267,7 +267,6 @@ async fn run(
                             id: tool_use.tool_use_id,
                             name: tool_use.name,
                             arguments: json!({}),
-                            thought_signature: None,
                         }));
                     blocks.push(BlockState {
                         bedrock_index: index,

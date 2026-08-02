@@ -232,7 +232,6 @@ mod tests {
             id: "call_1".into(),
             name: name.into(),
             arguments: args,
-            thought_signature: None,
         };
 
         // Denied bash command: blocked, reason names the pattern.

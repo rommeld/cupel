@@ -421,7 +421,6 @@ async fn run(
                                 id,
                                 name,
                                 arguments: json!({}),
-                                thought_signature: None,
                             }));
                             blocks.push(BlockState {
                                 anthropic_index: index,

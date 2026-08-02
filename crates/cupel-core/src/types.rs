@@ -17,8 +17,6 @@ use tokio_util::sync::CancellationToken;
 pub struct Api(pub String);
 
 impl Api {
-    // These strings must match pi's API identifiers exactly so persisted
-    // sessions stay interchangeable between the two implementations.
     pub const ANTHROPIC_MESSAGES: &'static str = "anthropic-messages";
     pub const OPENAI_RESPONSES: &'static str = "openai-responses";
     pub const OPENAI_COMPLETIONS: &'static str = "openai-completions";
@@ -74,7 +72,7 @@ pub struct TextContent {
 }
 
 impl TextContent {
-    /// Plain text without provider metadata - the overwhelmingly common case.
+    /// Plain text without provider metadata.
     #[must_use]
     pub fn plain(text: impl Into<String>) -> Self {
         Self {
@@ -108,16 +106,13 @@ pub struct ImageContent {
 
 /// A model's request to call a tool. `arguments` is free-form JSON; it's
 /// expected to be a JSON object. During streaming it is only fully
-/// populated once the tool call finishes. `thought_signature` is
-/// Google-specific opaque thought context.
+/// populated once the tool call finishes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub thought_signature: Option<String>,
 }
 
 /// Allow content in a **user** message.
@@ -328,15 +323,6 @@ pub enum CacheRetention {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Transport {
-    Sse,
-    Websocket,
-    WebsocketCached,
-    Auto,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub enum InputModality {
     Text,
     Image,
@@ -352,7 +338,6 @@ pub struct ModelCost {
 }
 
 /// Model descriptor.
-/// TODO: translate into idiomatic Rust.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Model {
@@ -360,7 +345,6 @@ pub struct Model {
     pub name: String,
     pub api: Api,
     pub provider: Provider,
-    /// API root, e.g. `https://api.anthropic.com`. Providers append their path.
     pub base_url: String,
     pub reasoning: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -383,15 +367,12 @@ pub struct StreamOptions {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub api_key: Option<String>,
-    /// Cooperative cancellation. Providers race their work against this token.
     pub signal: Option<CancellationToken>,
-    pub transport: Option<Transport>,
     pub cache_retention: Option<CacheRetention>,
     pub session_id: Option<String>,
     pub headers: Option<BTreeMap<String, String>>,
     pub timeout_ms: Option<u64>,
     pub max_retries: Option<u32>,
-    pub max_retry_delay_ms: Option<u64>,
     pub metadata: Option<BTreeMap<String, serde_json::Value>>,
     pub env: Option<BTreeMap<String, String>>,
     /// Unified reasoning level; the provider maps it to its own thinking config.
@@ -400,8 +381,7 @@ pub struct StreamOptions {
     pub thinking_budgets: Option<ThinkingBudgets>,
 }
 
-/// Current Unix time in milliseconds. Messages carry creation timestamps
-/// (pi uses `Date.now()`); this is the Rust equivalent.
+/// Current Unix time in milliseconds.
 #[must_use]
 pub fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};

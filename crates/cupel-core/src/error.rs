@@ -45,9 +45,6 @@ pub enum InferenceError {
     #[error("HTTP transport error: {0}")]
     Http(#[from] reqwest::Error),
 
-    #[error("JSON error: {0}")]
-    JsonError(#[from] serde_json::Error),
-
     /// The message stream closed or reported an error before producing a final message.
     #[error("message stream error: {0}")]
     Stream(#[from] MessageStreamError),

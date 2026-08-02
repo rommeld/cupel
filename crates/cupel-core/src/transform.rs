@@ -274,15 +274,11 @@ fn transform_assistant(
             }
             AssistantContent::ToolCall(tool_call) => {
                 let mut tool_call = tool_call.clone();
-                if !is_same_model {
-                    // Google-specific thought signatures don't transfer.
-                    tool_call.thought_signature = None;
-                    if let Some(normalize) = normalize_tool_call_id {
-                        let normalized = normalize(&tool_call.id, model, assistant);
-                        if normalized != tool_call.id {
-                            tool_call_id_map.insert(tool_call.id.clone(), normalized.clone());
-                            tool_call.id = normalized;
-                        }
+                if !is_same_model && let Some(normalize) = normalize_tool_call_id {
+                    let normalized = normalize(&tool_call.id, model, assistant);
+                    if normalized != tool_call.id {
+                        tool_call_id_map.insert(tool_call.id.clone(), normalized.clone());
+                        tool_call.id = normalized;
                     }
                 }
                 Some(AssistantContent::ToolCall(tool_call))
@@ -350,7 +346,6 @@ mod tests {
                 id: "call_1".into(),
                 name: "grep".into(),
                 arguments: serde_json::json!({}),
-                thought_signature: None,
             })],
             StopReason::ToolUse,
         )];

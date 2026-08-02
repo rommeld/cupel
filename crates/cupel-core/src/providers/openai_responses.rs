@@ -303,7 +303,6 @@ async fn run(
                         .unwrap_or("")
                         .to_string(),
                     arguments: json!({}),
-                    thought_signature: None,
                 }));
                 let content_index = output.content.len() - 1;
                 slots.insert(

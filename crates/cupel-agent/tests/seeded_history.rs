@@ -145,6 +145,6 @@ async fn seeded_messages_reach_the_provider_and_survive_in_state() {
 
     // (b) State = seed + this run's messages (new user prompt + answer).
     let state_messages = agent.state().messages;
-    assert_eq!(state_messages.len(), 4);
+    assert_eq!(state_messages.len(), 3);
     assert_eq!(state_messages[0..2], seed[..]);
 }

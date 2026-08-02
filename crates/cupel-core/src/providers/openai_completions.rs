@@ -393,7 +393,6 @@ async fn run(
                                     .unwrap_or("")
                                     .to_string(),
                                 arguments: json!({}),
-                                thought_signature: None,
                             }));
                             let index = output.content.len() - 1;
                             tool_calls.insert(stream_index, (index, String::new()));

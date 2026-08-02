@@ -223,7 +223,6 @@ pub async fn run(
                     recorder.on_agent_end();
                     break;
                 }
-                _ => {}
             }
         }
         agent.wait_for_idle().await;

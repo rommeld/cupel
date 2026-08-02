@@ -6,7 +6,7 @@
 //! hands back an [`AgentEventStream`] - the caller consumes events at its
 //! own pace while the internal forwarder keeps [`AgentState`] up to date.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt as _;
@@ -20,12 +20,8 @@ use cupel_core::{
 use crate::agent_loop::{AgentEventSink, AgentEventStream, agent_event_channel, agent_loop};
 use crate::types::{
     AgentContext, AgentEvent, AgentHooks, AgentLoopConfig, AgentMessage, AgentTool, NoHooks,
-    QueueMode, RetryConfig, ToolExecutionMode,
+    RetryConfig, ToolExecutionMode,
 };
-
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 
 /// Snapshot of the agent's public state. Cheap to clone except `messages`.
 #[derive(Clone)]
@@ -43,42 +39,6 @@ pub struct AgentState {
     pub error_message: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Queues
-// ---------------------------------------------------------------------------
-
-/// A queue of messages waiting for their drain point (pi's
-/// `PendingMessageQueue`).
-struct PendingQueue {
-    messages: VecDeque<AgentMessage>,
-    mode: QueueMode,
-}
-
-impl PendingQueue {
-    fn new(mode: QueueMode) -> Self {
-        Self {
-            messages: VecDeque::new(),
-            mode,
-        }
-    }
-
-    fn clear(&mut self) {
-        self.messages.clear();
-    }
-
-    fn drain(&mut self) -> Vec<AgentMessage> {
-        match self.mode {
-            QueueMode::All => self.messages.drain(..).collect(),
-            QueueMode::OneAtATime => self.messages.pop_front().into_iter().collect(),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Agent
-// ---------------------------------------------------------------------------
-
-/// Options for constructing an [`Agent`].
 pub struct AgentOptions {
     pub system_prompt: String,
     pub model: Model,
@@ -93,18 +53,10 @@ pub struct AgentOptions {
     pub tool_execution: ToolExecutionMode,
     pub retry: RetryConfig,
     pub compaction: crate::compaction::CompactionConfig,
-    pub steering_mode: QueueMode,
-    pub follow_up_mode: QueueMode,
-    /// Conversation history to start from - the RESUME seeding path. Restored
-    /// messages are the full, uncompacted transcript (persisted history is
-    /// never rewritten by compaction, which only mutates each run's private
-    /// context snapshot); the loop simply re-compacts when the seeded
-    /// history pushes the next request over the threshold.
     pub messages: Vec<AgentMessage>,
 }
 
 impl AgentOptions {
-    /// Minimal options: everything else defaulted.
     #[must_use]
     pub fn new(model: Model, registry: Arc<Registry>) -> Self {
         Self {
@@ -121,8 +73,6 @@ impl AgentOptions {
             tool_execution: ToolExecutionMode::default(),
             retry: RetryConfig::default(),
             compaction: crate::compaction::CompactionConfig::default(),
-            steering_mode: QueueMode::default(),
-            follow_up_mode: QueueMode::default(),
             messages: Vec::new(),
         }
     }
@@ -130,17 +80,13 @@ impl AgentOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    #[error(
-        "agent is already processing a prompt; use steer()/follow_up() to queue messages, or wait for completion"
-    )]
+    #[error("agent is already processing a prompt; wait for completion")]
     Busy,
 }
 
 pub struct Agent {
     state: Arc<Mutex<AgentState>>,
     tools: Vec<Arc<dyn AgentTool>>,
-    steering: Arc<Mutex<PendingQueue>>,
-    follow_up: Arc<Mutex<PendingQueue>>,
     hooks: Arc<dyn AgentHooks>,
     registry: Arc<Registry>,
     api_key: Option<String>,
@@ -168,8 +114,6 @@ impl Agent {
                 error_message: None,
             })),
             tools: options.tools,
-            steering: Arc::new(Mutex::new(PendingQueue::new(options.steering_mode))),
-            follow_up: Arc::new(Mutex::new(PendingQueue::new(options.follow_up_mode))),
             hooks: options.hooks,
             registry: options.registry,
             api_key: options.api_key,
@@ -221,42 +165,12 @@ impl Agent {
             .thinking_level = level;
     }
 
-    /// Clear the transcript and queued messages - a fresh conversation with
-    /// the same configuration. Only meaningful while idle; callers should
-    /// check [`Agent::is_running`]... which doesn't exist on Agent itself -
-    /// frontends track the active run - so this simply clears state.
     pub fn reset(&self) {
         {
             let mut state = self.state.lock().expect("agent state lock poisoned");
             state.messages.clear();
             state.error_message = None;
         }
-        self.steering
-            .lock()
-            .expect("steering queue lock poisoned")
-            .clear();
-        self.follow_up
-            .lock()
-            .expect("follow-up queue lock poisoned")
-            .clear();
-    }
-
-    /// Queue a message to be injected after the current assistant turn.
-    pub fn steer(&self, message: AgentMessage) {
-        self.steering
-            .lock()
-            .expect("steering lock poisoned")
-            .messages
-            .push_back(message);
-    }
-
-    /// Queue a message to run only after the agent would otherwise stop.
-    pub fn follow_up(&self, message: AgentMessage) {
-        self.follow_up
-            .lock()
-            .expect("follow-up lock poisoned")
-            .messages
-            .push_back(message);
     }
 
     /// Cancellation token of the active run, if any (e.g. for a Ctrl-C
@@ -328,8 +242,6 @@ impl Agent {
         // The run's hooks = user hooks + our queue draining.
         let hooks: Arc<dyn AgentHooks> = Arc::new(RunHooks {
             inner: Arc::clone(&self.hooks),
-            steering: Arc::clone(&self.steering),
-            follow_up: Arc::clone(&self.follow_up),
         });
         let registry = Arc::clone(&self.registry);
 
@@ -382,9 +294,6 @@ async fn forward_events(
                 AgentEvent::MessageEnd { message } => {
                     state.messages.push(message.clone());
                 }
-                AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
-                    state.pending_tool_calls.insert(tool_call_id.clone());
-                }
                 AgentEvent::ToolExecutionEnd { tool_call_id, .. } => {
                     state.pending_tool_calls.remove(tool_call_id);
                 }
@@ -406,8 +315,6 @@ async fn forward_events(
 /// (pi builds the same thing inline in `createLoopConfig`.)
 struct RunHooks {
     inner: Arc<dyn AgentHooks>,
-    steering: Arc<Mutex<PendingQueue>>,
-    follow_up: Arc<Mutex<PendingQueue>>,
 }
 
 #[async_trait::async_trait]
@@ -428,17 +335,6 @@ impl AgentHooks for RunHooks {
     ) -> Option<crate::types::BeforeToolCallResult> {
         self.inner.before_tool_call(assistant, tool_call).await
     }
-    async fn after_tool_call(
-        &self,
-        assistant: &cupel_core::types::AssistantMessage,
-        tool_call: &cupel_core::types::ToolCall,
-        result: &crate::types::AgentToolResult,
-        is_error: bool,
-    ) -> Option<crate::types::AfterToolCallResult> {
-        self.inner
-            .after_tool_call(assistant, tool_call, result, is_error)
-            .await
-    }
     async fn should_stop_after_turn(
         &self,
         message: &cupel_core::types::AssistantMessage,
@@ -447,31 +343,5 @@ impl AgentHooks for RunHooks {
         self.inner
             .should_stop_after_turn(message, tool_results)
             .await
-    }
-    async fn prepare_next_turn(&self) -> Option<crate::types::AgentLoopTurnUpdate> {
-        self.inner.prepare_next_turn().await
-    }
-
-    // The queue methods are OURS; user hooks' steering/follow-up (if any)
-    // are drained first, then the Agent queues.
-    async fn steering_messages(&self) -> Vec<AgentMessage> {
-        let mut messages = self.inner.steering_messages().await;
-        messages.extend(
-            self.steering
-                .lock()
-                .expect("steering lock poisoned")
-                .drain(),
-        );
-        messages
-    }
-    async fn follow_up_messages(&self) -> Vec<AgentMessage> {
-        let mut messages = self.inner.follow_up_messages().await;
-        messages.extend(
-            self.follow_up
-                .lock()
-                .expect("follow-up lock poisoned")
-                .drain(),
-        );
-        messages
     }
 }

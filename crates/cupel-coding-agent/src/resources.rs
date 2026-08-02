@@ -42,15 +42,6 @@ fn resolve_config_home(env_value: Option<String>, home: Option<PathBuf>) -> Opti
     }
 }
 
-/// The source roots to search: cupel home, then the project's `.cupel/`
-/// directory, then the project cwd itself. Later roots are MORE specific:
-/// their instructions appear after earlier ones in the prompt, and their
-/// prompt templates replace same-named earlier ones.
-#[must_use]
-pub fn default_roots(cwd: &Path) -> Vec<PathBuf> {
-    resolve_default_roots(config_home(), cwd)
-}
-
 /// [`default_roots`] with an EXPLICIT home instead of the env lookup -
 /// for callers that resolved the home once and thread it around (the
 /// bootstrap loader, /hot-reload), and for env-free tests.
@@ -295,15 +286,6 @@ mod tests {
             Some(PathBuf::from("/u/.cupel"))
         );
         assert_eq!(resolve_config_home(None, None), None);
-    }
-
-    #[test]
-    fn default_roots_end_with_the_project_cwd() {
-        let roots = default_roots(Path::new("/proj"));
-        assert_eq!(roots.last(), Some(&PathBuf::from("/proj")));
-        // At most three roots: cupel home (when one resolves), the project
-        // `.cupel/` directory, and the cwd itself.
-        assert!(roots.len() <= 3);
     }
 
     #[test]

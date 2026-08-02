@@ -10,10 +10,6 @@ use cupel_core::types::{
     AssistantMessage, Message, Model, ThinkingLevel, ToolResultContent, ToolResultMessage,
 };
 
-// ---------------------------------------------------------------------------
-// Messages
-// ---------------------------------------------------------------------------
-
 /// A message in the agent transcript: either one the LLM understands, or an
 /// app-defined message (UI notification, artifact, ...) that is filtered out
 /// (or converted) before each LLM call by [`AgentHooks::convert_to_llm`].
@@ -26,7 +22,6 @@ use cupel_core::types::{
 pub enum AgentMessage {
     Llm(Message),
     Custom {
-        /// App-defined discriminator, e.g. `"notification"`.
         kind: String,
         payload: Value,
         timestamp: u64,
@@ -34,7 +29,6 @@ pub enum AgentMessage {
 }
 
 impl AgentMessage {
-    /// Convenience: wrap a plain user text message.
     #[must_use]
     pub fn user_text(text: impl Into<String>) -> Self {
         AgentMessage::Llm(Message::User(cupel_core::types::UserMessage {
@@ -44,21 +38,14 @@ impl AgentMessage {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tools
-// ---------------------------------------------------------------------------
-
 /// Errors from tool execution. Tools should *throw* (return `Err`) on
 /// failure; the loop converts errors into error tool-results for the model.
 pub type ToolError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Final or partial result produced by a tool.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolResult {
-    /// Text or image content returned to the model.
     pub content: Vec<ToolResultContent>,
-    /// Arbitrary structured details for logs or UI rendering.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub details: Option<Value>,
     /// Hint that the agent should stop after the current tool batch.
@@ -117,10 +104,6 @@ pub trait AgentTool: Send + Sync {
     ) -> Result<AgentToolResult, ToolError>;
 }
 
-// ---------------------------------------------------------------------------
-// Execution configuration
-// ---------------------------------------------------------------------------
-
 /// How tool calls from one assistant message are executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolExecutionMode {
@@ -151,25 +134,6 @@ pub struct BeforeToolCallResult {
     pub reason: Option<String>,
 }
 
-/// Returned from [`AgentHooks::after_tool_call`] to override parts of an
-/// executed tool result. `None` fields keep the executed values (field-by-
-/// field merge, no deep merge - same as pi).
-#[derive(Debug, Clone, Default)]
-pub struct AfterToolCallResult {
-    pub content: Option<Vec<ToolResultContent>>,
-    pub details: Option<Value>,
-    pub is_error: Option<bool>,
-    pub terminate: Option<bool>,
-}
-
-/// Replacement state applied before the next provider request in a run.
-#[derive(Debug, Clone, Default)]
-pub struct AgentLoopTurnUpdate {
-    pub model: Option<Model>,
-    /// `Some(None)` switches thinking off; `None` keeps the current level.
-    pub thinking_level: Option<Option<ThinkingLevel>>,
-}
-
 /// Context snapshot the low-level loop works on.
 #[derive(Clone)]
 pub struct AgentContext {
@@ -178,8 +142,7 @@ pub struct AgentContext {
     pub tools: Vec<Arc<dyn AgentTool>>,
 }
 
-/// Automatic-retry policy for transient provider failures (pi's session
-/// retry settings: 3 retries, 2s base delay, exponential backoff).
+/// Automatic-retry policy for transient provider failures.
 ///
 /// Which errors count as transient is decided by
 /// [`cupel_core::retry::is_retryable_assistant_error`]; this struct only
@@ -218,15 +181,8 @@ pub struct AgentLoopConfig {
     pub compaction: crate::compaction::CompactionConfig,
 }
 
-// ---------------------------------------------------------------------------
-// Hooks
-// ---------------------------------------------------------------------------
-
 /// Extension points for the agent loop. Every method has a sensible default,
 /// so implementors override only what they need.
-///
-/// Contract (same as pi): hook implementations must not panic; a panicking
-/// hook tears down the loop without a normal event sequence.
 #[async_trait::async_trait]
 pub trait AgentHooks: Send + Sync {
     /// Convert agent messages to LLM messages before each provider call.
@@ -261,17 +217,6 @@ pub trait AgentHooks: Send + Sync {
         None
     }
 
-    /// Override point after a tool executed, before events are emitted.
-    async fn after_tool_call(
-        &self,
-        _assistant: &AssistantMessage,
-        _tool_call: &cupel_core::types::ToolCall,
-        _result: &AgentToolResult,
-        _is_error: bool,
-    ) -> Option<AfterToolCallResult> {
-        None
-    }
-
     /// Called after each turn; return `true` to stop the run gracefully.
     async fn should_stop_after_turn(
         &self,
@@ -279,11 +224,6 @@ pub trait AgentHooks: Send + Sync {
         _tool_results: &[ToolResultMessage],
     ) -> bool {
         false
-    }
-
-    /// Swap model/thinking level between turns of one run.
-    async fn prepare_next_turn(&self) -> Option<AgentLoopTurnUpdate> {
-        None
     }
 
     /// Messages to inject after the current turn ("steering").
@@ -321,19 +261,13 @@ pub enum CompactionReason {
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     // -- run lifecycle --
-    AgentStart,
     AgentEnd {
         messages: Vec<AgentMessage>,
     },
     // -- turn lifecycle: one assistant response + its tool calls/results --
-    TurnStart,
     TurnEnd {
         message: Box<AgentMessage>,
         tool_results: Vec<ToolResultMessage>,
-    },
-    // -- message lifecycle (user, assistant, and tool-result messages) --
-    MessageStart {
-        message: AgentMessage,
     },
     /// Streaming update for the in-flight assistant message. Carries the raw
     /// provider event; UIs that want the partial message apply the deltas.
@@ -367,17 +301,6 @@ pub enum AgentEvent {
         max_attempts: u32,
         delay_ms: u64,
         error_message: String,
-    },
-    // -- tool execution lifecycle --
-    ToolExecutionStart {
-        tool_call_id: String,
-        tool_name: String,
-        args: Value,
-    },
-    ToolExecutionUpdate {
-        tool_call_id: String,
-        tool_name: String,
-        partial: AgentToolResult,
     },
     ToolExecutionEnd {
         tool_call_id: String,

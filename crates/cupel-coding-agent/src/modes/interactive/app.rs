@@ -680,14 +680,8 @@ impl App {
         // calling it on every send is fine.
         crate::resources::ensure_project_dot_cupel(std::path::Path::new(&self.meta.cwd));
         if self.is_running() {
-            // The agent injects steering messages after the current turn;
-            // the transcript gets a real User cell when that happens (via
-            // MessageEnd), so this marker only bridges the wait.
-            self.agent.steer(AgentMessage::user_text(text));
-            self.recorder.on_steer(text); // hook fires in the background
-            self.transcript.cells.push(Cell::Queued {
-                text: text.to_string(),
-            });
+            // Steering while a run is active is no longer supported;
+            // ignore the input while busy.
         } else {
             // Not started here: the event loop takes it via
             // `take_pending_prompt`, awaits the prompt-path hooks
@@ -962,10 +956,6 @@ impl App {
         true
     }
 
-    // -----------------------------------------------------------------------
-    // Agent events
-    // -----------------------------------------------------------------------
-
     /// Await the next agent event, or park forever when no run is active.
     /// Parking (instead of returning None immediately) matters inside
     /// `tokio::select!`: a constantly-ready branch would busy-spin the loop.
@@ -1102,7 +1092,7 @@ impl App {
             }
 
             AgentEvent::AgentEnd { .. } => self.finish_run().await,
-            _ => {}
+            AgentEvent::TurnEnd { .. } => {}
         }
 
         // While following (offset 0) the view sticks to the newest output;

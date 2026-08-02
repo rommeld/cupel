@@ -34,8 +34,6 @@ pub struct TruncationResult {
     /// Head truncation only: the FIRST line alone exceeded the byte limit,
     /// so nothing could be kept.
     pub first_line_exceeds_limit: bool,
-    pub max_lines: usize,
-    pub max_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -65,13 +63,7 @@ pub fn format_size(bytes: usize) -> String {
     }
 }
 
-fn untruncated(
-    content: &str,
-    total_lines: usize,
-    total_bytes: usize,
-    max_lines: usize,
-    max_bytes: usize,
-) -> TruncationResult {
+fn untruncated(content: &str, total_lines: usize, total_bytes: usize) -> TruncationResult {
     TruncationResult {
         content: content.to_string(),
         truncated: false,
@@ -82,8 +74,6 @@ fn untruncated(
         output_bytes: total_bytes,
         last_line_partial: false,
         first_line_exceeds_limit: false,
-        max_lines,
-        max_bytes,
     }
 }
 
@@ -99,7 +89,7 @@ pub fn truncate_head(content: &str, options: TruncationOptions) -> TruncationRes
     let total_lines = lines.len();
 
     if total_lines <= max_lines && total_bytes <= max_bytes {
-        return untruncated(content, total_lines, total_bytes, max_lines, max_bytes);
+        return untruncated(content, total_lines, total_bytes);
     }
 
     // The very first line exceeding the budget means we can keep nothing
@@ -115,8 +105,6 @@ pub fn truncate_head(content: &str, options: TruncationOptions) -> TruncationRes
             output_bytes: 0,
             last_line_partial: false,
             first_line_exceeds_limit: true,
-            max_lines,
-            max_bytes,
         };
     }
 
@@ -149,8 +137,6 @@ pub fn truncate_head(content: &str, options: TruncationOptions) -> TruncationRes
         total_bytes,
         last_line_partial: false,
         first_line_exceeds_limit: false,
-        max_lines,
-        max_bytes,
     }
 }
 
@@ -166,7 +152,7 @@ pub fn truncate_tail(content: &str, options: TruncationOptions) -> TruncationRes
     let total_lines = lines.len();
 
     if total_lines <= max_lines && total_bytes <= max_bytes {
-        return untruncated(content, total_lines, total_bytes, max_lines, max_bytes);
+        return untruncated(content, total_lines, total_bytes);
     }
 
     let mut kept: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
@@ -216,8 +202,6 @@ pub fn truncate_tail(content: &str, options: TruncationOptions) -> TruncationRes
         total_bytes,
         last_line_partial,
         first_line_exceeds_limit: false,
-        max_lines,
-        max_bytes,
     }
 }
 

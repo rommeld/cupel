@@ -47,19 +47,6 @@ impl InputState {
         self.history_index = None;
     }
 
-    /// Cursor position as (line, column) in display terms, for placing the
-    /// terminal cursor.
-    #[must_use]
-    pub fn cursor_line_col(&self) -> (usize, usize) {
-        let before: String = self.buffer.chars().take(self.cursor).collect();
-        let line = before.matches('\n').count();
-        let col = before
-            .rsplit('\n')
-            .next()
-            .map_or(0, |last| last.chars().count());
-        (line, col)
-    }
-
     fn byte_index(&self, char_index: usize) -> usize {
         self.buffer
             .char_indices()
@@ -188,18 +175,6 @@ mod tests {
     }
 
     #[test]
-    fn home_end_work_per_line() {
-        let mut input = InputState::default();
-        input.insert_str("first\nsecond");
-        input.move_home();
-        let (line, col) = input.cursor_line_col();
-        assert_eq!((line, col), (1, 0));
-        input.move_end();
-        let (line, col) = input.cursor_line_col();
-        assert_eq!((line, col), (1, 6));
-    }
-
-    #[test]
     fn history_round_trip_preserves_stash() {
         let mut input = InputState::default();
         input.insert_str("one");
@@ -225,8 +200,6 @@ mod tests {
         // Replace the "@qué" token (chars 4..8) with a completion.
         input.replace_range(4, 8, "@querétaro.rs ");
         assert_eq!(input.text(), "sée @querétaro.rs  tail");
-        let (line, col) = input.cursor_line_col();
-        assert_eq!((line, col), (0, 4 + "@querétaro.rs ".chars().count()));
     }
 
     #[test]

@@ -906,7 +906,6 @@ mod tests {
                     id: "call_1".into(),
                     name: "grep".into(),
                     arguments: serde_json::json!({"pattern": "bug"}),
-                    thought_signature: None,
                 }),
             ],
             api: Api::from("mock"),

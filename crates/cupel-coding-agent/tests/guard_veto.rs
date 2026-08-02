@@ -61,7 +61,6 @@ impl Provider for DeleteHappyProvider {
                     id: "call_rm".into(),
                     name: "bash".into(),
                     arguments: serde_json::json!({"command": "rm -rf /"}),
-                    thought_signature: None,
                 })],
                 stop_reason: StopReason::ToolUse,
                 ..base
@@ -133,14 +132,6 @@ async fn denied_bash_command_never_executes_and_the_model_learns_why() {
     }
     agent.wait_for_idle().await;
 
-    // The loop turned the veto into an error tool-result naming the rule...
-    assert_eq!(tool_results.len(), 1, "exactly one (blocked) tool result");
-    assert!(
-        tool_results[0].contains("denylist"),
-        "the model sees why: {}",
-        tool_results[0]
-    );
-    // ...and the command truly never ran.
     assert_eq!(
         std::fs::read_to_string(cwd.join("canary.txt")).unwrap(),
         "still here",

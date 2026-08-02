@@ -13,7 +13,7 @@ pub mod compaction;
 pub mod types;
 
 pub use agent::{Agent, AgentError, AgentOptions, AgentState};
-pub use agent_loop::{AgentEventStream, agent_loop, agent_loop_continue};
+pub use agent_loop::{AgentEventStream, agent_loop};
 pub use compaction::CompactionConfig;
 pub use types::{
     AgentContext, AgentEvent, AgentHooks, AgentLoopConfig, AgentMessage, AgentTool,
