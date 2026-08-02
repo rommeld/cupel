@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.5.4-beta] - 2026-08-02
+
+- remove unused code from codebase to make it more readable
+- changelog: v0.5.3-beta
+
 ## [v0.5.3-beta] - 2026-07-31
 
 - adjust pricing for GPT-5.6 Terra and GPT-5.6 Luna
