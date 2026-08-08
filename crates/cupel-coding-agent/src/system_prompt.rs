@@ -1,12 +1,9 @@
-//! System prompt construction: tool list, per-tool guidelines, project
-//! context files (eager), and date/cwd last.
+//! System prompt construction: tool list, per-tool guidelines
 
 use std::path::Path;
 
 use crate::resources::ContextFile;
 
-/// Build the system prompt. Guidelines mirror pi's per-tool guidance and
-/// only appear for tools that are actually available.
 #[must_use]
 pub fn build_system_prompt(
     cwd: &Path,

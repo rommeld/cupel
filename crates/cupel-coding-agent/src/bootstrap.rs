@@ -67,8 +67,7 @@ pub async fn load(
     let models = crate::models::build_catalog(registry, home.as_deref(), cwd).await;
     let guard = BashGuard::from_config(home.as_deref(), cwd);
 
-    // The grep tool talks to a CodeSearch backend; today that's GrepSearch,
-    // in iteration two an index-backed one from cupel-index slots in here.
+    // The grep tool talks to a CodeSearch backend.
     let backend = Arc::new(GrepSearch::new(cwd));
     let tools: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(ReadTool::new(cwd)),
