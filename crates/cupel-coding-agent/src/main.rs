@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use cupel_agent::{Agent, AgentOptions, ToolExecutionMode};
 use cupel_coding_agent::modes::{self, SessionMeta};
+use cupel_coding_agent::settings::Settings;
 use cupel_core::types::{Model, ThinkingLevel};
 
 fn main() -> std::process::ExitCode {
@@ -115,8 +116,13 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
 
 /// Pick a model + API key from CLI args and the MERGED catalog (built-ins,
 /// models.json layers, discovered local models). Credential knowledge
-/// lives in `providers.rs`, shared with the TUI's `/provider` command.
-fn select_model(args: &CliArgs, catalog: &[Model]) -> Result<(Model, Option<String>), String> {
+/// lives in `providers.rs`, shared with the TUI's `/provider` command;
+/// keys sources at startup: exported env var, then ~/.cupel/settings.json.
+fn select_model(
+    args: &CliArgs,
+    catalog: &[Model],
+    settings: &Settings,
+) -> Result<(Model, Option<String>), String> {
     use cupel_coding_agent::providers;
 
     if let Some(wanted) = &args.model {
@@ -125,22 +131,22 @@ fn select_model(args: &CliArgs, catalog: &[Model]) -> Result<(Model, Option<Stri
             .find(|m| m.id == *wanted)
             .cloned()
             .ok_or_else(|| format!("unknown model: {wanted} (see --help for the list)"))?;
-        let key = providers::env_api_key(model.provider.as_str());
+        let key = providers::resolve_api_key(model.provider.as_str(), settings);
         return Ok((model, key));
     }
 
     // No --model, pass 1: first provider with CLOUD credentials wins, in
     // catalog order. Bedrock carries no key through StreamOptions - the
     // AWS chain resolves inside the provider. Keyless local models fall
-    // through here (their env var is None), so an exported cloud key
-    // always beats a merely-running ollama.
+    // through here (no env var, and normally not settings entry), so a
+    // configured cloud key always beats a merely-running ollama.
     for model in catalog {
         match model.provider.as_str() {
             "amazon-bedrock" if providers::has_aws_credentials() => {
                 return Ok((model.clone(), None));
             }
             provider => {
-                if let Some(key) = providers::env_api_key(provider) {
+                if let Some(key) = providers::resolve_api_key(provider, settings) {
                     return Ok((model.clone(), Some(key)));
                 }
             }
@@ -154,9 +160,9 @@ fn select_model(args: &CliArgs, catalog: &[Model]) -> Result<(Model, Option<Stri
     }
     Err(
         "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, FIREWORKS_API_KEY, \
-         or AWS credentials, start a local server (ollama / llama-server - see README \
-         'Local models'), or start with an explicit `--model <id>` and enter a key in \
-         the TUI via `/provider <name> <api-key>`"
+         or AWS credentials, add a key to ~/.cupel/settings.json, start a local server \
+         (ollama / llama-server - see README 'Local models'), or start with an explicit \
+         `--model <id>` and enter a key in the TUI via `/provider <name> <api-key>`"
             .to_string(),
     )
 }
@@ -213,7 +219,6 @@ async fn run() -> Result<(), String> {
     // frontends create it on the first agent interaction (resources::
     // ensure_project_dot_cupel), so just launching cupel leaves no trace.
 
-    // ---- Load the session ingredients ONCE ------------------------------------
     // bootstrap::load reads everything reloadable (context files, prompt
     // templates, model catalog incl. the bounded ollama probe, bash-deny
     // rules, tools) in one place - the TUI's /hot-reload runs the SAME
@@ -228,26 +233,26 @@ async fn run() -> Result<(), String> {
     // notice. Plain mode has no such commands - it keeps the hard error.
     // An explicit `--model` that fails stays fatal in both modes: a typo
     // should not silently start something else.
-    let (model, api_key, startup_warning) = match select_model(&args, &ingredients.models) {
-        Ok((model, key)) => (model, key, None),
-        Err(e) if !use_plain && args.model.is_none() => {
-            let fallback = ingredients
-                .models
-                .first()
-                .cloned()
-                .ok_or_else(|| e.clone())?;
-            let warning = format!(
-                "{e}\n\nstarted without credentials on {} - requests will fail until you \
+    let (model, api_key, startup_warning) =
+        match select_model(&args, &ingredients.models, &ingredients.settings) {
+            Ok((model, key)) => (model, key, None),
+            Err(e) if !use_plain && args.model.is_none() => {
+                let fallback = ingredients
+                    .models
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| e.clone())?;
+                let warning = format!(
+                    "{e}\n\nstarted without credentials on {} - requests will fail until you \
                  `/provider <name> <api-key>`, switch to a local model via /model, or \
                  restart with a key exported",
-                fallback.id
-            );
-            (fallback, None, Some(warning))
-        }
-        Err(e) => return Err(e),
-    };
+                    fallback.id
+                );
+                (fallback, None, Some(warning))
+            }
+            Err(e) => return Err(e),
+        };
 
-    // ---- Session identity: fresh or resumed ---------------------------------
     // Resume keeps the ORIGINAL session id, so the recorder appends to the
     // same transcript file and external consumers see one continuous
     // session. The seeded messages flow into AgentOptions.messages below.
@@ -296,12 +301,12 @@ async fn run() -> Result<(), String> {
         cwd: cwd.display().to_string(),
         templates: ingredients.templates,
         models: ingredients.models,
+        settings: ingredients.settings,
         home,
         startup_warning,
         context_files: ingredients.context_files,
     };
 
-    // ---- Pick a frontend ------------------------------------------------------
     // The TUI takes over the whole screen; that only makes sense on a real
     // terminal. Piped output (cupel < script, CI logs) gets plain mode.
     if use_plain {
@@ -362,20 +367,65 @@ mod tests {
     fn select_model_falls_back_to_keyless_local_models() {
         let args = parse(&[]).unwrap();
         let catalog = vec![keyless_model("qwen3:8b"), keyless_model("llama3:8b")];
+        let mut settings = Settings::default();
+        settings
+            .providers
+            .insert("test-cloud".into(), "from-settings".into());
         // Pass 2: first keyless model wins, with no key.
-        let (model, key) = select_model(&args, &catalog).unwrap();
+        let (model, key) = select_model(&args, &catalog, &settings).unwrap();
         assert_eq!(model.id, "qwen3:8b");
         assert!(key.is_none());
 
         // Explicit --model on a keyless entry also carries no key.
         let args = parse(&["--model", "llama3:8b"]).unwrap();
-        let (model, key) = select_model(&args, &catalog).unwrap();
+        let (model, key) = select_model(&args, &catalog, &settings).unwrap();
         assert_eq!(model.id, "llama3:8b");
         assert!(key.is_none());
 
         // Empty catalog: the error mentions the local-server escape hatch.
         let args = parse(&[]).unwrap();
-        let err = select_model(&args, &[]).unwrap_err();
+        let err = select_model(&args, &[], &settings).unwrap_err();
         assert!(err.contains("ollama"), "{err}");
+    }
+
+    /// A key-REQUIRING model on a provider id with NO env-var mapping:
+    /// env_api_key returns None on every machine, so only the settings
+    /// tier can supply a key - the test stays environment-independent
+    /// (same trick as keyless_model above, other direction).
+    fn cloud_model(id: &str, provider: &str) -> Model {
+        let mut model = cupel_core::catalog::builtin_models().remove(0);
+        model.id = id.to_string();
+        model.provider = cupel_core::types::Provider::from(provider);
+        model.compat = None; // no requiresApiKey:false -> a key IS required
+        model
+    }
+
+    #[test]
+    fn select_model_honors_a_settings_key() {
+        let args = parse(&[]).unwrap();
+        let catalog = vec![
+            cloud_model("cloud-1", "test-cloud"),
+            keyless_model("qwen3:8b"),
+        ];
+        let mut settings = Settings::default();
+        settings
+            .providers
+            .insert("test-cloud".into(), "from-settings".into());
+
+        // Pass 1 finds the settings-backed provider first.
+        let (model, key) = select_model(&args, &catalog, &settings).unwrap();
+        assert_eq!(model.id, "cloud-1");
+        assert_eq!(key.as_deref(), Some("from-settings"));
+
+        // Without the settings entry the same catalog falls through to
+        // the keyless local model.
+        let (model, key) = select_model(&args, &catalog, &Settings::default()).unwrap();
+        assert_eq!(model.id, "qwen3:8b");
+        assert!(key.is_none());
+
+        // Explicit --model resolves the settings key too.
+        let args = parse(&["--model", "cloud-1"]).unwrap();
+        let (_, key) = select_model(&args, &catalog, &settings).unwrap();
+        assert_eq!(key.as_deref(), Some("from-settings"));
     }
 }

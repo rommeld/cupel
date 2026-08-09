@@ -149,6 +149,14 @@ impl Agent {
         self.api_key = api_key;
     }
 
+    /// The fallback API key FUTURE runs will use - the read half of
+    /// [`AGENT::set_api_key`], so frontends and tests can verify which
+    /// credential a reload or switch resolved without sending a request.
+    #[must_use]
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
+    }
+
     /// The provider registry this agent dispatches through. Cheap (Arc
     /// clone); lets a frontend REBUILD an agent - the TUI's /hot-reload -
     /// without re-plumbing the registry from startup.

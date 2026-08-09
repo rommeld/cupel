@@ -300,6 +300,7 @@ mod tests {
                 // Real builtin catalog so /model and /provider tests exercise
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
+                settings: crate::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -360,6 +361,7 @@ mod tests {
                 cwd: "/tmp".into(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
+                settings: crate::settings::Settings::default(),
                 home: None,
                 startup_warning: Some(
                     "no credentials found - use /provider <name> <api-key>".into(),
@@ -464,6 +466,7 @@ mod tests {
                 cwd: cwd.display().to_string(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
+                settings: crate::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -517,6 +520,7 @@ mod tests {
                 cwd: cwd.display().to_string(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
+                settings: crate::settings::Settings::default(),
                 home: Some(home),
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -951,6 +955,7 @@ mod tests {
                 // Real builtin catalog so /model and /provider tests exercise
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
+                settings: crate::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -1146,5 +1151,180 @@ mod tests {
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
         assert_eq!(app.input.text(), buffer_before, "history must not fire");
         assert!(app.autocomplete.is_open());
+    }
+
+    #[test]
+    fn provider_key_is_auto_saved_to_settings() {
+        let root = std::env::temp_dir().join("cupel-ui-provider-save");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-save");
+
+        type_text(&mut app, "/provider fireworks fw-secret-123");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+
+        // On disk, parsed, and holding the key.
+        let path = root.join("home/settings.json");
+        let saved = crate::settings::load_settings(&path).unwrap();
+        assert_eq!(saved.api_key("fireworks"), Some("fw-secret-123"));
+        // The in-memory mirror agrees (the listing reads this, not disk).
+        assert_eq!(
+            app.meta.settings.api_key("fireworks"),
+            Some("fw-secret-123")
+        );
+        // The notice names the file but never the secret.
+        let noticed = app.transcript.cells.iter().any(|c| {
+            matches!(c, Cell::Notice { text }
+                if text.contains("key saved to") && !text.contains("fw-secret-123"))
+        });
+        assert!(noticed, "expected a save notice without the secret");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn provider_save_failure_keeps_the_session_key() {
+        let root = std::env::temp_dir().join("cupel-ui-provider-save-broken");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-save-broken");
+        let path = root.join("home/settings.json");
+        std::fs::write(&path, "{broken").unwrap();
+
+        type_text(&mut app, "/provider fireworks fw-secret-123");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+
+        // The malformed file was refused, not clobbered...
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{broken");
+        // ...the key still works for this session, and the switch happened.
+        assert_eq!(
+            app.session_keys.get("fireworks").map(String::as_str),
+            Some("fw-secret-123")
+        );
+        assert_eq!(app.meta.provider, "fireworks");
+        let warned = app.transcript.cells.iter().any(|c| {
+            matches!(c, Cell::Notice { text }
+                if text.contains("key not saved") && !text.contains("fw-secret-123"))
+        });
+        assert!(warned, "expected the not-saved warning");
+    }
+
+    /// A key-requiring model on a provider id with no env-var mapping -
+    /// the same env-independence trick as main.rs's select_model tests.
+    fn acme_model() -> cupel_core::types::Model {
+        let mut model = cupel_core::catalog::builtin_models().remove(0);
+        model.id = "acme-1".into();
+        model.provider = cupel_core::types::Provider::from("acme");
+        model.compat = None;
+        model
+    }
+
+    #[test]
+    fn provider_listing_shows_settings_state() {
+        let mut app = test_app();
+        app.meta.models.push(acme_model());
+        app.meta
+            .settings
+            .providers
+            .insert("acme".into(), "k-1".into());
+
+        type_text(&mut app, "/provider");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        let listed = app.transcript.cells.iter().any(|c| {
+            matches!(c, Cell::Notice { text }
+                if text.contains("acme") && text.contains("key in settings.json"))
+        });
+        assert!(listed, "expected the settings-backed status line");
+    }
+
+    #[test]
+    fn custom_provider_now_accepts_a_key() {
+        let mut app = test_app();
+        app.meta.models.push(acme_model());
+
+        type_text(&mut app, "/provider acme secret-1");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        // Accepted into session memory (the old env_var_name gate is gone);
+        // with home: None the save fails soft (NoHome warning), which this
+        // test does not mind - the acceptance is the point.
+        assert_eq!(
+            app.session_keys.get("acme").map(String::as_str),
+            Some("secret-1")
+        );
+        let rejected = app.transcript.cells.iter().any(
+            |c| matches!(c, Cell::Notice { text } if text.contains("does not take an API key")),
+        );
+        assert!(!rejected, "custom providers must accept keys now");
+
+        // Bedrock still refuses one.
+        type_text(&mut app, "/provider amazon-bedrock some-key");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        let rejected = app.transcript.cells.iter().any(
+            |c| matches!(c, Cell::Notice { text } if text.contains("does not take an API key")),
+        );
+        assert!(rejected, "bedrock has no key slot");
+    }
+
+    #[test]
+    fn provider_switch_without_key_never_writes_settings() {
+        let root = std::env::temp_dir().join("cupel-ui-provider-nokey");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-nokey");
+
+        type_text(&mut app, "/provider fireworks");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.meta.provider, "fireworks");
+        // Proof that env/no-key paths can never persist anything.
+        assert!(!root.join("home/settings.json").exists());
+    }
+
+    #[tokio::test]
+    async fn hot_reload_picks_up_hand_edited_settings() {
+        use crate::modes::interactive::app::ReloadTarget;
+        let root = std::env::temp_dir().join("cupel-ui-reload-settings");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-reload-settings");
+        // Point the agent at a custom provider so no exported env var can
+        // interfere with the assertion.
+        let model = acme_model();
+        app.agent.set_model(model.clone());
+        app.meta.models.push(model);
+
+        // Simulate the user hand-editing the file while cupel runs.
+        std::fs::write(
+            root.join("home/settings.json"),
+            r#"{"providers": {"acme": "from-disk"}}"#,
+        )
+        .unwrap();
+
+        let app = app.hot_reload(ReloadTarget::Current).await;
+        assert_eq!(app.agent.api_key(), Some("from-disk"));
+        assert_eq!(app.meta.settings.api_key("acme"), Some("from-disk"));
     }
 }

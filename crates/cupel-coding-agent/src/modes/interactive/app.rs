@@ -63,10 +63,12 @@ pub struct App {
     /// Set by the Ctrl+Y key handler; the event loop applies it (only the
     /// loop owns the terminal and can issue the crossterm commands).
     pub mouse_toggle_requested: bool,
-    /// API keys entered via `/provider <name> <key>` this session. They
-    /// take precedence over exported env vars and are NEVER persisted -
-    /// process memory only (writing env vars back is impossible here:
-    /// set_var is unsafe in edition 2024 and the workspace forbids unsafe).
+    /// API keys entered via `/provider <name> <key>` this session - the
+    /// HIGHEST precedence tier (above env vars and settings.json). Each
+    /// entry is also auto-saved to ~/.cupel/settings.json; when that save
+    /// fails the key simply stays session-only. Writing keys back into
+    /// the process environment remains impossible: set_var is unsafe in
+    /// edition 2024 and therefore in this project forbidden.
     pub session_keys: std::collections::HashMap<String, String>,
     /// Set by `/hot-reload`; the async event loop performs the actual
     /// rebuild (it re-runs the bootstrap loader, which probes ollama and
@@ -284,10 +286,6 @@ impl App {
         self.run_events.is_some()
     }
 
-    // -----------------------------------------------------------------------
-    // Terminal events
-    // -----------------------------------------------------------------------
-
     pub fn on_terminal_event(&mut self, event: Event) {
         match event {
             // Windows terminals report key releases too; only act on press.
@@ -315,7 +313,6 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-        // ---- autocomplete popup takes precedence while VISIBLE --------------
         // It consumes ONLY the keys it needs; everything else (Ctrl-C
         // included) falls through so session control never changes meaning.
         // Visible - not merely open: a session with zero matches renders
@@ -359,7 +356,6 @@ impl App {
         }
 
         match (key.code, ctrl, alt) {
-            // ---- session control -----------------------------------------
             (KeyCode::Char('c'), true, _) => {
                 if self.is_running() {
                     // First Ctrl-C aborts the run; when idle it quits.
@@ -373,7 +369,6 @@ impl App {
             }
             (KeyCode::Esc, ..) if self.is_running() => self.agent.abort(),
 
-            // ---- view control --------------------------------------------
             // Ctrl+Y toggles "selection mode": mouse capture off so the
             // TERMINAL owns the mouse again (select + copy text natively),
             // then back on for wheel scrolling. Only requested here - the
@@ -386,7 +381,6 @@ impl App {
                 self.scroll_by(-i64::from(self.last_transcript_height / 2).max(-1));
             }
 
-            // ---- editing --------------------------------------------------
             // Alt+Enter inserts a newline (Shift+Enter is indistinguishable
             // from Enter in most terminals, so Alt is the portable choice).
             (KeyCode::Enter, _, true) => {
@@ -458,8 +452,8 @@ impl App {
     /// OLD app comes back with an error notice, nothing torn down.
     ///
     /// What carries over in both modes: the current model + thinking level
-    /// (runtime switches survive a reload), session-entered API keys, and
-    /// the mouse-capture state.
+    /// (runtime switches survive a reload), session-entered API keys (settings.json
+    /// is re-read from disk), and the mouse-capture state.
     pub async fn hot_reload(self, target: ReloadTarget) -> Self {
         let cwd = std::path::PathBuf::from(&self.meta.cwd);
         match target {
@@ -497,7 +491,12 @@ impl App {
         options.system_prompt = state.system_prompt.clone();
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.guard);
-        options.api_key = self.resolve_key(state.model.provider.as_str());
+        let provider = state.model.provider.as_str();
+        options.api_key = self
+            .session_keys
+            .get(provider)
+            .cloned()
+            .or_else(|| crate::providers::resolve_api_key(provider, &ingredients.settings));
         options.thinking_level = state.thinking_level;
         options.tool_execution = cupel_agent::ToolExecutionMode::Parallel;
         options.session_id = Some(session_id.clone());
@@ -517,6 +516,7 @@ impl App {
             provider: state.model.provider.as_str().to_string(),
             cwd: self.meta.cwd.clone(),
             templates: ingredients.templates,
+            settings: ingredients.settings,
             models: ingredients.models,
             home: self.meta.home.clone(),
             startup_warning: None,
@@ -578,9 +578,15 @@ impl App {
         options.system_prompt = ingredients.system_prompt;
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.guard);
-        // The key is re-resolved for the CURRENT provider: session-entered
-        // keys win, then env - same rule as /provider switching.
-        options.api_key = self.resolve_key(state.model.provider.as_str());
+        // Session-entered keys still win, but the settings tier must come
+        // from the FRESH ingredients - self.meta.settings is the stale
+        // copy this reload replaces (hand edits would be lost otherwise).
+        let provider = state.model.provider.as_str();
+        options.api_key = self
+            .session_keys
+            .get(provider)
+            .cloned()
+            .or_else(|| crate::providers::resolve_api_key(provider, &ingredients.settings));
         options.thinking_level = state.thinking_level;
         options.tool_execution = cupel_agent::ToolExecutionMode::Parallel;
         options.session_id = Some(session_id.clone());
@@ -598,6 +604,7 @@ impl App {
             cwd: self.meta.cwd.clone(),
             templates: ingredients.templates,
             models: ingredients.models,
+            settings: ingredients.settings,
             home: self.meta.home.clone(),
             // A reload is user-initiated; the startup condition was already
             // shown once and does not repeat.
@@ -717,7 +724,7 @@ impl App {
         self.session_keys
             .get(provider)
             .cloned()
-            .or_else(|| crate::providers::env_api_key(provider))
+            .or_else(|| crate::providers::resolve_api_key(provider, &self.meta.settings))
     }
 
     /// Point the agent at `model` AND re-resolve the API key for its
@@ -733,7 +740,8 @@ impl App {
     }
 
     /// `/provider` - list providers, or switch to one (optionally handing
-    /// over an API key for this session).
+    /// over an API key, which is kept for the session AND saved to
+    /// ~/.cupel/settings.json).
     fn handle_provider_command(&mut self, args: &str) {
         let mut parts = args.split_whitespace();
         let name = parts.next().unwrap_or("");
@@ -742,6 +750,9 @@ impl App {
         if name.is_empty() {
             let mut lines = vec!["providers (/provider <name> [api-key]):".to_string()];
             for (provider, model) in crate::providers::catalog_providers(&self.meta.models) {
+                // The order of these arms MIRRORS resolve_key's precedence
+                // (session > env > settings) - keep the two in sync, or the
+                // listing lies about which key a request would use.
                 let status = if provider == "amazon-bedrock" {
                     if crate::providers::has_aws_credentials() {
                         "AWS credentials found".to_string()
@@ -753,14 +764,26 @@ impl App {
                     // out anonymously, nothing to configure.
                     "local endpoint - no key required".to_string()
                 } else if self.session_keys.contains_key(&provider) {
-                    "key entered this session".to_string()
-                } else {
-                    let var = crate::providers::env_var_name(&provider).unwrap_or("env");
-                    if crate::providers::env_api_key(&provider).is_some() {
-                        format!("{var} exported")
+                    if self.meta.settings.api_key(&provider).is_some() {
+                        "key entered this session & saved to settings.json".to_string()
                     } else {
-                        format!("no key ({var} unset)")
+                        "key entered this session".to_string()
                     }
+                } else if crate::providers::env_api_key(&provider).is_some() {
+                    let var = crate::providers::env_var_name(&provider).unwrap_or("env");
+                    if self.meta.settings.api_key(&provider).is_some() {
+                        format!("{var} exported (overrides settings.json)")
+                    } else {
+                        format!("{var} exported")
+                    }
+                } else if self.meta.settings.api_key(&provider).is_some() {
+                    "key in settings.json".to_string()
+                } else if let Some(var) = crate::providers::env_var_name(&provider) {
+                    format!("no key ({var} unset)")
+                } else {
+                    // Custom providers have no env var at all - pointing at
+                    // one would be misleading; /provider is ther channel.
+                    format!("no key (set with /provider {provider} <api-key>")
                 };
                 lines.push(format!("  {provider}  - default {}, {status}", model.id));
             }
@@ -776,17 +799,39 @@ impl App {
             return;
         };
 
+        let mut saved_note = String::new();
         if let Some(key) = entered_key {
             // Neither Bedrock (AWS chain) nor keyless local endpoints have
             // anywhere to put a key.
-            if crate::providers::env_var_name(&provider).is_none()
-                || crate::providers::provider_is_keyless(&self.meta.models, &provider)
-            {
+            if !crate::providers::takes_api_key(&self.meta.models, &provider) {
                 self.notice(format!("{provider} does not take an API key - key ignored"));
             } else {
-                // Session memory only, never persisted; deliberately not
-                // echoed back into the transcript either.
+                // Session memory FIRST: the key must work for this session
+                // even if the disk save below fails. Deliberately never
+                // echoed back into the transcript.
                 self.session_keys.insert(provider.clone(), key.to_string());
+                // Persist. save_provider_key re-reads the file itself and
+                // refuses to clobber a malformed one; the in-memory mirror
+                // is updated only on sucess
+                let saved =
+                    crate::settings::save_provider_key(self.meta.home.as_deref(), &provider, key);
+                match saved {
+                    Ok(path) => {
+                        // Mirror the write so the /provider listing (which
+                        // reads meta.settings, never the disk) stays true.
+                        self.meta
+                            .settings
+                            .providers
+                            .insert(provider.clone(), key.to_string());
+                        saved_note = format!("; key saved to {}", path.display());
+                    }
+                    // SaveError carries paths and parse reasons, never the
+                    // key - safe to interpolate.
+                    Err(e) => self.notice(format!(
+                        "warning: key not saved ({e}) - it stays active for this
+                        session only"
+                    )),
+                }
             }
         }
 
@@ -802,13 +847,15 @@ impl App {
                 "using exported {}",
                 crate::providers::env_var_name(&provider).unwrap_or("env")
             )
+        } else if self.meta.settings.api_key(&provider).is_some() {
+            "using the key from settings.json".to_string()
         } else {
             format!("NO KEY - requests will fail; set one with /provider {provider} <api-key>")
         };
         let model_id = model.id.clone();
         self.switch_model(model);
         self.notice(format!(
-            "provider switched to {provider} (model {model_id}; {key_source})"
+            "provider switched to {provider} (model {model_id}; {key_source} {saved_note})"
         ));
     }
 

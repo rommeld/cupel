@@ -83,6 +83,7 @@ decimal_literal_representation = "allow"
 separated_literal_suffix = "allow"
 non_ascii_literal = "allow"
 
+doc_lazy_continuation = "allow"
 doc_markdown = "allow"
 doc_paragraphs_missing_punctuation = "allow"
 missing_panics_doc = "allow"
@@ -114,6 +115,8 @@ integer_division_remainder_used = "allow"
 large_futures = "allow"
 
 items_after_statements = "allow"
+
+if_not_else = "allow"
 
 let_underscore_untyped = "allow"
 let_underscore_must_use = "allow"

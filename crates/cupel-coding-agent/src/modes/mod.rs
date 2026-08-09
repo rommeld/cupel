@@ -26,6 +26,10 @@ pub struct SessionMeta {
     /// runtime reloads (/hot-reload) rebuild from the SAME home the
     /// session started with - env-free and testable.
     pub home: Option<std::path::PathBuf>,
+    /// `~/.cupel/settings.json` as loaded at startup (or the last
+    /// /hot-reload). The LOWEST key-precedence tier - see App::resolve_key
+    /// (session-entered > env var > this).
+    pub settings: crate::settings::Settings,
     /// A startup condition worth telling the user about (e.g. "no
     /// credentials found") - the TUI shows it as the first transcript
     /// notice instead of refusing to start.

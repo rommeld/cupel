@@ -239,7 +239,8 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "provider",
-        description: "Switch provider: /provider <name> [api-key] (no argument lists them)",
+        description: "Switch provider: /provider <name> [api-key] (key is saved to
+        ~/.cupel/settings.json; no argument lists them)",
     },
     BuiltinCommand {
         name: "thinking",

@@ -13,6 +13,7 @@ use cupel_core::types::Model;
 use crate::commands::PromptTemplate;
 use crate::guard::BashGuard;
 use crate::search::GrepSearch;
+use crate::settings::Settings;
 use crate::system_prompt::build_system_prompt;
 use crate::tools::{
     bash::BashTool, edit::EditTool, grep::GrepTool, read::ReadTool, write::WriteTool,
@@ -47,6 +48,9 @@ pub struct Ingredients {
     pub models: Vec<Model>,
     /// Bash denylist rebuilt from the current bash-deny files.
     pub guard: BashGuard,
+    /// Provider API keys from `~/.cupel/settings.json`. Loaded here (not
+    /// once in main) so `/hot-reload` picks up hand edits to the file.
+    pub settings: Settings,
     /// The context files (AGENTS.md/CLAUDE.md) as loaded - kept alongside
     /// the system prompt they were embedded into, so a later in-place
     /// `/hot-reload` can DIFF against them instead of re-reading blind.
@@ -66,6 +70,10 @@ pub async fn load(
     let templates = crate::commands::load_prompt_templates(&roots);
     let models = crate::models::build_catalog(registry, home.as_deref(), cwd).await;
     let guard = BashGuard::from_config(home.as_deref(), cwd);
+    let settings = crate::settings::load_home_settings(home.as_deref());
+    // A project-side settings.json must never hold keys - warn once here,
+    // on the same stderr channel as the models.json warnings.
+    crate::settings::warn_project_settings(cwd);
 
     // The grep tool talks to a CodeSearch backend.
     let backend = Arc::new(GrepSearch::new(cwd));
@@ -84,6 +92,7 @@ pub async fn load(
         templates,
         models,
         guard,
+        settings,
     }
 }
 
@@ -114,6 +123,11 @@ mod tests {
         )
         .unwrap();
         std::fs::write(cwd.join(".cupel/bash-deny"), "git\\s+push\\s+--force\n").unwrap();
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"providers": {"test-local": "k-1"}}"#,
+        )
+        .unwrap();
 
         let registry = cupel_core::default_registry();
         let ingredients = load(&cwd, Some(home), &registry).await;
@@ -122,6 +136,7 @@ mod tests {
         assert!(ingredients.templates.iter().any(|t| t.name == "greet"));
         assert!(ingredients.models.iter().any(|m| m.id == "local-test"));
         assert_eq!(ingredients.tools.len(), 5);
+        assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
         // The guard carries defaults AND the project rule.
         // (Verified through the public hook in guard.rs tests; here the
         // cheap signal is that construction succeeded with both layers.)

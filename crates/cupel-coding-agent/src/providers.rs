@@ -1,12 +1,15 @@
 //! Provider credential resolution, shared by startup (`select_model` in
 //! main.rs) and the runtime `/provider` + `/model` built-ins - one place
-//! that knows which environment variable each provider reads.
+//! that knows which environment variable each provider reads and how the
+//! key sources layer: session-entered key > exported env var >
+//! `~/.cupel/settings.json` (see `crate::settings`).
 //!
 //! Note on `export`: keys entered at runtime CANNOT be written back into
 //! the process environment - `std::env::set_var` is unsafe in edition 2024
 //! (not thread-safe) and this workspace forbids unsafe code. Runtime keys
-//! therefore live in the frontend's session state and take precedence over
-//! the environment; exported variables remain the startup path.
+//! therefore live in the frontend's session state; settings.json is the
+//! PERSISTENT home for keys, and exported variables remain a startup-time
+//! override (the 12-factor convention: env beats file config).
 
 use cupel_core::types::Model;
 
@@ -26,6 +29,22 @@ pub fn env_var_name(provider: &str) -> Option<&'static str> {
 #[must_use]
 pub fn env_api_key(provider: &str) -> Option<String> {
     std::env::var(env_var_name(provider)?).ok()
+}
+
+/// The pure precedence core: an exported env var beats the settings file.
+/// Parameterized (like resources::resolve_config_home) so tests can prove
+/// the order without reading process-global env vars - this is the ONLY
+/// env-free place where the prcedence is provable.
+#[must_use]
+pub fn resolve_key_layers(env: Option<String>, settings: Option<&str>) -> Option<String> {
+    env.or_else(|| settings.map(str::to_string))
+}
+
+/// Startup-side key resoultion: env var first, then settings.json. The
+/// TUI layers session-entered keys ON TOP of this (APP::resolve_key).
+#[must_use]
+pub fn resolve_api_key(provider: &str, settings: &crate::settings::Settings) -> Option<String> {
+    resolve_key_layers(env_api_key(provider), settings.api_key(provider))
 }
 
 /// Whether the AWS credential chain has anything to work with. (Bedrock
@@ -78,6 +97,17 @@ pub fn provider_is_keyless(models: &[Model], provider: &str) -> bool {
         any = true;
     }
     any
+}
+
+/// Whether `/provider <name> <key>` has anywhere to put a key: everything
+/// except amazon-bedrock (its AWS chain has no key slot) and all-keyless
+/// local providers. Custom models.json providers DO qualify - session
+/// memory and settings.jons are per-provider-id maps, unlike the closed
+/// env_var_name match that used to gate this (and locked custom providers
+/// out of keys entirely).
+#[must_use]
+pub fn takes_api_key(models: &[Model], provider: &str) -> bool {
+    provider != "amazon-bedrock" && !provider_is_keyless(models, provider)
 }
 
 #[cfg(test)]
@@ -136,5 +166,34 @@ mod tests {
             !provider_is_keyless(&[keyless], "unknown"),
             "no models = not keyless"
         );
+    }
+
+    #[test]
+    fn key_precedence_env_beats_settings() {
+        assert_eq!(
+            resolve_key_layers(Some("env-key".into()), Some("file-key")),
+            Some("env-key".to_string())
+        );
+        assert_eq!(
+            resolve_key_layers(None, Some("file-key")),
+            Some("file-key".to_string())
+        );
+        assert_eq!(resolve_key_layers(None, None), None);
+    }
+
+    #[test]
+    fn takes_api_key_rejects_only_bedrock_and_keyless() {
+        let models = cupel_core::catalog::builtin_models();
+        assert!(takes_api_key(&models, "anthropic"));
+        assert!(
+            takes_api_key(&models, "custom-proxy"),
+            "no env var needed anymore"
+        );
+        assert!(!takes_api_key(&models, "amazon-bedrock"));
+
+        let mut keyless = cupel_core::catalog::builtin_models().remove(0);
+        keyless.provider = cupel_core::types::Provider::from("ollama");
+        keyless.compat = Some(serde_json::json!({"requiresApiKey": false}));
+        assert!(!takes_api_key(&[keyless], "ollama"));
     }
 }
