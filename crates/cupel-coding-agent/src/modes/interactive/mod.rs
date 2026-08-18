@@ -19,6 +19,7 @@ pub mod app;
 pub mod autocomplete;
 pub mod fuzzy;
 pub mod input;
+pub mod theme;
 pub mod transcript;
 pub mod ui;
 

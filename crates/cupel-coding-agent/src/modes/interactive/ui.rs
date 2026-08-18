@@ -7,12 +7,10 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use super::app::App;
-use super::transcript;
+use crate::modes::interactive::{app::App, theme, transcript};
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     // Input grows with its content (explicit newlines + wrapped lines),
@@ -83,9 +81,9 @@ fn render_autocomplete(frame: &mut Frame<'_>, app: &App, transcript_area: Rect, 
         .enumerate()
         .map(|(i, row)| {
             let style = if i == selected {
-                Style::new().add_modifier(Modifier::REVERSED)
+                theme::POPUP_SELECTED
             } else {
-                Style::new().fg(Color::Cyan)
+                theme::POPUP_ROW
             };
             Line::from(Span::styled(format!(" {} ", row.display), style))
         })
@@ -121,7 +119,7 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             height: 1,
         };
         frame.render_widget(
-            Paragraph::new(marker).style(Style::new().fg(Color::Black).bg(Color::Yellow)),
+            Paragraph::new(marker).style(theme::SCROLL_MARKER),
             marker_area,
         );
     }
@@ -173,22 +171,19 @@ fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
 
 fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let border_style = if app.is_running() {
-        Style::new().fg(Color::Yellow)
+        theme::INPUT_BORDER_BUSY
     } else {
-        Style::new().fg(Color::DarkGray)
+        theme::INPUT_BORDER_IDLE
     };
     let title = if app.is_running() {
-        " working - enter queues a steering message "
+        " working "
     } else {
         " prompt "
     };
     let block = Block::new()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(Span::styled(
-            title,
-            Style::new().add_modifier(Modifier::DIM),
-        ));
+        .title(Span::styled(title, theme::CHROME));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -243,17 +238,11 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     // Left-align the status, right-align the key hints; drop the hints when
     // the terminal is too narrow for both.
-    let mut spans = vec![Span::styled(
-        left.clone(),
-        Style::new().add_modifier(Modifier::DIM),
-    )];
+    let mut spans = vec![Span::styled(left.clone(), theme::CHROME)];
     let padding = (area.width as usize).saturating_sub(left.len() + right.len());
     if padding > 0 {
         spans.push(Span::raw(" ".repeat(padding)));
-        spans.push(Span::styled(
-            right,
-            Style::new().add_modifier(Modifier::DIM),
-        ));
+        spans.push(Span::styled(right, theme::CHROME));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -267,10 +256,11 @@ mod tests {
     use super::*;
     use crate::modes::SessionMeta;
     use crate::modes::interactive::transcript::{Cell, ToolOutcome};
-    use cupel_agent::{Agent, AgentOptions};
+    use cupel_agent::{Agent, AgentEvent, AgentOptions};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::style::Color;
     use std::sync::Arc;
 
     fn test_app() -> App {
@@ -341,6 +331,49 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    /// Draw the app and return the style painted at the first occurrence
+    /// of `needle`. ASCII needles only: the byte index of the match is
+    /// then also its column. Panics when the needle is not on screen -
+    /// that is a failed test either way, and panicking here gives the
+    /// missing-text message instead of a confusing style mismatch.
+    fn style_of(app: &mut App, needle: &str) -> ratatui::style::Style {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| render(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        for y in 0..buffer.area.height {
+            let mut row = String::new();
+            for x in 0..buffer.area.width {
+                row.push_str(buffer[(x, y)].symbol());
+            }
+            if let Some(col) = row.find(needle) {
+                return buffer[(u16::try_from(col).unwrap(), y)].style();
+            }
+        }
+        panic!("needle {needle:?} not on screen");
+    }
+
+    #[test]
+    fn the_turn_hierarchy_reaches_the_screen() {
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::User {
+            text: "the task".into(),
+        });
+        app.transcript.cells.push(Cell::Thinking {
+            text: "pondering".into(),
+        });
+        app.transcript.cells.push(Cell::Answer {
+            text: "the answer".into(),
+        });
+
+        let task = style_of(&mut app, "> the task");
+        assert_eq!(task.fg, Some(Color::LightGreen));
+
+        assert_eq!(style_of(&mut app, "pondering").fg, Some(Color::DarkGray));
+
+        let answer = style_of(&mut app, "the answer");
+        assert_eq!(answer.fg, Some(Color::Magenta));
     }
 
     #[test]
@@ -1326,5 +1359,60 @@ mod tests {
         let app = app.hot_reload(ReloadTarget::Current).await;
         assert_eq!(app.agent.api_key(), Some("from-disk"));
         assert_eq!(app.meta.settings.api_key("acme"), Some("from-disk"));
+    }
+
+    #[tokio::test]
+    async fn start_run_leads_with_the_task_and_records_it() {
+        let root = std::env::temp_dir().join("cupel-ui-task-cell");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-task");
+
+        app.start_run("find the bug");
+        assert!(
+            matches!(app.transcript.cells.first(), Some(Cell::User { text }) if text == "find the bug"),
+            "the task must lead the turn"
+        );
+        let screen = draw(&mut app, 80, 20);
+        assert!(screen.contains("> find the bug"), "{screen}");
+
+        // The prompt reached the JSONL transcript too (assistant-only
+        // transcripts were the resume-fidelity bug this fixes).
+        let path = app
+            .recorder
+            .sessions_dir()
+            .expect("home is set")
+            .join("cupel-task.jsonl");
+        let (_, messages) = crate::session::load_transcript(&path).unwrap();
+        let recorded = matches!(
+            messages.first(),
+            Some(cupel_agent::AgentMessage::Llm(cupel_core::types::Message::User(user)))
+                if matches!(&user.content,
+                    cupel_core::types::UserContentBody::Text(t) if t == "find the bug")
+        );
+        assert!(recorded, "prompt missing from the transcript file");
+
+        // The run against the empty test registry errors in the
+        // background; settle it so the test ends cleanly.
+        app.agent.abort();
+        app.agent.wait_for_idle().await;
+    }
+
+    #[tokio::test]
+    async fn run_end_promotes_the_final_answer() {
+        let mut app = test_app();
+        app.on_agent_event(Some(AgentEvent::MessageUpdate {
+            event: cupel_core::types::AssistantMessageEvent::TextDelta {
+                content_index: 0,
+                delta: "final words".into(),
+            },
+        }))
+        .await;
+        app.on_agent_event(Some(AgentEvent::AgentEnd {
+            messages: Vec::new(),
+        }))
+        .await;
+        assert!(
+            matches!(app.transcript.cells.last(), Some(Cell::Answer { text }) if text == "final words")
+        );
     }
 }

@@ -6,20 +6,16 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.6.0-beta] - 2026-08-18
 
 - define model provider configurations in settings.json   - parse file, ignore unknown fields, does not leak any secrets - independent module   - handle directory and serialize information, manage temp files   - create auto-save and hot-reload functionality for persistent API key
-- modify AGENTS.md file by adding common guidelines and defining agent behaviors
 - Removed unnecessary entries to README.md
-- changelog: v0.5.4-beta
 
 ## [v0.5.4-beta] - 2026-08-02
 
 - remove unused code from codebase to make it more readable
-- changelog: v0.5.3-beta
 
 ## [v0.5.3-beta] - 2026-07-31
 
 - adjust pricing for GPT-5.6 Terra and GPT-5.6 Luna
 - reduce CHANGELOG content
-- changelog: v0.5.2-beta
 
 ## [v0.5.2-beta] - 2026-07-28
 

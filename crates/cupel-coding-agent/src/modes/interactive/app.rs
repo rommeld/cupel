@@ -703,8 +703,18 @@ impl App {
 
     /// Start the agent run for a prompt (the async half of `send`).
     pub fn start_run(&mut self, text: &str) {
+        // The task leads the turn. `start_run`is the single funnel every
+        // prompt goes through (typed prompts, expanded templates, /review bundles).
+        self.transcript.cells.push(Cell::User {
+            text: text.to_string(),
+        });
         match self.agent.prompt_text(text) {
-            Ok(events) => self.run_events = Some(events),
+            Ok(events) => {
+                // Record the prompt so --resume replays the WHOLE turn.
+                self.recorder
+                    .record(&AgentMessage::user_text(text.to_string()));
+                self.run_events = Some(events);
+            }
             Err(err) => self.transcript.cells.push(Cell::Error {
                 text: err.to_string(),
             }),
@@ -828,8 +838,7 @@ impl App {
                     // SaveError carries paths and parse reasons, never the
                     // key - safe to interpolate.
                     Err(e) => self.notice(format!(
-                        "warning: key not saved ({e}) - it stays active for this
-                        session only"
+                        "warning: key not saved ({e}) - it stays active for this session only"
                     )),
                 }
             }
@@ -1039,44 +1048,36 @@ impl App {
                 _ => {}
             },
 
-            // User messages (initial prompt and drained steering messages)
-            // come back to us as events - the loop is the source of truth.
+            // Finalized ASSISTANT messages come back as events - the loop
+            // is the source of truth for them. User prompts never arrive
+            // this way (the loop emits MessageEnd only for assistant
+            // messages); start_run pushes and records them directly.
             AgentEvent::MessageEnd { message } => {
                 // Every finalized message rides into the transcript file.
                 self.recorder.record(&message);
-                match message {
-                    AgentMessage::Llm(Message::User(user)) => {
-                        let text = match user.content {
-                            UserContentBody::Text(text) => text,
-                            UserContentBody::Blocks(_) => "(rich message)".to_string(),
-                        };
-                        self.transcript.cells.push(Cell::User { text });
+                if let AgentMessage::Llm(Message::Assistant(assistant)) = message {
+                    if matches!(
+                        assistant.stop_reason,
+                        StopReason::Error | StopReason::Aborted
+                    ) {
+                        self.transcript.cells.push(Cell::Error {
+                            text: assistant
+                                .error_message
+                                .unwrap_or_else(|| "unknown error".to_string()),
+                        });
+                    } else {
+                        let usage = &assistant.usage;
+                        self.totals.input += usage.input;
+                        self.totals.output += usage.output;
+                        self.totals.cache_read += usage.cache_read;
+                        self.totals.cost += usage.cost.total;
+                        self.transcript.cells.push(Cell::Usage {
+                            text: format!(
+                                "[{} in / {} out / {} cached, ${:.4}]",
+                                usage.input, usage.output, usage.cache_read, usage.cost.total
+                            ),
+                        });
                     }
-                    AgentMessage::Llm(Message::Assistant(assistant)) => {
-                        if matches!(
-                            assistant.stop_reason,
-                            StopReason::Error | StopReason::Aborted
-                        ) {
-                            self.transcript.cells.push(Cell::Error {
-                                text: assistant
-                                    .error_message
-                                    .unwrap_or_else(|| "unknown error".to_string()),
-                            });
-                        } else {
-                            let usage = &assistant.usage;
-                            self.totals.input += usage.input;
-                            self.totals.output += usage.output;
-                            self.totals.cache_read += usage.cache_read;
-                            self.totals.cost += usage.cost.total;
-                            self.transcript.cells.push(Cell::Usage {
-                                text: format!(
-                                    "[{} in / {} out / {} cached, ${:.4}]",
-                                    usage.input, usage.output, usage.cache_read, usage.cost.total
-                                ),
-                            });
-                        }
-                    }
-                    _ => {}
                 }
             }
 
@@ -1148,6 +1149,9 @@ impl App {
     }
 
     async fn finish_run(&mut self) {
+        // The trailing assistant prose was the run's fnal answer -
+        // promote it so the turn visibly ends with its results.
+        self.transcript.promote_final_answer();
         self.run_events = None;
         // Fire the `stop` hook without blocking the UI; the next prompt's
         // before_prompt (or session end) settles it.

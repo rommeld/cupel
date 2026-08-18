@@ -1,0 +1,55 @@
+//! The TUI palette - every style the transcript and chrome use, in ONE
+//! place.
+//!
+//! As a module, the visual hierarchy of turn is a single reviewable
+//! unit:
+//!
+//! - TASK and ANSWER are the emphasized endpoints of a turn (what was
+//! asked, what came out).
+//! - REASONING and TOOL traffic are the de-emphasized middle,
+//! - errors/notices keep their conventional terminal colors.
+//!
+//! These are true `const`s: ratatui`s `Style::new()`, `fg`, `bg`, and
+//! `add_modifier` are const fns. Note the chained `add_modifier` calls
+//! where two modifiers combin - the `|` operator (BitOr) is NOT a const
+//! fn, so `Modifier::DIM | Modifier::ITALIC` would not compile here.
+
+use ratatui::style::{Color, Modifier, Style};
+
+/// The user's task opening a turn: bright and bold, the "> " prefix rides
+/// in transcript.rs.
+pub const TASK: Style = Style::new()
+    .fg(Color::LightGreen)
+    .add_modifier(Modifier::BOLD);
+/// Mid-turn assistant prose (commentary between tool calls): plain.
+pub const ASSISTANT: Style = Style::new();
+/// The turn's final answer: the emphasized couterpart to TASK. Magenta
+/// because green (task), cyan (tools), red (errors), and yellow
+/// (notices) are taken - and BOLD alone is too subtle next to plain
+/// prose.
+pub const ANSWER: Style = Style::new().fg(Color::Magenta);
+/// Model reasoning: present but visually receded (M3 tunes this).
+pub const REASONING: Style = Style::new()
+    .fg(Color::DarkGray)
+    .add_modifier(Modifier::ITALIC);
+/// A tool call header (`[name] {args}`).
+pub const TOOL_HEADER: Style = Style::new().fg(Color::Cyan);
+/// De-emphasized detail lines: pending markers, ok tool output, overflow
+/// notes, usage summaries.
+pub const DETAIL: Style = Style::new();
+/// Errors and failed tool results.
+pub const ERROR: Style = Style::new().fg(Color::Red);
+/// Status notices (retry, compaction, /provider listings).
+pub const NOTICE: Style = Style::new().fg(Color::Yellow);
+
+/// Input border while a run is active / while idle.
+pub const INPUT_BORDER_BUSY: Style = Style::new().fg(Color::Yellow);
+pub const INPUT_BORDER_IDLE: Style = Style::new().fg(Color::DarkGray);
+/// Box titles and the footer line.
+pub const CHROME: Style = Style::new().add_modifier(Modifier::DIM);
+/// The " ↓ N more " overlay while scrolled up.
+pub const SCROLL_MARKER: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
+/// Autocomplete popup rows: the selected one inverts, the rest match the
+/// tool color.
+pub const POPUP_SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
+pub const POPUP_ROW: Style = Style::new().fg(Color::Cyan);

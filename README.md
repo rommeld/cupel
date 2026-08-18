@@ -1,29 +1,26 @@
 # cupel
 
-A cupel is a small vessel for refining precious metal. This project borrows that idea: separate useful code context from repository noise, then feed the refined signal into fast local agent workflows.
+A cupel is a small vessel for refining precious metals. This project borrows that idea: it separates useful code context from repository noise, then feeds that refined signal into fast, local agent workflows.
 
-`cupel` is a lean Rust coding agent focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval. I build it on my former favourit agent [pi](https://pi.dev) (a **MASTERPIECE**).
+`cupel` is a lean Rust coding agent focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval. It is heavily inspired by my former favourite agent [pi](https://pi.dev) (a **MASTERPIECE**).
 
-## Crates definition
+## Workspace crates
 
 ### 1. `cupel-core`
 
-The inference crate builds the foundation. It contains a provider-neutral chat-completion abstraction, a built-in model catalog (Anthropic, OpenAI, AWS Bedrock, Fireworks), token/cost tracking, request/response tracing, and retry/backoff logic. Other crates depend on it for all LLM calls.
+The inference crate forms the foundation. It contains a provider-neutral chat-completion abstraction, a built-in model catalog (Anthropic, OpenAI, AWS Bedrock, Fireworks), token/cost tracking, request/response tracing, and retry/backoff logic. Other crates depend on it for all LLM calls.
 
 ### 2. `cupel-agent`
 
-Includes the basic agent definition and defines an agent loop primitive. It wires a system prompt, message history, and a set of tool definitions into a loop that repeatedly calls the inference layer, parses model tool calls, executes them, and feeds the results back to the model. It also provides context compaction hooks and the `AgentHooks` extension point for intercepting or overriding tool calls mid-flight.
+Defines the basic agent and its loop primitive. It wires a system prompt, message history, and a set of tool definitions into a loop that repeatedly calls the inference layer, parses model tool calls, executes them, and feeds the results back to the model. It also provides context compaction hooks and the `AgentHooks` extension point for intercepting or overriding tool calls mid-flight.
 
 ### 3. `cupel-coding-agent`
 
-Use the `ripgrep` crate as the underlying for the **grep tool**. The crate also includes a simple `cuple CLI` to call functionality from the terminal. `ratatui` is the TUI crate of choice.
-
-It implements the concrete coding-agent experience: a terminal UI, `@file-path` fuzzy file referencing, slash commands (`/new`, `/model`, `/thinking`, `/usage`, `/quit`), prompt templates loaded from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools (`read`, `grep`, `write`, `edit`, `bash`).
+Implements the concrete coding-agent experience: a terminal UI, `@file-path` fuzzy file referencing, slash commands (`/help`, `/new`, `/model`, `/provider`, `/thinking`, `/usage`, `/hot-reload`, `/session-id`, `/quit`), prompt templates loaded from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools (`read`, `grep`, `write`, `edit`, `bash`). It uses the `ripgrep` crate as the underlying engine for the **grep tool** and `ratatui` for the TUI. The crate also includes a simple `cupel` CLI for calling functionality from the terminal.
 
 ## Install
 
-No Rust required - currently support for macOS
-(Intel & Silicon) or Linux (x86_64/aarch64, static musl):
+No Rust required. Currently supported: macOS (Intel & Silicon) or Linux (x86_64/aarch64, static musl):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
@@ -31,18 +28,19 @@ curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 
 ## Usage
 
-Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and Fireworks - plus any OpenAI-compatible local server (ollama, llama-server; see "Local models" below), e.g.:
+Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and Fireworks — plus any OpenAI-compatible local server (Ollama, `llama-server`; see "Local models" below).
 
-```sh
-export FIREWORKS_API_KEY=fw-...
-cargo run -p cupel-coding-agent --
-```
+### Project context
 
-Project context: `AGENTS.md` (or `CLAUDE.md`) lives either in  `~/.cupel` or `~/.cupel`.
+`AGENTS.md` (or `CLAUDE.md`) lives either in `~/.cupel` (global) or `<project>/.cupel` (project-specific). On a name collision, the most specific location wins: working directory > `.cupel/` > `~/.cupel`.
 
-Slash commands: `/help` lists everything; built-ins (`/new`, `/model <id>`, `/provider <name> [api-key]`, `/thinking <level>`, `/usage`, `/quit`, `/hot-reload`) are handled locally; markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision the most specific location wins: working directory > `.cupel/` > `~/.cupel`.
+### Slash commands
 
-Local models: with `ollama serve` running, every pulled model appears automatically in `--help`, `/model`, and `/provider` (probed at `OLLAMA_HOST` or `http://localhost:11434` with a 500ms budget; silently skipped when ollama is down). With no cloud keys exported, cupel defaults to the first discovered model. Discovered models assume a conservative 4096-token context window (ollama's own default); to raise it, or to add any other OpenAI-compatible endpoint (llama-server, LM Studio, a proxy), define the model in a `models.json` in `~/.cupel/` or `<project>/.cupel/`:
+`/help` lists everything. Built-ins (`/new`, `/model <id>`, `/provider <name> [api-key]`, `/thinking <level>`, `/usage`, `/hot-reload`, `/session-id`, `/quit`) are handled locally. Markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision, the most specific location wins.
+
+### Local models
+
+With `ollama serve` running, every pulled model appears automatically in `--help`, `/model`, and `/provider` (probed at `OLLAMA_HOST` or `http://localhost:11434` with a 500ms budget; silently skipped when Ollama is down). With no cloud keys exported, `cupel` defaults to the first discovered model. Discovered models assume a conservative 4096-token context window (Ollama's own default). To raise it, or to add any other OpenAI-compatible endpoint (`llama-server`, LM Studio, a proxy), define the model in a `models.json` in `~/.cupel/` or `<project>/.cupel/`:
 
 ```json
 [
@@ -64,18 +62,55 @@ Local models: with `ollama serve` running, every pulled model appears automatica
 ]
 ```
 
-(For llama-server, the same entry with `"baseUrl": "http://localhost:8080/v1"` works. `api` must be one of the four registered protocols - unknown ones are warned about and skipped. `requiresApiKey: false` marks a keyless local endpoint.)
+For `llama-server`, use the same entry with `"baseUrl": "http://localhost:8080/v1"`. `api` must be one of the four registered protocols — unknown ones are warned about and skipped. `requiresApiKey: false` marks a keyless local endpoint.
 
-## Slash-commands
+### Providers
 
-Providers: `/provider` lists every provider; `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` hands over a key when nothing is exported - scoped to this session: the key lives in process memory only, is never persisted or echoed, and wins over the environment variable. Switching models across providers via `/model` re-resolves the key the same way.
+`/provider` lists every provider. `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` supplies a key when nothing is exported. The key is scoped to this session: it lives in process memory only, is never persisted or echoed, and takes precedence over the environment variable. Switching models across providers via `/model` re-resolves the key in the same way.
 
-Sessions management: every conversation is persisted as a JSONL transcript in `~/.cupel/sessions/<project-slug>/<session-id>.jsonl`. The current session id is always visible in the TUI footer, and `/session-id` lists this project's sessions. `cupel --resume` reloads this project's newest session - full history back in context and on screen - and keeps appending to the same file; `cupel --resume <session-id>` picks a specific one. Compaction never rewrites the transcript, so it is always the complete conversation. Don't resume the same session from two terminals at once - appends would interleave.
+### Session management
 
-Hot reload: edits to `~/.cupel` or `<project>/.cupel` (an updated `AGENTS.md`, new prompt templates, models.json changes, bash-deny rules) normally apply on the next launch - `/hot-reload` applies them NOW. Bare `/hot-reload` updates the RUNNING session in place: same id, same history, same transcript file; fresh templates/models/bash-deny/tools are swapped in, and `AGENTS.md` changes are appended as a compact unified DIFF message ("[context update]") instead of re-embedding the whole file - the original stays in the system prompt from session start, so only the changed instructions cost tokens. `/hot-reload <session-id>` resumes another session with a full rebuild (fresh system prompt included); ids autocomplete from the transcripts on disk. The current model, thinking level, and session-entered API keys carry over in both modes; only the resume mode closes the old session (`session-end` hook fires - an in-place reload is not a session boundary).
+Every conversation is persisted as a JSONL transcript in `~/.cupel/sessions/<project-slug>/<session-id>.jsonl`. The current session ID is always visible in the TUI footer, and `/session-id` lists this project's sessions. `cupel --resume` reloads this project's newest session — full history back in context and on screen — and keeps appending to the same file. `cupel --resume <session-id>` picks a specific one.
 
-## Hooks (deny-list)
+Compaction never rewrites the transcript, so the transcript remains the complete conversation. Do not resume the same session from two terminals at once — appended entries would interleave.
 
-Hooks: drop an executable into `~/.cupel/hooks/<event>/` (global) or `<project>/.cupel/hooks/<event>/` (per project) and cupel runs it on that event with a JSON payload on stdin: `{"event", "sessionId", "sessionRef" (transcript path), "cwd", "timestamp", "prompt"?}`. Events: `session-start`, `user-prompt-submit`, `stop` (run finished), `session-end`. Hooks observe, never veto: failures and timeouts (60s per hook) are logged and ignored.
+### Hot reload
 
-Guardrails: bash commands run through a deny list before they execute. `rm -rf` (and its spellings: `-fr`, combined flag groups, behind `sudo` or `&&`) is blocked out of the box; the model receives an error naming the rule instead of the command running. Add your own rules - one regex per line, `#` comments - in `~/.cupel/bash-deny` (global) or `<project>/.cupel/bash-deny` (per project); files EXTEND the defaults (union - deny rules never cancel each other). Matching is deliberately conservative: any line of the command matching anywhere blocks, even inside quotes, because a false positive costs one retry while a false negative costs your files. Invalid patterns are warned about and skipped.
+Edits to `~/.cupel` or `<project>/.cupel` (an updated `AGENTS.md`, new prompt templates, `models.json` changes, bash-deny rules) normally apply on the next launch. `/hot-reload` applies them immediately.
+
+Bare `/hot-reload` updates the running session in place: same ID, same history, same transcript file. Fresh templates, models, bash-deny rules, and tools are swapped in, and `AGENTS.md` changes are appended as a compact unified diff message (`[context update]`) instead of re-embedding the whole file. The original stays in the system prompt from session start, so only the changed instructions cost tokens.
+
+`/hot-reload <session-id>` resumes another session with a full rebuild (fresh system prompt included). Session IDs autocomplete from the transcripts on disk.
+
+The current model, thinking level, and session-entered API keys carry over in both modes. Only the resume mode closes the old session (`session-end` hook fires); an in-place reload is not a session boundary.
+
+## Hooks and guardrails
+
+### Hooks
+
+Drop executables into `~/.cupel/hooks/<event>/` (global) or `<project>/.cupel/hooks/<event>/` (per project). `cupel` runs them on that event with a JSON payload on stdin. The payload schema is:
+
+```json
+{
+  "event": "session-start",
+  "sessionId": "...",
+  "sessionRef": "...",
+  "cwd": "...",
+  "timestamp": "...",
+  "prompt": "..."
+}
+```
+
+`sessionRef` is the transcript path; `prompt` is present for `user-prompt-submit` and absent otherwise.
+
+Events: `session-start`, `user-prompt-submit`, `stop` (run finished), `session-end`.
+
+Hooks observe but never veto. Failures and timeouts (60s per hook) are logged and do not block execution.
+
+### Guardrails
+
+Bash commands are checked against a deny list before they execute. `rm -rf` (and its spellings: `-fr`, combined flag groups, behind `sudo` or `&&`) is blocked out of the box. The model receives an error naming the rule instead of the command being executed.
+
+Add your own rules — one regex per line, `#` comments — in `~/.cupel/bash-deny` (global) or `<project>/.cupel/bash-deny` (per project). Files extend the defaults (union: deny rules never cancel each other).
+
+Matching is deliberately conservative: any line of the command that matches anywhere blocks, even inside quotes, because a false positive costs one retry while a false negative costs your files. Invalid patterns are logged as warnings and skipped.

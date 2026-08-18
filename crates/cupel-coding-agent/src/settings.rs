@@ -70,7 +70,9 @@ pub fn load_home_settings(home: Option<&Path>) -> Settings {
     match load_settings(&settings_path(home)) {
         Ok(settings) => settings,
         Err(e) => {
-            eprint!("warning: ignore settings file: {e}");
+            eprintln!(
+                "warning: ignoring settings file: {e} (fix the JSON syntax, e.g. remove trailing commas)"
+            );
             Settings::default()
         }
     }

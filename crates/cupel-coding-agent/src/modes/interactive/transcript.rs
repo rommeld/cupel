@@ -6,13 +6,14 @@
 //!
 //! 1. Streaming deltas mutate the LAST cell in place (append to the text
 //!    being typed out) instead of re-deriving the whole view per event.
-//! 2. UI-only state (tool results attached to their calls, expansion,
-//!    "queued" markers) has an obvious home that the agent knows nothing
-//!    about.
+//! 2. UI-only state (tool results attached to their calls, expansion
+//!    ) has an obvious home that the agent knows nothing about.
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
+
+use crate::modes::interactive::theme;
 
 /// How many result lines a collapsed tool cell shows.
 const TOOL_PREVIEW_LINES: usize = 6;
@@ -21,12 +22,13 @@ const TOOL_PREVIEW_LINES: usize = 6;
 pub enum Cell {
     /// A user message (submitted prompt or drained steering message).
     User { text: String },
-    /// A message queued for steering while the agent is still running. It
-    /// re-appears as a `User` cell when the loop drains it; this marker just
-    /// shows the input wasn't lost in the meantime.
-    Queued { text: String },
     /// Streaming assistant prose.
     Assistant { text: String },
+    /// The turn's FINAL assistant prose, promoted from the trailing
+    /// Assistant cell when the run ends - the emphasized counterpart to
+    /// the User task that opened the turn. Mid-turn prose between tool
+    /// calls stays a plain Assistant cell.
+    Answer { text: String },
     /// Streaming assistant thinking (rendered dim).
     Thinking { text: String },
     /// A tool call and (once finished) its result.
@@ -34,8 +36,7 @@ pub enum Cell {
         /// Tool call id, used to attach the result when it completes.
         id: String,
         name: String,
-        /// Compact JSON of the arguments (may still be growing during
-        /// streaming; replaced by the final version on `ToolCallEnd`).
+        /// Compact JSON of the final arguments (the cell is created on ToolCallEnd).
         args: String,
         result: Option<ToolOutcome>,
     },
@@ -94,6 +95,31 @@ impl Transcript {
         }
     }
 
+    /// Promote the trailing assistant prose to an Answer cell. Called when
+    /// a run ends - only then is "the last text the model wrote" known to
+    /// be its final answer; during streaming every Assistant cell might
+    /// still be followed by another tool call.
+    ///
+    /// Walks back over trailing bookkeeping (usage, notices) and stops at
+    /// anything substantive: a run that ended in an Error cell keeps its
+    /// plain cells - there is no "answer" to celebrate.
+    pub fn promote_final_answer(&mut self) {
+        for cell in self.cells.iter_mut().rev() {
+            match cell {
+                Cell::Usage { .. } | Cell::Notice { .. } => {}
+                Cell::Assistant { text } => {
+                    // take() moves the String out (leaving an empty one
+                    // behind) so the cell can be REPLACED without cloning
+                    // the text - the old cell is overwritten right after.
+                    let text = core::mem::take(text);
+                    *cell = Cell::Answer { text };
+                    return;
+                }
+                _ => return,
+            }
+        }
+    }
+
     /// Flatten every cell into styled, wrapped lines for a given terminal
     /// width. Called once per frame; cheap enough at chat-transcript sizes
     /// that we don't cache (ratatui diffs the actual terminal writes anyway).
@@ -109,31 +135,16 @@ impl Transcript {
             }
             match cell {
                 Cell::User { text } => {
-                    push_wrapped(
-                        &mut out,
-                        &format!("> {text}"),
-                        width,
-                        Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
-                    );
-                }
-                Cell::Queued { text } => {
-                    push_wrapped(
-                        &mut out,
-                        &format!("(queued) {text}"),
-                        width,
-                        Style::new().fg(Color::Green).add_modifier(Modifier::DIM),
-                    );
+                    push_wrapped(&mut out, &format!("> {text}"), width, theme::TASK);
                 }
                 Cell::Assistant { text } => {
-                    push_wrapped(&mut out, text, width, Style::default());
+                    push_wrapped(&mut out, text, width, theme::ASSISTANT);
+                }
+                Cell::Answer { text } => {
+                    push_wrapped(&mut out, text, width, theme::ANSWER);
                 }
                 Cell::Thinking { text } => {
-                    push_wrapped(
-                        &mut out,
-                        text,
-                        width,
-                        Style::new().add_modifier(Modifier::DIM | Modifier::ITALIC),
-                    );
+                    push_wrapped(&mut out, text, width, theme::REASONING);
                 }
                 Cell::Tool {
                     name, args, result, ..
@@ -142,20 +153,15 @@ impl Transcript {
                         &mut out,
                         &format!("[{name}] {args}"),
                         width,
-                        Style::new().fg(Color::Cyan),
+                        theme::TOOL_HEADER,
                     );
                     match result {
-                        None => push_wrapped(
-                            &mut out,
-                            "  ...",
-                            width,
-                            Style::new().add_modifier(Modifier::DIM),
-                        ),
+                        None => push_wrapped(&mut out, "  ...", width, theme::DETAIL),
                         Some(outcome) => {
                             let style = if outcome.is_error {
-                                Style::new().fg(Color::Red)
+                                theme::ERROR
                             } else {
-                                Style::new().add_modifier(Modifier::DIM)
+                                theme::DETAIL
                             };
                             // Tool results show a fixed preview; the FULL
                             // output already went to the model (and to the
@@ -169,30 +175,20 @@ impl Transcript {
                                     &mut out,
                                     &format!("  ... ({} more lines)", total - TOOL_PREVIEW_LINES),
                                     width,
-                                    Style::new().add_modifier(Modifier::DIM),
+                                    theme::DETAIL,
                                 );
                             }
                         }
                     }
                 }
                 Cell::Error { text } => {
-                    push_wrapped(
-                        &mut out,
-                        &format!("error: {text}"),
-                        width,
-                        Style::new().fg(Color::Red),
-                    );
+                    push_wrapped(&mut out, &format!("error: {text}"), width, theme::ERROR);
                 }
                 Cell::Notice { text } => {
-                    push_wrapped(&mut out, text, width, Style::new().fg(Color::Yellow));
+                    push_wrapped(&mut out, text, width, theme::NOTICE);
                 }
                 Cell::Usage { text } => {
-                    push_wrapped(
-                        &mut out,
-                        text,
-                        width,
-                        Style::new().add_modifier(Modifier::DIM),
-                    );
+                    push_wrapped(&mut out, text, width, theme::DETAIL);
                 }
             }
         }
@@ -358,5 +354,47 @@ mod tests {
             panic!("expected tool cell with result");
         };
         assert_eq!(outcome.text, "hit");
+    }
+
+    #[test]
+    fn promote_final_answer_targets_trailing_prose_only() {
+        let mut t = Transcript::default();
+        t.cells.push(Cell::User {
+            text: "task".into(),
+        });
+        t.append_assistant("mid-turn note");
+        t.cells.push(Cell::Tool {
+            id: "1".into(),
+            name: "read".into(),
+            args: "{}".into(),
+            result: None,
+        });
+        t.append_assistant("the final answer");
+        t.cells.push(Cell::Usage {
+            text: "[usage]".into(),
+        });
+
+        t.promote_final_answer();
+
+        assert!(
+            matches!(t.cells.last(), Some(Cell::Usage { .. })),
+            "usage stays last"
+        );
+        assert!(matches!(&t.cells[3], Cell::Answer { text } if text == "the final answer"));
+        assert!(
+            matches!(&t.cells[1], Cell::Assistant { text } if text == "mid-turn note"),
+            "mid-turn prose must stay plain"
+        );
+    }
+
+    #[test]
+    fn promote_final_answer_skips_error_runs() {
+        let mut t = Transcript::default();
+        t.append_assistant("half an answer");
+        t.cells.push(Cell::Error {
+            text: "boom".into(),
+        });
+        t.promote_final_answer();
+        assert!(!t.cells.iter().any(|c| matches!(c, Cell::Answer { .. })));
     }
 }
