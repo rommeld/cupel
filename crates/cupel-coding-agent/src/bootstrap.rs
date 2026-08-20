@@ -4,14 +4,17 @@
 //! assembly lived inline in main.rs - hot-reload would have had to copy
 //! it, and the two paths would drift.
 
+use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cupel_agent::types::AgentTool;
-use cupel_core::types::Model;
+use cupel_agent::AgentHooks;
+use cupel_agent::types::{AgentTool, BeforeToolCallResult};
+use cupel_core::types::{AssistantMessage, Model, ToolCall};
 
 use crate::commands::PromptTemplate;
 use crate::guard::BashGuard;
+use crate::loop_killer::LoopKiller;
 use crate::search::GrepSearch;
 use crate::settings::Settings;
 use crate::system_prompt::build_system_prompt;
@@ -46,10 +49,14 @@ pub struct Ingredients {
     pub templates: Vec<PromptTemplate>,
     /// Merged model catalog (builtins + models.json + ollama discovery).
     pub models: Vec<Model>,
-    /// Bash denylist rebuilt from the current bash-deny files.
-    pub guard: BashGuard,
-    /// Provider API keys from `~/.cupel/settings.json`. Loaded here (not
-    /// once in main) so `/hot-reload` picks up hand edits to the file.
+    /// The agent-loop hooks (bash guard + loop killer + ...), rebuild per
+    /// load so /hot-reload picks up both bash-deny edits and a changed
+    /// loopKiller setting.
+    pub hooks: SessionHooks,
+    /// Layered settings: ~/.cupel/settings.json overlaid with the
+    /// project's .cupel/settings.json (non-secret fields only -provider
+    /// keys stay home-only by construction). Loaded here so /hot-reload
+    /// picks up hand edits to either file.
     pub settings: Settings,
     /// The context files (AGENTS.md/CLAUDE.md) as loaded - kept alongside
     /// the system prompt they were embedded into, so a later in-place
@@ -70,7 +77,11 @@ pub async fn load(
     let templates = crate::commands::load_prompt_templates(&roots);
     let models = crate::models::build_catalog(registry, home.as_deref(), cwd).await;
     let guard = BashGuard::from_config(home.as_deref(), cwd);
-    let settings = crate::settings::load_home_settings(home.as_deref());
+    let settings = Settings::layered(
+        crate::settings::load_home_settings(home.as_deref()),
+        crate::settings::load_project_settings(cwd),
+    );
+    let hooks = SessionHooks::new(guard, LoopKiller::new(settings.loop_killer_max_repeats()));
     // A project-side settings.json must never hold keys - warn once here,
     // on the same stderr channel as the models.json warnings.
     crate::settings::warn_project_settings(cwd);
@@ -91,13 +102,55 @@ pub async fn load(
         tools,
         templates,
         models,
-        guard,
+        hooks,
         settings,
+    }
+}
+
+/// The ONE [`AgentHooks`] object a session run with: the bash guard and
+/// the loop killer behind a single trait object (`AgentOptions.hooks`
+/// hols exactly one). Fans out only `before_tool_call` - the sole hook
+/// either member cares about; every other AgentHooks method keeps its
+/// trait default. Extend the fan-out when a member grwos a new hook.
+pub struct SessionHooks {
+    guard: BashGuard,
+    loop_killer: LoopKiller,
+}
+
+impl SessionHooks {
+    #[must_use]
+    pub fn new(guard: BashGuard, loop_killer: LoopKiller) -> Self {
+        Self { guard, loop_killer }
+    }
+}
+
+#[async_trait]
+impl AgentHooks for SessionHooks {
+    async fn before_tool_call(
+        &self,
+        assistant: &AssistantMessage,
+        tool_call: &ToolCall,
+    ) -> Option<BeforeToolCallResult> {
+        // The killer OBSERVES every request call FIRST - including ones
+        // the guard is about to veto: a model hammering a denied bash
+        // command is looping too, and each guard block would otherwise
+        // reset nothing while the loop spins forever. Once the killer
+        // trips, its message takes over: "take a different approach"
+        // redirects harder than the guard's per-command veto, which is
+        // exactly what a stuck model needs to hear.
+        if let Some(reason) = self.loop_killer.note_call(tool_call) {
+            return Some(BeforeToolCallResult {
+                block: true,
+                reason: Some(reason),
+            });
+        }
+        self.guard.before_tool_call(assistant, tool_call).await
     }
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[tokio::test]
@@ -109,6 +162,11 @@ mod tests {
         std::fs::create_dir_all(cwd.join(".cupel")).unwrap();
         std::fs::write(home.join("AGENTS.md"), "ALWAYS SAY PING").unwrap();
         std::fs::write(home.join("prompts/greet.md"), "Greet $1.").unwrap();
+        std::fs::write(
+            cwd.join(".cupel/settings.json"),
+            r#"{"loopKiller": {"maxRepeats": 2}}"#,
+        )
+        .unwrap();
         std::fs::write(
             cwd.join(".cupel/models.json"),
             serde_json::json!([{
@@ -136,6 +194,8 @@ mod tests {
         assert!(ingredients.templates.iter().any(|t| t.name == "greet"));
         assert!(ingredients.models.iter().any(|m| m.id == "local-test"));
         assert_eq!(ingredients.tools.len(), 5);
+        assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
+        assert_eq!(ingredients.settings.loop_killer_max_repeats(), Some(2));
         assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
         // The guard carries defaults AND the project rule.
         // (Verified through the public hook in guard.rs tests; here the

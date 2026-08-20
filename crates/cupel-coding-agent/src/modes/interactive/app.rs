@@ -490,7 +490,7 @@ impl App {
         // embedded once; updates travel as the (small) delta message.
         options.system_prompt = state.system_prompt.clone();
         options.tools = ingredients.tools;
-        options.hooks = std::sync::Arc::new(ingredients.guard);
+        options.hooks = std::sync::Arc::new(ingredients.hooks);
         let provider = state.model.provider.as_str();
         options.api_key = self
             .session_keys
@@ -577,7 +577,7 @@ impl App {
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
         options.system_prompt = ingredients.system_prompt;
         options.tools = ingredients.tools;
-        options.hooks = std::sync::Arc::new(ingredients.guard);
+        options.hooks = std::sync::Arc::new(ingredients.hooks);
         // Session-entered keys still win, but the settings tier must come
         // from the FRESH ingredients - self.meta.settings is the stale
         // copy this reload replaces (hand edits would be lost otherwise).

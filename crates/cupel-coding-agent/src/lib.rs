@@ -7,6 +7,7 @@ pub mod bootstrap;
 pub mod commands;
 pub mod guard;
 pub mod hooks;
+pub mod loop_killer;
 pub mod models;
 pub mod modes;
 pub mod ollama;

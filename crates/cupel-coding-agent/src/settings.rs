@@ -18,9 +18,26 @@ pub struct Settings {
     /// HashMap iteration order is randomized per process.
     #[serde(default)]
     pub providers: BTreeMap<String, String>,
+    /// Loop-killer section; None = not configured. Opt-in by decision: an
+    /// absent section changes nothing about existing behavior.
+    /// skip_serializing_if: a key save must not inject "loopKiller": null
+    /// into a file whose author never wrote that key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_killer: Option<LoopKillerSettings>,
     /// Every unknown top-level field, round-tripped through save.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Loop-killer configuration: how many times the SAME tool call (same
+/// name, identical arguments) may run back-to-back before the repeat is
+/// blocked and the model is steered onto a new track (see
+/// `crate::loop_killer)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopKillerSettings {
+    /// 0 = explicitly disabled (same as leaving the section out).
+    pub max_repeats: u32,
 }
 
 impl Settings {
@@ -29,24 +46,56 @@ impl Settings {
     pub fn api_key(&self, provider: &str) -> Option<&str> {
         self.providers.get(provider).map(String::as_str)
     }
+    /// The effective repeat allowance; None = loop killer off. Opt-in by
+    /// decision: no loopKiller section (or maxRepeats 0) means `cupel`
+    /// behaves exactly as before this feature existed.
+    #[must_use]
+    pub fn loop_killer_max_repeats(&self) -> Option<u32> {
+        let configured = self.loop_killer?.max_repeats;
+        (configured > 0).then_some(configured)
+    }
+    /// Merge home and project into the runtime view, per FIELD:
+    /// - providers: HOME ONLY. A project settings.json must never supply
+    /// credentials (warn_project_settings already told the user why);
+    /// the project's map is deliverately not touched at all.
+    /// - loopKiller: project overrides home when present (the usual
+    /// later-wins layering, mirroring models.json).
+    /// extra: the home copy rides along - it exists for the SAVE
+    /// round-trip, which only ever writes the home file.
+    #[must_use]
+    pub fn layered(home: Settings, project: Settings) -> Settings {
+        Settings {
+            providers: home.providers,
+            loop_killer: project.loop_killer.or(home.loop_killer),
+            extra: home.extra,
+        }
+    }
 }
 
-/// Manuel Debug that prints provider NAMES only, never key values -
-/// `{:?}` output reaces logs, panics, and failed-assertion messages,
-/// and secrets must not. (This also makes assert_eq! failures in tests
+/// Manuel Debug that prints only, never key values - `{:?}` output
+/// reaces logs, panics, and failed-assertion messages, and secrets
+/// must not. (This also makes assert_eq! failures in tests
 /// safe to paste anywhere.)
 impl core::fmt::Debug for Settings {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Settings")
             .field("providers", &self.providers.keys().collect::<Vec<_>>())
             .field("extra", &self.extra.keys().collect::<Vec<_>>())
+            .field("loopKiller", &self.loop_killer)
             .finish_non_exhaustive()
     }
 }
 
+/// `~/.cupel/settings.json`.
 #[must_use]
 pub fn settings_path(home: &Path) -> PathBuf {
     home.join("settings.json")
+}
+
+/// `<cwd>/.cupel/settings.json`.
+#[must_use]
+pub fn project_settings_path(cwd: &Path) -> PathBuf {
+    cwd.join(".cupel/settings.json")
 }
 
 /// Parse the settings file. A missing file is simply empty defaults; a
@@ -73,6 +122,23 @@ pub fn load_home_settings(home: Option<&Path>) -> Settings {
             eprintln!(
                 "warning: ignoring settings file: {e} (fix the JSON syntax, e.g. remove trailing commas)"
             );
+            Settings::default()
+        }
+    }
+}
+
+/// The project layer (`<cwd>/.cupel/settings.json`), with the same
+/// warn-and-default policy as the home layer: a malformed hand-written
+/// file is announced and skipped, never fatal. Secrets are NOT filtered
+/// here - `layered`simply never reads this layer`s providers map, so
+/// filtering has nothing to do (security by construction beats secruity
+/// by inspection).
+#[must_use]
+pub fn load_project_settings(cwd: &Path) -> Settings {
+    match load_settings(&project_settings_path(cwd)) {
+        Ok(settings) => settings,
+        Err(e) => {
+            eprintln!("warning: ignoring project settings file: {e}");
             Settings::default()
         }
     }
@@ -217,7 +283,7 @@ fn project_settings_define_providers(path: &Path) -> bool {
 /// secret, so they are never honored - only warned about. A project file
 /// WITHOUT a providers key stays silent.
 pub fn warn_project_settings(cwd: &Path) {
-    let path = cwd.join(".cupel/settings.json");
+    let path = project_settings_path(cwd);
     if project_settings_define_providers(&path) {
         eprintln!(
             "warning: provider keys in {} are ignored - API keys belong in \
@@ -417,5 +483,95 @@ mod tests {
         );
         std::fs::write(&path, r#"{"providers": {"anthropic": "leak"}}"#).unwrap();
         assert!(project_settings_define_providers(&path));
+    }
+
+    #[test]
+    fn loop_killer_settings_parse_and_default_off() {
+        let parsed: Settings =
+            serde_json::from_str(r#"{"loopKiller": {"maxRepeats": 5}}"#).unwrap();
+        assert_eq!(parsed.loop_killer_max_repeats(), Some(5));
+        // A known field now - it must NOT fall into the extra map.
+        assert!(parsed.extra.is_empty());
+
+        // Opt-in: absent section = off, explicit 0 = off.
+        assert_eq!(Settings::default().loop_killer_max_repeats(), None);
+        let zero: Settings = serde_json::from_str(r#"{"loopKiller": {"maxRepeats": 0}}"#).unwrap();
+        assert_eq!(zero.loop_killer_max_repeats(), None);
+    }
+
+    #[test]
+    fn save_does_not_inject_a_null_loop_killer() {
+        let home = temp_root("save-no-null");
+        save_provider_key(Some(&home), "anthropic", "sk-a").unwrap();
+        let text = std::fs::read_to_string(home.join("settings.json")).unwrap();
+        assert!(
+            !text.contains("loopKiller"),
+            "skip_serializing_if failed:\n{text}"
+        );
+    }
+
+    #[test]
+    fn save_preserves_a_loop_killer_section() {
+        let home = temp_root("save-keep-lk");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"loopKiller": {"maxRepeats": 4}, "providers": {}}"#,
+        )
+        .unwrap();
+        save_provider_key(Some(&home), "anthropic", "sk-a").unwrap();
+        let settings = load_settings(&home.join("settings.json")).unwrap();
+        assert_eq!(settings.loop_killer_max_repeats(), Some(4));
+        assert_eq!(settings.api_key("anthropic"), Some("sk-a"));
+    }
+
+    #[test]
+    fn layered_project_overrides_loop_killer_but_never_supplies_keys() {
+        let mut home = Settings::default();
+        home.providers.insert("anthropic".into(), "sk-home".into());
+        home.loop_killer = Some(LoopKillerSettings { max_repeats: 3 });
+        let mut project = Settings::default();
+        // A hostile or careless project file: both a key AND a config.
+        project
+            .providers
+            .insert("anthropic".into(), "sk-LEAKED".into());
+        project.loop_killer = Some(LoopKillerSettings { max_repeats: 7 });
+
+        let merged = Settings::layered(home.clone(), project);
+        assert_eq!(merged.loop_killer_max_repeats(), Some(7), "project wins");
+        assert_eq!(
+            merged.api_key("anthropic"),
+            Some("sk-home"),
+            "keys must stay home-only"
+        );
+
+        // Without a project section the home value stands.
+        let merged = Settings::layered(home, Settings::default());
+        assert_eq!(merged.loop_killer_max_repeats(), Some(3));
+    }
+
+    #[test]
+    fn project_settings_load_warns_and_defaults_like_home() {
+        let root = temp_root("project-load");
+        std::fs::create_dir_all(root.join(".cupel")).unwrap();
+        assert_eq!(
+            load_project_settings(&root),
+            Settings::default(),
+            "missing file = defaults"
+        );
+        std::fs::write(root.join(".cupel/settings.json"), "{broken").unwrap();
+        assert_eq!(
+            load_project_settings(&root),
+            Settings::default(),
+            "malformed = warn + defaults"
+        );
+        std::fs::write(
+            root.join(".cupel/settings.json"),
+            r#"{"loopKiller": {"maxRepeats": 2}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_project_settings(&root).loop_killer_max_repeats(),
+            Some(2)
+        );
     }
 }

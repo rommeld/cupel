@@ -290,9 +290,9 @@ async fn run() -> Result<(), String> {
     options.tool_execution = ToolExecutionMode::Parallel;
     options.session_id = Some(session_id);
     options.messages = seeded_messages;
-    // The bash denylist guard rides the agent loop's before_tool_call veto
-    // point (see guard.rs).
-    options.hooks = Arc::new(ingredients.guard);
+    // The bash denylist guard AND loop killer ride the agent loop's before_tool_call
+    // veto point (see guard.rs, loop_killer.rs, ...).
+    options.hooks = Arc::new(ingredients.hooks);
     let agent = Agent::new(options);
 
     let meta = SessionMeta {

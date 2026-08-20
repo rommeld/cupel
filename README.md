@@ -111,6 +111,13 @@ Hooks observe but never veto. Failures and timeouts (60s per hook) are logged an
 
 Bash commands are checked against a deny list before they execute. `rm -rf` (and its spellings: `-fr`, combined flag groups, behind `sudo` or `&&`) is blocked out of the box. The model receives an error naming the rule instead of the command being executed.
 
-Add your own rules — one regex per line, `#` comments — in `~/.cupel/bash-deny` (global) or `<project>/.cupel/bash-deny` (per project). Files extend the defaults (union: deny rules never cancel each other).
+Add your own rules — one regex per line, `#` comments — in `~/.cupel/bash-deny` (global) or `<project>/.cupel/bash-deny` (per project).
+A `loopKiller` setting also blocks repeated identical tool calls after `maxRepeats` consecutive attempts, redirecting the model to a different approach.
 
-Matching is deliberately conservative: any line of the command that matches anywhere blocks, even inside quotes, because a false positive costs one retry while a false negative costs your files. Invalid patterns are logged as warnings and skipped.
+```json
+{
+  "loopKiller": {
+    "maxRepeats": 3
+  }
+}
+```
