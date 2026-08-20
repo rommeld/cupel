@@ -1,7 +1,8 @@
 //! `cupel` - entry point: parse args, wire the agent, pick a frontend.
 //!
 //! Usage:
-//!   cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh] [--plain]
+//!   cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh (default:
+//! medium)] [--plain]
 //!
 //! Frontend selection: the ratatui TUI when stdout is a real terminal, the
 //! plain line REPL when piped or when `--plain` is given.
@@ -9,6 +10,7 @@
 //! Model selection: `--model` picks from the built-in catalog; without it,
 //! the first provider with credentials in the environment wins
 //! (`ANTHROPIC_API_KEY`, then `OPENAI_API_KEY`, then AWS credentials).
+//! Thinking defaults to medium; --thinking off disables it.
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
@@ -53,7 +55,7 @@ struct CliArgs {
 fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
     let mut parsed = CliArgs {
         model: None,
-        thinking: None,
+        thinking: Some(ThinkingLevel::Medium),
         plain: false,
         resume: None,
     };
@@ -88,7 +90,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh] [--resume [id]] [--plain]\n\navailable models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh (default: medium)] [--resume [id]] [--plain]\n\navailable models:\n",
                 );
                 // Built-ins + models.json layers; deliberately NOT the
                 // ollama probe - help must be instant and never touch the
@@ -349,6 +351,18 @@ mod tests {
     fn unknown_arguments_still_error() {
         assert!(parse(&["--bogus"]).is_err());
         assert!(parse(&["--model"]).is_err(), "--model needs a value");
+    }
+
+    #[test]
+    fn thinking_defaults_to_medium_and_off_still_disables() {
+        // pi parity: no flag means medium...
+        assert_eq!(parse(&[]).unwrap().thinking, Some(ThinkingLevel::Medium));
+        // ...and the explicit opt-out still maps to None (= off).
+        assert!(parse(&["--thinking", "off"]).unwrap().thinking.is_none());
+        assert_eq!(
+            parse(&["--thinking", "high"]).unwrap().thinking,
+            Some(ThinkingLevel::High)
+        );
     }
 
     /// A keyless local model (the ollama-discovery shape). Tests use ONLY

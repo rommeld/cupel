@@ -173,6 +173,30 @@ impl Agent {
             .thinking_level = level;
     }
 
+    /// The thinking level FUTURE runs will use - the read half of
+    /// [`Agent::set_thinking_level`], for status displays. A cheap
+    /// copy read under the lock, deliberately NOT a full state()
+    /// snapshot (which clones the message history) - this runs per
+    /// rendered frame.
+    #[must_use]
+    pub fn thinking_level(&self) -> Option<ThinkingLevel> {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .thinking_level
+    }
+
+    /// Whether the CURRENT model supports reasoning at all - drives
+    /// whether a thinking level is worth displaying.
+    #[must_use]
+    pub fn model_supports_reasoning(&self) -> bool {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .model
+            .reasoning
+    }
+
     pub fn reset(&self) {
         {
             let mut state = self.state.lock().expect("agent state lock poisoned");

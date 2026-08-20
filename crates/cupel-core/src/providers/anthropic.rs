@@ -36,10 +36,6 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
 const FINE_GRAINED_TOOL_STREAMING_BETA: &str = "fine-grained-tool-streaming-2025-05-14";
 
-// ---------------------------------------------------------------------------
-// Compat flags
-// ---------------------------------------------------------------------------
-
 /// API-specific compatibility knobs, deserialized from `model.compat`.
 /// `#[serde(default)]` on the struct means absent fields use `Default`.
 #[derive(Debug, Deserialize)]
@@ -88,10 +84,6 @@ fn anthropic_compat(model: &Model) -> AnthropicCompat {
         .unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
-// OAuth "stealth mode" (Claude Code identity)
-// ---------------------------------------------------------------------------
-
 /// Claude Code subscription tokens only allow the Claude Code tool names.
 /// pi mimics them: outgoing tool names are canonicalized case-insensitively,
 /// incoming ones are mapped back to the caller's original names.
@@ -131,10 +123,6 @@ fn from_claude_code_name(name: &str, tools: Option<&[Tool]>) -> String {
         .and_then(|tools| tools.iter().find(|t| t.name.eq_ignore_ascii_case(name)))
         .map_or_else(|| name.to_string(), |t| t.name.clone())
 }
-
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
 
 pub struct AnthropicProvider {
     http: reqwest::Client,
@@ -212,13 +200,11 @@ async fn run(
     let is_oauth = is_oauth_token(&api_key);
     let compat = anthropic_compat(model);
 
-    // ---- Request body ----------------------------------------------------
     let body = build_request_body(model, context, options, &compat, is_oauth);
     // TRACE only: request bodies contain the user's code and prompts.
     tracing::trace!(body = %body, "request body");
     let url = format!("{}/v1/messages", model.base_url.trim_end_matches('/'));
 
-    // ---- Headers -----------------------------------------------------------
     let mut req = http
         .post(&url)
         .header("content-type", "application/json")
@@ -662,10 +648,6 @@ fn map_stop_reason(reason: &str, stop_details: Option<&Value>) -> (StopReason, O
     }
 }
 
-// ---------------------------------------------------------------------------
-// Request building
-// ---------------------------------------------------------------------------
-
 /// The `cache_control` JSON attached to cacheable blocks, or `None` when the
 /// caller disabled caching. Prompt caching is what makes multi-turn agent
 /// loops affordable: unchanged prefix tokens are re-read at ~10% of the price.
@@ -689,7 +671,6 @@ fn build_request_body(
 ) -> Value {
     let cache_control = cache_control_value(options, compat);
 
-    // ---- Thinking configuration + max_tokens -------------------------------
     // This mirrors pi's streamSimple(): the unified reasoning level decides
     // between adaptive effort (new models) and token budgets (older models),
     // and budget-based thinking needs max_tokens head-room.
@@ -753,7 +734,6 @@ fn build_request_body(
         "stream": true,
     });
 
-    // ---- System prompt ------------------------------------------------------
     // OAuth tokens MUST lead with the Claude Code identity string.
     let mut system: Vec<Value> = Vec::new();
     if is_oauth {

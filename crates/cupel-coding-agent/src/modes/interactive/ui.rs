@@ -215,12 +215,24 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let state = if app.is_running() { "working" } else { "idle" };
+    // the thinking level appears only for
+    // reasoning models; "off" keeps the word "thinking" so a bare level
+    // name never reads like part of the model name.
+    let thinking_segment = if app.agent.model_supports_reasoning() {
+        match app.agent.thinking_level() {
+            None => " | thinking off".to_string(),
+            Some(level) => format!(" | thinking {}", thinking_level_name(level)),
+        }
+    } else {
+        String::new()
+    };
     // The session id sits in the always-visible left half so `--resume
     // <id>` (or /hot-reload <id>) can be typed from what's on screen.
     let left = format!(
-        " {} ({}) | {} | {} | {} in / {} out / {} cached | ${:.4}",
+        " {} ({}){} | {} | {} | {} in / {} out / {} cached | ${:.4}",
         app.meta.model_name,
         app.meta.provider,
+        thinking_segment,
         app.recorder.session_id(),
         state,
         app.totals.input,
@@ -245,6 +257,19 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         spans.push(Span::styled(right, theme::CHROME));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Display name for a thinking level - the same lowercase words the
+/// /thinking command accepts, so footer and command speak one language.
+fn thinking_level_name(level: cupel_core::types::ThinkingLevel) -> &'static str {
+    use cupel_core::types::ThinkingLevel;
+    match level {
+        ThinkingLevel::Minimal => "minimal",
+        ThinkingLevel::Low => "low",
+        ThinkingLevel::Medium => "medium",
+        ThinkingLevel::High => "high",
+        ThinkingLevel::XHigh => "xhigh",
+    }
 }
 
 #[cfg(test)]
@@ -1414,5 +1439,19 @@ mod tests {
         assert!(
             matches!(app.transcript.cells.last(), Some(Cell::Answer { text }) if text == "final words")
         );
+    }
+
+    #[test]
+    fn footer_shows_the_thinking_level_for_reasoning_models() {
+        let mut app = test_app();
+        // AgentOptions::new leaves thinking at None -> "thinking off".
+        let screen = draw(&mut app, 120, 20);
+        assert!(screen.contains("thinking off"), "{screen}");
+
+        app.agent
+            .set_thinking_level(Some(cupel_core::types::ThinkingLevel::Medium));
+        let screen = draw(&mut app, 120, 20);
+        assert!(screen.contains("thinking medium"), "{screen}");
+        assert!(!screen.contains("thinking off"), "{screen}");
     }
 }
