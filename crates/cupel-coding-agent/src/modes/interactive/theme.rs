@@ -53,3 +53,39 @@ pub const SCROLL_MARKER: Style = Style::new().fg(Color::Black).bg(Color::Yellow)
 /// tool color.
 pub const POPUP_SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
 pub const POPUP_ROW: Style = Style::new().fg(Color::Cyan);
+
+// PATCH styles: applied onto a cell's base stayle via Style::patch -
+// set fields win, unset fields keep the base. A heading in an Answer cell
+// is therefore magenta; only styles that DO set a color (code, links)
+// deliberately break out of the cell color, because code is code no matter
+// which cell it is in.
+
+/// H1/H2: bold + underlined (H3-H6 get MD_BOLD only - depth fades).
+pub const MD_HEADING: Style = Style::new()
+    .add_modifier(Modifier::BOLD)
+    .add_modifier(Modifier::UNDERLINED);
+pub const MD_BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
+pub const MD_ITALIC: Style = Style::new().add_modifier(Modifier::ITALIC);
+pub const MD_STRIKE: Style = Style::new().add_modifier(Modifier::CROSSED_OUT);
+/// Inline code: cupel's cyan accent family (tools, popups)
+pub const MD_CODE: Style = Style::new().fg(Color::Cyan);
+/// Fenced code blocks: a full-width panel on xtrem-256 index 235
+/// (#262626) - subtler and more portable than truecolor, and visually
+/// "a surface", not a color.
+pub const MD_CODE_BLOCK_BG: Color = Color::Indexed(235);
+/// Blockquotes: receded like reasoning, but inside the cell's color.
+pub const MD_QUOTE: Style = Style::new()
+    .add_modifier(Modifier::DIM)
+    .add_modifier(Modifier::ITALIC);
+/// List bullets and ordered-list numbers.
+pub const MD_BULLET: Style = Style::new().fg(Color::Cyan);
+/// Link text: the universal terminal convention.
+pub const MD_LINK: Style = Style::new()
+    .fg(Color::Blue)
+    .add_modifier(Modifier::UNDERLINED);
+/// The "(url)" suffix behind a link whose text differs from its target.
+pub const MD_LINK_URL: Style = Style::new().add_modifier(Modifier::DIM);
+/// Table separators and horizontal rules.
+pub const MD_RULE: Style = Style::new().add_modifier(Modifier::DIM);
+/// Table header row.
+pub const MD_TABLE_HEADER: Style = Style::new().add_modifier(Modifier::BOLD);

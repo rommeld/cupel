@@ -286,6 +286,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use ratatui::style::Color;
+    use ratatui::style::Modifier;
     use std::sync::Arc;
 
     fn test_app() -> App {
@@ -1453,5 +1454,23 @@ mod tests {
         let screen = draw(&mut app, 120, 20);
         assert!(screen.contains("thinking medium"), "{screen}");
         assert!(!screen.contains("thinking off"), "{screen}");
+    }
+
+    #[test]
+    fn markdown_reaches_the_screen_and_plain_answers_stay_magenta() {
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::Answer {
+            text: "# Fazit\nplain magenta with **weight**".into(),
+        });
+        let screen = draw(&mut app, 80, 24);
+        assert!(screen.contains("Fazit"), "{screen}");
+        assert!(!screen.contains("# Fazit"), "hashes are chrome: {screen}");
+        assert!(!screen.contains("**"), "delimiters are consumed: {screen}");
+        // The invariant: unmarked text keeps the cell identity...
+        assert_eq!(style_of(&mut app, "plain magenta").fg, Some(Color::Magenta));
+        // ...and accents COMBINE with it instead of replacing it.
+        let weight = style_of(&mut app, "weight");
+        assert_eq!(weight.fg, Some(Color::Magenta));
+        assert!(weight.add_modifier.contains(Modifier::BOLD));
     }
 }

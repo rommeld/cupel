@@ -138,10 +138,20 @@ impl Transcript {
                     push_wrapped(&mut out, &format!("> {text}"), width, theme::TASK);
                 }
                 Cell::Assistant { text } => {
-                    push_wrapped(&mut out, text, width, theme::ASSISTANT);
+                    // Assistant prose is markdown; the base style keeps
+                    // the cell indentity (markdown accents PATCH onto it).
+                    out.extend(crate::modes::interactive::markdown::render(
+                        text,
+                        width,
+                        theme::ASSISTANT,
+                    ));
                 }
                 Cell::Answer { text } => {
-                    push_wrapped(&mut out, text, width, theme::ANSWER);
+                    out.extend(crate::modes::interactive::markdown::render(
+                        text,
+                        width,
+                        theme::ANSWER,
+                    ));
                 }
                 Cell::Thinking { text } => {
                     push_wrapped(&mut out, text, width, theme::REASONING);
