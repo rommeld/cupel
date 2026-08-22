@@ -3,6 +3,14 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.7.0] - 2026-08-23
+
+- add Markdown renderer to format assistant output accordingly
+- set default thinking to medium
+- add loop killer to cupel and manage in project speific or home settings.json
+- adjust color themes with a unified theme.rs to manage TUI colors
+- changelog: v0.6.0-beta
+
 ## [v0.6.0-beta] - 2026-08-18
 
 - define model provider configurations in settings.json   - parse file, ignore unknown fields, does not leak any secrets - independent module   - handle directory and serialize information, manage temp files   - create auto-save and hot-reload functionality for persistent API key
