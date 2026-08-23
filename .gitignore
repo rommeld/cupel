@@ -5,6 +5,7 @@
 !/crates/cupel-core/
 !/crates/cupel-core/src/
 !/crates/cupel-core/src/**
+!/crates/cupel-core/src/**.json
 
 !/crates/cupel-agent/
 !crates/cupel-agent/tests

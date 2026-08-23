@@ -9,7 +9,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - set default thinking to medium
 - add loop killer to cupel and manage in project speific or home settings.json
 - adjust color themes with a unified theme.rs to manage TUI colors
-- changelog: v0.6.0-beta
 
 ## [v0.6.0-beta] - 2026-08-18
 
