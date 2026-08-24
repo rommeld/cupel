@@ -89,12 +89,7 @@ pub fn models_from_tags(json: &serde_json::Value, host: &str) -> Vec<Model> {
             thinking_level_map: None,
             input: vec![InputModality::Text],
             // Local inference is free - keeps /usage honest at $0.
-            cost: ModelCost {
-                input: 0.0,
-                output: 0.0,
-                cached_read: 0.0,
-                cached_write: 0.0,
-            },
+            cost: ModelCost::default(),
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_tokens: DEFAULT_CONTEXT_WINDOW,
             headers: None,

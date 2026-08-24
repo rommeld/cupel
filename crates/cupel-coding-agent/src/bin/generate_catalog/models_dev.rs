@@ -64,6 +64,25 @@ pub struct Cost {
     pub cache_read: f64,
     /// Absent for providers that do not bill cache writes (Fireworks).
     pub cache_write: f64,
+    /// Long-context price tiers (e.g. GPT-5.6 above 272k prompt tokens).
+    pub tiers: Vec<RawTier>,
+}
+
+/// models.dev nests the threshold: `tier: {type: "context", size: N}`.
+#[derive(Debug, Deserialize)]
+pub struct RawTier {
+    pub input: f64,
+    pub output: f64,
+    #[serde(default)]
+    pub cache_read: f64,
+    #[serde(default)]
+    pub cache_write: f64,
+    pub tier: TierThreshold,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TierThreshold {
+    pub size: u64,
 }
 
 #[derive(Debug, Default, Deserialize)]

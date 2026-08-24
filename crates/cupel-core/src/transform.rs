@@ -311,12 +311,7 @@ mod tests {
             } else {
                 vec![InputModality::Text]
             },
-            cost: ModelCost {
-                input: 0.0,
-                output: 0.0,
-                cached_read: 0.0,
-                cached_write: 0.0,
-            },
+            cost: ModelCost::default(),
             context_window: 100_000,
             max_tokens: 4096,
             headers: None,

@@ -525,12 +525,7 @@ mod tests {
             reasoning: false,
             thinking_level_map: None,
             input: vec![cupel_core::types::InputModality::Text],
-            cost: cupel_core::types::ModelCost {
-                input: 0.0,
-                output: 0.0,
-                cached_read: 0.0,
-                cached_write: 0.0,
-            },
+            cost: cupel_core::types::ModelCost::default(),
             context_window,
             max_tokens: 4096,
             headers: None,

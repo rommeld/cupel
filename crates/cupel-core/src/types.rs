@@ -328,13 +328,27 @@ pub enum InputModality {
     Image,
 }
 
+/// One long-context price tier: applies when the request's prompt
+/// tokens exceed `context_over` (pi: cost.tiers/inputTokensAbove).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CostTier {
+    pub context_over: u64,
+    pub input: f64,
+    pub output: f64,
+    pub cached_read: f64,
+    pub cached_write: f64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelCost {
     pub input: f64,
     pub output: f64,
     pub cached_read: f64,
     pub cached_write: f64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tiers: Option<Vec<CostTier>>,
 }
 
 /// Model descriptor.

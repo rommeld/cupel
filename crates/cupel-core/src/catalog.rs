@@ -93,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn test_referenced_ids_are_present() {
+    fn referenced_ids_are_present() {
         // cupel-coding-agent tests hardcode these ids (autocomplete,
         // models.json layering); removing them from curation.rs must
         // fail HERE with a clear message, not somewhere in the TUI tests.

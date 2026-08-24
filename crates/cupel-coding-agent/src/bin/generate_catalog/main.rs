@@ -15,7 +15,7 @@ mod models_dev;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use cupel_core::types::{Api, InputModality, Model, ModelCost, Provider};
+use cupel_core::types::{Api, CostTier, InputModality, Model, ModelCost, Provider};
 
 use crate::curation::{Curated, CuratedProvider, MODELS_DEV_URL, PROVIDERS, Thinking};
 use crate::models_dev::ProviderEntry;
@@ -141,6 +141,18 @@ fn to_model(
             output: cost.output,
             cached_read: cost.cache_read,
             cached_write: cost.cache_write,
+            tiers: (!cost.tiers.is_empty()).then(|| {
+                cost.tiers
+                    .iter()
+                    .map(|tier| CostTier {
+                        context_over: tier.tier.size,
+                        input: tier.input,
+                        output: tier.output,
+                        cached_read: tier.cache_read,
+                        cached_write: tier.cache_write,
+                    })
+                    .collect()
+            }),
         },
         context_window: entry.limit.context,
         max_tokens: entry.limit.output,
