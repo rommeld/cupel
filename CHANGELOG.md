@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.8.0] - 2026-08-24
+
+- replace hardcoded model catalog with generated catalog.json
+- changelog: v0.7.0
+
 ## [v0.7.0] - 2026-08-23
 
 - add Markdown renderer to format assistant output accordingly
