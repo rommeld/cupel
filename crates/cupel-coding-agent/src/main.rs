@@ -8,8 +8,8 @@
 //! plain line REPL when piped or when `--plain` is given.
 //!
 //! Model selection: `--model` picks from the built-in catalog; without it,
-//! the first provider with credentials in the environment wins
-//! (`ANTHROPIC_API_KEY`, then `OPENAI_API_KEY`, then AWS credentials).
+//! the first provider with credentials in the environment wins, in
+//! catalog order (Anthropic, `OpenAI`, Bedrock/AWS, Fireworks, `OpenRouter`).
 //! Thinking defaults to medium; --thinking off disables it.
 
 use std::io::IsTerminal as _;
@@ -162,9 +162,10 @@ fn select_model(
     }
     Err(
         "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, FIREWORKS_API_KEY, \
-         or AWS credentials, add a key to ~/.cupel/settings.json, start a local server \
+         OPENROUTER_API_KEY, or AWS credentials, add a key to ~/.cupel/settings.json, start a \
+         local server \
          (ollama / llama-server - see README 'Local models'), or start with an explicit \
-         `--model <id>` and enter a key in the TUI via `/provider <name> <api-key>`"
+         `--model <id>` and enter a key in the TUI via `/provider <name> <api-key>"
             .to_string(),
     )
 }

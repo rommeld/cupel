@@ -6,7 +6,7 @@
 //! - [`anthropic`] - Anthropic Messages API (SSE)
 //! - [`openai_responses`] - `OpenAI` Responses API (SSE)
 //! - [`openai_completions`] - `OpenAI` Chat Completions API (SSE) - the
-//!   protocol most "OpenAI-compatible" vendors (Fireworks, Groq, ...) speak
+//!   protocol most "OpenAI-compatible" vendors (Fireworks, OpenRouter, ...) speak
 //! - [`bedrock`] - AWS Bedrock `ConverseStream` (binary event stream via the
 //!   official AWS SDK)
 //!

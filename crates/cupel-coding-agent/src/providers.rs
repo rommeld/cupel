@@ -21,6 +21,7 @@ pub fn env_var_name(provider: &str) -> Option<&'static str> {
         "anthropic" => Some("ANTHROPIC_API_KEY"),
         "openai" => Some("OPENAI_API_KEY"),
         "fireworks" => Some("FIREWORKS_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
         _ => None,
     }
 }
@@ -119,6 +120,7 @@ mod tests {
         assert_eq!(env_var_name("anthropic"), Some("ANTHROPIC_API_KEY"));
         assert_eq!(env_var_name("openai"), Some("OPENAI_API_KEY"));
         assert_eq!(env_var_name("fireworks"), Some("FIREWORKS_API_KEY"));
+        assert_eq!(env_var_name("openrouter"), Some("OPENROUTER_API_KEY"));
         // Bedrock has no key variable - the AWS chain handles it.
         assert_eq!(env_var_name("amazon-bedrock"), None);
         assert_eq!(env_var_name("unknown"), None);

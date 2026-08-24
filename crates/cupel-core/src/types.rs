@@ -49,6 +49,7 @@ impl Provider {
     pub const OPENAI: &'static str = "openai";
     pub const AMAZON_BEDROCK: &'static str = "amazon-bedrock";
     pub const FIREWORKS: &'static str = "fireworks";
+    pub const OPENROUTER: &'static str = "openrouter";
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

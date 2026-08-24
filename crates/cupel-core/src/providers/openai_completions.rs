@@ -35,10 +35,6 @@ use crate::{
     },
 };
 
-// ---------------------------------------------------------------------------
-// Compat flags
-// ---------------------------------------------------------------------------
-
 /// How a model expects its thinking configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -48,6 +44,9 @@ enum ThinkingFormat {
     Openai,
     /// `thinking: {type: enabled|disabled}` plus optional `reasoning_effort`.
     Deepseek,
+    /// OpenRouter's unified `reasoning: {effort: ...}` object - one scale
+    /// the router translates for every vendor behind it.
+    Openrouter,
 }
 
 /// Compat knobs, deserialized from `model.compat`. Defaults match a
@@ -110,10 +109,6 @@ fn completions_compat(model: &Model) -> CompletionsCompat {
         .unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
-
 pub struct OpenAiCompletionsProvider {
     http: reqwest::Client,
 }
@@ -164,10 +159,6 @@ impl Provider for OpenAiCompletionsProvider {
         stream
     }
 }
-
-// ---------------------------------------------------------------------------
-// Worker
-// ---------------------------------------------------------------------------
 
 #[tracing::instrument(name = "openai_completions_request", skip_all, fields(model = %model.id, provider = %model.provider.as_str()))]
 async fn run(
@@ -232,7 +223,6 @@ async fn run(
         return Ok(());
     }
 
-    // ---- Stream state ------------------------------------------------------
     // At most one text block and one thinking block accumulate (chunks have
     // no block indices for those); tool calls are keyed by the API's own
     // per-call `index`.
@@ -307,7 +297,6 @@ async fn run(
                 continue;
             };
 
-            // ---- text ------------------------------------------------------
             if let Some(content) = delta.get("content").and_then(Value::as_str)
                 && !content.is_empty()
             {
@@ -333,7 +322,6 @@ async fn run(
                 }
             }
 
-            // ---- reasoning --------------------------------------------------
             // Clones disagree on the field name; take the first non-empty one.
             // The field name is stored as the thinking SIGNATURE so replay can
             // write the text back into the same vendor field.
@@ -373,7 +361,6 @@ async fn run(
                 }
             }
 
-            // ---- tool calls -------------------------------------------------
             if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {
                     let stream_index = call.get("index").and_then(Value::as_u64).unwrap_or(0);
@@ -536,10 +523,6 @@ fn map_stop_reason(reason: &str) -> (StopReason, Option<String>) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Request building
-// ---------------------------------------------------------------------------
-
 fn build_request_body(
     model: &Model,
     context: &Context,
@@ -593,7 +576,6 @@ fn build_request_body(
         body["tools"] = json!([]);
     }
 
-    // ---- thinking -----------------------------------------------------------
     if model.reasoning {
         // Clamp to what the model supports, then map through the model's own
         // level -> effort table.
@@ -636,6 +618,28 @@ fn build_request_body(
                         .map(|m| m.get("off").cloned().flatten())
                     {
                         body["reasoning_effort"] = json!(off_value);
+                    }
+                }
+            }
+            ThinkingFormat::Openrouter => {
+                if let Some(level) = effort_on {
+                    body["reasoning"] = json!({"effort": mapped_effort(model, level)});
+                } else {
+                    // "off": a map entry `off -> null` means the model cannot stop
+                    // thinking - omit the parameter. Any other state send an explicit
+                    // effort: the mapped off value, or OpenRouter's own "none".
+                    match model.thinking_level_map.as_ref().and_then(|m| m.get("off")) {
+                        Some(None) => {}
+                        Some(Some(value)) => {
+                            body["reasoning"] = json!(
+                                {"effort": value}
+                            );
+                        }
+                        None => {
+                            body["reasoning"] = json!(
+                                {"effort": "none"}
+                            );
+                        }
                     }
                 }
             }
@@ -937,5 +941,63 @@ mod tests {
             "requiresApiKey": "nope",
         }))));
         assert!(compat.requires_api_key);
+    }
+
+    /// A reasoning model pinned to the OpenRouter thinking format, with an
+    /// optional level -> effort map (mirrors a curated openrouter row).
+    fn openrouter_model(map: Option<crate::types::ThinkingLevelMap>) -> Model {
+        let mut model = model_with_compat(Some(serde_json::json!({
+            "thinkingFormat": "openrouter",
+            "supportsDeveloperRole": false,
+        })));
+        model.reasoning = true;
+        model.thinking_level_map = map;
+        model
+    }
+
+    fn empty_context() -> Context {
+        Context {
+            system_prompt: None,
+            messages: Vec::new(),
+            tools: None,
+        }
+    }
+
+    #[test]
+    fn openrouter_thinking_rides_the_nested_reasoning_object() {
+        let model = openrouter_model(None);
+        let compat = completions_compat(&model);
+        let options = StreamOptions {
+            reasoning: Some(ThinkingLevel::Medium),
+            ..StreamOptions::default()
+        };
+        let body = build_request_body(&model, &empty_context(), &options, &compat);
+        // Nested object, NOT the flat OpenAI reasoning_effort field.
+        assert_eq!(body["reasoning"], json!({"effort": "medium"}));
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn openrouter_off_sends_an_explicit_none() {
+        // pi parity: without an `off -> null` map entry, off is an explicit
+        // {effort: "none"} so OpenRouter disables reasoning server-side.
+        let model = openrouter_model(None);
+        let compat = completions_compat(&model);
+        let options = StreamOptions::default();
+        let body = build_request_body(&model, &empty_context(), &options, &compat);
+        assert_eq!(body["reasoning"], json!({"effort": "none"}));
+    }
+
+    #[test]
+    fn openrouter_off_is_omitted_for_always_thinking_models() {
+        // Kimi K2.7 Code cannot stop thinking (curation pins off -> null);
+        // the request must omit the parameter entirely, not send "none".
+        let mut map = crate::types::ThinkingLevelMap::new();
+        map.insert("off".to_string(), None);
+        let model = openrouter_model(Some(map));
+        let compat = completions_compat(&model);
+        let options = StreamOptions::default();
+        let body = build_request_body(&model, &empty_context(), &options, &compat);
+        assert!(body.get("reasoning").is_none());
     }
 }

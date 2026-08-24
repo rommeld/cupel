@@ -70,6 +70,14 @@ For `llama-server`, use the same entry with `"baseUrl": "http://localhost:8080/v
 
 ### Providers
 
+Built-in providers:
+
+- `anthropic` — Anthropic Messages API
+- `openai` — OpenAI Responses API
+- `amazon-bedrock` — AWS Bedrock ConverseStream
+- `fireworks` — Fireworks OpenAI-compatible completions
+- `openrouter` — OpenRouter OpenAI-compatible completions gateway
+
 `/provider` lists every provider. `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` supplies a key when nothing is exported. The key is scoped to this session: it lives in process memory only, is never persisted or echoed, and takes precedence over the environment variable. Switching models across providers via `/model` re-resolves the key in the same way.
 
 ### Session management

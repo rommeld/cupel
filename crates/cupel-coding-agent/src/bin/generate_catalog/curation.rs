@@ -19,6 +19,8 @@ pub const BEDROCK_BASE_URL: &str = "";
 pub const FIREWORKS_ANTHROPIC_BASE_URL: &str = "https://api.fireworks.ai/inference";
 /// Fireworks' Anthropic-compatible endpoint (most of ther models).
 pub const FIREWORKS_COMPLETIONS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
+/// OpenRouter's OpenAI completions compatible endpoint
+pub const OPENROUTER_COMPLETIONS_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
 /// How a curated model's thinkingLevelMap is produced.
 pub enum Thinking {
@@ -41,6 +43,7 @@ pub enum Compat {
     FireworksAnthropic,
     FireworksCompletions,
     AdaptiveAnthropic,
+    OpenrouterCompletions,
 }
 
 impl Compat {
@@ -60,6 +63,10 @@ impl Compat {
             Self::AdaptiveAnthropic => Some(serde_json::json!({
                 "forceAdaptiveThinking": true,
                 "supportsTemperature": false,
+            })),
+            Self::OpenrouterCompletions => Some(serde_json::json!({
+                "thinkingFormat": "openrouter",
+                "supportsDeveloperRole": false,
             })),
         }
     }
@@ -95,6 +102,9 @@ const GLM52_THINKING: &[(&str, Option<&str>)] = &[
     ("medium", Some("high")),
     ("xhigh", Some("max")),
 ];
+
+/// Kimi K2.7 Code on OpenRouter is always-thinking.
+const KIMI_K27_CODE_OPENROUTER_THINKING: &[(&str, Option<&str>)] = &[("off", None)];
 
 // Compact row constructors, one per model family - the same shape the
 // old catalog.rs used (fireworks_anthropic / fireworks_glm52 helpers).
@@ -150,6 +160,17 @@ const fn fireworks_glm(id: &'static str) -> Curated {
         base_url: FIREWORKS_COMPLETIONS_BASE_URL,
         thinking: Thinking::Explicit(GLM52_THINKING),
         compat: Compat::FireworksCompletions,
+    }
+}
+
+const fn openrouter(id: &'static str, thinking: Thinking) -> Curated {
+    Curated {
+        id,
+        rename: None,
+        api: Api::OPENAI_COMPLETIONS,
+        base_url: OPENROUTER_COMPLETIONS_BASE_URL,
+        thinking,
+        compat: Compat::OpenrouterCompletions,
     }
 }
 
@@ -229,6 +250,21 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             fireworks_anthropic("accounts/fireworks/routers/kimi-k3-fast"),
             fireworks_glm("accounts/fireworks/models/glm-5p2"),
             fireworks_glm("accounts/fireworks/routers/glm-5p2-fast"),
+        ],
+    },
+    CuratedProvider {
+        models_dev_id: "openrouter",
+        cupel_id: Provider::OPENROUTER,
+        models: &[
+            openrouter("qwen/qwen3.8-max", Thinking::FromEffort),
+            openrouter(
+                "moonshotai/kimi-k2.7-code",
+                Thinking::Explicit(KIMI_K27_CODE_OPENROUTER_THINKING),
+            ),
+            openrouter("z-ai/glm-5.3", Thinking::FromEffort),
+            openrouter("deepseek/deepseek-v4-pro", Thinking::FromEffort),
+            openrouter("x-ai/grok-4.6", Thinking::FromEffort),
+            openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
         ],
     },
 ];

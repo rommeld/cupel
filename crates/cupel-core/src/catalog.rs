@@ -130,4 +130,31 @@ mod tests {
         ids.dedup();
         assert_eq!(before, ids.len(), "duplicate model id in catalog");
     }
+
+    #[test]
+    fn openrouter_models_ride_the_completions_endpoint() {
+        // OpenRouter is a router, not a vendor: every curated model speaks
+        // plain openai-completions against the one openrouter.ai base URL,
+        // with the openrouter thinking format pinned in compat.
+        let mut seen = 0;
+        for model in builtin_models() {
+            if model.provider.as_str() != Provider::OPENROUTER {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(model.api.as_str(), Api::OPENAI_COMPLETIONS, "{}", model.id);
+            assert_eq!(
+                model.base_url, "https://openrouter.ai/api/v1",
+                "{}",
+                model.id
+            );
+            let format = model
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("thinkingFormat"))
+                .and_then(serde_json::Value::as_str);
+            assert_eq!(format, Some("openrouter"), "{}", model.id);
+        }
+        assert!(seen > 0, "no openrouter models in the catalog");
+    }
 }
