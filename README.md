@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/ade2934b-199b-4838-b38c-d5595685bf85" alt="Projektlogo" width="200">
+</p>
+
 # cupel
 
 A cupel is a small vessel for refining precious metals. This project borrows that idea: it separates useful code context from repository noise, then feeds that refined signal into fast, local agent workflows.
