@@ -13,8 +13,9 @@ use cupel_core::types::{
     UserContentBody,
 };
 use ratatui::crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
+use ratatui::layout::{Position, Rect};
 
 use super::autocomplete::{Autocomplete, Candidate};
 use super::input::InputState;
@@ -74,6 +75,18 @@ pub struct App {
     /// rebuild (it re-runs the bootstrap loader, which probes ollama and
     /// awaits hooks - nothing a sync key handler may do).
     pub pending_reload: Option<ReloadTarget>,
+    /// Cell selected by a click in the conversation pane. Cleared by Esc,
+    /// /new, or clicking the block again.
+    pub selected_cell: Option<usize>,
+    /// Raw text queued for the clipboard. The event loop turns it into an
+    /// OSC 52 escape sequence.
+    pub pending_copy: Option<String>,
+    /// Hit-test state saved by the render pass each frame: which cell each
+    /// conversation-pane line belongs to, the pane's inner area, and the
+    /// line index at the top of the visible window.
+    pub last_line_cells: Vec<Option<usize>>,
+    pub last_chat_inner: Rect,
+    pub last_top_line: usize,
 }
 
 /// What `/hot-reload` asked for.
@@ -178,6 +191,11 @@ impl App {
             mouse_toggle_requested: false,
             session_keys: std::collections::HashMap::new(),
             pending_reload: None,
+            selected_cell: None,
+            pending_copy: None,
+            last_line_cells: Vec::new(),
+            last_chat_inner: Rect::ZERO,
+            last_top_line: 0,
         };
         app.replay_history(&history);
         // A startup condition (e.g. keyless start) leads the transcript, so
@@ -297,11 +315,13 @@ impl App {
             }
             // The wheel scrolls the transcript wherever the pointer is -
             // same clamped movement as PgUp/PgDn, at the conventional
-            // 3-lines-per-notch step. (Mouse events only arrive because
-            // mod.rs enables mouse capture.)
+            // 3-lines-per-notch step. A left click selects the block under
+            // the pointer. (Mouse events only arrive because mod.rs
+            // enables mouse capture.)
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::ScrollUp => self.scroll_by(3),
                 MouseEventKind::ScrollDown => self.scroll_by(-3),
+                MouseEventKind::Down(MouseButton::Left) => self.click(mouse.column, mouse.row),
                 _ => {}
             },
             // Resize is handled implicitly: the next draw uses the new size.
@@ -368,12 +388,19 @@ impl App {
                 self.should_quit = true;
             }
             (KeyCode::Esc, ..) if self.is_running() => self.agent.abort(),
+            // Esc while idle drops the click selection (harmless no-op
+            // when nothing is selected).
+            (KeyCode::Esc, ..) => self.selected_cell = None,
 
             // Ctrl+Y toggles "selection mode": mouse capture off so the
             // TERMINAL owns the mouse again (select + copy text natively),
             // then back on for wheel scrolling. Only requested here - the
             // event loop owns the terminal and issues the actual commands.
             (KeyCode::Char('y'), true, _) => self.mouse_toggle_requested = true,
+            // Ctrl+O copies: the clicked block, or - with nothing selected
+            // - the latest answer, so the everyday "grab the result"
+            // gesture needs no mouse at all.
+            (KeyCode::Char('o'), true, _) => self.copy_selected(),
             (KeyCode::PageUp, ..) => {
                 self.scroll_by(i64::from(self.last_transcript_height / 2).max(1));
             }
@@ -634,6 +661,48 @@ impl App {
             "selection mode - select and copy with the mouse; ctrl+y to re-enable wheel scrolling"
         });
         self.mouse_captured
+    }
+
+    /// A left click in the conversation pane selects the block under the
+    /// pointer (the Ctrl+O copy target); clicking it again - or clicking
+    /// chrome - deselects. Terminal coordinates resolve through the
+    /// geometry the render pass saved: window top line + row offset =
+    /// visual line, and the line->cell map says which block that is.
+    fn click(&mut self, column: u16, row: u16) {
+        let area = self.last_chat_inner;
+        if !area.contains(Position { x: column, y: row }) {
+            return;
+        }
+        let line = self.last_top_line + (row - area.y) as usize;
+        let hit = self.last_line_cells.get(line).copied().flatten();
+        self.selected_cell = if hit == self.selected_cell { None } else { hit };
+    }
+
+    /// Ctrl+O: queue a block's raw text for the clipboard. The selected
+    /// block wins; without a selection the most recent Answer is the
+    /// target. Only QUEUED here - the event loop owns the terminal and
+    /// emits the actual OSC 52 sequence (same split as the mouse toggle).
+    fn copy_selected(&mut self) {
+        let index = self.selected_cell.or_else(|| {
+            self.transcript
+                .cells
+                .iter()
+                .rposition(|cell| matches!(cell, Cell::Answer { .. }))
+        });
+        let Some(index) = index else {
+            self.notice("nothing to copy - click a block, or finish a turn for an answer");
+            return;
+        };
+        // Tool cells are never selectable (they have no line in the map),
+        // so copy_text only misses on stale state - fail soft.
+        let Some(text) = self.transcript.copy_text(index).map(str::to_string) else {
+            return;
+        };
+        let chars = text.chars().count();
+        self.pending_copy = Some(text);
+        // "sent", not "copied": OSC 52 is fire-and-forget - the terminal
+        // decides whether it honors the sequence.
+        self.notice(format!("sent {chars} chars to the clipboard (OSC 52)"));
     }
 
     fn scroll_by(&mut self, delta: i64) {
@@ -950,6 +1019,8 @@ impl App {
                 } else {
                     self.agent.reset();
                     self.transcript.cells.clear();
+                    // The selection indexes into the cells just cleared.
+                    self.selected_cell = None;
                     self.totals = Totals::default();
                     self.notice("conversation cleared");
                 }

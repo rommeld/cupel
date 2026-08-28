@@ -6,9 +6,11 @@
 //! there is only state (in `App`) and this projection of it.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{
+    Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 
 use crate::modes::interactive::{app::App, theme, transcript};
 
@@ -92,21 +94,91 @@ fn render_autocomplete(frame: &mut Frame<'_>, app: &App, transcript_area: Rect, 
 }
 
 fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    let lines = app.transcript.to_lines(area.width);
-    let height = area.height as usize;
+    // The tools pane exists only once there is tool traffic; a pure chat
+    // keeps the full width for prose.
+    let has_tools = app
+        .transcript
+        .cells
+        .iter()
+        .any(|cell| matches!(cell, transcript::Cell::Tool { .. }));
+    let (chat_area, tools_area) = if has_tools {
+        let [chat, tools] = Layout::horizontal([
+            Constraint::Percentage(CHAT_PANE_PERCENT),
+            Constraint::Percentage(100 - CHAT_PANE_PERCENT),
+        ])
+        .areas(area);
+        (chat, Some(tools))
+    } else {
+        (area, None)
+    };
 
-    // Remember geometry so key handlers can clamp scrolling next event.
-    app.last_total_lines = lines.len();
-    app.last_transcript_height = area.height;
-    let max_scroll = lines.len().saturating_sub(height);
+    // Blocks render first, content after - `inner` subtracts borders AND
+    // padding, so the Paragraphs below never touch the chrome.
+    let chat_block = pane_block(" conversation ");
+    let chat_inner = chat_block.inner(chat_area);
+    frame.render_widget(chat_block, chat_area);
+    let tools_inner = tools_area.map(|tools_area| {
+        let block = pane_block(" tools ");
+        let inner = block.inner(tools_area);
+        frame.render_widget(block, tools_area);
+        inner
+    });
+
+    let columns = app.transcript.to_columns(
+        chat_inner.width,
+        tools_inner.map_or(0, |inner| inner.width),
+        app.selected_cell,
+    );
+    let total = columns.left.len();
+    let height = chat_inner.height as usize;
+
+    // Remember geometry so key/mouse handlers can clamp and hit-test.
+    app.last_total_lines = total;
+    app.last_transcript_height = chat_inner.height;
+    let max_scroll = total.saturating_sub(height);
     app.scroll_from_bottom = app.scroll_from_bottom.min(max_scroll);
 
-    // Bottom-anchored window: offset 0 shows the newest lines.
-    let end = lines.len() - app.scroll_from_bottom;
+    // Bottom-anchored window: offset 0 shows the newest lines. The SAME
+    // window slices both panes - that lockstep is what keeps a band's
+    // reasoning and tool calls on the same rows while scrolling.
+    let end = total - app.scroll_from_bottom;
     let start = end.saturating_sub(height);
-    let visible: Vec<Line<'static>> = lines[start..end].to_vec();
+    app.last_top_line = start;
+    app.last_chat_inner = chat_inner;
+    app.last_line_cells = columns.cell_at;
 
-    frame.render_widget(Paragraph::new(visible), area);
+    frame.render_widget(
+        Paragraph::new(columns.left[start..end].to_vec()),
+        chat_inner,
+    );
+    if let Some(tools_inner) = tools_inner {
+        frame.render_widget(
+            Paragraph::new(columns.right[start..end].to_vec()),
+            tools_inner,
+        );
+    }
+
+    // ONE scrollbar for the lockstep panes, on the transcript's right
+    // edge; the vertical margin spares the border corner glyphs. Rendered
+    // only when there is something to scroll - a permanently full bar
+    // would read as decoration.
+    if total > height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .track_style(theme::PANE_BORDER)
+            .thumb_style(theme::SCROLLBAR_THUMB);
+        let mut state = ScrollbarState::new(total).position(start);
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut state,
+        );
+    }
 
     // A scroll indicator only when not following the tail.
     if app.scroll_from_bottom > 0 {
@@ -123,6 +195,20 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             marker_area,
         );
     }
+}
+
+/// Left pane share of the transcript width: prose needs more room than
+/// tool call previews.
+const CHAT_PANE_PERCENT: u16 = 60;
+
+/// The shared look of both transcript panes: dim border, dim title, one
+/// column of padding so text never sticks to a border line.
+fn pane_block(title: &'static str) -> Block<'static> {
+    Block::new()
+        .borders(Borders::ALL)
+        .border_style(theme::PANE_BORDER)
+        .title(Span::styled(title, theme::CHROME))
+        .padding(Padding::horizontal(1))
 }
 
 /// Cursor position as (visual line, visual column) in the wrapped input
@@ -243,15 +329,18 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // The mouse hint tracks selection mode, so it never lies about what
     // the wheel currently does.
     let right = if app.mouse_captured {
-        "enter send · alt+enter newline · @ file · / cmds · esc abort · wheel scroll · ctrl+y copy "
+        "enter send · alt+enter newline · @ file · / cmds · esc abort · click block · ctrl+o copy · ctrl+y select "
     } else {
         "enter send · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+y scroll "
     };
 
     // Left-align the status, right-align the key hints; drop the hints when
-    // the terminal is too narrow for both.
+    // the terminal is too narrow for both. Chars, not bytes: every `·` in
+    // the hints is 2 bytes of UTF-8 but only 1 terminal column - len()
+    // would overestimate and drop the hints while they still fit.
     let mut spans = vec![Span::styled(left.clone(), theme::CHROME)];
-    let padding = (area.width as usize).saturating_sub(left.len() + right.len());
+    let padding =
+        (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
     if padding > 0 {
         spans.push(Span::raw(" ".repeat(padding)));
         spans.push(Span::styled(right, theme::CHROME));
@@ -1040,7 +1129,8 @@ mod tests {
         let mut app = test_app();
         assert!(app.mouse_captured);
         let screen = draw(&mut app, 200, 20);
-        assert!(screen.contains("ctrl+y copy"), "hint missing:\n{screen}");
+        assert!(screen.contains("ctrl+o copy"), "hint missing:\n{screen}");
+        assert!(screen.contains("ctrl+y select"), "hint missing:\n{screen}");
 
         // Ctrl+Y only REQUESTS the toggle (the event loop owns the
         // terminal); applying flips state and posts a notice.
@@ -1454,6 +1544,152 @@ mod tests {
         let screen = draw(&mut app, 120, 20);
         assert!(screen.contains("thinking medium"), "{screen}");
         assert!(!screen.contains("thinking off"), "{screen}");
+    }
+
+    #[test]
+    fn tools_pane_appears_with_the_first_tool_call() {
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::Assistant {
+            text: "chatting".into(),
+        });
+        let screen = draw(&mut app, 80, 20);
+        assert!(screen.contains(" conversation "), "{screen}");
+        assert!(
+            !screen.contains(" tools "),
+            "no tool traffic yet:\n{screen}"
+        );
+
+        app.transcript.cells.push(Cell::Tool {
+            id: "1".into(),
+            name: "grep".into(),
+            args: "{}".into(),
+            result: None,
+        });
+        let screen = draw(&mut app, 80, 20);
+        assert!(screen.contains(" tools "), "pane must appear:\n{screen}");
+        assert!(screen.contains("[grep]"), "{screen}");
+    }
+
+    #[test]
+    fn band_rule_ties_reasoning_and_tool_rows_together() {
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::User {
+            text: "task".into(),
+        });
+        app.transcript.append_thinking("let me look");
+        app.transcript.cells.push(Cell::Tool {
+            id: "1".into(),
+            name: "read".into(),
+            args: "{}".into(),
+            result: None,
+        });
+        let screen = draw(&mut app, 90, 20);
+        // The SAME band number must sit on ONE screen row in both panes -
+        // that shared row is the reasoning->tool association.
+        let banded = screen.lines().any(|row| row.matches("─ 1 ").count() == 2);
+        assert!(banded, "band number missing or misaligned:\n{screen}");
+    }
+
+    #[test]
+    fn scrollbar_appears_once_content_overflows() {
+        let mut app = test_app();
+        let screen = draw(&mut app, 40, 12);
+        assert!(
+            !screen.contains('█'),
+            "an empty transcript needs no scrollbar:\n{screen}"
+        );
+        for i in 0..40 {
+            app.transcript.cells.push(Cell::Assistant {
+                text: format!("line {i}"),
+            });
+        }
+        let screen = draw(&mut app, 40, 12);
+        assert!(
+            screen.contains('█'),
+            "overflowing content must show the thumb:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn click_selects_a_block_and_ctrl_o_copies_it() {
+        use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::User {
+            text: "the task".into(),
+        });
+        app.transcript.append_thinking("private reasoning");
+        app.transcript.append_assistant("the answer");
+        let _ = draw(&mut app, 80, 24); // teach the app its geometry
+
+        // Resolve the thinking cell's screen row through the same map the
+        // click handler uses - the test then exercises the real geometry
+        // math instead of hardcoding a row.
+        let line = app
+            .last_line_cells
+            .iter()
+            .position(|cell| *cell == Some(1))
+            .expect("thinking line mapped");
+        let row = app.last_chat_inner.y + (line - app.last_top_line) as u16;
+        app.on_terminal_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: app.last_chat_inner.x + 1,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert_eq!(app.selected_cell, Some(1));
+
+        // The selected block renders with the highlight background.
+        let _ = draw(&mut app, 80, 24);
+        let style = style_of(&mut app, "private reasoning");
+        assert_eq!(style.bg, theme::SELECTED.bg);
+
+        // Ctrl+O queues the RAW text and confirms with a notice.
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        )));
+        assert_eq!(app.pending_copy.as_deref(), Some("private reasoning"));
+        assert!(
+            app.transcript
+                .cells
+                .iter()
+                .any(|c| matches!(c, Cell::Notice { text } if text.contains("clipboard")))
+        );
+
+        // Esc drops the selection.
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert_eq!(app.selected_cell, None);
+    }
+
+    #[test]
+    fn ctrl_o_with_nothing_selected_copies_the_latest_answer() {
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::Answer {
+            text: "first".into(),
+        });
+        app.transcript.cells.push(Cell::Answer {
+            text: "final answer".into(),
+        });
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        )));
+        assert_eq!(app.pending_copy.as_deref(), Some("final answer"));
+
+        // An empty transcript: a helpful notice, nothing queued.
+        let mut app = test_app();
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.pending_copy.is_none());
+        assert!(
+            app.transcript
+                .cells
+                .iter()
+                .any(|c| matches!(c, Cell::Notice { text } if text.contains("nothing to copy")))
+        );
     }
 
     #[test]

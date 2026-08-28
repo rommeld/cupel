@@ -6,8 +6,7 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.9.0] - 2026-08-27
 
 - add openrouter API to provider list expand model list
-- update README and CHANGELOG
-- changelog: v0.8.1
+- update README
 
 ## [v0.8.1] - 2026-08-24
 

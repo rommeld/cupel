@@ -20,7 +20,7 @@ Defines the basic agent and its loop primitive. It wires a system prompt, messag
 
 ### 3. `cupel-coding-agent`
 
-Implements the concrete coding-agent experience: a terminal UI, `@file-path` fuzzy file referencing, slash commands (`/help`, `/new`, `/model`, `/provider`, `/thinking`, `/usage`, `/hot-reload`, `/session-id`, `/quit`), prompt templates loaded from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools (`read`, `grep`, `write`, `edit`, `bash`). It uses the `ripgrep` crate as the underlying engine for the **grep tool** and `ratatui` for the TUI. The crate also includes a simple `cupel` CLI for calling functionality from the terminal.
+Implements the concrete coding-agent experience: a terminal UI, `@file-path` fuzzy file referencing, slash commands (`/help`, `/new`, `/model`, `/provider`, `/thinking`, `/review`, `/usage`, `/hot-reload`, `/session-id`, `/quit`), prompt templates loaded from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools (`read`, `grep`, `write`, `edit`, `bash`). It uses the `grep` crate family (`grep-matcher`, `grep-regex`, `grep-searcher`) as the underlying engine for the **grep tool** and `ratatui` for the TUI. The crate also includes a simple `cupel` CLI for calling functionality from the terminal.
 
 ## Install
 
@@ -40,7 +40,7 @@ Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and F
 
 ### Slash commands
 
-`/help` lists everything. Built-ins (`/new`, `/model <id>`, `/provider <name> [api-key]`, `/thinking <level>`, `/usage`, `/hot-reload`, `/session-id`, `/quit`) are handled locally. Markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision, the most specific location wins.
+`/help` lists everything. Built-ins (`/new`, `/model <id>`, `/provider <name> [api-key]`, `/thinking <level>`, `/review [path...]`, `/usage`, `/hot-reload`, `/session-id`, `/quit`) are handled locally. `/review` bundles the current project, specific paths, or a `--diff` into a code-review prompt. Markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision, the most specific location wins.
 
 ### Local models
 
@@ -78,7 +78,7 @@ Built-in providers:
 - `fireworks` — Fireworks OpenAI-compatible completions
 - `openrouter` — OpenRouter OpenAI-compatible completions gateway
 
-`/provider` lists every provider. `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` supplies a key when nothing is exported. The key is scoped to this session: it lives in process memory only, is never persisted or echoed, and takes precedence over the environment variable. Switching models across providers via `/model` re-resolves the key in the same way.
+`/provider` lists every provider. `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` supplies a key when nothing is exported. The key is kept in session memory and also saved to `~/.cupel/settings.json` (safe atomic write, owner-only permissions), so it survives restarts. It is never echoed. Key resolution order is: session-entered key > exported environment variable > `~/.cupel/settings.json`. Switching models across providers via `/model` re-resolves the key in the same way.
 
 ### Session management
 
@@ -108,7 +108,7 @@ Drop executables into `~/.cupel/hooks/<event>/` (global) or `<project>/.cupel/ho
   "sessionId": "...",
   "sessionRef": "...",
   "cwd": "...",
-  "timestamp": "...",
+  "timestamp": 1234567890,
   "prompt": "..."
 }
 ```
@@ -124,7 +124,7 @@ Hooks observe but never veto. Failures and timeouts (60s per hook) are logged an
 Bash commands are checked against a deny list before they execute. `rm -rf` (and its spellings: `-fr`, combined flag groups, behind `sudo` or `&&`) is blocked out of the box. The model receives an error naming the rule instead of the command being executed.
 
 Add your own rules — one regex per line, `#` comments — in `~/.cupel/bash-deny` (global) or `<project>/.cupel/bash-deny` (per project).
-A `loopKiller` setting also blocks repeated identical tool calls after `maxRepeats` consecutive attempts, redirecting the model to a different approach.
+A `loopKiller` setting also blocks repeated identical tool calls after `maxRepeats` consecutive attempts, redirecting the model to a different approach. Put it in `~/.cupel/settings.json` (global) or `<project>/.cupel/settings.json` (project overrides home):
 
 ```json
 {

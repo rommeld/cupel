@@ -18,9 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 /// The user's task opening a turn: bright and bold, the "> " prefix rides
 /// in transcript.rs.
-pub const TASK: Style = Style::new()
-    .fg(Color::LightGreen)
-    .add_modifier(Modifier::BOLD);
+pub const TASK: Style = Style::new().fg(Color::LightGreen);
 /// Mid-turn assistant prose (commentary between tool calls): plain.
 pub const ASSISTANT: Style = Style::new();
 /// The turn's final answer: the emphasized couterpart to TASK. Magenta
@@ -49,6 +47,17 @@ pub const INPUT_BORDER_IDLE: Style = Style::new().fg(Color::DarkGray);
 pub const CHROME: Style = Style::new().add_modifier(Modifier::DIM);
 /// The " ↓ N more " overlay while scrolled up.
 pub const SCROLL_MARKER: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
+/// Borders and titles of the two transcript panes (conversation | tools).
+pub const PANE_BORDER: Style = Style::new().fg(Color::DarkGray);
+/// The numbered band rule that ties a reasoning step (left pane) to the
+/// tool calls it triggered (right pane): same number, same row, both panes.
+pub const STEP_RULE: Style = Style::new().fg(Color::DarkGray);
+/// Background of the click-selected conversation block (Ctrl+O copies it).
+/// bg-only on purpose: a Line's own style paints UNDER its spans, so the
+/// highlight tints the row while every span keeps its foreground color.
+pub const SELECTED: Style = Style::new().bg(Color::Indexed(237));
+/// The scrollbar thumb; the track reuses the pane border color.
+pub const SCROLLBAR_THUMB: Style = Style::new().fg(Color::DarkGray);
 /// Autocomplete popup rows: the selected one inverts, the rest match the
 /// tool color.
 pub const POPUP_SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);

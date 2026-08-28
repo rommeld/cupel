@@ -118,6 +118,18 @@ async fn event_loop(
             }
         }
 
+        // Ctrl+O queued a copy: emit it as OSC 52 - the "set clipboard"
+        // escape sequence - straight to stdout. It paints nothing, so
+        // ratatui's frame diff never notices; the TERMINAL (not cupel)
+        // performs the actual clipboard write, which is why this works
+        // across SSH sessions too.
+        if let Some(text) = app.pending_copy.take() {
+            use std::io::Write as _;
+            let mut out = std::io::stdout();
+            let _ = out.write_all(osc52(&text).as_bytes());
+            let _ = out.flush();
+        }
+
         // Ctrl+Y requested a selection-mode toggle: release the mouse so
         // the terminal can select/copy text natively, or recapture it for
         // wheel scrolling. The command goes to the terminal FIRST; state
@@ -163,4 +175,27 @@ async fn event_loop(
     // Normal exit: drain the hook chain and announce session-end.
     app.recorder.end_session().await;
     Ok(())
+}
+
+/// The OSC 52 "set clipboard" sequence for `text`.
+///
+/// Shape: `ESC ] 52 ; c ; <base64> BEL`. 52 is the clipboard opcode, `c`
+/// selects the system CLIPBOARD (not the X11 primary selection), and the
+/// payload travels base64-encoded because clipboard text may contain any
+/// byte - including the BEL that would otherwise end the sequence early.
+fn osc52(text: &str) -> String {
+    use base64::Engine as _;
+    let payload = base64::engine::general_purpose::STANDARD.encode(text);
+    format!("\x1b]52;c;{payload}\x07")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::osc52;
+
+    #[test]
+    fn osc52_wraps_the_text_in_the_clipboard_sequence() {
+        // "hi" is "aGk=" in base64; ESC ] opens the OSC, BEL closes it.
+        assert_eq!(osc52("hi"), "\u{1b}]52;c;aGk=\u{7}");
+    }
 }
