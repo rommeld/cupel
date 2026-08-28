@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.10.0] - 2026-08-29
+
+- refactor TUI layout to divide conversation and tool use
+- changelog: v0.9.0
+
 ## [v0.9.0] - 2026-08-27
 
 - add openrouter API to provider list expand model list
