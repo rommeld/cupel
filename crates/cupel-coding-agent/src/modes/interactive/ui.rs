@@ -132,6 +132,14 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let total = columns.left.len();
     let height = chat_inner.height as usize;
 
+    // Keep the reader's place: the offset is measured from the BOTTOM, and
+    // new output moves the bottom - a fixed offset would slide the view.
+    // Growing it by exactly the growth pins the visible lines; at 0
+    // (follow mode) the view sticks to the tail on purpose.
+    if app.scroll_from_bottom > 0 {
+        app.scroll_from_bottom += total.saturating_sub(app.last_total_lines);
+    }
+
     // Remember geometry so key/mouse handlers can clamp and hit-test.
     app.last_total_lines = total;
     app.last_transcript_height = chat_inner.height;
@@ -898,6 +906,53 @@ mod tests {
             )));
         }
         assert_eq!(app.scroll_from_bottom, 0);
+    }
+
+    #[test]
+    fn scrolled_view_stays_pinned_while_output_grows() {
+        let mut app = test_app();
+        for i in 0..30 {
+            app.transcript.cells.push(Cell::Assistant {
+                text: format!("line {i}"),
+            });
+        }
+        // Learn the geometry, then scroll up into history.
+        let _ = draw(&mut app, 40, 12);
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::NONE,
+        )));
+        let _ = draw(&mut app, 40, 12);
+        let anchor = app.last_top_line;
+
+        // The agent keeps streaming below the window.
+        for i in 0..8 {
+            app.transcript.cells.push(Cell::Assistant {
+                text: format!("tail {i}"),
+            });
+        }
+        let after = draw(&mut app, 40, 12);
+
+        // The window held its place in CONTENT space: same top line, and
+        // none of the new tail scrolled into view.
+        assert_eq!(app.last_top_line, anchor, "view must stay pinned");
+        assert!(
+            !after.contains("tail"),
+            "new output must not slide the view:\n{after}"
+        );
+
+        // Scrolling back down resumes following the tail as before.
+        for _ in 0..100 {
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::PageDown,
+                KeyModifiers::NONE,
+            )));
+        }
+        let followed = draw(&mut app, 40, 12);
+        assert!(
+            followed.contains("tail 7"),
+            "follow mode resumes:\n{followed}"
+        );
     }
 
     #[test]

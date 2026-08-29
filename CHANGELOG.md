@@ -6,7 +6,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.10.0] - 2026-08-29
 
 - refactor TUI layout to divide conversation and tool use
-- changelog: v0.9.0
 
 ## [v0.9.0] - 2026-08-27
 

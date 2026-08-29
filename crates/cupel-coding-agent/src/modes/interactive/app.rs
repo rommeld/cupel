@@ -44,8 +44,11 @@ pub struct App {
     /// Event stream of the active run; `None` when idle.
     pub run_events: Option<AgentEventStream>,
     /// Scroll position measured in lines from the BOTTOM. 0 = follow output.
-    /// Bottom-anchored (instead of top-anchored) means new output never
-    /// yanks the view while the user is reading history.
+    /// The distance alone is not enough while reading history: new output
+    /// moves the bottom, and a fixed distance would slide the view with it.
+    /// So whenever it is > 0, the render pass grows it in step with content
+    /// growth - the visible lines stay pinned until the user scrolls back
+    /// down to 0 (see `render_transcript`).
     pub scroll_from_bottom: usize,
     /// Set by the render pass each frame so scrolling can clamp correctly.
     pub last_transcript_height: u16,
