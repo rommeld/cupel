@@ -157,4 +157,57 @@ mod tests {
         }
         assert!(seen > 0, "no openrouter models in the catalog");
     }
+
+    #[test]
+    fn codex_models_ride_the_chatgpt_backend() {
+        // The subscription rows: namespaced ids (cupel's flat id space -
+        // the openai provider owns the bare gpt-5.6 ids), the ChatGPT
+        // backend URL, and a compat requestModel carrying the WIRE name
+        // the namespacing hid.
+        let mut seen = 0;
+        for model in builtin_models() {
+            if model.provider.as_str() != Provider::OPENAI_CODEX {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(
+                model.api.as_str(),
+                Api::OPENAI_CODEX_RESPONSES,
+                "{}",
+                model.id
+            );
+            assert_eq!(
+                model.base_url, "https://chatgpt.com/backend-api",
+                "{}",
+                model.id
+            );
+            assert!(model.reasoning, "{}: every codex model reasons", model.id);
+            let request_model = model
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("requestModel"))
+                .and_then(serde_json::Value::as_str);
+            assert_eq!(
+                model.id.strip_prefix("codex/"),
+                request_model,
+                "{}: id must be codex/<requestModel>",
+                model.id
+            );
+            // pi's minimal -> "low" pin survives; xhigh stays ABSENT so
+            // cupel's key-absence rule keeps the level available.
+            let map = model.thinking_level_map.as_ref().expect("map pinned");
+            assert_eq!(
+                map.get("minimal"),
+                Some(&Some("low".to_string())),
+                "{}",
+                model.id
+            );
+            assert!(
+                !map.contains_key("xhigh"),
+                "{}: xhigh entry would DISABLE xhigh",
+                model.id
+            );
+        }
+        assert!(seen > 0, "no codex models in the catalog");
+    }
 }

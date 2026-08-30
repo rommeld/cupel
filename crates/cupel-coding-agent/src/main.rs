@@ -8,8 +8,8 @@
 //! plain line REPL when piped or when `--plain` is given.
 //!
 //! Model selection: `--model` picks from the built-in catalog; without it,
-//! the first provider with credentials in the environment wins, in
-//! catalog order (Anthropic, `OpenAI`, Bedrock/AWS, Fireworks, `OpenRouter`).
+//! the first provider with credentials wins, in catalog order (Anthropic,
+//! `OpenAI`, Bedrock/AWS, Fireworks, `OpenRouter`, Codex/ChatGPT login).
 //! Thinking defaults to medium; --thinking off disables it.
 
 use std::io::IsTerminal as _;
@@ -124,6 +124,7 @@ fn select_model(
     args: &CliArgs,
     catalog: &[Model],
     settings: &Settings,
+    home: Option<&std::path::Path>,
 ) -> Result<(Model, Option<String>), String> {
     use cupel_coding_agent::providers;
 
@@ -147,6 +148,12 @@ fn select_model(
             "amazon-bedrock" if providers::has_aws_credentials() => {
                 return Ok((model.clone(), None));
             }
+            // Codex carries no key either: a stored ChatGPT login is the
+            // credential, and the api_key HOOK turns it into a fresh
+            // access token per request (bootstrap::SessionHooks).
+            "openai-codex" if cupel_coding_agent::auth::has_credential(home, "openai-codex") => {
+                return Ok((model.clone(), None));
+            }
             provider => {
                 if let Some(key) = providers::resolve_api_key(provider, settings) {
                     return Ok((model.clone(), Some(key)));
@@ -162,8 +169,8 @@ fn select_model(
     }
     Err(
         "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, FIREWORKS_API_KEY, \
-         OPENROUTER_API_KEY, or AWS credentials, add a key to ~/.cupel/settings.json, start a \
-         local server \
+         OPENROUTER_API_KEY, or AWS credentials, add a key to ~/.cupel/settings.json, log in \
+         with a ChatGPT subscription (/login openai-codex in the TUI), start a local server \
          (ollama / llama-server - see README 'Local models'), or start with an explicit \
          `--model <id>` and enter a key in the TUI via `/provider <name> <api-key>"
             .to_string(),
@@ -236,25 +243,29 @@ async fn run() -> Result<(), String> {
     // notice. Plain mode has no such commands - it keeps the hard error.
     // An explicit `--model` that fails stays fatal in both modes: a typo
     // should not silently start something else.
-    let (model, api_key, startup_warning) =
-        match select_model(&args, &ingredients.models, &ingredients.settings) {
-            Ok((model, key)) => (model, key, None),
-            Err(e) if !use_plain && args.model.is_none() => {
-                let fallback = ingredients
-                    .models
-                    .first()
-                    .cloned()
-                    .ok_or_else(|| e.clone())?;
-                let warning = format!(
-                    "{e}\n\nstarted without credentials on {} - requests will fail until you \
+    let (model, api_key, startup_warning) = match select_model(
+        &args,
+        &ingredients.models,
+        &ingredients.settings,
+        home.as_deref(),
+    ) {
+        Ok((model, key)) => (model, key, None),
+        Err(e) if !use_plain && args.model.is_none() => {
+            let fallback = ingredients
+                .models
+                .first()
+                .cloned()
+                .ok_or_else(|| e.clone())?;
+            let warning = format!(
+                "{e}\n\nstarted without credentials on {} - requests will fail until you \
                  `/provider <name> <api-key>`, switch to a local model via /model, or \
                  restart with a key exported",
-                    fallback.id
-                );
-                (fallback, None, Some(warning))
-            }
-            Err(e) => return Err(e),
-        };
+                fallback.id
+            );
+            (fallback, None, Some(warning))
+        }
+        Err(e) => return Err(e),
+    };
 
     // Resume keeps the ORIGINAL session id, so the recorder appends to the
     // same transcript file and external consumers see one continuous
@@ -387,19 +398,19 @@ mod tests {
             .providers
             .insert("test-cloud".into(), "from-settings".into());
         // Pass 2: first keyless model wins, with no key.
-        let (model, key) = select_model(&args, &catalog, &settings).unwrap();
+        let (model, key) = select_model(&args, &catalog, &settings, None).unwrap();
         assert_eq!(model.id, "qwen3:8b");
         assert!(key.is_none());
 
         // Explicit --model on a keyless entry also carries no key.
         let args = parse(&["--model", "llama3:8b"]).unwrap();
-        let (model, key) = select_model(&args, &catalog, &settings).unwrap();
+        let (model, key) = select_model(&args, &catalog, &settings, None).unwrap();
         assert_eq!(model.id, "llama3:8b");
         assert!(key.is_none());
 
         // Empty catalog: the error mentions the local-server escape hatch.
         let args = parse(&[]).unwrap();
-        let err = select_model(&args, &[], &settings).unwrap_err();
+        let err = select_model(&args, &[], &settings, None).unwrap_err();
         assert!(err.contains("ollama"), "{err}");
     }
 
@@ -415,6 +426,45 @@ mod tests {
         model
     }
 
+    /// A codex catalog row (provider openai-codex has no env var, so
+    /// pass 1 can only match it through the auth.json arm - the test
+    /// stays environment-independent like the others).
+    fn codex_model() -> Model {
+        let mut model = cupel_core::catalog::builtin_models().remove(0);
+        model.id = "codex/test".to_string();
+        model.provider = cupel_core::types::Provider::from("openai-codex");
+        model.compat = None;
+        model
+    }
+
+    #[test]
+    fn select_model_picks_codex_when_logged_in() {
+        let args = parse(&[]).unwrap();
+        let home = std::env::temp_dir().join("cupel-select-codex");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let catalog = vec![codex_model(), keyless_model("qwen3:8b")];
+
+        // Not logged in: codex is skipped, the keyless local wins.
+        let (model, _) = select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
+        assert_eq!(model.id, "qwen3:8b");
+
+        // Logged in: codex wins, and carries NO startup key - the
+        // api_key hook mints fresh access tokens per request instead.
+        let credential = cupel_core::oauth::openai_codex::OAuthCredential {
+            access: "a".into(),
+            refresh: "r".into(),
+            expires: 1,
+            account_id: "acc".into(),
+        };
+        cupel_coding_agent::auth::save_credential(Some(&home), "openai-codex", &credential)
+            .unwrap();
+        let (model, key) =
+            select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
+        assert_eq!(model.id, "codex/test");
+        assert!(key.is_none());
+    }
+
     #[test]
     fn select_model_honors_a_settings_key() {
         let args = parse(&[]).unwrap();
@@ -428,19 +478,19 @@ mod tests {
             .insert("test-cloud".into(), "from-settings".into());
 
         // Pass 1 finds the settings-backed provider first.
-        let (model, key) = select_model(&args, &catalog, &settings).unwrap();
+        let (model, key) = select_model(&args, &catalog, &settings, None).unwrap();
         assert_eq!(model.id, "cloud-1");
         assert_eq!(key.as_deref(), Some("from-settings"));
 
         // Without the settings entry the same catalog falls through to
         // the keyless local model.
-        let (model, key) = select_model(&args, &catalog, &Settings::default()).unwrap();
+        let (model, key) = select_model(&args, &catalog, &Settings::default(), None).unwrap();
         assert_eq!(model.id, "qwen3:8b");
         assert!(key.is_none());
 
         // Explicit --model resolves the settings key too.
         let args = parse(&["--model", "cloud-1"]).unwrap();
-        let (_, key) = select_model(&args, &catalog, &settings).unwrap();
+        let (_, key) = select_model(&args, &catalog, &settings, None).unwrap();
         assert_eq!(key.as_deref(), Some("from-settings"));
     }
 }

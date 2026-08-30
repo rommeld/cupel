@@ -12,7 +12,7 @@ A cupel is a small vessel for refining precious metals. This project borrows tha
 
 ### 1. `cupel-core`
 
-The inference crate forms the foundation. It contains a provider-neutral chat-completion abstraction, a built-in model catalog (Anthropic, OpenAI, AWS Bedrock, Fireworks), token/cost tracking, request/response tracing, and retry/backoff logic. Other crates depend on it for all LLM calls.
+The inference crate forms the foundation. It contains a provider-neutral chat-completion abstraction, a built-in model catalog (Anthropic, OpenAI, AWS Bedrock, Fireworks, OpenRouter, OpenAI Codex), token/cost tracking, request/response tracing, and retry/backoff logic. Other crates depend on it for all LLM calls.
 
 ### 2. `cupel-agent`
 
@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 
 ## Usage
 
-Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, and Fireworks — plus any OpenAI-compatible local server (Ollama, `llama-server`; see "Local models" below).
+Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, Fireworks, OpenRouter, and OpenAI Codex (your ChatGPT Plus/Pro subscription via `/login openai-codex` — no API key) — plus any OpenAI-compatible local server (Ollama, `llama-server`; see "Local models" below).
 
 ### Project context
 
@@ -77,8 +77,11 @@ Built-in providers:
 - `amazon-bedrock` — AWS Bedrock ConverseStream
 - `fireworks` — Fireworks OpenAI-compatible completions
 - `openrouter` — OpenRouter OpenAI-compatible completions gateway
+- `openai-codex` — ChatGPT Codex backend (Plus/Pro subscription; OAuth login instead of a key)
 
 `/provider` lists every provider. `/provider <name>` switches to it (model + matching key together), and `/provider <name> <api-key>` supplies a key when nothing is exported. The key is kept in session memory and also saved to `~/.cupel/settings.json` (safe atomic write, owner-only permissions), so it survives restarts. It is never echoed. Key resolution order is: session-entered key > exported environment variable > `~/.cupel/settings.json`. Switching models across providers via `/model` re-resolves the key in the same way.
+
+`openai-codex` takes no key: `/login openai-codex` runs a ChatGPT browser login (`/login openai-codex device` for headless machines) and stores rotating OAuth tokens in `~/.cupel/auth.json` (owner-only). Tokens refresh automatically before each request; `/logout openai-codex` removes them.
 
 ### Session management
 

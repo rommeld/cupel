@@ -81,7 +81,11 @@ pub async fn load(
         crate::settings::load_home_settings(home.as_deref()),
         crate::settings::load_project_settings(cwd),
     );
-    let hooks = SessionHooks::new(guard, LoopKiller::new(settings.loop_killer_max_repeats()));
+    let hooks = SessionHooks::new(
+        guard,
+        LoopKiller::new(settings.loop_killer_max_repeats()),
+        home.clone(),
+    );
     // A project-side settings.json must never hold keys - warn once here,
     // on the same stderr channel as the models.json warnings.
     crate::settings::warn_project_settings(cwd);
@@ -115,17 +119,37 @@ pub async fn load(
 pub struct SessionHooks {
     guard: BashGuard,
     loop_killer: LoopKiller,
+    /// Where auth.json lives - the api_key hook resolves subscription
+    /// tokens per call (refreshing them near expiry).
+    home: Option<PathBuf>,
+    /// One shared client for those refresh calls.
+    http: reqwest::Client,
 }
 
 impl SessionHooks {
     #[must_use]
-    pub fn new(guard: BashGuard, loop_killer: LoopKiller) -> Self {
-        Self { guard, loop_killer }
+    pub fn new(guard: BashGuard, loop_killer: LoopKiller, home: Option<PathBuf>) -> Self {
+        Self {
+            guard,
+            loop_killer,
+            home,
+            http: reqwest::Client::new(),
+        }
     }
 }
 
 #[async_trait]
 impl AgentHooks for SessionHooks {
+    /// The agent loop calls this before EVERY provider request (types.rs:
+    /// "Resolve an API key for a provider right before each call") - the
+    /// designed home for expiring OAuth tokens. Key-based providers
+    /// return None here and keep riding AgentOptions.api_key.
+    async fn api_key(&self, provider: &str) -> Option<String> {
+        if provider != cupel_core::types::Provider::OPENAI_CODEX {
+            return None;
+        }
+        crate::auth::openai_codex_access_token(self.home.as_deref(), &self.http).await
+    }
     async fn before_tool_call(
         &self,
         assistant: &AssistantMessage,

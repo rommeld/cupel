@@ -1764,4 +1764,180 @@ mod tests {
         assert_eq!(weight.fg, Some(Color::Magenta));
         assert!(weight.add_modifier.contains(Modifier::BOLD));
     }
+
+    // ---- /login and /logout ------------------------------------------------
+
+    /// Submit one line as a command (popup closed first, like a user
+    /// pressing esc before enter).
+    fn submit_command(app: &mut App, line: &str) {
+        type_text(app, line);
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+    }
+
+    fn last_notice(app: &App) -> String {
+        app.transcript
+            .cells
+            .iter()
+            .rev()
+            .find_map(|cell| match cell {
+                Cell::Notice { text } => Some(text.clone()),
+                _ => None,
+            })
+            .expect("a notice cell")
+    }
+
+    #[test]
+    fn login_command_validates_before_spawning_anything() {
+        // Every path here must answer WITHOUT starting a flow - the
+        // real flows bind port 1455 and open a browser.
+        let mut app = test_app();
+        submit_command(&mut app, "/login");
+        assert!(
+            last_notice(&app).contains("/login openai-codex"),
+            "usage lists the provider"
+        );
+        assert!(app.login.is_none());
+
+        submit_command(&mut app, "/login anthropic");
+        assert!(last_notice(&app).contains("unknown login provider"));
+        assert!(app.login.is_none());
+
+        // A paste with no waiting flow is redirected to start one.
+        submit_command(
+            &mut app,
+            "/login openai-codex http://localhost:1455/auth/callback?code=x",
+        );
+        assert!(last_notice(&app).contains("no login waiting"));
+        assert!(app.login.is_none());
+    }
+
+    #[test]
+    fn esc_cancels_a_waiting_login_before_touching_the_run() {
+        let mut app = test_app();
+        let (flow, _events, cancel, _code_rx) = crate::modes::interactive::login::stub_flow();
+        app.login = Some(flow);
+
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(app.login.is_none(), "esc drops the flow");
+        assert!(cancel.is_cancelled(), "dropping cancelled the task");
+        assert!(last_notice(&app).contains("login cancelled"));
+    }
+
+    /// Type + enter WITHOUT the popup-closing esc: while a login waits,
+    /// esc (with no popup visible) would cancel exactly the flow this
+    /// test needs alive. The paste token matches no candidate, so the
+    /// popup never opens and enter submits directly.
+    fn submit_paste(app: &mut App, line: &str) {
+        type_text(app, line);
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+    }
+
+    #[test]
+    fn a_pasted_code_reaches_the_waiting_flow_once() {
+        let mut app = test_app();
+        let (flow, _events, _cancel, mut code_rx) = crate::modes::interactive::login::stub_flow();
+        app.login = Some(flow);
+
+        submit_paste(&mut app, "/login openai-codex code-from-browser");
+        assert!(
+            last_notice(&app).contains("code submitted"),
+            "{}",
+            last_notice(&app)
+        );
+        assert_eq!(code_rx.try_recv().unwrap(), "code-from-browser");
+        // The oneshot is spent; a second paste is told so.
+        submit_paste(&mut app, "/login openai-codex another");
+        assert!(last_notice(&app).contains("cannot take a pasted code"));
+    }
+
+    #[tokio::test]
+    async fn login_events_flow_into_notices_and_done_clears_the_flow() {
+        let mut app = test_app();
+        let (flow, events, _cancel, _code_rx) = crate::modes::interactive::login::stub_flow();
+        app.login = Some(flow);
+
+        events
+            .send(crate::modes::interactive::login::LoginEvent::Notice(
+                "open the browser".to_string(),
+            ))
+            .unwrap();
+        let event = app.next_event().await;
+        app.on_event(event).await;
+        assert!(last_notice(&app).contains("open the browser"));
+        assert!(app.login.is_some(), "notices keep the flow alive");
+
+        events
+            .send(crate::modes::interactive::login::LoginEvent::Done(Ok(
+                "logged in with ChatGPT (account acc-1)".to_string(),
+            )))
+            .unwrap();
+        let event = app.next_event().await;
+        app.on_event(event).await;
+        assert!(app.login.is_none(), "done ends the flow");
+        let notice = last_notice(&app);
+        assert!(notice.contains("logged in with ChatGPT"), "{notice}");
+        assert!(notice.contains("/provider openai-codex"), "{notice}");
+    }
+
+    #[test]
+    fn logout_lists_and_removes_stored_credentials() {
+        let root = std::env::temp_dir().join("cupel-ui-logout");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-logout-test");
+        let home = root.join("home");
+
+        submit_command(&mut app, "/logout");
+        assert!(last_notice(&app).contains("no stored logins"));
+
+        let credential = cupel_core::oauth::openai_codex::OAuthCredential {
+            access: "a".into(),
+            refresh: "r".into(),
+            expires: 1,
+            account_id: "acc".into(),
+        };
+        crate::auth::save_credential(Some(&home), "openai-codex", &credential).unwrap();
+
+        submit_command(&mut app, "/logout");
+        assert!(last_notice(&app).contains("openai-codex"));
+        submit_command(&mut app, "/logout openai-codex");
+        assert!(last_notice(&app).contains("logged out"));
+        assert!(!crate::auth::has_credential(Some(&home), "openai-codex"));
+        // A second logout reports the absence instead of erroring.
+        submit_command(&mut app, "/logout openai-codex");
+        assert!(last_notice(&app).contains("no stored login for openai-codex"));
+    }
+
+    #[test]
+    fn provider_listing_shows_the_codex_login_status() {
+        let mut app = test_app(); // home: None -> never logged in
+        submit_command(&mut app, "/provider");
+        let notice = last_notice(&app);
+        assert!(
+            notice.contains(
+                "openai-codex  - default codex/gpt-5.6-sol, not logged in - /login openai-codex"
+            ),
+            "{notice}"
+        );
+        // And the key path is closed: codex takes logins, not keys.
+        submit_command(&mut app, "/provider openai-codex sk-pasted");
+        let notice = app
+            .transcript
+            .cells
+            .iter()
+            .rev()
+            .filter_map(|cell| match cell {
+                Cell::Notice { text } => Some(text.clone()),
+                _ => None,
+            })
+            .find(|text| text.contains("does not take an API key"))
+            .expect("key refusal notice");
+        assert!(notice.contains("openai-codex"), "{notice}");
+    }
 }

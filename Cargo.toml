@@ -22,14 +22,17 @@ aws-smithy-types = "1"
 base64 = "0.22"
 futures-core = "0.3"
 futures-util = "0.3"
+getrandom = "0.3"
+
 grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
 ratatui = "0.29"
-reqwest = { version = "0.13", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["form", "json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 similar = "2"
 thiserror = "2"
 tokio = { version = "1.52", features = ["full"] }

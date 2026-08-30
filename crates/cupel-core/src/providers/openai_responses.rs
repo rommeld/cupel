@@ -129,7 +129,7 @@ fn parse_text_signature(signature: &str) -> (String, Option<String>) {
 /// Cheap deterministic hash used to shorten foreign/oversized ids. FNV-1a is
 /// tiny, dependency-free, and collision-resistant enough for id dedup (pi
 /// uses a similar `shortHash`).
-fn short_hash(input: &str) -> String {
+pub(crate) fn short_hash(input: &str) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut hash = FNV_OFFSET;
@@ -140,7 +140,7 @@ fn short_hash(input: &str) -> String {
     format!("{hash:016x}")
 }
 
-fn normalize_id_part(part: &str) -> String {
+pub(crate) fn normalize_id_part(part: &str) -> String {
     let sanitized: String = part
         .chars()
         .map(|c| {
@@ -219,6 +219,16 @@ async fn run(
         });
     }
 
+    process_response_stream(response, model, options, sink).await
+}
+
+/// Decode one Responses SSE body into unified events.
+pub(crate) async fn process_response_stream(
+    response: reqwest::Response,
+    model: &Model,
+    options: &StreamOptions,
+    sink: &EventSink,
+) -> Result<()> {
     let mut output = new_output_message(model);
     if !sink.start() {
         return Ok(());
@@ -529,7 +539,7 @@ async fn run(
                     }
                 }
 
-                "response.completed" | "response.incomplete" => {
+                "response.completed" | "response.incomplete" | "response.done" => {
                     saw_terminal_response = true;
                     if let Some(response) = data.get("response") {
                         finalize_response(response, model, &mut output);
@@ -787,7 +797,6 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
 }
 
 fn convert_messages(model: &Model, context: &Context, compat: &OpenAiCompat) -> Value {
-    let transformed = transform_messages(&context.messages, model, Some(normalize_tool_call_id));
     let mut items: Vec<Value> = Vec::new();
 
     if let Some(system_prompt) = &context.system_prompt {
@@ -798,6 +807,23 @@ fn convert_messages(model: &Model, context: &Context, compat: &OpenAiCompat) -> 
         };
         items.push(json!({"role": role, "content": system_prompt}));
     }
+
+    items.extend(convert_items(model, context, normalize_tool_call_id));
+    Value::Array(items)
+}
+
+/// The transcript as Responses items WITHOUT the system prompt. It is shared with the
+/// Codex provider, which carries the system prompt in the `instructions` body field
+/// instead of a leading message item. The tool-call id normalizer is a parameter
+/// because Codex counts the plain `openai` provider as family (ids stay usable
+/// across a switch).
+pub(crate) fn convert_items(
+    model: &Model,
+    context: &Context,
+    normalize: crate::transform::NormalizeToolCallId,
+) -> Vec<Value> {
+    let transformed = transform_messages(&context.messages, model, Some(normalize));
+    let mut items: Vec<Value> = Vec::new();
 
     for (msg_index, msg) in transformed.iter().enumerate() {
         match msg {
@@ -960,5 +986,5 @@ fn convert_messages(model: &Model, context: &Context, compat: &OpenAiCompat) -> 
         }
     }
 
-    Value::Array(items)
+    items
 }

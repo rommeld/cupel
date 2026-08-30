@@ -20,6 +20,7 @@ impl Api {
     pub const ANTHROPIC_MESSAGES: &'static str = "anthropic-messages";
     pub const OPENAI_RESPONSES: &'static str = "openai-responses";
     pub const OPENAI_COMPLETIONS: &'static str = "openai-completions";
+    pub const OPENAI_CODEX_RESPONSES: &'static str = "openai-codex-responses";
     pub const BEDROCK_CONVERSE_STREAM: &'static str = "bedrock-converse-stream";
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -47,6 +48,7 @@ pub struct Provider(pub String);
 impl Provider {
     pub const ANTHROPIC: &'static str = "anthropic";
     pub const OPENAI: &'static str = "openai";
+    pub const OPENAI_CODEX: &'static str = "openai-codex";
     pub const AMAZON_BEDROCK: &'static str = "amazon-bedrock";
     pub const FIREWORKS: &'static str = "fireworks";
     pub const OPENROUTER: &'static str = "openrouter";

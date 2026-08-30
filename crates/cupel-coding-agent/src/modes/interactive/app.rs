@@ -19,6 +19,7 @@ use ratatui::layout::{Position, Rect};
 
 use super::autocomplete::{Autocomplete, Candidate};
 use super::input::InputState;
+use super::login;
 use super::transcript::{Cell, ToolOutcome, Transcript};
 use crate::commands;
 use crate::modes::SessionMeta;
@@ -78,6 +79,10 @@ pub struct App {
     /// rebuild (it re-runs the bootstrap loader, which probes ollama and
     /// awaits hooks - nothing a sync key handler may do).
     pub pending_reload: Option<ReloadTarget>,
+    /// A `/login` flow in progress. Dropping it cancels the background
+    /// task (login.rs), so esc, a replacing /login, /hot-reload, and
+    /// quit all clean up through the same door.
+    pub login: Option<login::LoginFlow>,
     /// Cell selected by a click in the conversation pane. Cleared by Esc,
     /// /new, or clicking the block again.
     pub selected_cell: Option<usize>,
@@ -90,6 +95,18 @@ pub struct App {
     pub last_line_cells: Vec<Option<usize>>,
     pub last_chat_inner: Rect,
     pub last_top_line: usize,
+}
+
+/// One wakeup from a background source (see [`App::next_event`]).
+/// The size skew (AgentEvent is ~300 bytes, LoginEvent a Vec-sized
+/// String) is fine for a value that lives one loop turn on the stack -
+/// boxing would buy nothing but an allocation per event.
+#[allow(clippy::large_enum_variant)]
+pub enum AppEvent {
+    /// The active run produced an event (None = its stream closed).
+    Agent(Option<AgentEvent>),
+    /// The active login produced an event (None = its channel closed).
+    Login(Option<login::LoginEvent>),
 }
 
 /// What `/hot-reload` asked for.
@@ -161,6 +178,18 @@ impl App {
                 is_dir: false,
             })
             .collect();
+        let login_candidates = vec![Candidate {
+            display:
+                "openai-codex  - ChatGPT Plus/Pro browser login (append 'device' for headless)"
+                    .to_string(),
+            value: "openai-codex".to_string(),
+            is_dir: false,
+        }];
+        let logout_candidates = vec![Candidate {
+            display: "openai-codex  - remove the stored ChatGPT login".to_string(),
+            value: "openai-codex".to_string(),
+            is_dir: false,
+        }];
         // `/hot-reload <id>` completes from the transcripts on disk. Only
         // file stems are read (no parsing) - App::new must stay fast.
         let session_candidates: Vec<Candidate> = recorder
@@ -172,6 +201,8 @@ impl App {
             .with_command_args("model", model_candidates)
             .with_command_args("thinking", thinking_candidates)
             .with_command_args("provider", provider_candidates)
+            .with_command_args("login", login_candidates)
+            .with_command_args("logout", logout_candidates)
             .with_command_args("hot-reload", session_candidates);
         // Restored history (a --resume session) exists before the App does;
         // snapshot it so the transcript can replay it as cells.
@@ -194,6 +225,7 @@ impl App {
             mouse_toggle_requested: false,
             session_keys: std::collections::HashMap::new(),
             pending_reload: None,
+            login: None,
             selected_cell: None,
             pending_copy: None,
             last_line_cells: Vec::new(),
@@ -389,6 +421,12 @@ impl App {
             }
             (KeyCode::Char('d'), true, _) if self.input.is_empty() && !self.is_running() => {
                 self.should_quit = true;
+            }
+            // A waiting login is the newest interaction - esc addresses
+            // it first; a second esc then aborts the run as usual.
+            (KeyCode::Esc, ..) if self.login.is_some() => {
+                self.login = None; // Drop cancels the background task.
+                self.notice("login cancelled");
             }
             (KeyCode::Esc, ..) if self.is_running() => self.agent.abort(),
             // Esc while idle drops the click selection (harmless no-op
@@ -841,6 +879,14 @@ impl App {
                     } else {
                         "no AWS credentials".to_string()
                     }
+                } else if provider == "openai-codex" {
+                    // Subscription auth: the credential is a stored LOGIN,
+                    // never a key - mirror auth.json, not the key tiers.
+                    if crate::auth::has_credential(self.meta.home.as_deref(), &provider) {
+                        "logged in with ChatGPT (/logout openai-codex)".to_string()
+                    } else {
+                        "not logged in - /login openai-codex".to_string()
+                    }
                 } else if crate::providers::provider_is_keyless(&self.meta.models, &provider) {
                     // Local endpoints (ollama, llama-server): requests go
                     // out anonymously, nothing to configure.
@@ -919,6 +965,12 @@ impl App {
         // Describe where the credential comes from WITHOUT echoing it.
         let key_source = if provider == "amazon-bedrock" {
             "AWS credential chain".to_string()
+        } else if provider == "openai-codex" {
+            if crate::auth::has_credential(self.meta.home.as_deref(), &provider) {
+                "using the stored ChatGPT login (tokens auto-refresh)".to_string()
+            } else {
+                "NOT logged in - requests will fail; run /login openai-codex".to_string()
+            }
         } else if crate::providers::provider_is_keyless(&self.meta.models, &provider) {
             "local endpoint - no key required".to_string()
         } else if self.session_keys.contains_key(&provider) {
@@ -1046,6 +1098,8 @@ impl App {
                 }
             }
             "provider" => self.handle_provider_command(args),
+            "login" => self.handle_login_command(args),
+            "logout" => self.handle_logout_command(args),
             "hot-reload" => {
                 if self.is_running() {
                     self.notice(
@@ -1086,6 +1140,111 @@ impl App {
         true
     }
 
+    /// `/login` - start a subscription login, or feed a pasted redirect
+    /// into the one that is waiting.
+    fn handle_login_command(&mut self, args: &str) {
+        let mut parts = args.split_whitespace();
+        let provider = parts.next().unwrap_or("");
+        let argument = parts.next();
+
+        if provider.is_empty() {
+            self.notice(
+                "subscription logins:\n  \
+                 /login openai-codex          - ChatGPT Plus/Pro via browser\n  \
+                 /login openai-codex device   - device-code login (headless)\n\
+                 while a browser login waits, /login openai-codex <redirect-url> \
+                 completes it manually",
+            );
+            return;
+        }
+        if provider != "openai-codex" {
+            self.notice(format!(
+                "unknown login provider: {provider} (/login lists them)"
+            ));
+            return;
+        }
+
+        match argument {
+            None => self.start_login(login::spawn_browser(self.meta.home.clone()), "browser"),
+            Some("device") => {
+                self.start_login(login::spawn_device(self.meta.home.clone()), "device-code");
+            }
+            // Anything else is the manual fallback: the redirect URL (or
+            // bare code) pasted into the flow that is waiting for it.
+            Some(pasted) => match &mut self.login {
+                Some(flow) => {
+                    if flow.submit_manual_code(pasted) {
+                        self.notice("code submitted - completing the login...");
+                    } else {
+                        self.notice(
+                            "this login cannot take a pasted code (device flow, \
+                             or one already arrived)",
+                        );
+                    }
+                }
+                None => {
+                    self.notice("no login waiting - start one with /login openai-codex");
+                }
+            },
+        }
+    }
+
+    /// Swap in a fresh login flow; a previous attempt is cancelled by
+    /// the drop (login.rs).
+    fn start_login(&mut self, flow: login::LoginFlow, kind: &str) {
+        if self.login.take().is_some() {
+            self.notice("previous login attempt cancelled");
+        }
+        self.notice(format!(
+            "starting the {kind} login for openai-codex... (esc cancels)"
+        ));
+        self.login = Some(flow);
+    }
+
+    /// `/logout` - list stored logins, or remove one from auth.json.
+    fn handle_logout_command(&mut self, args: &str) {
+        let name = args.trim();
+        if name.is_empty() {
+            let stored = crate::auth::load_auth(self.meta.home.as_deref());
+            if stored.is_empty() {
+                self.notice("no stored logins (auth.json is empty; /login adds one)");
+            } else {
+                let mut lines = vec!["stored logins (/logout <name>):".to_string()];
+                for provider in stored.keys() {
+                    lines.push(format!("  {provider}"));
+                }
+                self.notice(lines.join("\n"));
+            }
+            return;
+        }
+        match crate::auth::delete_credential(self.meta.home.as_deref(), name) {
+            Ok(true) => self.notice(format!("{name} logged out - credential removed")),
+            Ok(false) => self.notice(format!("no stored login for {name} (/logout lists them)")),
+            // SaveError never carries token values - safe to show.
+            Err(e) => self.notice(format!("logout failed: {e}")),
+        }
+    }
+
+    /// A login event arrived (never blocks - pure state + notices).
+    pub fn on_login_event(&mut self, event: Option<login::LoginEvent>) {
+        match event {
+            Some(login::LoginEvent::Notice(text)) => self.notice(text),
+            Some(login::LoginEvent::Done(Ok(summary))) => {
+                self.login = None;
+                self.notice(format!(
+                    "{summary}\nswitch with /provider openai-codex (default codex/gpt-5.6-sol)"
+                ));
+            }
+            Some(login::LoginEvent::Done(Err(error))) => {
+                self.login = None;
+                self.notice(format!("login failed: {error}"));
+            }
+            // Channel closed without Done: the task was cancelled and its
+            // final send raced the drop - nothing to report.
+            None => self.login = None,
+        }
+    }
+
     /// Await the next agent event, or park forever when no run is active.
     /// Parking (instead of returning None immediately) matters inside
     /// `tokio::select!`: a constantly-ready branch would busy-spin the loop.
@@ -1093,6 +1252,37 @@ impl App {
         match &mut self.run_events {
             Some(events) => events.next().await,
             None => std::future::pending().await,
+        }
+    }
+
+    /// The two background sources, multiplexed behind ONE `&mut self`
+    /// future - mod.rs cannot hold two `app.next_...()` branches in its
+    /// select! (each would borrow `app` mutably). Inside the method the
+    /// borrows split field-by-field, which is exactly what the borrow
+    /// checker is happy to prove.
+    pub async fn next_event(&mut self) -> AppEvent {
+        let run_events = &mut self.run_events;
+        let login = &mut self.login;
+        tokio::select! {
+            event = async {
+                match run_events {
+                    Some(events) => events.next().await,
+                    None => std::future::pending().await,
+                }
+            } => AppEvent::Agent(event),
+            event = async {
+                match login {
+                    Some(flow) => flow.next_event().await,
+                    None => std::future::pending().await,
+                }
+            } => AppEvent::Login(event),
+        }
+    }
+
+    pub async fn on_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::Agent(event) => self.on_agent_event(event).await,
+            AppEvent::Login(event) => self.on_login_event(event),
         }
     }
 

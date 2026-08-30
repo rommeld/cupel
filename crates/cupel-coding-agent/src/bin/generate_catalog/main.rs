@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 
 use cupel_core::types::{Api, CostTier, InputModality, Model, ModelCost, Provider};
 
-use crate::curation::{Curated, CuratedProvider, MODELS_DEV_URL, PROVIDERS, Thinking};
+use crate::curation::{
+    Curated, CuratedProvider, MODELS_DEV_URL, OPENAI_CODEX_MODELS, PROVIDERS, Thinking,
+};
 use crate::models_dev::ProviderEntry;
 
 // const MODELS_DEV_URL: &str = "https://models.dev/api.json";
@@ -37,7 +39,12 @@ async fn run() -> Result<(), String> {
     let raw = fetch(MODELS_DEV_URL).await?;
     let wanted: Vec<&str> = PROVIDERS.iter().map(|p| p.models_dev_id).collect();
     let catalog = models_dev::parse_wanted(&raw, &wanted)?;
-    let models = build_models(PROVIDERS, &catalog)?;
+    let mut models = build_models(PROVIDERS, &catalog)?;
+    // Codex rides BEHIND the models.dev providers - pi appends its
+    // codexModels after the fetched catalog the same way. Appended here
+    // (not inside build_models) so the join stays a pure function of the
+    // curation table.
+    models.extend(openai_codex_models());
     validate(&models)?;
     print_summary(&models);
 
@@ -93,6 +100,59 @@ fn build_models(
         }
     }
     Ok(models)
+}
+
+/// The pinned Codex rows as cupel Models - no models.dev join, the
+/// curation table IS the data (see curation.rs for why).
+fn openai_codex_models() -> Vec<Model> {
+    OPENAI_CODEX_MODELS
+        .iter()
+        .map(|row| {
+            let (input, output, cached_read, cached_write) = row.cost;
+            let mut thinking_level_map = std::collections::BTreeMap::new();
+            // pi pins minimal -> "low" (the backend has no minimal
+            // effort). pi's xhigh/max identity pins are NOT copied:
+            // under cupel's key-absence rule an xhigh entry would
+            // DISABLE xhigh, and max is outside cupel's level scale.
+            thinking_level_map.insert("minimal".to_string(), Some("low".to_string()));
+            Model {
+                id: format!("codex/{}", row.id),
+                name: row.name.to_string(),
+                api: Api::from(Api::OPENAI_CODEX_RESPONSES),
+                provider: Provider::from(Provider::OPENAI_CODEX),
+                base_url: curation::OPENAI_CODEX_BASE_URL.to_string(),
+                reasoning: true,
+                thinking_level_map: Some(thinking_level_map),
+                input: if row.vision {
+                    vec![InputModality::Text, InputModality::Image]
+                } else {
+                    vec![InputModality::Text]
+                },
+                cost: ModelCost {
+                    input,
+                    output,
+                    cached_read,
+                    cached_write,
+                    // pi's withOpenAiLongContextPricing: past 272k prompt
+                    // tokens the whole request reprices at input x2,
+                    // output x1.5, cache x2.
+                    tiers: row.long_context_tier.then(|| {
+                        vec![CostTier {
+                            context_over: 272_000,
+                            input: input * 2.0,
+                            output: output * 1.5,
+                            cached_read: cached_read * 2.0,
+                            cached_write: cached_write * 2.0,
+                        }]
+                    }),
+                },
+                context_window: row.context_window,
+                max_tokens: 128_000,
+                headers: None,
+                compat: Some(serde_json::json!({"requestModel": row.id})),
+            }
+        })
+        .collect()
 }
 
 /// Merge on curation row with its model.dev entry into a cupel Model.
@@ -207,6 +267,7 @@ fn validate(models: &[Model]) -> Result<(), String> {
         Api::ANTHROPIC_MESSAGES,
         Api::OPENAI_RESPONSES,
         Api::OPENAI_COMPLETIONS,
+        Api::OPENAI_CODEX_RESPONSES,
         Api::BEDROCK_CONVERSE_STREAM,
     ];
     let mut errors = Vec::new();
@@ -364,5 +425,34 @@ mod tests {
         renamed.id = "claude-opus-5".to_string();
         let error = validate(&[renamed]).unwrap_err();
         assert!(error.contains("models[0]"), "{error}");
+    }
+
+    #[test]
+    fn codex_rows_are_pinned_namespaced_and_tiered() {
+        let models = openai_codex_models();
+        assert_eq!(models.len(), 7, "pi's explicit codex list");
+        for model in &models {
+            // The id namespacing contract the provider's wire_model undoes.
+            let request_model = model
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("requestModel"))
+                .and_then(serde_json::Value::as_str)
+                .expect("every codex row pins requestModel");
+            assert_eq!(model.id, format!("codex/{request_model}"));
+            assert_eq!(model.api.as_str(), Api::OPENAI_CODEX_RESPONSES);
+            assert_eq!(model.provider.as_str(), Provider::OPENAI_CODEX);
+        }
+        // Spot checks against pi's generate-models.ts values.
+        let sol = &models[0];
+        assert_eq!(sol.id, "codex/gpt-5.6-sol", "first row = /provider default");
+        let tiers = sol.cost.tiers.as_ref().expect("long-context tier");
+        assert_eq!(tiers[0].context_over, 272_000);
+        assert!((tiers[0].input - 10.0).abs() < f64::EPSILON, "5.0 x2");
+        assert!((tiers[0].output - 45.0).abs() < f64::EPSILON, "30.0 x1.5");
+        let spark = models.last().expect("seven rows");
+        assert_eq!(spark.context_window, 128_000);
+        assert!(spark.cost.tiers.is_none(), "spark has no long-context tier");
+        assert_eq!(spark.input, vec![InputModality::Text], "spark is text-only");
     }
 }

@@ -6,7 +6,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.10.1] - 2026-08-29
 
 - pin scrolled view while agent output grows
-- changelog: v0.10.0
 
 ## [v0.10.0] - 2026-08-29
 

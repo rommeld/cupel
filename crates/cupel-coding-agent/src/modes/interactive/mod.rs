@@ -19,6 +19,7 @@ pub mod app;
 pub mod autocomplete;
 pub mod fuzzy;
 pub mod input;
+pub mod login;
 pub mod markdown;
 pub mod theme;
 pub mod transcript;
@@ -113,8 +114,11 @@ async fn event_loop(
                     None => break, // Input thread died; nothing left to do.
                 }
             }
-            event = app.next_agent_event() => {
-                app.on_agent_event(event).await;
+            // Agent events and login events share one wakeup: two
+            // `&mut app` futures cannot sit in the same select!, so the
+            // App multiplexes them itself (App::next_event).
+            event = app.next_event() => {
+                app.on_event(event).await;
             }
         }
 

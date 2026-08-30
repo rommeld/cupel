@@ -21,6 +21,9 @@ pub const FIREWORKS_ANTHROPIC_BASE_URL: &str = "https://api.fireworks.ai/inferen
 pub const FIREWORKS_COMPLETIONS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
 /// OpenRouter's OpenAI completions compatible endpoint
 pub const OPENROUTER_COMPLETIONS_BASE_URL: &str = "https://openrouter.ai/api/v1";
+/// The ChatGPT Codex backend (subscription auth, see cupel-core's
+/// oauth::openai_codex + providers::openai_codex_responses).
+pub const OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
 /// How a curated model's thinkingLevelMap is produced.
 pub enum Thinking {
@@ -237,15 +240,11 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         cupel_id: Provider::FIREWORKS,
         models: &[
             fireworks_anthropic("accounts/fireworks/models/kimi-k2p7-code"),
-            fireworks_anthropic("accounts/fireworks/models/deepseek-v4-flash"),
-            fireworks_anthropic("accounts/fireworks/models/deepseek-v4-pro"),
+            fireworks_anthropic("accounts/fireworks/models/deepseek-v4-flash-0731"),
             fireworks_anthropic("accounts/fireworks/models/deepseek-v4-pro-0813"),
             fireworks_anthropic("accounts/fireworks/models/kimi-k2p6"),
-            fireworks_anthropic("accounts/fireworks/models/minimax-m2p7"),
+            fireworks_anthropic("accounts/fireworks/models/minimax-m3"),
             fireworks_anthropic("accounts/fireworks/models/qwen3p7-plus"),
-            fireworks_anthropic("accounts/fireworks/routers/kimi-k2p6-fast"),
-            fireworks_anthropic("accounts/fireworks/routers/kimi-k2p6-turbo"),
-            fireworks_anthropic("accounts/fireworks/routers/kimi-k2p7-code-fast"),
             fireworks_anthropic("accounts/fireworks/models/kimi-k3"),
             fireworks_anthropic("accounts/fireworks/routers/kimi-k3-fast"),
             fireworks_glm("accounts/fireworks/models/glm-5p2"),
@@ -266,5 +265,96 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("x-ai/grok-4.6", Thinking::FromEffort),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
         ],
+    },
+];
+
+// ---------------------------------------------------------------------------
+// OpenAI Codex (ChatGPT subscription) - pinned rows, not models.dev rows
+// ---------------------------------------------------------------------------
+
+/// One Codex model, pinned by hand. models.dev has no `openai-codex`
+/// provider (subscription backends carry no public price sheet), so pi
+/// keeps an explicit list in generate-models.ts ("we keep a small,
+/// explicit list to avoid aliases") - this table is that list, verbatim:
+/// same ids, names, prices, and limits.
+///
+/// The `id` is the BACKEND's model name; the generator namespaces the
+/// catalog id as `codex/<id>` and stores the backend name in compat's
+/// `requestModel`. That split exists because cupel's catalog is one flat
+/// id namespace (merge_models replaces by id, /model addresses by id) -
+/// and the openai provider already owns "gpt-5.6-sol" etc.
+pub struct PinnedCodex {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Codex Spark is text-only; everything else takes images too.
+    pub vision: bool,
+    /// $/M: input, output, cache read, cache write.
+    pub cost: (f64, f64, f64, f64),
+    /// Whether the >272k long-context tier applies (input x2, output
+    /// x1.5, cache x2 - pi's withOpenAiLongContextPricing).
+    pub long_context_tier: bool,
+    pub context_window: u64,
+}
+
+/// Row order = catalog order: the first row is the `/provider
+/// openai-codex` default. gpt-5.6-sol leads to match the openai
+/// provider's curation (same family, same default instinct); pi lists
+/// alphabetically, which would make the light Spark model the default.
+pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
+    PinnedCodex {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        vision: true,
+        cost: (5.0, 30.0, 0.5, 6.25),
+        long_context_tier: true,
+        context_window: 272_000,
+    },
+    PinnedCodex {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        vision: true,
+        cost: (0.2, 1.2, 0.02, 0.25),
+        long_context_tier: true,
+        context_window: 272_000,
+    },
+    PinnedCodex {
+        id: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        vision: true,
+        cost: (2.0, 12.0, 0.2, 2.5),
+        long_context_tier: true,
+        context_window: 272_000,
+    },
+    PinnedCodex {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        vision: true,
+        cost: (5.0, 30.0, 0.5, 0.0),
+        long_context_tier: true,
+        context_window: 272_000,
+    },
+    PinnedCodex {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        vision: true,
+        cost: (2.5, 15.0, 0.25, 0.0),
+        long_context_tier: true,
+        context_window: 272_000,
+    },
+    PinnedCodex {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 mini",
+        vision: true,
+        cost: (0.75, 4.5, 0.075, 0.0),
+        long_context_tier: false,
+        context_window: 272_000,
+    },
+    PinnedCodex {
+        id: "gpt-5.3-codex-spark",
+        name: "GPT-5.3 Codex Spark",
+        vision: false,
+        cost: (1.75, 14.0, 0.175, 0.0),
+        long_context_tier: false,
+        context_window: 128_000,
     },
 ];

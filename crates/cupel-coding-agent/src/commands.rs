@@ -243,6 +243,14 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         ~/.cupel/settings.json; no argument lists them)",
     },
     BuiltinCommand {
+        name: "login",
+        description: "Log in with a subscription: /login openai-codex [device] (ChatGPT Plus/Pro)",
+    },
+    BuiltinCommand {
+        name: "logout",
+        description: "Remove a stored login: /logout openai-codex",
+    },
+    BuiltinCommand {
         name: "thinking",
         description: "Set thinking level: /thinking off|minimal|low|medium|high|xhigh",
     },

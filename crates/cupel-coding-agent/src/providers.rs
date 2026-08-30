@@ -108,7 +108,11 @@ pub fn provider_is_keyless(models: &[Model], provider: &str) -> bool {
 /// out of keys entirely).
 #[must_use]
 pub fn takes_api_key(models: &[Model], provider: &str) -> bool {
-    provider != "amazon-bedrock" && !provider_is_keyless(models, provider)
+    // openai-codex authenticates with /login (OAuth tokens in auth.json);
+    // a pasted key has no slot there, exactly like Bedrock's AWS chain.
+    provider != "amazon-bedrock"
+        && provider != "openai-codex"
+        && !provider_is_keyless(models, provider)
 }
 
 #[cfg(test)]
@@ -192,6 +196,7 @@ mod tests {
             "no env var needed anymore"
         );
         assert!(!takes_api_key(&models, "amazon-bedrock"));
+        assert!(!takes_api_key(&models, "openai-codex"), "/login, not keys");
 
         let mut keyless = cupel_core::catalog::builtin_models().remove(0);
         keyless.provider = cupel_core::types::Provider::from("ollama");

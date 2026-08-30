@@ -15,12 +15,14 @@
 //! - [`catalog`] - a small built-in model catalog
 //! - [`sse`] / [`json_util`] / [`transform`] / [`options_util`] - shared
 //!   plumbing used by the providers
+//! - [`oauth`] - OAuth login flows for subscription providers
 
 pub mod catalog;
 pub mod error;
 pub mod event_stream;
 pub mod json_util;
 pub mod model;
+pub mod oauth;
 pub mod options_util;
 pub mod overflow;
 pub mod provider;
@@ -43,6 +45,9 @@ pub fn default_registry() -> provider::Registry {
     ));
     registry.register(Arc::new(
         providers::openai_completions::OpenAiCompletionsProvider::new(),
+    ));
+    registry.register(Arc::new(
+        providers::openai_codex_responses::OpenAiCodexResponsesProvider::new(),
     ));
     registry.register(Arc::new(providers::bedrock::BedrockProvider::new()));
     registry

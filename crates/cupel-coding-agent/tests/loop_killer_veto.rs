@@ -115,6 +115,7 @@ async fn repeated_identical_calls_are_cut_off_and_redirected() {
     options.hooks = Arc::new(SessionHooks::new(
         BashGuard::from_config(None, &cwd),
         LoopKiller::new(Some(2)),
+        None,
     ));
     let mut agent = Agent::new(options);
 
