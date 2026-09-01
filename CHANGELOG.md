@@ -6,7 +6,12 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.11.0] - 2026-09-01
 
 - add codex as another provider to access openai pro and max plans
-- changelog: v0.10.1
+  * implement codex flow: const, credentials, authorization url, and token endpoints
+  * repair models.dev drift in the fireworks curation
+  * add the seven codex models: pinned curation rows, codex/ id namespace with requestModel compat, long-context tiers
+  * add auth.json credential store with auto-refresh: api_key hook resolves codex tokens per request, /login-aware startup selection
+  * add /login and /logout: browser oauth with paste fallback, device-code flow, esc cancel, provider status lines
+
 
 ## [v0.10.1] - 2026-08-29
 
@@ -15,19 +20,40 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.10.0] - 2026-08-29
 
 - refactor TUI layout to divide conversation and tool use
+  * define style builder, Color::Indexed as moveable area instead of color
+  * use index instead of reference to put reasoning side-by-side with tool calls
+  * create renderer for three vectors
+  * expand event handler so app receives ui updates
 
 ## [v0.9.0] - 2026-08-27
 
 - add openrouter API to provider list expand model list
-- update README
 
 ## [v0.8.1] - 2026-08-24
 
 - add long-context price tiers for GPT-5.6 models
+  * add CostTier struct and optional tiers field on ModelCost (camelCase
+    serde, defaults to None so existing catalogs parse unchanged)
+  * calculate_cost picks the highest tier below the total prompt size
+    (input + cache_read + cache_write) and reprices the whole request
+    with tier rates, matching pi's cost.tiers/inputTokensAbove semantics
+  * teach the catalog generator to map models.dev tier.size thresholds
+    and regenerate catalog.json (three GPT-5.6 entries gain a 272k tier)
+  * derive Default on ModelCost and collapse nine all-zero struct
+    literals to ModelCost::default()
 
 ## [v0.8.0] - 2026-08-24
 
 - replace hardcoded model catalog with generated catalog.json
+- Replace the hand-written Rust model catalog in cupel-core with a generated
+  JSON catalog embedded via include_str!.
+  * add dev-time `generate-catalog` bin that fetches model.dev,
+    applies curation tables (base URLs, API families, compat quirks,
+    thinking-level maps), validates, and writes catalog.json
+  * keep catalog data checked into git so it never runs on runtime
+  * reduce catalog.rs to a thin loader over the embbeded JSON
+  * set default-run = "cupel" to keep `cargo run` unambiguous with
+    two bin targets
 
 ## [v0.7.0] - 2026-08-23
 
