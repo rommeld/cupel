@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.11.0] - 2026-09-01
+
+- add codex as another provider to access openai pro and max plans
+- changelog: v0.10.1
+
 ## [v0.10.1] - 2026-08-29
 
 - pin scrolled view while agent output grows
