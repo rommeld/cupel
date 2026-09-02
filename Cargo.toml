@@ -15,6 +15,7 @@ repository = "https://github.com/rommeld/cupel"
 cupel-core = { path = "crates/cupel-core" }
 cupel-agent = { path = "crates/cupel-agent" }
 
+anyhow = "1.0"
 async-trait = "0.1"
 aws-config = "1"
 aws-sdk-bedrockruntime = "1"
@@ -23,7 +24,6 @@ base64 = "0.22"
 futures-core = "0.3"
 futures-util = "0.3"
 getrandom = "0.3"
-
 grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"

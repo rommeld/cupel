@@ -19,6 +19,23 @@ use cupel_agent::{Agent, AgentOptions, ToolExecutionMode};
 use cupel_coding_agent::modes::{self, SessionMeta};
 use cupel_coding_agent::settings::Settings;
 use cupel_core::types::{Model, ThinkingLevel};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+enum AppError {
+    #[error("argument error: {0}")]
+    Arguments(String),
+    #[error("could not determine current directory")]
+    CurrentDirectory(#[source] std::io::Error),
+    #[error("model selection error: {0}")]
+    ModelSelection(String),
+    #[error("session error: {0}")]
+    Session(String),
+    #[error("plain-mode error: {0}")]
+    PlainMode(String),
+    #[error("interactive-mode error")]
+    InteractiveMode(#[source] std::io::Error),
+}
 
 fn main() -> std::process::ExitCode {
     // Build the runtime explicitly instead of `#[tokio::main]` - same thing,
@@ -217,14 +234,14 @@ fn init_tracing(interactive: bool) -> Option<std::path::PathBuf> {
     }
 }
 
-async fn run() -> Result<(), String> {
-    let args = parse_args(std::env::args().skip(1))?;
+async fn run() -> Result<(), AppError> {
+    let args = parse_args(std::env::args().skip(1)).map_err(AppError::Arguments)?;
     let use_plain = args.plain || !std::io::stdout().is_terminal();
     if let Some(log_path) = init_tracing(!use_plain) {
         // Announced BEFORE the TUI takes the screen; visible in scrollback.
         eprintln!("logging to {}", log_path.display());
     }
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let cwd = std::env::current_dir().map_err(AppError::CurrentDirectory)?;
     // NOTE: the project .cupel/ directory is NOT scaffolded here - the
     // frontends create it on the first agent interaction (resources::
     // ensure_project_dot_cupel), so just launching cupel leaves no trace.
@@ -255,7 +272,7 @@ async fn run() -> Result<(), String> {
                 .models
                 .first()
                 .cloned()
-                .ok_or_else(|| e.clone())?;
+                .ok_or_else(|| AppError::ModelSelection(e.clone()))?;
             let warning = format!(
                 "{e}\n\nstarted without credentials on {} - requests will fail until you \
                  `/provider <name> <api-key>`, switch to a local model via /model, or \
@@ -264,7 +281,7 @@ async fn run() -> Result<(), String> {
             );
             (fallback, None, Some(warning))
         }
-        Err(e) => return Err(e),
+        Err(e) => return Err(AppError::ModelSelection(e)),
     };
 
     // Resume keeps the ORIGINAL session id, so the recorder appends to the
@@ -278,14 +295,17 @@ async fn run() -> Result<(), String> {
                     cupel_coding_agent::session::sessions_dir(home.as_deref(), &cwd)
                         .map(|dir| dir.join(format!("{id}.jsonl")))
                         .filter(|p| p.exists())
-                        .ok_or_else(|| format!("no session named {id} for this project"))?
+                        .ok_or_else(|| format!("no session named {id} for this project"))
+                        .map_err(AppError::Session)?
                 }
                 ResumeTarget::Latest => {
                     cupel_coding_agent::session::find_latest(home.as_deref(), &cwd)
-                        .ok_or("no previous session to resume for this project")?
+                        .ok_or("no previous session to resume for this project")
+                        .map_err(|message| AppError::Session(message.to_string()))?
                 }
             };
-            let (header, messages) = cupel_coding_agent::session::load_transcript(&path)?;
+            let (header, messages) =
+                cupel_coding_agent::session::load_transcript(&path).map_err(AppError::Session)?;
             (header.session_id, messages)
         }
     };
@@ -324,11 +344,13 @@ async fn run() -> Result<(), String> {
     // The TUI takes over the whole screen; that only makes sense on a real
     // terminal. Piped output (cupel < script, CI logs) gets plain mode.
     if use_plain {
-        modes::plain::run(agent, &meta, recorder).await
+        modes::plain::run(agent, &meta, recorder)
+            .await
+            .map_err(AppError::PlainMode)
     } else {
         modes::interactive::run(agent, meta, recorder)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(AppError::InteractiveMode)
     }
 }
 
