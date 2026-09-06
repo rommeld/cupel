@@ -3,6 +3,13 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.12.0] - 2026-09-06
+
+- add GPT-6 Astra support and model-specific reasoning limits - add Astra to OpenAI, Codex, and OpenRouter catalogs - support max thinking level - omit temperature for models which do not support - separate planning windows from long-context - preserve and enforce context ceilings
+- create basic structures to integrate external tracing tools (i.e. logfire, Sentry)
+- modify CHANGELOG.md and add new structure to release notes
+- changelog: v0.11.0
+
 ## [v0.11.0] - 2026-09-01
 
 - add codex as another provider to access openai pro and max plans
