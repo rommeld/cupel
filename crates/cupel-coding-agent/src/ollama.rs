@@ -91,6 +91,7 @@ pub fn models_from_tags(json: &serde_json::Value, host: &str) -> Vec<Model> {
             // Local inference is free - keeps /usage honest at $0.
             cost: ModelCost::default(),
             context_window: DEFAULT_CONTEXT_WINDOW,
+            max_context_window: None,
             max_tokens: DEFAULT_CONTEXT_WINDOW,
             headers: None,
             // Safe-side flags for local servers: no key, and none of the

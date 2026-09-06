@@ -68,12 +68,27 @@ pub fn merge_models(layers: Vec<Vec<Model>>) -> Vec<Model> {
     for layer in layers {
         for model in layer {
             match merged.iter_mut().find(|m| m.id == model.id) {
-                Some(existing) => *existing = model,
+                Some(existing) => *existing = with_context_ceiling(existing, model),
                 None => merged.push(model),
             }
         }
     }
     merged
+}
+
+/// The catalog's context ceiling survives an override (Codex CLI's
+/// with_config_overrides does the same clamp): a replacement row that
+/// names no maxContextWindow inherits the replaced row's, and its
+/// contextWindow is clamped to that ceiling. A row that pins its OWN
+/// ceiling owns it
+fn with_context_ceiling(existing: &Model, mut replacement: Model) -> Model {
+    if replacement.max_context_window.is_none() {
+        replacement.max_context_window = existing.max_context_window;
+    }
+    if let Some(ceiling) = replacement.max_context_window {
+        replacement.context_window = replacement.context_window.min(ceiling);
+    }
+    replacement
 }
 
 /// Drop entries whose `api` has no registered provider implementation -
@@ -224,6 +239,37 @@ mod tests {
         let ids: Vec<&str> = merged.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b", "c"], "position of 'a' is preserved");
         assert_eq!(merged[0].context_window, 9000, "later layer won");
+    }
+
+    #[test]
+    fn overrides_inherit_and_respect_the_context_ceiling() {
+        // A long-context row: planning window 272k, ceiling 922k.
+        let mut base: Vec<Model> =
+            serde_json::from_value(serde_json::json!([entry_json("astra", 272_000)])).unwrap();
+        base[0].max_context_window = Some(922_000);
+
+        // The user raises the window past the ceiling without naming one:
+        // the ceiling is inherited and the window clamped to it.
+        let overlay: Vec<Model> =
+            serde_json::from_value(serde_json::json!([entry_json("astra", 2_000_000)])).unwrap();
+        let merged = merge_models(vec![base.clone(), overlay]);
+        assert_eq!(merged[0].context_window, 922_000, "clamped to the ceiling");
+        assert_eq!(merged[0].max_context_window, Some(922_000), "inherited");
+
+        // A row that pins its own ceiling owns it.
+        let mut own: Vec<Model> =
+            serde_json::from_value(serde_json::json!([entry_json("astra", 2_000_000)])).unwrap();
+        own[0].max_context_window = Some(3_000_000);
+        let merged = merge_models(vec![base, own]);
+        assert_eq!(merged[0].context_window, 2_000_000);
+        assert_eq!(merged[0].max_context_window, Some(3_000_000));
+
+        // Rows without any ceiling merge exactly as before.
+        let plain: Vec<Model> =
+            serde_json::from_value(serde_json::json!([entry_json("a", 1000)])).unwrap();
+        let bigger: Vec<Model> =
+            serde_json::from_value(serde_json::json!([entry_json("a", 9000)])).unwrap();
+        assert_eq!(merge_models(vec![plain, bigger])[0].context_window, 9000);
     }
 
     #[test]

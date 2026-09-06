@@ -82,9 +82,6 @@ impl Provider for BedrockProvider {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Model-family detection
-// ---------------------------------------------------------------------------
 // Bedrock hosts many model families behind one API; Claude-specific features
 // (thinking, prompt caching, signatures) must only be sent to Claude models.
 // The model id may be a bare id, an inference-profile id, or an ARN, so we
@@ -854,13 +851,13 @@ fn build_additional_model_request_fields(
         ThinkingLevel::Low => 2048,
         ThinkingLevel::Medium => 8192,
         // Claude budget models don't support xhigh; clamp to high.
-        ThinkingLevel::High | ThinkingLevel::XHigh => 16384,
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => 16384,
     };
     let custom_budget = options.thinking_budgets.and_then(|b| match level {
         ThinkingLevel::Minimal => b.minimal,
         ThinkingLevel::Low => b.low,
         ThinkingLevel::Medium => b.medium,
-        ThinkingLevel::High | ThinkingLevel::XHigh => b.high,
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => b.high,
     });
     let budget = thinking_budget_override
         .or(custom_budget)
@@ -888,6 +885,7 @@ fn map_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> String {
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High => "high",
         ThinkingLevel::XHigh => "xhigh",
+        ThinkingLevel::Max => "max",
     };
     if let Some(Some(mapped)) = model.thinking_level_map.as_ref().and_then(|m| m.get(key)) {
         return mapped.clone();
@@ -895,7 +893,7 @@ fn map_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> String {
     match level {
         ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
         ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High | ThinkingLevel::XHigh => "high",
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => "high",
     }
     .to_string()
 }

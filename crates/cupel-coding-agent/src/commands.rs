@@ -252,7 +252,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "thinking",
-        description: "Set thinking level: /thinking off|minimal|low|medium|high|xhigh",
+        description: "Set thinking level: /thinking off|minimal|low|medium|high|xhigh|max",
     },
     BuiltinCommand {
         name: "session-id",

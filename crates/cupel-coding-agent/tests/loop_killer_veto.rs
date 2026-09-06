@@ -92,6 +92,7 @@ fn mock_model() -> Model {
         input: vec![InputModality::Text],
         cost: ModelCost::default(),
         context_window: 100_000,
+        max_context_window: None,
         max_tokens: 4096,
         headers: None,
         compat: None,

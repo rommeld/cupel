@@ -1,8 +1,8 @@
 //! `cupel` - entry point: parse args, wire the agent, pick a frontend.
 //!
 //! Usage:
-//!   cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh (default:
-//! medium)] [--plain]
+//!   cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max
+//!  (default: medium)] [--plain]
 //!
 //! Frontend selection: the ratatui TUI when stdout is a real terminal, the
 //! plain line REPL when piped or when `--plain` is given.
@@ -91,6 +91,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                     "medium" => Some(ThinkingLevel::Medium),
                     "high" => Some(ThinkingLevel::High),
                     "xhigh" => Some(ThinkingLevel::XHigh),
+                    "max" => Some(ThinkingLevel::Max),
                     other => return Err(format!("unknown thinking level: {other}")),
                 };
             }
@@ -107,7 +108,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh (default: medium)] [--resume [id]] [--plain]\n\navailable models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium)] [--resume [id]] [--plain]\n\navailable models:\n",
                 );
                 // Built-ins + models.json layers; deliberately NOT the
                 // ollama probe - help must be instant and never touch the
@@ -396,6 +397,10 @@ mod tests {
         assert_eq!(
             parse(&["--thinking", "high"]).unwrap().thinking,
             Some(ThinkingLevel::High)
+        );
+        assert_eq!(
+            parse(&["--thinking", "max"]).unwrap().thinking,
+            Some(ThinkingLevel::Max)
         );
     }
 

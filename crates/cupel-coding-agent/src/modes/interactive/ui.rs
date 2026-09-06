@@ -366,6 +366,7 @@ fn thinking_level_name(level: cupel_core::types::ThinkingLevel) -> &'static str 
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High => "high",
         ThinkingLevel::XHigh => "xhigh",
+        ThinkingLevel::Max => "max",
     }
 }
 
@@ -1921,7 +1922,7 @@ mod tests {
         let notice = last_notice(&app);
         assert!(
             notice.contains(
-                "openai-codex  - default codex/gpt-5.6-sol, not logged in - /login openai-codex"
+                "openai-codex  - default codex/gpt-6-astra, not logged in - /login openai-codex"
             ),
             "{notice}"
         );

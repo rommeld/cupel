@@ -80,6 +80,9 @@ struct CompletionsCompat {
     /// llama-server) accept anonymous requests - `requiresApiKey: false`
     /// lets a keyless request proceed without an Authorization header.
     requires_api_key: bool,
+    /// Whether the model accepts `temperature` (GPT-6 Astra rejects it;
+    /// derived from models.dev by the generator).
+    supports_temperature: bool,
 }
 
 impl Default for CompletionsCompat {
@@ -97,6 +100,7 @@ impl Default for CompletionsCompat {
             send_session_affinity_headers: false,
             thinking_format: ThinkingFormat::Openai,
             requires_api_key: true,
+            supports_temperature: true,
         }
     }
 }
@@ -547,7 +551,9 @@ fn build_request_body(
         let clamped = clamp_max_tokens_to_context(model, context, max_tokens);
         body[compat.max_tokens_field.as_str()] = json!(clamped);
     }
-    if let Some(temperature) = options.temperature {
+    if let Some(temperature) = options.temperature
+        && compat.supports_temperature
+    {
         body["temperature"] = json!(temperature);
     }
 
@@ -585,6 +591,7 @@ fn build_request_body(
             ThinkingLevel::Medium => ModelThinkingLevel::Medium,
             ThinkingLevel::High => ModelThinkingLevel::High,
             ThinkingLevel::XHigh => ModelThinkingLevel::XHigh,
+            ThinkingLevel::Max => ModelThinkingLevel::Max,
         });
         let clamped = requested.map(|level| clamp_thinking_level(model, level));
         let effort_on = clamped.filter(|level| *level != ModelThinkingLevel::Off);
@@ -906,6 +913,7 @@ mod tests {
             input: vec![InputModality::Text],
             cost: ModelCost::default(),
             context_window: 4096,
+            max_context_window: None,
             max_tokens: 4096,
             headers: None,
             compat,
@@ -986,6 +994,47 @@ mod tests {
         let options = StreamOptions::default();
         let body = build_request_body(&model, &empty_context(), &options, &compat);
         assert_eq!(body["reasoning"], json!({"effort": "none"}));
+    }
+
+    /// GPT-6 Astra through an OpenAI-compatible completions endpoint
+    /// (OpenRouter's `openai/gpt-6-astra`, or api.openai.com itself).
+    fn astra_model(format: &str) -> Model {
+        let mut map = crate::types::ThinkingLevelMap::new();
+        map.insert("off".to_string(), None);
+        map.insert("minimal".to_string(), None);
+        let mut model = model_with_compat(Some(serde_json::json!({
+            "thinkingFormat": format,
+            "supportsTemperature": false,
+        })));
+        model.reasoning = true;
+        model.thinking_level_map = Some(map);
+        model
+    }
+
+    #[test]
+    fn astra_drops_temperature_and_sends_max_effort() {
+        for (format, field) in [("openai", "reasoning_effort"), ("openrouter", "reasoning")] {
+            let model = astra_model(format);
+            let compat = completions_compat(&model);
+            let options = StreamOptions {
+                reasoning: Some(ThinkingLevel::Max),
+                temperature: Some(0.2),
+                ..StreamOptions::default()
+            };
+            let body = build_request_body(&model, &empty_context(), &options, &compat);
+            assert!(body.get("temperature").is_none(), "{format}: {body}");
+            let effort = if format == "openai" {
+                body[field].clone()
+            } else {
+                body[field]["effort"].clone()
+            };
+            assert_eq!(effort, json!("max"), "{format}");
+
+            // off -> null: no reasoning field at all, in both formats.
+            let body =
+                build_request_body(&model, &empty_context(), &StreamOptions::default(), &compat);
+            assert!(body.get(field).is_none(), "{format}: {body}");
+        }
     }
 
     #[test]

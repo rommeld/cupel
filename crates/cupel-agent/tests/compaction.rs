@@ -144,6 +144,7 @@ fn mock_model(context_window: u64) -> Model {
         input: vec![cupel_core::types::InputModality::Text],
         cost: ModelCost::default(),
         context_window,
+        max_context_window: None,
         max_tokens: 4096,
         headers: None,
         compat: None,

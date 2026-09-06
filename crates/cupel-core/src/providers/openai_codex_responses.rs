@@ -31,7 +31,10 @@ use crate::{
     provider::Provider,
     providers::{
         apply_custom_headers, error_message,
-        openai_responses::{convert_items, normalize_id_part, process_response_stream, short_hash},
+        openai_responses::{
+            convert_items, normalize_id_part, process_response_stream, short_hash,
+            supports_temperature,
+        },
         with_cancel,
     },
     types::{
@@ -225,7 +228,9 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
     {
         body["prompt_cache_key"] = json!(clamp_cache_key(session_id));
     }
-    if let Some(temperature) = options.temperature {
+    if let Some(temperature) = options.temperature
+        && supports_temperature(model)
+    {
         body["temperature"] = json!(temperature);
     }
 
@@ -255,6 +260,7 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
             ThinkingLevel::Medium => ModelThinkingLevel::Medium,
             ThinkingLevel::High => ModelThinkingLevel::High,
             ThinkingLevel::XHigh => ModelThinkingLevel::XHigh,
+            ThinkingLevel::Max => ModelThinkingLevel::Max,
         });
         let clamped = requested.map(|level| clamp_thinking_level(model, level));
         if let Some(level) = clamped
@@ -317,6 +323,7 @@ mod tests {
             input: vec![InputModality::Text, InputModality::Image],
             cost: ModelCost::default(),
             context_window: 272_000,
+            max_context_window: None,
             max_tokens: 128_000,
             headers: None,
             compat: None,
@@ -430,6 +437,47 @@ mod tests {
         assert!(body.get("reasoning").is_none());
         // Encrypted reasoning stays included even with thinking off.
         assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+    }
+
+    #[test]
+    fn astra_on_codex_sends_max_and_no_temperature() {
+        // The pinned codex/gpt-6-astra row: minimal -> low like every
+        // Codex row, off unsupported, max kept by omission, no temperature.
+        let mut model = codex_model();
+        model.id = "codex/gpt-6-astra".to_string();
+        let mut map = ThinkingLevelMap::new();
+        map.insert("off".to_string(), None);
+        map.insert("minimal".to_string(), Some("low".to_string()));
+        model.thinking_level_map = Some(map);
+        model.compat = Some(json!({
+            "requestModel": "gpt-6-astra",
+            "supportsTemperature": false,
+        }));
+        let options = StreamOptions {
+            reasoning: Some(ThinkingLevel::Max),
+            temperature: Some(0.2),
+            ..StreamOptions::default()
+        };
+        let body = build_request_body(&model, &context_with_prompt(), &options);
+        assert_eq!(body["model"], json!("gpt-6-astra"));
+        assert_eq!(
+            body["reasoning"],
+            json!({"effort": "max", "summary": "auto"})
+        );
+        assert!(body.get("temperature").is_none(), "{body}");
+
+        // A GPT-5.5 row (max -> null pinned by the generator) clamps max
+        // down to xhigh - the level below it on the scale.
+        let mut gpt55 = codex_model();
+        gpt55
+            .thinking_level_map
+            .as_mut()
+            .expect("map")
+            .insert("max".to_string(), None);
+        let body = build_request_body(&gpt55, &context_with_prompt(), &options);
+        assert_eq!(body["reasoning"]["effort"], json!("xhigh"));
+        // ...and without the knob the temperature still goes out.
+        assert_eq!(body["temperature"], json!(0.2));
     }
 
     #[test]

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use cupel_core::types::{Api, CostTier, InputModality, Model, ModelCost, Provider};
 
 use crate::curation::{
-    Curated, CuratedProvider, MODELS_DEV_URL, OPENAI_CODEX_MODELS, PROVIDERS, Thinking,
+    Curated, CuratedProvider, MODELS_DEV_URL, OPENAI_CODEX_MODELS, PROVIDERS, Thinking, Window,
 };
 use crate::models_dev::ProviderEntry;
 
@@ -109,12 +109,23 @@ fn openai_codex_models() -> Vec<Model> {
         .iter()
         .map(|row| {
             let (input, output, cached_read, cached_write) = row.cost;
+            let has = |level: &str| row.levels.contains(&level);
             let mut thinking_level_map = std::collections::BTreeMap::new();
-            // pi pins minimal -> "low" (the backend has no minimal
-            // effort). pi's xhigh/max identity pins are NOT copied:
-            // under cupel's key-absence rule an xhigh entry would
-            // DISABLE xhigh, and max is outside cupel's level scale.
-            thinking_level_map.insert("minimal".to_string(), Some("low".to_string()));
+            if !has("none") {
+                thinking_level_map.insert("off".to_string(), None);
+            }
+            if !has("minimal") {
+                thinking_level_map.insert("minimal".to_string(), Some("low".to_string()));
+            }
+            for level in ["low", "medium", "high", "xhigh", "max"] {
+                if !has(level) {
+                    thinking_level_map.insert(level.to_string(), None);
+                }
+            }
+            let mut compat = serde_json::json!({"requestModel": row.id});
+            if !row.temperature {
+                compat["supportsTemperature"] = serde_json::json!(false);
+            }
             Model {
                 id: format!("codex/{}", row.id),
                 name: row.name.to_string(),
@@ -147,9 +158,10 @@ fn openai_codex_models() -> Vec<Model> {
                     }),
                 },
                 context_window: row.context_window,
+                max_context_window: row.max_context_window,
                 max_tokens: 128_000,
                 headers: None,
-                compat: Some(serde_json::json!({"requestModel": row.id})),
+                compat: Some(compat),
             }
         })
         .collect()
@@ -187,6 +199,29 @@ fn to_model(
             provider.cupel_id, row.id
         ));
     }
+    let (context_window, max_context_window) = match row.window {
+        Window::ModelsDev => (entry.limit.context, None),
+        Window::PriceTier => {
+            // The lowest price-tier threshold is the planning window; a
+            // PriceTier row whose models.dev entry lists no tier is a
+            // curation error, not a silent fallback to the full window.
+            let threshold = cost
+                .tiers
+                .iter()
+                .map(|tier| tier.tier.size)
+                .min()
+                .ok_or_else(|| {
+                    format!(
+                        "{}/{} is curated as Window::PriceTier but models.dev lists no price tier",
+                        provider.cupel_id, row.id
+                    )
+                })?;
+            (
+                threshold,
+                Some(entry.limit.input.unwrap_or(entry.limit.context)),
+            )
+        }
+    };
     Ok(Model {
         id: row.id.to_string(),
         name: row.rename.unwrap_or(entry.name.as_str()).to_string(),
@@ -214,11 +249,28 @@ fn to_model(
                     .collect()
             }),
         },
-        context_window: entry.limit.context,
+        context_window,
+        max_context_window,
         max_tokens: entry.limit.output,
         headers: None,
-        compat: row.compat.to_value(),
+        compat: with_temperature_knob(row.compat.to_value(), row.api, entry.temperature),
     })
+}
+
+/// models.dev's `temperature: false` becomdes the OpenAI-family compat
+/// knob `supportsTemperature: false`. Anthropic rows keep their explicit
+/// templates.
+fn with_temperature_knob(
+    compat: Option<serde_json::Value>,
+    api: &str,
+    supports_temperature: bool,
+) -> Option<serde_json::Value> {
+    if supports_temperature || !matches!(api, Api::OPENAI_RESPONSES | Api::OPENAI_COMPLETIONS) {
+        return compat;
+    }
+    let mut compat = compat.unwrap_or_else(|| serde_json::json!({}));
+    compat["supportsTemperature"] = serde_json::json!(false);
+    Some(compat)
 }
 
 /// models.dev knows text/image/pdf/audio/video; cupel's InputModality
@@ -281,6 +333,14 @@ fn validate(models: &[Model]) -> Result<(), String> {
         }
         if model.max_tokens == 0 {
             errors.push(format!("{}: maxTokens is 0", model.id));
+        }
+        if let Some(ceiling) = model.max_context_window
+            && ceiling < model.context_window
+        {
+            errors.push(format!(
+                "{}: maxContextWindow {ceiling} is below contextWindow {}",
+                model.id, model.context_window,
+            ));
         }
         if !known_apis.contains(&model.api.as_str()) {
             errors.push(format!("{}: unkown api {}", model.id, model.api));
@@ -352,6 +412,7 @@ mod tests {
         base_url: "https://api.anthropic.com",
         thinking: Thinking::Budget,
         compat: Compat::None,
+        window: Window::ModelsDev,
     };
     const TEST_PROVIDER: CuratedProvider = CuratedProvider {
         models_dev_id: "anthropic",
@@ -374,6 +435,71 @@ mod tests {
         // Budget thinking: no map at all.
         assert!(model.thinking_level_map.is_none());
         assert!(model.compat.is_none());
+    }
+
+    /// GPT-6 Astra exactly as models.dev lists it (2026-09-06).
+    fn astra_entry() -> models_dev::ModelEntry {
+        serde_json::from_value(serde_json::json!({
+            "name": "GPT-6 Astra",
+            "reasoning": true,
+            "reasoning_options": [
+                {"type": "effort", "values": ["low", "medium", "high", "xhigh", "max"]}
+            ],
+            "temperature": false,
+            "modalities": {"input": ["text", "image", "pdf"]},
+            "cost": {
+                "input": 10, "output": 50, "cache_read": 1, "cache_write": 12.5,
+                "tiers": [{"input": 20, "output": 75, "cache_read": 2, "cache_write": 25,
+                           "tier": {"type": "context", "size": 272_000}}]
+            },
+            "limit": {"context": 1_050_000, "input": 922_000, "output": 128_000}
+        }))
+        .expect("fixture entry parses")
+    }
+
+    const ASTRA_ROW: Curated = Curated {
+        id: "gpt-6-astra",
+        rename: None,
+        api: Api::OPENAI_RESPONSES,
+        base_url: "https://api.openai.com/v1",
+        thinking: Thinking::FromEffort,
+        compat: Compat::None,
+        window: Window::PriceTier,
+    };
+    const OPENAI_PROVIDER: CuratedProvider = CuratedProvider {
+        models_dev_id: "openai",
+        cupel_id: "openai",
+        models: &[ASTRA_ROW],
+    };
+
+    #[test]
+    fn price_tier_rows_plan_against_the_tier_threshold() {
+        let model = to_model(&OPENAI_PROVIDER, &ASTRA_ROW, &astra_entry()).expect("maps");
+        // 272k planning window (the price tier), 922k opt-in ceiling (the
+        // documented max input), tier prices carried along.
+        assert_eq!(model.context_window, 272_000);
+        assert_eq!(model.max_context_window, Some(922_000));
+        assert_eq!(
+            model.cost.tiers.as_ref().expect("tier")[0].context_over,
+            272_000
+        );
+        // The effort scale: off/minimal disabled, xhigh/max kept by omission.
+        let map = model.thinking_level_map.expect("map");
+        assert_eq!(map.get("off"), Some(&None));
+        assert_eq!(map.get("minimal"), Some(&None));
+        assert!(!map.contains_key("xhigh") && !map.contains_key("max"));
+        // temperature: false -> the compat knob, created from nothing.
+        assert_eq!(
+            model.compat,
+            Some(serde_json::json!({"supportsTemperature": false}))
+        );
+
+        // A PriceTier row without a tier on models.dev is a named error.
+        let mut tierless = astra_entry();
+        tierless.cost.as_mut().expect("cost").tiers.clear();
+        let error = to_model(&OPENAI_PROVIDER, &ASTRA_ROW, &tierless).unwrap_err();
+        assert!(error.contains("openai/gpt-6-astra"), "{error}");
+        assert!(error.contains("no price tier"), "{error}");
     }
 
     #[test]
@@ -415,10 +541,14 @@ mod tests {
         let mut broken = good.clone();
         broken.context_window = 0;
         broken.base_url = "not-a-url".to_string();
-        let error = validate(&[good.clone(), broken, good.clone()]).unwrap_err();
+        let mut inverted = good.clone();
+        inverted.id = "inverted".to_string();
+        inverted.max_context_window = Some(inverted.context_window - 1);
+        let error = validate(&[good.clone(), broken, good.clone(), inverted]).unwrap_err();
         assert!(error.contains("duplicated id claude-sonnet-5"), "{error}");
         assert!(error.contains("contextWindow is 0"), "{error}");
         assert!(error.contains("not an http(s) URL"), "{error}");
+        assert!(error.contains("inverted: maxContextWindow"), "{error}");
 
         // The order contract: anything but sonnet-5 first is an error.
         let mut renamed = good;
@@ -430,7 +560,7 @@ mod tests {
     #[test]
     fn codex_rows_are_pinned_namespaced_and_tiered() {
         let models = openai_codex_models();
-        assert_eq!(models.len(), 7, "pi's explicit codex list");
+        assert_eq!(models.len(), 8, "pi's explicit codex list");
         for model in &models {
             // The id namespacing contract the provider's wire_model undoes.
             let request_model = model
@@ -444,13 +574,50 @@ mod tests {
             assert_eq!(model.provider.as_str(), Provider::OPENAI_CODEX);
         }
         // Spot checks against pi's generate-models.ts values.
-        let sol = &models[0];
-        assert_eq!(sol.id, "codex/gpt-5.6-sol", "first row = /provider default");
-        let tiers = sol.cost.tiers.as_ref().expect("long-context tier");
+        let astra = &models[0];
+        assert_eq!(
+            astra.id, "codex/gpt-6-astra",
+            "first row = /provider default"
+        );
+        assert_eq!(astra.context_window, 272_000);
+        assert_eq!(
+            astra.max_context_window,
+            Some(872_000),
+            "Codex CLI's ceiling"
+        );
+        let tiers = astra.cost.tiers.as_ref().expect("long-context tier");
         assert_eq!(tiers[0].context_over, 272_000);
-        assert!((tiers[0].input - 10.0).abs() < f64::EPSILON, "5.0 x2");
-        assert!((tiers[0].output - 45.0).abs() < f64::EPSILON, "30.0 x1.5");
-        let spark = models.last().expect("seven rows");
+        assert!((tiers[0].input - 20.0).abs() < f64::EPSILON, "10.0 x2");
+        assert!((tiers[0].output - 75.0).abs() < f64::EPSILON, "50.0 x1.5");
+        let astra_map = astra.thinking_level_map.as_ref().expect("map");
+        assert!(!astra_map.contains_key("max"), "max listed -> key absent");
+        assert_eq!(
+            astra
+                .compat
+                .as_ref()
+                .and_then(|c| c.get("supportsTemperature")),
+            Some(&serde_json::json!(false))
+        );
+        // GPT-5.5's scale stops at xhigh: max is pinned off, temperature
+        // and ceiling untouched.
+        let gpt55 = models
+            .iter()
+            .find(|m| m.id == "codex/gpt-5.5")
+            .expect("row");
+        assert_eq!(
+            gpt55.thinking_level_map.as_ref().expect("map").get("max"),
+            Some(&None)
+        );
+        assert!(
+            gpt55
+                .compat
+                .as_ref()
+                .expect("compat")
+                .get("supportsTemperature")
+                .is_none()
+        );
+        assert!(gpt55.max_context_window.is_none());
+        let spark = models.last().expect("eight rows");
         assert_eq!(spark.context_window, 128_000);
         assert!(spark.cost.tiers.is_none(), "spark has no long-context tier");
         assert_eq!(spark.input, vec![InputModality::Text], "spark is text-only");

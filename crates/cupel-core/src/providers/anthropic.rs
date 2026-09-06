@@ -249,7 +249,7 @@ async fn run(
         req = req.timeout(core::time::Duration::from_millis(timeout));
     }
 
-    // ---- Send, racing the cancellation token -------------------------------
+    // Send, racing the cancellation token.
     let response = with_cancel(options, req.json(&body).send()).await??;
 
     let status = response.status();
@@ -261,7 +261,7 @@ async fn run(
         });
     }
 
-    // ---- Stream + decode the SSE body --------------------------------------
+    // Stream + decode the SSE body.
     let mut output = new_output_message(model);
     if !sink.start() {
         return Ok(()); // Consumer dropped the stream; stop working.
@@ -806,6 +806,7 @@ fn map_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> String {
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High => "high",
         ThinkingLevel::XHigh => "xhigh",
+        ThinkingLevel::Max => "max",
     };
     if let Some(Some(mapped)) = model.thinking_level_map.as_ref().and_then(|m| m.get(key)) {
         return mapped.clone();
@@ -815,6 +816,7 @@ fn map_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> String {
         ThinkingLevel::Medium => "medium",
         ThinkingLevel::High => "high",
         ThinkingLevel::XHigh => "xhigh",
+        ThinkingLevel::Max => "max",
     }
     .to_string()
 }

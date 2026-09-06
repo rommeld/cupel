@@ -129,11 +129,11 @@ pub fn clamp_max_tokens_to_context(
 
 /// Budget-based thinking models "spend" thinking tokens out of `max_tokens`,
 /// so enabling thinking without raising `max_tokens` would starve the actual
-/// answer. `xhigh` clamps to `high` (budget models don't support it).
+/// answer. `xhigh` and `max` clamps to `high` (budget models don't support it).
 #[must_use]
 pub fn clamp_reasoning(level: ThinkingLevel) -> ThinkingLevel {
     match level {
-        ThinkingLevel::XHigh => ThinkingLevel::High,
+        ThinkingLevel::XHigh | ThinkingLevel::Max => ThinkingLevel::High,
         other => other,
     }
 }
@@ -165,7 +165,9 @@ pub fn adjust_max_tokens_for_thinking(
         ThinkingLevel::Minimal => budgets.minimal.unwrap_or(1024),
         ThinkingLevel::Low => budgets.low.unwrap_or(2048),
         ThinkingLevel::Medium => budgets.medium.unwrap_or(8192),
-        ThinkingLevel::High | ThinkingLevel::XHigh => budgets.high.unwrap_or(16384),
+        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => {
+            budgets.high.unwrap_or(16384)
+        }
     };
 
     let max_tokens = match base_max_tokens {

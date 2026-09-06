@@ -527,6 +527,7 @@ mod tests {
             input: vec![cupel_core::types::InputModality::Text],
             cost: cupel_core::types::ModelCost::default(),
             context_window,
+            max_context_window: None,
             max_tokens: 4096,
             headers: None,
             compat: None,

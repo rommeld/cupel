@@ -39,10 +39,6 @@ use crate::{
     },
 };
 
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
-
 pub struct OpenAiResponsesProvider {
     http: reqwest::Client,
 }
@@ -93,10 +89,6 @@ impl Provider for OpenAiResponsesProvider {
         stream
     }
 }
-
-// ---------------------------------------------------------------------------
-// Text signatures: how we remember OpenAI's message item ids
-// ---------------------------------------------------------------------------
 
 /// Encode `{"v":1,"id":...}` (pi's `TextSignatureV1`). Versioning the payload
 /// lets future formats coexist with already-persisted sessions.
@@ -175,10 +167,6 @@ fn normalize_tool_call_id(id: &str, model: &Model, source: &AssistantMessage) ->
     }
     format!("{normalized_call_id}|{normalized_item_id}")
 }
-
-// ---------------------------------------------------------------------------
-// Worker
-// ---------------------------------------------------------------------------
 
 #[tracing::instrument(name = "openai_responses_request", skip_all, fields(model = %model.id, provider = %model.provider.as_str()))]
 async fn run(
@@ -671,10 +659,6 @@ fn finalize_response(response: &Value, model: &Model, output: &mut AssistantMess
     }
 }
 
-// ---------------------------------------------------------------------------
-// Request building
-// ---------------------------------------------------------------------------
-
 /// Compat knobs for the Responses API, read from `model.compat`.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -683,6 +667,9 @@ struct OpenAiCompat {
     supports_developer_role: bool,
     /// Whether 24h prompt-cache retention is available.
     supports_long_cache_retention: bool,
+    /// Whether the model accepts the `temperature` request field. GPT-6
+    /// Astra rejects it.
+    supports_temperature: bool,
 }
 
 impl Default for OpenAiCompat {
@@ -690,6 +677,7 @@ impl Default for OpenAiCompat {
         Self {
             supports_developer_role: true,
             supports_long_cache_retention: true,
+            supports_temperature: true,
         }
     }
 }
@@ -700,6 +688,11 @@ fn openai_compat(model: &Model) -> OpenAiCompat {
         .clone()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default()
+}
+
+/// The one knob the Codex provider shares with this dialect.
+pub(crate) fn supports_temperature(model: &Model) -> bool {
+    openai_compat(model).supports_temperature
 }
 
 fn build_request_body(model: &Model, context: &Context, options: &StreamOptions) -> Value {
@@ -730,7 +723,9 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
     if let Some(max_tokens) = options.max_tokens {
         body["max_output_tokens"] = json!(clamp_max_tokens_to_context(model, context, max_tokens));
     }
-    if let Some(temperature) = options.temperature {
+    if let Some(temperature) = options.temperature
+        && compat.supports_temperature
+    {
         body["temperature"] = json!(temperature);
     }
 
@@ -763,6 +758,7 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
             ThinkingLevel::Medium => ModelThinkingLevel::Medium,
             ThinkingLevel::High => ModelThinkingLevel::High,
             ThinkingLevel::XHigh => ModelThinkingLevel::XHigh,
+            ThinkingLevel::Max => ModelThinkingLevel::Max,
         });
         let clamped = requested.map(|level| clamp_thinking_level(model, level));
 
@@ -987,4 +983,110 @@ pub(crate) fn convert_items(
     }
 
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        InputModality, Message, ModelCost, Provider as ProviderName, ThinkingLevelMap, UserMessage,
+        now_ms,
+    };
+
+    /// A GPT-6 Astra catalog row as the generator emits it: no off, no
+    /// minimal, max kept by omission, and the temperature knob off.
+    fn astra_model() -> Model {
+        let mut map = ThinkingLevelMap::new();
+        map.insert("off".to_string(), None);
+        map.insert("minimal".to_string(), None);
+        Model {
+            id: "gpt-6-astra".to_string(),
+            name: "GPT-6 Astra".to_string(),
+            api: Api::from(Api::OPENAI_RESPONSES),
+            provider: ProviderName::from(ProviderName::OPENAI),
+            base_url: "https://api.openai.com/v1".to_string(),
+            reasoning: true,
+            thinking_level_map: Some(map),
+            input: vec![InputModality::Text, InputModality::Image],
+            cost: ModelCost::default(),
+            context_window: 272_000,
+            max_context_window: None,
+            max_tokens: 128_000,
+            headers: None,
+            compat: Some(json!({"supportsTemperature": false})),
+        }
+    }
+
+    fn context() -> Context {
+        Context {
+            system_prompt: Some("You are cupel.".to_string()),
+            messages: vec![Message::User(UserMessage {
+                content: UserContentBody::Text("hi".to_string()),
+                timestamp: now_ms(),
+            })],
+            tools: None,
+        }
+    }
+
+    fn with_reasoning(level: Option<ThinkingLevel>) -> StreamOptions {
+        StreamOptions {
+            reasoning: level,
+            temperature: Some(0.2),
+            ..StreamOptions::default()
+        }
+    }
+
+    #[test]
+    fn astra_drops_temperature_but_default_models_keep_it() {
+        let body = build_request_body(&astra_model(), &context(), &with_reasoning(None));
+        assert!(body.get("temperature").is_none(), "{body}");
+
+        // Without the knob (older rows, user models.json) nothing changes.
+        let mut plain = astra_model();
+        plain.compat = None;
+        let body = build_request_body(&plain, &context(), &with_reasoning(None));
+        assert_eq!(body["temperature"], json!(0.2));
+    }
+
+    #[test]
+    fn astra_reasoning_levels_go_on_the_wire_by_name() {
+        let model = astra_model();
+        // max is a real effort value now, not clamped to xhigh.
+        let body = build_request_body(
+            &model,
+            &context(),
+            &with_reasoning(Some(ThinkingLevel::Max)),
+        );
+        assert_eq!(
+            body["reasoning"],
+            json!({"effort": "max", "summary": "auto"})
+        );
+        assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+
+        // minimal is unsupported: the clamp walks up to low (OpenAI's own
+        // migration advice for none/minimal users).
+        let body = build_request_body(
+            &model,
+            &context(),
+            &with_reasoning(Some(ThinkingLevel::Minimal)),
+        );
+        assert_eq!(body["reasoning"]["effort"], json!("low"));
+    }
+
+    #[test]
+    fn astra_off_omits_the_reasoning_field() {
+        // off -> null in the map: the model cannot be switched off, so the
+        // request carries NO reasoning field (never effort "none", which
+        // Astra rejects) and the server applies its default effort.
+        let body = build_request_body(&astra_model(), &context(), &with_reasoning(None));
+        assert!(body.get("reasoning").is_none(), "{body}");
+
+        // The GPT-5.6 shape (off -> "none") still sends the explicit none.
+        let mut gpt56 = astra_model();
+        let mut map = ThinkingLevelMap::new();
+        map.insert("off".to_string(), Some("none".to_string()));
+        gpt56.thinking_level_map = Some(map);
+        let body = build_request_body(&gpt56, &context(), &with_reasoning(None));
+        assert_eq!(body["reasoning"], json!({"effort": "none"}));
+    }
 }

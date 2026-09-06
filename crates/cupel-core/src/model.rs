@@ -45,13 +45,14 @@ fn effective_rates(cost: &crate::types::ModelCost, usage: &Usage) -> CostTier {
         .unwrap_or(base)
 }
 
-const EXTENDED: [ModelThinkingLevel; 6] = [
+const EXTENDED: [ModelThinkingLevel; 7] = [
     ModelThinkingLevel::Off,
     ModelThinkingLevel::Minimal,
     ModelThinkingLevel::Low,
     ModelThinkingLevel::Medium,
     ModelThinkingLevel::High,
     ModelThinkingLevel::XHigh,
+    ModelThinkingLevel::Max,
 ];
 
 /// By model supported thinking level.
@@ -71,7 +72,7 @@ pub(crate) fn supported_thinking_levels(model: &Model) -> Vec<ModelThinkingLevel
             match entry {
                 Some(None) => false,
                 other => {
-                    if *level == ModelThinkingLevel::XHigh {
+                    if matches!(level, ModelThinkingLevel::XHigh | ModelThinkingLevel::Max) {
                         other.is_none()
                     } else {
                         true
@@ -148,6 +149,7 @@ mod tests {
                 }]),
             },
             context_window: 400_000,
+            max_context_window: None,
             max_tokens: 128_000,
             headers: None,
             compat: None,
@@ -187,6 +189,52 @@ mod tests {
         assert_close(usage.cost.input, 4.0 * 300_000.0 / PER_M);
         assert_close(usage.cost.output, 15.0 * 2_000.0 / PER_M);
         assert_close(usage.cost.total, usage.cost.input + usage.cost.output);
+    }
+
+    fn astra_map() -> crate::types::ThinkingLevelMap {
+        let mut map = crate::types::ThinkingLevelMap::new();
+        map.insert("off".to_string(), None);
+        map.insert("minimal".to_string(), None);
+        map
+    }
+
+    #[test]
+    fn max_follow_the_key_absence_rule() {
+        let mut model = tiered_model();
+        assert!(supported_thinking_levels(&model).contains(&ModelThinkingLevel::Max));
+
+        model.thinking_level_map = Some(astra_map());
+        assert_eq!(
+            supported_thinking_levels(&model),
+            vec![
+                ModelThinkingLevel::Low,
+                ModelThinkingLevel::Medium,
+                ModelThinkingLevel::High,
+                ModelThinkingLevel::XHigh,
+                ModelThinkingLevel::Max,
+            ]
+        );
+
+        for entry in [None, Some("max".to_string())] {
+            let mut map = astra_map();
+            map.insert("max".to_string(), entry);
+            model.thinking_level_map = Some(map);
+            assert!(!supported_thinking_levels(&model).contains(&ModelThinkingLevel::Max));
+            assert_eq!(
+                clamp_thinking_level(&model, ModelThinkingLevel::Max),
+                ModelThinkingLevel::XHigh
+            );
+        }
+    }
+
+    #[test]
+    fn astra_clamps_minimal_up_to_low() {
+        let mut model = tiered_model();
+        model.thinking_level_map = Some(astra_map());
+        assert_eq!(
+            clamp_thinking_level(&model, ModelThinkingLevel::Minimal),
+            ModelThinkingLevel::Low
+        );
     }
 
     #[test]

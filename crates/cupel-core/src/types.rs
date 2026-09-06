@@ -273,6 +273,7 @@ pub enum ThinkingLevel {
     Medium,
     High,
     XHigh,
+    Max,
 }
 
 /// A thinking level *including* the "off" state, used by model metadata.
@@ -285,6 +286,7 @@ pub enum ModelThinkingLevel {
     Medium,
     High,
     XHigh,
+    Max,
 }
 
 impl ModelThinkingLevel {
@@ -298,6 +300,7 @@ impl ModelThinkingLevel {
             ModelThinkingLevel::Medium => "medium",
             ModelThinkingLevel::High => "high",
             ModelThinkingLevel::XHigh => "xhigh",
+            ModelThinkingLevel::Max => "max",
         }
     }
 }
@@ -369,6 +372,8 @@ pub struct Model {
     pub input: Vec<InputModality>,
     pub cost: ModelCost,
     pub context_window: u64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub max_context_window: Option<u64>,
     pub max_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub headers: Option<BTreeMap<String, String>>,

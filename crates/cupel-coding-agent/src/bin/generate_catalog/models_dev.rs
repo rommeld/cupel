@@ -21,16 +21,31 @@ pub struct ProviderEntry {
 /// Every field is defaulted so sparse upstream entries still parse; hard
 /// requirements (cost present, usable limits) are enforced later, where
 /// the error message can name the curated model.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct ModelEntry {
     pub name: String,
     pub reasoning: bool,
     pub reasoning_options: Vec<ReasoningOption>,
     pub modalities: Modalities,
-    /// JSON `null` on image/embedding models - hence Option.
     pub cost: Option<Cost>,
     pub limit: Limit,
+    pub temperature: bool,
+}
+
+/// Hand-written because `temperature` must default to TRUE.
+impl Default for ModelEntry {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            reasoning: false,
+            reasoning_options: Vec::new(),
+            modalities: Modalities::default(),
+            cost: None,
+            limit: Limit::default(),
+            temperature: true,
+        }
+    }
 }
 
 /// How a model's thinking is switched upstream. Internally tagged on
@@ -90,6 +105,7 @@ pub struct TierThreshold {
 pub struct Limit {
     pub context: u64,
     pub output: u64,
+    pub input: Option<u64>,
 }
 
 /// Stage 1 + 2: parse the outer object generically, then typed-parse
@@ -141,8 +157,8 @@ impl ProviderEntry {
 /// - a SUPPORTED level needs NO entry (the provider's identity fallback
 /// sends the level's own name),
 /// xhigh is special-cased by supported_thinking_levels: it is
-/// selectable onyl while its key is ABSENT - even `xhigh -> "xhigh"`
-/// would disable it. Supported xhigh therefore means: omit the key.
+/// selectable onyl while its key is ABSENT. Supported xhigh/max
+/// therefore means: omit the key.
 pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<ThinkingLevelMap> {
     let mut effort: Vec<String> = Vec::new();
     let mut has_toggle = false;
@@ -166,7 +182,7 @@ pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<Thi
     // Effort values without any cupel equivalent (e.g. only "default"):
     // treat as if models.dev had said nothing, rather than disabling
     // every level.
-    let known = ["none", "minimal", "low", "medium", "high", "xhigh"];
+    let known = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
     if !known.iter().any(|level| supported.contains(level)) {
         return None;
     }
@@ -185,10 +201,11 @@ pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<Thi
             map.insert(level.to_string(), None);
         }
     }
-    if !supported.contains("xhigh") {
-        map.insert("xhigh".to_string(), None);
+    for level in ["xhigh", "max"] {
+        if !supported.contains(level) {
+            map.insert(level.to_string(), None);
+        }
     }
-    // models.dev "max" has no cupel thinking level and is ignored.
     if map.is_empty() { None } else { Some(map) }
 }
 
@@ -297,9 +314,43 @@ mod tests {
         // collapses to None.
         let options = [
             ReasoningOption::Toggle {},
-            effort(&["minimal", "low", "medium", "high", "xhigh"]),
+            effort(&["minimal", "low", "medium", "high", "xhigh", "max"]),
         ];
         assert!(thinking_level_map_from_effort(&options).is_none());
+    }
+
+    #[test]
+    fn astra_shaped_effort_disables_off_and_minimal_only() {
+        // GPT-6 Astra on models.dev: low..max, no none, no toggle. Both
+        // top levels are supported, so both keys stay absent.
+        let options = [effort(&["low", "medium", "high", "xhigh", "max"])];
+        let map = thinking_level_map_from_effort(&options).expect("map derived");
+        assert_eq!(map, map_of(&[("off", None), ("minimal", None)]));
+    }
+
+    #[test]
+    fn scales_without_max_get_an_explicit_null() {
+        // The mirror image of the omission rule: a model whose scale stops
+        // at xhigh must carry `max: null`, or max would be selectable.
+        let options = [effort(&[
+            "none", "minimal", "low", "medium", "high", "xhigh",
+        ])];
+        let map = thinking_level_map_from_effort(&options).expect("map derived");
+        assert_eq!(map, map_of(&[("max", None), ("off", Some("none"))]));
+    }
+
+    #[test]
+    fn temperature_defaults_to_supported() {
+        // The hand-written Default: a sparse entry (no `temperature` key)
+        // must NOT read as "rejects temperature".
+        let catalog = parse_wanted(FIXTURE, &["anthropic"]).expect("fixture parses");
+        let sparse = catalog["anthropic"]
+            .model("anthropic", "paint-o-matic")
+            .expect("entry parses");
+        assert!(sparse.temperature);
+        let explicit: ModelEntry =
+            serde_json::from_value(serde_json::json!({"temperature": false})).expect("parses");
+        assert!(!explicit.temperature);
     }
 
     #[test]

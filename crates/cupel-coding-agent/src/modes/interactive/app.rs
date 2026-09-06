@@ -160,8 +160,9 @@ impl App {
             ("minimal", "shortest thinking budget"),
             ("low", "small thinking budget"),
             ("medium", "moderate thinking budget"),
-            ("high", "large thinking budget"),
-            ("xhigh", "maximum thinking budget"),
+            ("high", "high thinking budget"),
+            ("xhigh", "extra high thinking budget"),
+            ("max", "maxium thinking budget"),
         ]
         .iter()
         .map(|(level, description)| Candidate {
@@ -1123,6 +1124,7 @@ impl App {
                     "medium" => Some(Some(cupel_core::types::ThinkingLevel::Medium)),
                     "high" => Some(Some(cupel_core::types::ThinkingLevel::High)),
                     "xhigh" => Some(Some(cupel_core::types::ThinkingLevel::XHigh)),
+                    "max" => Some(Some(cupel_core::types::ThinkingLevel::Max)),
                     _ => None,
                 };
                 match level {
@@ -1130,8 +1132,9 @@ impl App {
                         self.agent.set_thinking_level(level);
                         self.notice(format!("thinking level set to {args}"));
                     }
-                    None => self
-                        .notice("usage: /thinking off|minimal|low|medium|high|xhigh".to_string()),
+                    None => self.notice(
+                        "usage: /thinking off|minimal|low|medium|high|xhigh|max".to_string(),
+                    ),
                 }
             }
             "quit" => self.should_quit = true,
@@ -1232,7 +1235,7 @@ impl App {
             Some(login::LoginEvent::Done(Ok(summary))) => {
                 self.login = None;
                 self.notice(format!(
-                    "{summary}\nswitch with /provider openai-codex (default codex/gpt-5.6-sol)"
+                    "{summary}\nswitch with /provider openai-codex (default codex/gpt-6-astra)"
                 ));
             }
             Some(login::LoginEvent::Done(Err(error))) => {

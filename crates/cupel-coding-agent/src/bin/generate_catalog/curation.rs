@@ -39,6 +39,16 @@ pub enum Thinking {
     Explicit(&'static [(&'static str, Option<&'static str>)]),
 }
 
+/// Where a curated model's context window come from.
+pub enum Window {
+    /// models.dev's `limit.context` verbatim.
+    ModelsDev,
+    /// OpenAI's long-context family (GPT-5.6, GPT-6 Astra): the planning
+    /// window is the long-context PRICE tier's threshold, and models.dev's
+    /// `limit.input` becomes `maxContextWindow`.
+    PriceTier,
+}
+
 /// Named compat templates - the per-API quirk blobs from the old
 /// hand-written catalog, now defined in exactly one place.
 pub enum Compat {
@@ -84,6 +94,7 @@ pub struct Curated {
     pub base_url: &'static str,
     pub thinking: Thinking,
     pub compat: Compat,
+    pub window: Window,
 }
 
 pub struct CuratedProvider {
@@ -119,6 +130,7 @@ const fn anthropic(id: &'static str, rename: Option<&'static str>) -> Curated {
         base_url: ANTHROPIC_BASE_URL,
         thinking: Thinking::Budget,
         compat: Compat::None,
+        window: Window::ModelsDev,
     }
 }
 
@@ -130,6 +142,7 @@ const fn openai(id: &'static str, rename: Option<&'static str>) -> Curated {
         base_url: OPENAI_BASE_URL,
         thinking: Thinking::FromEffort,
         compat: Compat::None,
+        window: Window::PriceTier,
     }
 }
 
@@ -141,6 +154,7 @@ const fn bedrock(id: &'static str, rename: Option<&'static str>, thinking: Think
         base_url: BEDROCK_BASE_URL,
         thinking,
         compat: Compat::None,
+        window: Window::ModelsDev,
     }
 }
 
@@ -152,6 +166,7 @@ const fn fireworks_anthropic(id: &'static str) -> Curated {
         base_url: FIREWORKS_ANTHROPIC_BASE_URL,
         thinking: Thinking::Budget,
         compat: Compat::FireworksAnthropic,
+        window: Window::ModelsDev,
     }
 }
 
@@ -163,6 +178,7 @@ const fn fireworks_glm(id: &'static str) -> Curated {
         base_url: FIREWORKS_COMPLETIONS_BASE_URL,
         thinking: Thinking::Explicit(GLM52_THINKING),
         compat: Compat::FireworksCompletions,
+        window: Window::ModelsDev,
     }
 }
 
@@ -174,6 +190,7 @@ const fn openrouter(id: &'static str, thinking: Thinking) -> Curated {
         base_url: OPENROUTER_COMPLETIONS_BASE_URL,
         thinking,
         compat: Compat::OpenrouterCompletions,
+        window: Window::ModelsDev,
     }
 }
 
@@ -199,6 +216,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 // token budgets, and no temperature parameter.
                 thinking: Thinking::FromEffort,
                 compat: Compat::AdaptiveAnthropic,
+                window: Window::ModelsDev,
             },
             anthropic("claude-haiku-4-5", Some("Claude Haiku 4.5")),
             anthropic("claude-sonnet-4-6", None),
@@ -209,6 +227,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models_dev_id: "openai",
         cupel_id: Provider::OPENAI,
         models: &[
+            openai("gpt-6-astra", None),
             openai("gpt-5.6-sol", Some("GPT-5.6 Solar")),
             openai("gpt-5.6-luna", None),
             openai("gpt-5.6-terra", None),
@@ -255,7 +274,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models_dev_id: "openrouter",
         cupel_id: Provider::OPENROUTER,
         models: &[
-            openrouter("qwen/qwen3.8-max", Thinking::FromEffort),
+            openrouter("qwen/qwen3.8-max-0902", Thinking::FromEffort),
             openrouter(
                 "moonshotai/kimi-k2.7-code",
                 Thinking::Explicit(KIMI_K27_CODE_OPENROUTER_THINKING),
@@ -264,13 +283,18 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("deepseek/deepseek-v4-pro", Thinking::FromEffort),
             openrouter("x-ai/grok-4.6", Thinking::FromEffort),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
+            Curated {
+                id: "openai/gpt-6-astra",
+                rename: None,
+                api: Api::OPENAI_COMPLETIONS,
+                base_url: OPENROUTER_COMPLETIONS_BASE_URL,
+                thinking: Thinking::FromEffort,
+                compat: Compat::OpenrouterCompletions,
+                window: Window::PriceTier,
+            },
         ],
     },
 ];
-
-// ---------------------------------------------------------------------------
-// OpenAI Codex (ChatGPT subscription) - pinned rows, not models.dev rows
-// ---------------------------------------------------------------------------
 
 /// One Codex model, pinned by hand. models.dev has no `openai-codex`
 /// provider (subscription backends carry no public price sheet), so pi
@@ -294,7 +318,20 @@ pub struct PinnedCodex {
     /// x1.5, cache x2 - pi's withOpenAiLongContextPricing).
     pub long_context_tier: bool,
     pub context_window: u64,
+    /// The backend's `max_context_window` when it exceeds context_window
+    /// (the long-context opt-in ceiling).
+    pub max_context_window: Option<u64>,
+    /// The backend's effort scale, verbatim from Codex CLI's models.json
+    /// (`supported_reasong_levels`), minus its `ultra` entry.
+    pub levels: &'static [&'static str],
+    /// Whether the model accepts `temperature` (Astra rejects it).
+    pub temperature: bool,
 }
+
+/// The two effort scales the Codex backend advertises today: every row
+/// stops at xhigh except the 5.6 family and Astra, which add max.
+const CODEX_LEVELS_TO_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
+const CODEX_LEVELS_TO_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Row order = catalog order: the first row is the `/provider
 /// openai-codex` default. gpt-5.6-sol leads to match the openai
@@ -302,12 +339,26 @@ pub struct PinnedCodex {
 /// alphabetically, which would make the light Spark model the default.
 pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
     PinnedCodex {
+        id: "gpt-6-astra",
+        name: "GPT-6 Astra",
+        vision: true,
+        cost: (10.0, 50.0, 1.0, 12.5),
+        long_context_tier: true,
+        context_window: 272_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
+    PinnedCodex {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
         vision: true,
         cost: (5.0, 30.0, 0.5, 6.25),
         long_context_tier: true,
         context_window: 272_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: true,
     },
     PinnedCodex {
         id: "gpt-5.6-luna",
@@ -316,6 +367,9 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (0.2, 1.2, 0.02, 0.25),
         long_context_tier: true,
         context_window: 272_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: true,
     },
     PinnedCodex {
         id: "gpt-5.6-terra",
@@ -324,6 +378,9 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (2.0, 12.0, 0.2, 2.5),
         long_context_tier: true,
         context_window: 272_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: true,
     },
     PinnedCodex {
         id: "gpt-5.5",
@@ -332,6 +389,9 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (5.0, 30.0, 0.5, 0.0),
         long_context_tier: true,
         context_window: 272_000,
+        max_context_window: None,
+        levels: CODEX_LEVELS_TO_XHIGH,
+        temperature: true,
     },
     PinnedCodex {
         id: "gpt-5.4",
@@ -340,6 +400,9 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (2.5, 15.0, 0.25, 0.0),
         long_context_tier: true,
         context_window: 272_000,
+        max_context_window: None,
+        levels: CODEX_LEVELS_TO_XHIGH,
+        temperature: true,
     },
     PinnedCodex {
         id: "gpt-5.4-mini",
@@ -348,6 +411,9 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (0.75, 4.5, 0.075, 0.0),
         long_context_tier: false,
         context_window: 272_000,
+        max_context_window: None,
+        levels: CODEX_LEVELS_TO_XHIGH,
+        temperature: true,
     },
     PinnedCodex {
         id: "gpt-5.3-codex-spark",
@@ -356,5 +422,8 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (1.75, 14.0, 0.175, 0.0),
         long_context_tier: false,
         context_window: 128_000,
+        max_context_window: None,
+        levels: CODEX_LEVELS_TO_XHIGH,
+        temperature: true,
     },
 ];

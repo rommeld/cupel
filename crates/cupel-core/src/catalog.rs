@@ -98,7 +98,14 @@ mod tests {
         // models.json layering); removing them from curation.rs must
         // fail HERE with a clear message, not somewhere in the TUI tests.
         let models = builtin_models();
-        for id in ["claude-sonnet-5", "claude-haiku-4-5", "claude-sonnet-4-5"] {
+        for id in [
+            "claude-sonnet-5",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-5",
+            "gpt-6-astra",
+            "codex/gpt-6-astra",
+            "openai/gpt-6-astra",
+        ] {
             assert!(
                 models.iter().any(|m| m.id == id),
                 "{id} missing from catalog"
@@ -156,6 +163,83 @@ mod tests {
             assert_eq!(format, Some("openrouter"), "{}", model.id);
         }
         assert!(seen > 0, "no openrouter models in the catalog");
+    }
+
+    #[test]
+    fn openai_rows_plan_against_the_price_tier() {
+        // The long-context family: the planning window IS the price-tier
+        // threshold (requests never drift into 2x pricing unnoticed), the
+        // documented max input is the opt-in ceiling above it.
+        let mut seen = 0;
+        for model in builtin_models() {
+            if model.provider.as_str() != Provider::OPENAI {
+                continue;
+            }
+            seen += 1;
+            let tier = model.cost.tiers.as_ref().and_then(|t| t.first());
+            assert_eq!(
+                tier.map(|t| t.context_over),
+                Some(model.context_window),
+                "{}: contextWindow must equal the price-tier threshold",
+                model.id
+            );
+            assert!(
+                model.max_context_window > Some(model.context_window),
+                "{}: the ceiling must sit above the planning window",
+                model.id
+            );
+        }
+        assert!(seen > 0, "no openai models in the catalog");
+    }
+
+    #[test]
+    fn astra_rows_carry_the_documented_limits() {
+        // GPT-6 Astra in all three dialects: no temperature, no off, no
+        // minimal, and BOTH top levels selectable (keys absent).
+        let models = builtin_models();
+        for id in ["gpt-6-astra", "openai/gpt-6-astra", "codex/gpt-6-astra"] {
+            let model = models.iter().find(|m| m.id == id).expect(id);
+            assert_eq!(
+                model
+                    .compat
+                    .as_ref()
+                    .and_then(|c| c.get("supportsTemperature")),
+                Some(&serde_json::json!(false)),
+                "{id}"
+            );
+            let map = model.thinking_level_map.as_ref().expect("map");
+            assert_eq!(map.get("off"), Some(&None), "{id}");
+            assert!(
+                !map.contains_key("xhigh"),
+                "{id}: xhigh key would DISABLE it"
+            );
+            assert!(!map.contains_key("max"), "{id}: max key would DISABLE it");
+            assert_eq!(model.context_window, 272_000, "{id}");
+        }
+        // minimal: unsupported on the API (clamps up to low), pinned to
+        // "low" on Codex like every other Codex row - same wire result.
+        let api = models
+            .iter()
+            .find(|m| m.id == "gpt-6-astra")
+            .expect("api row");
+        assert_eq!(
+            api.thinking_level_map.as_ref().expect("map").get("minimal"),
+            Some(&None)
+        );
+        assert_eq!(
+            api.max_context_window,
+            Some(922_000),
+            "OpenAI's documented max input"
+        );
+        let codex = models
+            .iter()
+            .find(|m| m.id == "codex/gpt-6-astra")
+            .expect("codex row");
+        assert_eq!(
+            codex.max_context_window,
+            Some(872_000),
+            "Codex CLI's ceiling"
+        );
     }
 
     #[test]

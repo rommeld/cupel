@@ -15,7 +15,6 @@ repository = "https://github.com/rommeld/cupel"
 cupel-core = { path = "crates/cupel-core" }
 cupel-agent = { path = "crates/cupel-agent" }
 
-anyhow = "1.0"
 async-trait = "0.1"
 aws-config = "1"
 aws-sdk-bedrockruntime = "1"
