@@ -255,6 +255,10 @@ async fn threshold_compaction_shrinks_the_request() {
     // User-text history has nothing to prune, so this path DID pay one
     // summarization call - the counterpart of the pruning test below.
     assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 1);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        AgentEvent::CompactionEnd { summary: Some(summary), .. } if !summary.is_empty()
+    )));
 }
 
 /// ~1000 estimated tokens of TOOL RESULT filler per message, prefixed by a

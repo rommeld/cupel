@@ -143,8 +143,8 @@ pub async fn run(
                             in_thinking = false;
                         }
                         println!(
-                            "\n\x1b[36m[{}] {}\x1b[0m",
-                            tool_call.name, tool_call.arguments
+                            "\n\x1b[36m[{}]\x1b[0m",
+                            agent.describe_tool_call(&tool_call.name, &tool_call.arguments)
                         );
                     }
                     _ => {}
@@ -152,22 +152,37 @@ pub async fn run(
                 AgentEvent::ToolExecutionEnd {
                     result, is_error, ..
                 } => {
-                    let text: String = result
-                        .content
-                        .iter()
-                        .filter_map(|c| match c {
-                            ToolResultContent::Text(t) => Some(t.text.as_str()),
-                            ToolResultContent::Image(_) => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    // Show the model's evidence, capped for terminal sanity.
-                    let preview: Vec<&str> = text.lines().take(10).collect();
-                    let more = text.lines().count().saturating_sub(preview.len());
-                    let style = if is_error { "\x1b[31m" } else { "\x1b[2m" };
-                    println!("{style}{}\x1b[0m", preview.join("\n"));
-                    if more > 0 {
-                        println!("\x1b[2m... ({more} more lines)\x1b[0m");
+                    if let Some(diff) = result
+                        .details
+                        .as_ref()
+                        .and_then(|d| d.get("diff"))
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        for line in diff.lines() {
+                            let color = match line.as_bytes().first() {
+                                Some(b'+') => "\x1b[32m",
+                                Some(b'-') => "\x1b[31m",
+                                _ => "\x1b[2m",
+                            };
+                            println!("{color}{line}\x1b[0m");
+                        }
+                    } else {
+                        let text: String = result
+                            .content
+                            .iter()
+                            .filter_map(|c| match c {
+                                ToolResultContent::Text(t) => Some(t.text.as_str()),
+                                ToolResultContent::Image(_) => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let preview: Vec<&str> = text.lines().take(10).collect();
+                        let more = text.lines().count().saturating_sub(preview.len());
+                        let style = if is_error { "\x1b[31m" } else { "\x1b[2m" };
+                        println!("{style}{}\x1b[0m", preview.join("\n"));
+                        if more > 0 {
+                            println!("\x1b[2m... ({more} more lines)\x1b[0m");
+                        }
                     }
                 }
                 AgentEvent::TurnEnd { message, .. } => {
@@ -178,6 +193,12 @@ pub async fn run(
                     if let AgentMessage::Llm(Message::Assistant(assistant)) = message.as_ref() {
                         if let Some(error) = &assistant.error_message {
                             println!("\n\x1b[31merror: {error}\x1b[0m");
+                        }
+                        if assistant.stop_reason == cupel_core::types::StopReason::Length {
+                            println!(
+                                "\n\x1b[31merror: response was truncated before completion \
+                                (output token limit)\x1b[0m"
+                            );
                         }
                         let usage = &assistant.usage;
                         println!(
@@ -193,12 +214,19 @@ pub async fn run(
                     tokens_before,
                     tokens_after,
                     error,
+                    summary,
                 } => match error {
-                    None => println!(
-                        "\x1b[33mcontext compacted: ~{}k -> ~{}k tokens\x1b[0m",
-                        tokens_before / 1000,
-                        tokens_after / 1000
-                    ),
+                    None => {
+                        println!(
+                            "\x1b[33mcontext compacted: ~{}k -> ~{}k tokens\x1b[0m",
+                            tokens_before / 1000,
+                            tokens_after / 1000
+                        );
+                        // The checkpoint the agent works from now.
+                        if let Some(summary) = summary {
+                            println!("\x1b[2m{summary}\x1b[0m\n");
+                        }
+                    }
                     Some(error) => println!("\x1b[31mcompaction failed: {error}\x1b[0m"),
                 },
                 AgentEvent::AutoRetry {
@@ -217,6 +245,7 @@ pub async fn run(
                         delay_ms as f64 / 1000.0
                     );
                 }
+                AgentEvent::ToolExecutionStart { .. } | AgentEvent::ToolExecutionUpdate { .. } => {}
                 AgentEvent::AgentEnd { .. } => {
                     // Fire the `stop` hook without holding up the prompt
                     // loop; the next before_prompt settles it.

@@ -120,6 +120,9 @@ async fn event_loop(
             event = app.next_event() => {
                 app.on_event(event).await;
             }
+            () = tokio::time::sleep(std::time::Duration::from_millis(100)), if app.is_running() => {
+                app.tick();
+            }
         }
 
         // Ctrl+O queued a copy: emit it as OSC 52 - the "set clipboard"

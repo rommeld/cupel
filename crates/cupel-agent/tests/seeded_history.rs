@@ -2,10 +2,6 @@
 //! path `cupel --resume` uses to restore a persisted transcript. A mock
 //! provider captures the `Context` it receives, proving the seeded messages
 //! actually reach the LLM request (not just the state snapshot).
-
-// Integration-test files under tests/ are compiled as their own crate and
-// only ever built in test mode, so the "tests outside #[cfg(test)]"
-// restriction lint does not apply here.
 #![allow(clippy::tests_outside_test_module)]
 
 use std::sync::{Arc, Mutex};
@@ -22,8 +18,6 @@ use cupel_core::{
     },
 };
 
-/// A provider that records every `Context` it is asked to stream for, then
-/// answers with a fixed text message.
 struct CapturingProvider {
     contexts: Arc<Mutex<Vec<Context>>>,
 }
@@ -78,7 +72,6 @@ fn mock_model() -> Model {
     }
 }
 
-/// Two messages standing in for a restored transcript: a past exchange.
 fn seed_messages() -> Vec<AgentMessage> {
     let user = AgentMessage::user_text("earlier question");
     let assistant = AgentMessage::Llm(Message::Assistant(AssistantMessage {
@@ -105,18 +98,14 @@ async fn seeded_messages_reach_the_provider_and_survive_in_state() {
     let mut registry = Registry::new();
     registry.register(provider);
 
-    // Built once and cloned: message timestamps come from now_ms(), so a
-    // second seed_messages() call would not compare equal.
     let seed = seed_messages();
     let mut options = AgentOptions::new(mock_model(), Arc::new(registry));
     options.api_key = Some("test".into());
     options.messages = seed.clone();
     let mut agent = Agent::new(options);
 
-    // The seed is visible in state before any run.
     assert_eq!(agent.state().messages.len(), 2);
 
-    // Run one prompt and drain the stream so the run completes.
     let mut events = agent.prompt_text("new question").expect("not busy");
     while let Some(event) = events.next().await {
         if matches!(event, AgentEvent::AgentEnd { .. }) {
@@ -125,7 +114,6 @@ async fn seeded_messages_reach_the_provider_and_survive_in_state() {
     }
     agent.wait_for_idle().await;
 
-    // (a) The provider saw the seeded history BEFORE the new prompt, in order.
     let captured = contexts.lock().unwrap();
     assert_eq!(captured.len(), 1, "exactly one LLM call");
     let sent = &captured[0].messages;
@@ -139,8 +127,15 @@ async fn seeded_messages_reach_the_provider_and_survive_in_state() {
     assert!(text_of(&sent[1]).contains("earlier answer"));
     assert!(text_of(&sent[2]).contains("new question"));
 
-    // (b) State = seed + this run's messages (new user prompt + answer).
     let state_messages = agent.state().messages;
-    assert_eq!(state_messages.len(), 3);
+    assert_eq!(state_messages.len(), 4);
     assert_eq!(state_messages[0..2], seed[..]);
+    assert!(matches!(
+        &state_messages[2],
+        AgentMessage::Llm(Message::User(u)) if format!("{:?}", u.content).contains("new question")
+    ));
+    assert!(matches!(
+        &state_messages[3],
+        AgentMessage::Llm(Message::Assistant(a)) if format!("{:?}", a.content).contains("answer")
+    ));
 }

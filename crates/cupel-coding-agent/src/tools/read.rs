@@ -1,15 +1,11 @@
 //! The `read` tool.
 //!
 //! Text files stream back with head truncation (2000 lines / 50 KB) and
-//! *actionable* continuation notices - "use offset=N to continue" teaches
+//! *actionable* continuation notices. "use offset=N to continue" teaches
 //! the model how to page through big files instead of giving up. Images are
 //! detected by extension and returned as base64 attachments; the core
 //! transform layer already downgrades them to a text placeholder for models
 //! without vision, so the tool doesn't need to know the active model.
-//!
-//! Simplifications vs. pi (documented, revisit if they bite): no automatic
-//! image resizing (pi resizes to 2000x2000 via sharp) and no macOS filename
-//! fallbacks (NFD normalization, curly-quote screenshot names).
 
 use std::path::PathBuf;
 
@@ -31,9 +27,7 @@ use crate::truncate::{
 #[serde(rename_all = "camelCase")]
 struct ReadArgs {
     path: String,
-    /// 1-indexed line to start from.
     offset: Option<usize>,
-    /// Maximum number of lines to return.
     limit: Option<usize>,
 }
 
@@ -106,6 +100,24 @@ impl AgentTool for ReadTool {
         })
     }
 
+    /// `read <path>` plus the requested line range.
+    fn describe_call(&self, args: &Value) -> String {
+        let Some(path) = args.get("path").and_then(Value::as_str) else {
+            return self.name().to_string();
+        };
+        let offset = args.get("offset").and_then(Value::as_u64);
+        let limit = args.get("limit").and_then(Value::as_u64);
+        if offset.is_none() && limit.is_none() {
+            return format!("read {path}");
+        }
+        let start = offset.unwrap_or(1);
+
+        match limit {
+            Some(limit) => format!("read {path}:{start}-{}", (start + limit).saturating_sub(1)),
+            None => format!("read {path}:{start}"),
+        }
+    }
+
     async fn execute(
         &self,
         _tool_call_id: &str,
@@ -120,7 +132,6 @@ impl AgentTool for ReadTool {
             return Err("Operation aborted".into());
         }
 
-        // ---- Images -----------------------------------------------------------
         if let Some(mime_type) = image_mime_type(&absolute_path) {
             let bytes = tokio::fs::read(&absolute_path).await?;
             let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -139,7 +150,6 @@ impl AgentTool for ReadTool {
             });
         }
 
-        // ---- Text --------------------------------------------------------------
         let content = tokio::fs::read_to_string(&absolute_path)
             .await
             .map_err(|e| format!("Could not read file: {} ({e})", args.path))?;
@@ -150,7 +160,6 @@ impl AgentTool for ReadTool {
         let all_lines: Vec<&str> = content.split('\n').collect();
         let total_file_lines = all_lines.len();
 
-        // Convert 1-indexed offset to a 0-indexed start.
         let start_line = args.offset.map_or(0, |o| o.saturating_sub(1));
         let start_line_display = start_line + 1;
         if start_line >= all_lines.len() {
@@ -176,7 +185,6 @@ impl AgentTool for ReadTool {
 
         let truncation = truncate_head(&selected, TruncationOptions::default());
         let output = if truncation.first_line_exceeds_limit {
-            // Nothing could be kept; point the model at a bash fallback.
             let first_line_size = format_size(all_lines[start_line].len());
             format!(
                 "[Line {start_line_display} is {first_line_size}, exceeds {} limit. Use bash: \
@@ -234,6 +242,28 @@ mod tests {
             return Err("expected text".to_string());
         };
         Ok(text.text.clone())
+    }
+
+    #[test]
+    fn describe_call_shows_the_line_range() {
+        let tool = ReadTool::new("/tmp");
+        assert_eq!(
+            tool.describe_call(&json!({"path": "src/lib.rs"})),
+            "read src/lib.rs"
+        );
+        assert_eq!(
+            tool.describe_call(&json!({"path": "src/lib.rs", "offset": 12, "limit": 69})),
+            "read src/lib.rs:12-80"
+        );
+        assert_eq!(
+            tool.describe_call(&json!({"path": "src/lib.rs", "limit": 20})),
+            "read src/lib.rs:1-20"
+        );
+        assert_eq!(
+            tool.describe_call(&json!({"path": "src/lib.rs", "offset": 200})),
+            "read src/lib.rs:200"
+        );
+        assert_eq!(tool.describe_call(&json!({})), "read");
     }
 
     #[tokio::test]

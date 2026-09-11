@@ -30,7 +30,7 @@ pub const ANSWER: Style = Style::new().fg(Color::Magenta);
 pub const REASONING: Style = Style::new()
     .fg(Color::DarkGray)
     .add_modifier(Modifier::ITALIC);
-/// A tool call header (`[name] {args}`).
+/// A tool call header (`$ cargo test`, `edite src/x.rs`).
 pub const TOOL_HEADER: Style = Style::new().fg(Color::Cyan);
 /// De-emphasized detail lines: pending markers, ok tool output, overflow
 /// notes, usage summaries.
@@ -39,6 +39,12 @@ pub const DETAIL: Style = Style::new();
 pub const ERROR: Style = Style::new().fg(Color::Red);
 /// Status notices (retry, compaction, /provider listings).
 pub const NOTICE: Style = Style::new().fg(Color::Yellow);
+/// Diff lines insed a tool cell: added, removed, context.
+/// Green/red is the universal diff convention. The context
+/// stays receded.
+pub const DIFF_ADD: Style = Style::new().fg(Color::Green);
+pub const DIFF_DEL: Style = Style::new().fg(Color::Red);
+pub const DIFF_CTX: Style = Style::new().fg(Color::DarkGray);
 
 /// Input border while a run is active / while idle.
 pub const INPUT_BORDER_BUSY: Style = Style::new().fg(Color::Yellow);

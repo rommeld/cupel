@@ -60,7 +60,7 @@ pub fn agent_event_channel() -> (AgentEventStream, AgentEventSink) {
     (AgentEventStream { rx }, AgentEventSink { tx })
 }
 
-/// Returns all NEW messages the run produced (prompts included).
+/// Returns all new messages the run produced (prompts included).
 pub async fn agent_loop(
     prompts: Vec<AgentMessage>,
     mut context: AgentContext,
@@ -72,6 +72,12 @@ pub async fn agent_loop(
 ) -> Vec<AgentMessage> {
     let mut new_messages: Vec<AgentMessage> = prompts.clone();
     context.messages.extend(prompts.iter().cloned());
+
+    for prompt in &prompts {
+        sink.emit(AgentEvent::MessageEnd {
+            message: prompt.clone(),
+        });
+    }
 
     run_loop(
         context,
@@ -127,10 +133,12 @@ async fn run_loop(
                 first_turn = false;
             }
 
+            // TODO: Cost reducition due to `.clone()`
             // Inject queued messages before the next assistant response.
             for message in pending_messages.drain(..) {
                 context.messages.push(message.clone());
-                new_messages.push(message);
+                new_messages.push(message.clone());
+                sink.emit(AgentEvent::MessageEnd { message });
             }
 
             // Compact BEFORE the request that would overflow, not after it
@@ -168,7 +176,7 @@ async fn run_loop(
 
                 // The pre-turn estimate is a heuristic; when it undershoots,
                 // the provider rejects the request as too large. That error
-                // is checked BEFORE transient retry  - waiting and resending the same oversized
+                // is checked before transient retry. The waiting and resending the same oversized
                 // request could never succeed. Compact, then re-request
                 // immediately (no backoff: the failure wasn't load-related).
                 if cupel_core::overflow::is_context_overflow(&message, config.model.context_window)
@@ -223,12 +231,7 @@ async fn run_loop(
                     // Abortable backoff: the user can still cancel mid-wait.
                     tokio::select! {
                         biased;
-                        () = cancel.cancelled() => {
-                            sink.emit(AgentEvent::AgentEnd {
-                                messages: new_messages.clone(),
-                            });
-                            return;
-                        }
+                        () = cancel.cancelled() => return,
                         () = tokio::time::sleep(
                             core::time::Duration::from_millis(delay_ms),
                         ) => {}
@@ -240,10 +243,6 @@ async fn run_loop(
                     has_more_tool_calls = true;
                     continue;
                 }
-
-                sink.emit(AgentEvent::AgentEnd {
-                    messages: new_messages.clone(),
-                });
                 return;
             }
             tracing::info!(
@@ -276,10 +275,10 @@ async fn run_loop(
                 .await;
                 has_more_tool_calls = !batch.terminate;
                 for result in batch.messages {
-                    context
-                        .messages
-                        .push(AgentMessage::Llm(Message::ToolResult(result.clone())));
-                    new_messages.push(AgentMessage::Llm(Message::ToolResult(result.clone())));
+                    let message = AgentMessage::Llm(Message::ToolResult(result.clone()));
+                    context.messages.push(message.clone());
+                    new_messages.push(message.clone());
+                    sink.emit(AgentEvent::MessageEnd { message });
                     tool_results.push(result);
                 }
             }
@@ -348,6 +347,7 @@ async fn run_compaction(
                 tokens_before: outcome.tokens_before,
                 tokens_after: outcome.tokens_after,
                 error: None,
+                summary: outcome.summary,
             });
             true
         }
@@ -357,6 +357,7 @@ async fn run_compaction(
                 tokens_before,
                 tokens_after: tokens_before,
                 error: Some(err.to_string()),
+                summary: None,
             });
             false
         }
@@ -550,7 +551,7 @@ async fn execute_tool_calls_sequential(
                 is_error,
             },
             Preparation::Ready { tool, args } => {
-                let executed = execute_prepared(&tool, &tool_call, args, cancel).await;
+                let executed = execute_prepared(&tool, &tool_call, args, cancel, sink).await;
                 finalize_executed(tool_call, executed)
             }
         };
@@ -643,7 +644,7 @@ async fn execute_tool_calls_parallel(
                 let cancel = cancel.clone();
                 let sink = sink.clone();
                 running.push(async move {
-                    let executed = execute_prepared(&tool, &tool_call, args, &cancel).await;
+                    let executed = execute_prepared(&tool, &tool_call, args, &cancel, &sink).await;
                     let finalized = finalize_executed(tool_call, executed);
                     sink.emit(AgentEvent::ToolExecutionEnd {
                         tool_call_id: finalized.tool_call.id.clone(),
@@ -746,8 +747,24 @@ async fn execute_prepared(
     tool_call: &ToolCall,
     args: Value,
     cancel: &CancellationToken,
+    sink: &AgentEventSink,
 ) -> (AgentToolResult, bool) {
-    let on_update: ToolUpdateFn = Arc::new(move |_partial| {});
+    sink.emit(AgentEvent::ToolExecutionStart {
+        tool_call_id: tool_call.id.clone(),
+        tool_name: tool_call.name.clone(),
+    });
+    let on_update: ToolUpdateFn = {
+        let sink = sink.clone();
+        let tool_call_id = tool_call.id.clone();
+        let tool_name = tool_call.name.clone();
+        Arc::new(move |partial| {
+            sink.emit(AgentEvent::ToolExecutionUpdate {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.clone(),
+                partial,
+            });
+        })
+    };
 
     let started = std::time::Instant::now();
     tracing::debug!(tool = %tool_call.name, tool_call_id = %tool_call.id, "tool execution start");
@@ -768,10 +785,8 @@ async fn execute_prepared(
 }
 
 fn finalize_executed(
-    // assistant: &AssistantMessage,
     tool_call: ToolCall,
     (result, is_error): (AgentToolResult, bool),
-    // hooks: &Arc<dyn AgentHooks>,
 ) -> FinalizedToolCall {
     FinalizedToolCall {
         tool_call,
@@ -780,7 +795,7 @@ fn finalize_executed(
     }
 }
 
-/// Early termination requires EVERY tool in the batch to ask for it.
+/// Early termination requires every tool in the batch to ask for it.
 fn should_terminate(finalized: &[FinalizedToolCall]) -> bool {
     !finalized.is_empty() && finalized.iter().all(|f| f.result.terminate)
 }

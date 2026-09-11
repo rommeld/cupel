@@ -29,7 +29,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     let [transcript_area, input_area, footer_area] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(input_lines + 2),
-        Constraint::Length(1),
+        Constraint::Length(2),
     ])
     .areas(frame.area());
 
@@ -153,7 +153,11 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let start = end.saturating_sub(height);
     app.last_top_line = start;
     app.last_chat_inner = chat_inner;
+    app.last_top_line = start;
+    app.last_chat_inner = chat_inner;
     app.last_line_cells = columns.cell_at;
+    app.last_tools_inner = tools_inner.unwrap_or(Rect::ZERO);
+    app.last_tool_cells = columns.tool_at;
 
     frame.render_widget(
         Paragraph::new(columns.left[start..end].to_vec()),
@@ -208,6 +212,7 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 /// Left pane share of the transcript width: prose needs more room than
 /// tool call previews.
 const CHAT_PANE_PERCENT: u16 = 60;
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// The shared look of both transcript panes: dim border, dim title, one
 /// column of padding so text never sticks to a border line.
@@ -270,9 +275,9 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
         theme::INPUT_BORDER_IDLE
     };
     let title = if app.is_running() {
-        " working "
+        format!("  {} working", SPINNER[app.frame % SPINNER.len()])
     } else {
-        " prompt "
+        " prompt ".to_string()
     };
     let block = Block::new()
         .borders(Borders::ALL)
@@ -291,8 +296,7 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .collect();
 
     // Scroll the viewport so the cursor's line stays visible once the text
-    // outgrows the height-capped box - otherwise the user would be typing
-    // into rows that render off-screen.
+    // outgrows the height-capped box.
     let (cursor_line, cursor_col) =
         visual_cursor(app.input.text(), app.input.cursor(), inner_width);
     let visible = inner.height.max(1) as usize;
@@ -320,10 +324,12 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         String::new()
     };
+    let window = app.agent.context_window();
+    let percent = (app.context_tokens * 100).checked_div(window).unwrap_or(0);
     // The session id sits in the always-visible left half so `--resume
     // <id>` (or /hot-reload <id>) can be typed from what's on screen.
     let left = format!(
-        " {} ({}){} | {} | {} | {} in / {} out / {} cached | ${:.4}",
+        " {} ({}){} | {} | {} | {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k ({percent}%)",
         app.meta.model_name,
         app.meta.provider,
         thinking_segment,
@@ -333,27 +339,31 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         app.totals.output,
         app.totals.cache_read,
         app.totals.cost,
+        app.context_tokens / 1000,
+        window / 1000,
     );
     // The mouse hint tracks selection mode, so it never lies about what
     // the wheel currently does.
     let right = if app.mouse_captured {
-        "enter send · alt+enter newline · @ file · / cmds · esc abort · click block · ctrl+o copy · ctrl+y select "
+        "enter send · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select "
     } else {
-        "enter send · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+y scroll "
+        "enter send · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll "
     };
 
-    // Left-align the status, right-align the key hints; drop the hints when
-    // the terminal is too narrow for both. Chars, not bytes: every `·` in
-    // the hints is 2 bytes of UTF-8 but only 1 terminal column - len()
-    // would overestimate and drop the hints while they still fit.
-    let mut spans = vec![Span::styled(left.clone(), theme::CHROME)];
-    let padding =
-        (area.width as usize).saturating_sub(left.chars().count() + right.chars().count());
-    if padding > 0 {
-        spans.push(Span::raw(" ".repeat(padding)));
-        spans.push(Span::styled(right, theme::CHROME));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    let [status_row, hints_row] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+    frame.render_widget(
+        Paragraph::new(Span::styled(left, theme::CHROME)),
+        status_row,
+    );
+    let padding = (area.width as usize).saturating_sub(right.chars().count());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" ".repeat(padding)),
+            Span::styled(right, theme::CHROME),
+        ])),
+        hints_row,
+    );
 }
 
 /// Display name for a thinking level - the same lowercase words the
@@ -842,10 +852,15 @@ mod tests {
         app.transcript.cells.push(Cell::Tool {
             id: "call_1".into(),
             name: "grep".into(),
-            args: r#"{"pattern":"bug"}"#.into(),
+            call: "grep /bug/ in src".into(),
+            expanded: false,
+            started_at: None,
+            live: None,
             result: Some(ToolOutcome {
                 text: "src/main.rs:1: bug".into(),
                 is_error: false,
+                diff: None,
+                took: None,
             }),
         });
         app.input.insert_str("next question");
@@ -855,7 +870,10 @@ mod tests {
             screen.contains("> find the bug"),
             "user cell missing:\n{screen}"
         );
-        assert!(screen.contains("[grep]"), "tool cell missing:\n{screen}");
+        assert!(
+            screen.contains("grep /bug/ in src"),
+            "tool cell missing:\n{screen}"
+        );
         assert!(
             screen.contains("src/main.rs:1: bug"),
             "tool result missing:\n{screen}"
@@ -1115,6 +1133,11 @@ mod tests {
                     name: "grep".into(),
                     arguments: serde_json::json!({"pattern": "bug"}),
                 }),
+                AssistantContent::ToolCall(ToolCall {
+                    id: "call_2".into(),
+                    name: "edit".into(),
+                    arguments: serde_json::json!({"path": "src/main.rs"}),
+                }),
             ],
             api: Api::from("mock"),
             provider: cupel_core::types::Provider::from("mock"),
@@ -1124,6 +1147,16 @@ mod tests {
             usage: Usage::default(),
             stop_reason: StopReason::Stop,
             error_message: None,
+            timestamp: now_ms(),
+        };
+        let edit_rules = ToolResultMessage {
+            tool_call_id: "call_2".into(),
+            tool_name: "edit".into(),
+            content: vec![cupel_core::types::ToolResultContent::Text(
+                TextContent::plain("Successfully replaced 1 block(s) in src/main.rs."),
+            )],
+            details: Some(serde_json::json!({"diff": "-1 bug();\n+1 fix();"})),
+            is_error: false,
             timestamp: now_ms(),
         };
         let tool_result = ToolResultMessage {
@@ -1141,6 +1174,7 @@ mod tests {
             AgentMessage::user_text("old question"),
             AgentMessage::Llm(Message::Assistant(assistant)),
             AgentMessage::Llm(Message::ToolResult(tool_result)),
+            AgentMessage::Llm(Message::ToolResult(edit_rules)),
         ];
         let agent = Agent::new(options);
         let recorder = crate::session::SessionRecorder::new(
@@ -1169,7 +1203,7 @@ mod tests {
 
         let screen = draw(&mut app, 80, 24);
         assert!(
-            screen.contains("resumed session cupel-resumed (3 messages)"),
+            screen.contains("resumed session cupel-resumed (4 messages)"),
             "resume notice missing:\n{screen}"
         );
         assert!(screen.contains("old question"), "user cell:\n{screen}");
@@ -1178,6 +1212,366 @@ mod tests {
             screen.contains("src/main.rs:1: bug"),
             "tool result attached:\n{screen}"
         );
+        assert!(screen.contains("+1 fix();"), "diff replayed:\n{screen}");
+        assert!(!screen.contains("Successfully"), "{screen}");
+    }
+
+    #[test]
+    fn ctrl_t_expands_every_tool_result_and_a_click_expands_one() {
+        use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let mut app = test_app();
+        app.transcript.append_thinking("looking");
+        for id in ["1", "2"] {
+            app.transcript.cells.push(Cell::Tool {
+                id: id.into(),
+                name: "read".into(),
+                call: format!("read file{id}.rs"),
+                expanded: false,
+                started_at: None,
+                live: None,
+                result: Some(ToolOutcome {
+                    text: (1..=9)
+                        .map(|i| format!("row {i}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    is_error: false,
+                    diff: None,
+                    took: None,
+                }),
+            });
+        }
+        // 120 columns: the marker line fits the tools pane unwrapped.
+        let screen = draw(&mut app, 120, 40);
+        assert!(
+            screen.contains("... (3 more lines, ctrl+t to expand)"),
+            "{screen}"
+        );
+        assert!(
+            !screen.contains("row 9"),
+            "hidden while collapsed:\n{screen}"
+        );
+
+        // A click on the first tool's header expands just that cell.
+        let line = app
+            .last_tool_cells
+            .iter()
+            .position(|cell| *cell == Some(1))
+            .expect("first tool mapped");
+        let row = app.last_tools_inner.y + (line - app.last_top_line) as u16;
+        app.on_terminal_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: app.last_tools_inner.x + 1,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+        assert!(matches!(
+            app.transcript.cells[1],
+            Cell::Tool { expanded: true, .. }
+        ));
+        assert!(matches!(
+            app.transcript.cells[2],
+            Cell::Tool {
+                expanded: false,
+                ..
+            }
+        ));
+        let screen = draw(&mut app, 120, 40);
+        assert_eq!(screen.matches("row 9").count(), 1, "{screen}");
+
+        // Ctrl+T: everything, then nothing.
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL,
+        )));
+        let screen = draw(&mut app, 120, 40);
+        assert_eq!(screen.matches("row 9").count(), 2, "{screen}");
+        assert!(!screen.contains("expand"), "{screen}");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL,
+        )));
+        let screen = draw(&mut app, 120, 40);
+        assert!(!screen.contains("row 9"), "{screen}");
+    }
+
+    /// A finished assistant message for event tests.
+    fn assistant_message(
+        text: &str,
+        stop_reason: cupel_core::types::StopReason,
+        total_tokens: u64,
+    ) -> cupel_agent::AgentMessage {
+        use cupel_core::types::{Api, AssistantContent, TextContent, Usage, now_ms};
+        cupel_agent::AgentMessage::Llm(cupel_core::types::Message::Assistant(
+            cupel_core::types::AssistantMessage {
+                content: vec![AssistantContent::Text(TextContent::plain(text))],
+                api: Api::from("mock"),
+                provider: cupel_core::types::Provider::from("mock"),
+                model: "mock".into(),
+                response_model: None,
+                response_id: None,
+                usage: Usage {
+                    total_tokens,
+                    ..Usage::default()
+                },
+                stop_reason,
+                error_message: None,
+                timestamp: now_ms(),
+            },
+        ))
+    }
+
+    #[tokio::test]
+    async fn footer_shows_context_usage_after_a_turn() {
+        let mut app = test_app();
+        assert!(
+            draw(&mut app, 200, 20).contains("ctx 0k/"),
+            "meter starts empty"
+        );
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: assistant_message("ok", cupel_core::types::StopReason::Stop, 48_000),
+        }))
+        .await;
+        let screen = draw(&mut app, 200, 20);
+        let window = app.agent.context_window();
+        assert!(
+            screen.contains(&format!(
+                "ctx 48k/{}k ({}%)",
+                window / 1000,
+                48_000 * 100 / window
+            )),
+            "{screen}"
+        );
+        // A compaction resets the meter to the post-compaction estimate.
+        app.on_agent_event(Some(AgentEvent::CompactionEnd {
+            tokens_before: 48_000,
+            tokens_after: 12_000,
+            error: None,
+            summary: None,
+        }))
+        .await;
+        assert!(draw(&mut app, 200, 20).contains("ctx 12k/"));
+    }
+
+    #[tokio::test]
+    async fn a_length_stop_is_flagged_and_never_promoted_to_an_answer() {
+        let mut app = test_app();
+        app.on_agent_event(Some(AgentEvent::MessageUpdate {
+            event: cupel_core::types::AssistantMessageEvent::TextDelta {
+                content_index: 0,
+                delta: "half an ans".into(),
+            },
+        }))
+        .await;
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: assistant_message("half an ans", cupel_core::types::StopReason::Length, 0),
+        }))
+        .await;
+        app.on_agent_event(Some(AgentEvent::AgentEnd {
+            messages: Vec::new(),
+        }))
+        .await;
+        let screen = draw(&mut app, 100, 20);
+        assert!(screen.contains("error: response was truncated"), "{screen}");
+        assert!(
+            matches!(&app.transcript.cells[0], Cell::Assistant { .. }),
+            "a fragment is not an answer"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_summary_becomes_its_own_cell() {
+        let mut app = test_app();
+        app.on_agent_event(Some(AgentEvent::CompactionEnd {
+            tokens_before: 48_000,
+            tokens_after: 12_000,
+            error: None,
+            summary: Some("## Goal\nfix the retry backoff".into()),
+        }))
+        .await;
+        assert!(matches!(
+            app.transcript.cells.last(),
+            Some(Cell::Summary { .. })
+        ));
+        let screen = draw(&mut app, 100, 20);
+        assert!(screen.contains("[context summary]"), "{screen}");
+        assert!(screen.contains("fix the retry backoff"), "{screen}");
+        assert_eq!(
+            style_of(&mut app, "fix the retry backoff").fg,
+            Some(Color::DarkGray)
+        );
+    }
+
+    #[test]
+    fn a_resumed_checkpoint_is_a_summary_cell_not_a_user_prompt() {
+        let model = cupel_core::catalog::builtin_models().remove(0);
+        let registry = Arc::new(cupel_core::provider::Registry::new());
+        let mut options = AgentOptions::new(model, registry);
+        options.messages = vec![cupel_agent::AgentMessage::user_text(format!(
+            "{}\n\n## Goal\nship it",
+            cupel_agent::compaction::COMPACTION_MARKER
+        ))];
+        let recorder = crate::session::SessionRecorder::new(
+            None,
+            std::path::Path::new("/tmp"),
+            "cupel-resumed",
+            "test-model",
+        );
+        let mut app = App::new(
+            Agent::new(options),
+            SessionMeta {
+                model_name: "Test Model".into(),
+                provider: "test".into(),
+                cwd: "/tmp".into(),
+                templates: Vec::new(),
+                models: cupel_core::catalog::builtin_models(),
+                settings: crate::settings::Settings::default(),
+                home: None,
+                startup_warning: None,
+                context_files: Vec::new(),
+            },
+            recorder,
+        );
+        assert!(
+            matches!(&app.transcript.cells[1], Cell::Summary { text } if text.starts_with("## Goal"))
+        );
+        let screen = draw(&mut app, 100, 20);
+        assert!(screen.contains("[context summary]"), "{screen}");
+        assert!(!screen.contains("> [Conversation summary"), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn enter_while_running_keeps_the_text_and_says_why() {
+        let mut app = test_app();
+        app.start_run("build it");
+        type_text(&mut app, "no, the other file");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert_eq!(app.input.text(), "no, the other file", "the text survives");
+        assert!(
+            app.transcript
+                .cells
+                .iter()
+                .any(|c| matches!(c, Cell::Notice { text } if text.contains("agent is working"))),
+        );
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn the_spinner_turns_with_every_tick_while_running() {
+        let mut app = test_app();
+        // A run against the empty registry errors in the background; until
+        // its events are pumped the app counts as running.
+        app.start_run("spin");
+        assert!(draw(&mut app, 80, 20).contains("⠋ working"));
+        app.tick();
+        assert!(draw(&mut app, 80, 20).contains("⠙ working"));
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+        assert!(draw(&mut app, 80, 20).contains(" prompt "));
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_renders_as_its_own_header_line() {
+        use cupel_agent::AgentTool;
+        // An agent that HAS the bash tool: the header comes from the tool.
+        let model = cupel_core::catalog::builtin_models().remove(0);
+        let registry = Arc::new(cupel_core::provider::Registry::new());
+        let mut options = AgentOptions::new(model, registry);
+        options.tools =
+            vec![Arc::new(crate::tools::bash::BashTool::new("/tmp")) as Arc<dyn AgentTool>];
+        let recorder = crate::session::SessionRecorder::new(
+            None,
+            std::path::Path::new("/tmp"),
+            "cupel-test",
+            "test-model",
+        );
+        let mut app = App::new(
+            Agent::new(options),
+            SessionMeta {
+                model_name: "Test Model".into(),
+                provider: "test".into(),
+                cwd: "/tmp".into(),
+                templates: Vec::new(),
+                models: cupel_core::catalog::builtin_models(),
+                settings: crate::settings::Settings::default(),
+                home: None,
+                startup_warning: None,
+                context_files: Vec::new(),
+            },
+            recorder,
+        );
+        let tool_call = |name: &str, arguments: serde_json::Value| AgentEvent::MessageUpdate {
+            event: cupel_core::types::AssistantMessageEvent::ToolCallEnd {
+                content_index: 0,
+                tool_call: cupel_core::types::ToolCall {
+                    id: format!("call_{name}"),
+                    name: name.into(),
+                    arguments,
+                },
+            },
+        };
+        app.on_agent_event(Some(tool_call(
+            "bash",
+            serde_json::json!({"command": "cargo test -p cupel-core"}),
+        )))
+        .await;
+        // A tool this agent does not have falls back to the bare name.
+        app.on_agent_event(Some(tool_call("magic", serde_json::json!({"x": 1}))))
+            .await;
+
+        let screen = draw(&mut app, 80, 24);
+        assert!(screen.contains("$ cargo test -p cupel-core"), "{screen}");
+        assert!(!screen.contains("[bash]"), "no raw JSON header:\n{screen}");
+        assert!(!screen.contains("\"command\""), "{screen}");
+        assert!(screen.contains("magic"), "{screen}");
+        assert!(!screen.contains("{\"x\":1}"), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn an_edit_result_renders_as_a_colored_diff() {
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::Tool {
+            id: "call_1".into(),
+            name: "edit".into(),
+            call: "edit a.rs".into(),
+            expanded: false,
+            started_at: None,
+            live: None,
+            result: None,
+        });
+        app.on_agent_event(Some(AgentEvent::ToolExecutionEnd {
+            tool_call_id: "call_1".into(),
+            tool_name: "edit".into(),
+            result: cupel_agent::types::AgentToolResult {
+                content: vec![cupel_core::types::ToolResultContent::Text(
+                    cupel_core::types::TextContent::plain(
+                        "Successfully replaced 1 block(s) in a.rs",
+                    ),
+                )],
+                details: Some(
+                    serde_json::json!({"diff": " 1 fn a() {\n-2     old();\n+2     new();\n 3 }"}),
+                ),
+                terminate: false,
+            },
+            is_error: false,
+        }))
+        .await;
+
+        let screen = draw(&mut app, 80, 24);
+        assert!(screen.contains("-2     old();"), "{screen}");
+        assert!(screen.contains("+2     new();"), "{screen}");
+        assert!(!screen.contains("Successfully"), "{screen}");
+        assert_eq!(style_of(&mut app, "+2     new();").fg, Some(Color::Green));
+        assert_eq!(style_of(&mut app, "-2     old();").fg, Some(Color::Red));
+        assert_eq!(style_of(&mut app, "1 fn a() {").fg, Some(Color::DarkGray));
     }
 
     #[test]
@@ -1547,8 +1941,10 @@ mod tests {
         let screen = draw(&mut app, 80, 20);
         assert!(screen.contains("> find the bug"), "{screen}");
 
-        // The prompt reached the JSONL transcript too (assistant-only
-        // transcripts were the resume-fidelity bug this fixes).
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
         let path = app
             .recorder
             .sessions_dir()
@@ -1562,11 +1958,11 @@ mod tests {
                     cupel_core::types::UserContentBody::Text(t) if t == "find the bug")
         );
         assert!(recorded, "prompt missing from the transcript file");
-
-        // The run against the empty test registry errors in the
-        // background; settle it so the test ends cleanly.
-        app.agent.abort();
-        app.agent.wait_for_idle().await;
+        assert!(matches!(
+            messages.get(1),
+            Some(cupel_agent::AgentMessage::Llm(cupel_core::types::Message::Assistant(a)))
+                if a.stop_reason == cupel_core::types::StopReason::Error
+        ));
     }
 
     #[tokio::test]
@@ -1618,12 +2014,15 @@ mod tests {
         app.transcript.cells.push(Cell::Tool {
             id: "1".into(),
             name: "grep".into(),
-            args: "{}".into(),
+            call: "grep /bug/ in .".into(),
+            expanded: false,
+            started_at: None,
+            live: None,
             result: None,
         });
         let screen = draw(&mut app, 80, 20);
         assert!(screen.contains(" tools "), "pane must appear:\n{screen}");
-        assert!(screen.contains("[grep]"), "{screen}");
+        assert!(screen.contains("grep /bug/ in ."), "{screen}");
     }
 
     #[test]
@@ -1636,7 +2035,10 @@ mod tests {
         app.transcript.cells.push(Cell::Tool {
             id: "1".into(),
             name: "read".into(),
-            args: "{}".into(),
+            call: "read src/main.rs".into(),
+            expanded: false,
+            started_at: None,
+            live: None,
             result: None,
         });
         let screen = draw(&mut app, 90, 20);

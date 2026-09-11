@@ -4,15 +4,15 @@
 //! draw*. Keeping a separate render model (a `Vec<Cell>`) instead of drawing
 //! straight from `AgentMessage`s has two payoffs:
 //!
-//! 1. Streaming deltas mutate the LAST cell in place (append to the text
+//! 1. Streaming deltas mutate the last cell in place (append to the text
 //!    being typed out) instead of re-deriving the whole view per event.
 //! 2. UI-only state (tool results attached to their calls, expansion
 //!    ) has an obvious home that the agent knows nothing about.
 //!
-//! The view is TWO panes: conversation (user, reasoning, answers) on the
+//! The view is two panes: conversation (user, reasoning, answers) on the
 //! left, tool traffic on the right. [`Transcript::steps`] groups the flat
 //! cell list into horizontal bands, and [`Transcript::to_columns`] renders
-//! each band across the SAME rows in both panes - that row alignment (plus
+//! each band across the same rows in both panes - that row alignment (plus
 //! a shared band number) is what assigns a tool call to its reasoning step.
 
 use ratatui::style::Style;
@@ -21,56 +21,60 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::modes::interactive::theme;
 
-/// How many result lines a collapsed tool cell shows.
+use std::time::{Duration, Instant};
+
 const TOOL_PREVIEW_LINES: usize = 6;
 
 /// One visual block in the conversation.
 pub enum Cell {
-    /// A user message (submitted prompt or drained steering message).
-    User { text: String },
-    /// Streaming assistant prose.
-    Assistant { text: String },
-    /// The turn's FINAL assistant prose, promoted from the trailing
-    /// Assistant cell when the run ends - the emphasized counterpart to
-    /// the User task that opened the turn. Mid-turn prose between tool
-    /// calls stays a plain Assistant cell.
-    Answer { text: String },
-    /// Streaming assistant thinking (rendered dim).
-    Thinking { text: String },
-    /// A tool call and (once finished) its result.
+    User {
+        text: String,
+    },
+    Assistant {
+        text: String,
+    },
+    Answer {
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
     Tool {
-        /// Tool call id, used to attach the result when it completes.
         id: String,
         name: String,
-        /// Compact JSON of the final arguments (the cell is created on ToolCallEnd).
-        args: String,
+        call: String,
+        expanded: bool,
+        started_at: Option<Instant>,
+        live: Option<String>,
         result: Option<ToolOutcome>,
     },
-    /// An error surfaced by the agent or a provider.
-    Error { text: String },
-    /// A status notice (e.g. "retrying in 2s"), rendered in warning color.
-    Notice { text: String },
-    /// Per-turn usage/cost summary.
-    Usage { text: String },
+    Error {
+        text: String,
+    },
+    Notice {
+        text: String,
+    },
+    Usage {
+        text: String,
+    },
+    Summary {
+        text: String,
+    },
 }
 
 pub struct ToolOutcome {
     pub text: String,
     pub is_error: bool,
+    pub diff: Option<String>,
+    pub took: Option<Duration>,
 }
 
 /// One horizontal band of the two-pane view: the conversation cells on the
 /// left and the tool calls they triggered on the right. Both panes render
-/// a band across the SAME rows - that alignment is what visually assigns a
-/// tool call to its reasoning step.
+/// a band across the same rows.
 pub struct Step {
-    /// Indices into `Transcript::cells` for the conversation pane.
     pub left: Vec<usize>,
-    /// Indices into `Transcript::cells` for the tool pane.
     pub right: Vec<usize>,
-    /// 1-based number rendered in BOTH panes when the band has tool calls;
-    /// `None` when there is nothing to correlate. Restarts at every user
-    /// prompt, so numbers stay small and turn-scoped.
     pub marker: Option<usize>,
 }
 
@@ -78,10 +82,8 @@ pub struct Step {
 pub struct Columns {
     pub left: Vec<Line<'static>>,
     pub right: Vec<Line<'static>>,
-    /// For each LEFT visual line: which cell it renders. `None` for chrome
-    /// (band rules, spacers, alignment padding). A mouse click resolves
-    /// through this map.
     pub cell_at: Vec<Option<usize>>,
+    pub tool_at: Vec<Option<usize>>,
 }
 
 #[derive(Default)]
@@ -113,35 +115,79 @@ impl Transcript {
         }
     }
 
-    /// Attach a finished result to its tool cell (matched by call id).
-    pub fn attach_tool_result(&mut self, tool_call_id: &str, outcome: ToolOutcome) {
-        // Search from the end: the matching call is almost always recent.
-        for cell in self.cells.iter_mut().rev() {
-            if let Cell::Tool { id, result, .. } = cell
-                && id == tool_call_id
-            {
-                *result = Some(outcome);
-                return;
+    /// The tool cell for a call id. Searches from the end.
+    fn tool_mut(&mut self, tool_call_id: &str) -> Option<&mut Cell> {
+        self.cells
+            .iter_mut()
+            .rev()
+            .find(|cell| matches!(cell, Cell::Tool { id, .. } if id == tool_call_id))
+    }
+
+    /// The loop started executing a call. Start the clock.
+    pub fn mark_tool_started(&mut self, tool_call_id: &str) {
+        if let Some(Cell::Tool { started_at, .. }) = self.tool_mut(tool_call_id) {
+            *started_at = Some(Instant::now());
+        }
+    }
+
+    /// A progress snapshot from a running tool.
+    pub fn attach_tool_progress(&mut self, tool_call_id: &str, text: String) {
+        if let Some(Cell::Tool {
+            live, result: None, ..
+        }) = self.tool_mut(tool_call_id)
+        {
+            *live = Some(text);
+        }
+    }
+
+    /// Attach a finished result to its tool cell (matched by call id). The
+    /// cell's clock, if it was started, becomes the outcome's `took`.
+    pub fn attach_tool_result(&mut self, tool_call_id: &str, mut outcome: ToolOutcome) {
+        if let Some(Cell::Tool {
+            started_at,
+            live,
+            result,
+            ..
+        }) = self.tool_mut(tool_call_id)
+        {
+            outcome.took = started_at.map(|started| started.elapsed());
+            *live = None;
+            *result = Some(outcome);
+        }
+    }
+
+    /// Flip one toll cell between preview and full result.
+    pub fn toggle_tool(&mut self, index: usize) {
+        if let Some(Cell::Tool { expanded, .. }) = self.cells.get_mut(index) {
+            *expanded = !*expanded;
+        }
+    }
+
+    /// Expand or collapse every tool cell (Ctrl+T).
+    pub fn set_all_tools_expanded(&mut self, expanded: bool) {
+        for cell in &mut self.cells {
+            if let Cell::Tool { expanded: e, .. } = cell {
+                *e = expanded;
             }
         }
     }
 
     /// Promote the trailing assistant prose to an Answer cell. Called when
-    /// a run ends - only then is "the last text the model wrote" known to
+    /// a run ends: only then is "the last text the model wrote" known to
     /// be its final answer; during streaming every Assistant cell might
     /// still be followed by another tool call.
     ///
     /// Walks back over trailing bookkeeping (usage, notices) and stops at
     /// anything substantive: a run that ended in an Error cell keeps its
-    /// plain cells - there is no "answer" to celebrate.
+    /// plain cells. There is no "answer" to celebrate.
     pub fn promote_final_answer(&mut self) {
         for cell in self.cells.iter_mut().rev() {
             match cell {
                 Cell::Usage { .. } | Cell::Notice { .. } => {}
                 Cell::Assistant { text } => {
                     // take() moves the String out (leaving an empty one
-                    // behind) so the cell can be REPLACED without cloning
-                    // the text - the old cell is overwritten right after.
+                    // behind) so the cell can be replaced without cloning
+                    // the text.
                     let text = core::mem::take(text);
                     *cell = Cell::Answer { text };
                     return;
@@ -153,8 +199,7 @@ impl Transcript {
 
     /// Group cells into visual bands: tool cells go right, everything else
     /// left. A new band starts at every user prompt (turn boundary) and
-    /// whenever conversation output follows tool calls - the model has
-    /// moved on to its next step.
+    /// whenever conversation output follows tool calls.
     #[must_use]
     pub fn steps(&self) -> Vec<Step> {
         let mut out: Vec<Step> = Vec::new();
@@ -207,6 +252,7 @@ impl Transcript {
             left: Vec::new(),
             right: Vec::new(),
             cell_at: Vec::new(),
+            tool_at: Vec::new(),
         };
 
         for step in self.steps() {
@@ -214,8 +260,8 @@ impl Transcript {
             if !columns.left.is_empty() {
                 push_chrome(&mut columns, Line::default(), Line::default());
             }
-            // The band rule: the SAME number at the SAME row in both panes
-            // - the visible thread from a reasoning step to its tool calls
+            // The band rule: the SAME number at the SAME row in both panes.
+            // The visible thread from a reasoning step to its tool calls
             // even when the two sides have very different heights.
             if let Some(number) = step.marker {
                 push_chrome(
@@ -246,31 +292,36 @@ impl Transcript {
             }
 
             let mut right: Vec<Line<'static>> = Vec::new();
+            let mut tool_at: Vec<Option<usize>> = Vec::new();
             for (position, &index) in step.right.iter().enumerate() {
                 if position > 0 {
                     right.push(Line::default());
+                    tool_at.push(None);
                 }
-                right.extend(tool_lines(&self.cells[index], right_width));
+                let mut lines = tool_lines(&self.cells[index], right_width);
+                tool_at.extend(std::iter::repeat_n(Some(index), lines.len()));
+                right.append(&mut lines);
             }
 
-            // Pad the shorter pane so the NEXT band starts at the same row
-            // on both sides - this is the whole alignment trick.
+            // This is the whole alignment tric.
             while left.len() < right.len() {
                 left.push(Line::default());
                 cell_at.push(None);
             }
             while right.len() < left.len() {
                 right.push(Line::default());
+                tool_at.push(None);
             }
 
             columns.left.append(&mut left);
             columns.cell_at.append(&mut cell_at);
             columns.right.append(&mut right);
+            columns.tool_at.append(&mut tool_at);
         }
         columns
     }
 
-    /// The raw text a copy places on the clipboard - the UNRENDERED cell
+    /// The raw text a copy places on the clipboard. The unrendered cell
     /// content (no `> ` prefix, no wrapping, markdown source exactly as
     /// the model wrote it). Tool cells return None: they live in the right
     /// pane and stay out of the copy feature.
@@ -284,6 +335,7 @@ impl Transcript {
             | Cell::Error { text }
             | Cell::Notice { text }
             | Cell::Usage { text } => Some(text),
+            Cell::Summary { text } => Some(text),
             Cell::Tool { .. } => None,
         }
     }
@@ -295,9 +347,9 @@ fn push_chrome(columns: &mut Columns, left: Line<'static>, right: Line<'static>)
     columns.left.push(left);
     columns.right.push(right);
     columns.cell_at.push(None);
+    columns.tool_at.push(None);
 }
 
-/// `─ 3 ────...` filled to `width` columns: the band's number, dim.
 fn band_rule(number: usize, width: usize) -> Line<'static> {
     let label = format!("─ {number} ");
     let fill = width.saturating_sub(label.chars().count());
@@ -307,8 +359,8 @@ fn band_rule(number: usize, width: usize) -> Line<'static> {
     ))
 }
 
-/// Styled, wrapped lines for one CONVERSATION cell - everything except
-/// tool calls, which render via [`tool_lines`] into the right pane.
+/// Everything except tool calls, which render via [`tool_lines`]
+/// into the right pane.
 fn conversation_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     match cell {
@@ -343,44 +395,94 @@ fn conversation_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
         Cell::Usage { text } => {
             push_wrapped(&mut out, text, width, theme::DETAIL);
         }
+        Cell::Summary { text } => {
+            push_wrapped(&mut out, "[context summary]", width, theme::NOTICE);
+            out.extend(crate::modes::interactive::markdown::render(
+                text,
+                width,
+                theme::REASONING,
+            ));
+        }
         Cell::Tool { .. } => {}
     }
     out
 }
 
-/// Styled, wrapped lines for one TOOL cell: the `[name] args` header, then
-/// a bounded result preview - the FULL output already went to the model
-/// (and to the trace log); the pane is a digest.
+/// Styled, wrapped lines for one tool cell: the call's header line, then
+/// the result. The full output already went to the model. The preview is a
+/// digest, and the marker line says how to see the rest.
 fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
     let Cell::Tool {
-        name, args, result, ..
+        name,
+        call,
+        expanded,
+        started_at,
+        live,
+        result,
+        ..
     } = cell
     else {
         return Vec::new();
     };
     let mut out: Vec<Line<'static>> = Vec::new();
-    push_wrapped(
-        &mut out,
-        &format!("[{name}] {args}"),
-        width,
-        theme::TOOL_HEADER,
-    );
+    push_wrapped(&mut out, call, width, theme::TOOL_HEADER);
     match result {
-        None => push_wrapped(&mut out, "  ...", width, theme::DETAIL),
+        None => {
+            if let Some(live) = live {
+                let lines: Vec<&str> = live.lines().collect();
+                let hidden = lines.len().saturating_sub(TOOL_PREVIEW_LINES);
+                for line in &lines[hidden..] {
+                    push_wrapped(&mut out, &format!("  {line}"), width, theme::DETAIL);
+                }
+            }
+            let waiting = match started_at {
+                Some(started) => format!("  ... running {}", format_seconds(started.elapsed())),
+                None => "  ...".to_string(),
+            };
+            push_wrapped(&mut out, &waiting, width, theme::DETAIL);
+        }
+        Some(ToolOutcome {
+            diff: Some(diff), ..
+        }) => push_diff(&mut out, diff, width),
         Some(outcome) => {
             let style = if outcome.is_error {
                 theme::ERROR
             } else {
                 theme::DETAIL
             };
-            let total = outcome.text.lines().count();
-            for line in outcome.text.lines().take(TOOL_PREVIEW_LINES) {
-                push_wrapped(&mut out, &format!("  {line}"), width, style);
-            }
-            if total > TOOL_PREVIEW_LINES {
+            let lines: Vec<&str> = outcome.text.lines().collect();
+            let hidden = lines.len().saturating_sub(TOOL_PREVIEW_LINES);
+            if *expanded || hidden == 0 {
+                for line in &lines {
+                    push_wrapped(&mut out, &format!(" {line} "), width, style);
+                }
+            } else if previews_the_tail(name) {
                 push_wrapped(
                     &mut out,
-                    &format!("  ... ({} more lines)", total - TOOL_PREVIEW_LINES),
+                    &format!("  ... ({hidden} earlier lines, ctrl+t to expand)"),
+                    width,
+                    theme::DETAIL,
+                );
+                for line in &lines[hidden..] {
+                    push_wrapped(&mut out, &format!("  {line}"), width, style);
+                }
+            } else {
+                for line in &lines[..TOOL_PREVIEW_LINES] {
+                    push_wrapped(&mut out, &format!("  {line}"), width, style);
+                }
+                push_wrapped(
+                    &mut out,
+                    &format!("  ... ({hidden} more lines, ctrl+t to expand)"),
+                    width,
+                    theme::DETAIL,
+                );
+            }
+            if let Some(took) = outcome.took
+                && previews_the_tail(name)
+            {
+                push_wrapped(
+                    &mut out,
+                    &format!("  took {}", format_seconds(took)),
                     width,
                     theme::DETAIL,
                 );
@@ -388,6 +490,30 @@ fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
         }
     }
     out
+}
+
+fn format_seconds(duration: Duration) -> String {
+    format!("{:.1}s", duration.as_secs_f64())
+}
+
+/// Which tool's output is read from the end. Only the shell_ a build or
+/// test run buries its verdict under hundreds of progress lines.
+fn previews_the_tail(tool_name: &str) -> bool {
+    tool_name == "bash"
+}
+
+/// Diff lines, styled by their first byte. The edit tool's diff format
+/// (edit_diff.rs) puts the marker first.
+/// `-12 old`, `+12 new`, `12 context`, and a `   ...` row between hunks.
+fn push_diff(out: &mut Vec<Line<'static>>, diff: &str, width: usize) {
+    for line in diff.lines() {
+        let style = match line.as_bytes().first() {
+            Some(b'+') => theme::DIFF_ADD,
+            Some(b'-') => theme::DIFF_DEL,
+            _ => theme::DIFF_CTX,
+        };
+        push_wrapped(out, &format!("  {line}"), width, style);
+    }
 }
 
 /// Wrap `text` to `width` display columns and append the resulting lines,
@@ -535,7 +661,10 @@ mod tests {
         transcript.cells.push(Cell::Tool {
             id: "call_1".into(),
             name: "grep".into(),
-            args: "{}".into(),
+            call: "{}".into(),
+            expanded: false,
+            started_at: None,
+            live: None,
             result: None,
         });
         transcript.attach_tool_result(
@@ -543,6 +672,8 @@ mod tests {
             ToolOutcome {
                 text: "hit".into(),
                 is_error: false,
+                diff: None,
+                took: None,
             },
         );
         let Some(Cell::Tool {
@@ -555,6 +686,165 @@ mod tests {
         assert_eq!(outcome.text, "hit");
     }
 
+    /// A finished bash cell with ten numbered output lines.
+    fn bash_cell(expanded: bool) -> Cell {
+        Cell::Tool {
+            id: "1".into(),
+            name: "bash".into(),
+            call: "$ cargo test".into(),
+            expanded,
+            started_at: None,
+            live: None,
+            result: Some(ToolOutcome {
+                text: (1..=10)
+                    .map(|i| format!("line {i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                is_error: false,
+                diff: None,
+                took: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn bash_previews_the_tail_and_files_the_head() {
+        let texts: Vec<String> = tool_lines(&bash_cell(false), 60)
+            .iter()
+            .map(line_text)
+            .collect();
+        assert_eq!(texts[0], "$ cargo test");
+        assert_eq!(texts[1], "  ... (4 earlier lines, ctrl+t to expand)");
+        assert_eq!(texts[2], "  line 5");
+        assert_eq!(texts.last().unwrap(), "  line 10");
+
+        let mut read = bash_cell(false);
+        if let Cell::Tool { name, .. } = &mut read {
+            *name = "read".into();
+        }
+        let texts: Vec<String> = tool_lines(&read, 60).iter().map(line_text).collect();
+        assert_eq!(texts[1], "  line 1");
+        assert_eq!(texts[6], "  line 6");
+        assert_eq!(texts[7], "  ... (4 more lines, ctrl+t to expand)");
+    }
+
+    #[test]
+    fn a_running_tool_shows_its_latest_output_and_a_clock() {
+        let mut t = Transcript::default();
+        let mut cell = bash_cell(false);
+        if let Cell::Tool { result, .. } = &mut cell {
+            *result = None;
+        }
+        t.cells.push(cell);
+        t.mark_tool_started("1");
+        t.attach_tool_progress("1", "a\nb\nc\nd\ne\nf\ng".into());
+
+        let texts: Vec<String> = tool_lines(&t.cells[0], 60).iter().map(line_text).collect();
+        assert_eq!(texts[1], "  b", "the snapshot's tail, six lines");
+        assert_eq!(texts[6], "  g");
+        assert!(texts[7].starts_with("  ... running "), "{texts:?}");
+
+        t.attach_tool_result(
+            "1",
+            ToolOutcome {
+                text: "g".into(),
+                is_error: false,
+                diff: None,
+                took: None,
+            },
+        );
+        let texts: Vec<String> = tool_lines(&t.cells[0], 60).iter().map(line_text).collect();
+        assert_eq!(texts, vec!["$ cargo test", " g ", "  took 0.0s"]);
+        assert!(matches!(&t.cells[0], Cell::Tool { live: None, .. }));
+    }
+
+    #[test]
+    fn expansion_shows_every_line_and_toggles_per_cell_or_for_all() {
+        let texts: Vec<String> = tool_lines(&bash_cell(true), 60)
+            .iter()
+            .map(line_text)
+            .collect();
+        assert_eq!(texts.len(), 11, "header + all ten lines");
+        assert!(!texts.iter().any(|t| t.contains("expand")));
+
+        let mut t = Transcript::default();
+        t.cells.push(bash_cell(false));
+        t.cells.push(bash_cell(false));
+        t.toggle_tool(1);
+        assert!(matches!(
+            t.cells[0],
+            Cell::Tool {
+                expanded: false,
+                ..
+            }
+        ));
+        assert!(matches!(t.cells[1], Cell::Tool { expanded: true, .. }));
+        t.set_all_tools_expanded(true);
+        assert!(matches!(t.cells[0], Cell::Tool { expanded: true, .. }));
+        t.set_all_tools_expanded(false);
+        assert!(matches!(
+            t.cells[1],
+            Cell::Tool {
+                expanded: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn tool_map_points_clicks_at_the_right_tool_cell() {
+        let mut t = Transcript::default();
+        t.append_thinking("short");
+        t.cells.push(tool("1"));
+        t.cells.push(tool("2"));
+        let columns = t.to_columns(40, 40, None);
+        assert_eq!(columns.tool_at.len(), columns.right.len());
+        assert_eq!(columns.tool_at[0], None, "the band rule is chrome");
+        assert_eq!(columns.tool_at[1], Some(1), "first tool's header");
+        assert_eq!(
+            columns
+                .tool_at
+                .iter()
+                .rposition(|c| *c == Some(2))
+                .map(|_| 2),
+            Some(2),
+            "second tool is mapped"
+        );
+    }
+
+    #[test]
+    fn diff_replaces_result_text_and_colors_by_marker() {
+        let cell = Cell::Tool {
+            id: "1".into(),
+            name: "edit".into(),
+            call: "{}".into(),
+            expanded: false,
+            started_at: None,
+            live: None,
+            result: Some(ToolOutcome {
+                text: "Successfully replaced 1 block(s) in a.rs".into(),
+                is_error: false,
+                diff: Some(" 1 fn main() {\n-2     old();\n+2     new();\n 3 }".into()),
+                took: None,
+            }),
+        };
+        let lines = tool_lines(&cell, 40);
+        let texts: Vec<String> = lines.iter().map(line_text).collect();
+        assert_eq!(texts[0], "{}");
+        assert_eq!(texts[1], "   1 fn main() {");
+        assert_eq!(texts[2], "  -2     old();");
+        assert_eq!(texts[3], "  +2     new();");
+        assert_eq!(texts[4], "   3 }");
+        assert_eq!(lines[1].spans[0].style, theme::DIFF_CTX);
+        assert_eq!(lines[2].spans[0].style, theme::DIFF_DEL);
+        assert_eq!(lines[3].spans[0].style, theme::DIFF_ADD);
+        assert_eq!(lines[4].spans[0].style, theme::DIFF_CTX);
+        assert!(
+            !texts.iter().any(|t| t.contains("Successfully")),
+            "the confirmation line is for the mode, not the screen"
+        );
+    }
+
     #[test]
     fn promote_final_answer_targets_trailing_prose_only() {
         let mut t = Transcript::default();
@@ -565,7 +855,10 @@ mod tests {
         t.cells.push(Cell::Tool {
             id: "1".into(),
             name: "read".into(),
-            args: "{}".into(),
+            call: "{}".into(),
+            expanded: false,
+            started_at: None,
+            live: None,
             result: None,
         });
         t.append_assistant("the final answer");
@@ -597,12 +890,14 @@ mod tests {
         assert!(!t.cells.iter().any(|c| matches!(c, Cell::Answer { .. })));
     }
 
-    /// A bare tool cell for grouping tests.
     fn tool(id: &str) -> Cell {
         Cell::Tool {
             id: id.into(),
             name: "grep".into(),
-            args: "{}".into(),
+            call: "{}".into(),
+            expanded: false,
+            started_at: None,
+            live: None,
             result: None,
         }
     }
@@ -656,10 +951,15 @@ mod tests {
         t.cells.push(Cell::Tool {
             id: "1".into(),
             name: "read".into(),
-            args: "{}".into(),
+            call: "{}".into(),
+            started_at: None,
+            live: None,
+            expanded: false,
             result: Some(ToolOutcome {
                 text: "a\nb\nc\nd".into(),
                 is_error: false,
+                diff: None,
+                took: None,
             }),
         });
         t.append_thinking("after");

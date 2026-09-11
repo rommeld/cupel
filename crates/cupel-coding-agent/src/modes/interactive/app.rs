@@ -39,62 +39,30 @@ pub struct App {
     pub meta: SessionMeta,
     pub transcript: Transcript,
     pub input: InputState,
-    /// The `@path` file-reference popup (see `autocomplete.rs`).
     pub autocomplete: Autocomplete,
     pub totals: Totals,
-    /// Event stream of the active run; `None` when idle.
     pub run_events: Option<AgentEventStream>,
-    /// Scroll position measured in lines from the BOTTOM. 0 = follow output.
-    /// The distance alone is not enough while reading history: new output
-    /// moves the bottom, and a fixed distance would slide the view with it.
-    /// So whenever it is > 0, the render pass grows it in step with content
-    /// growth - the visible lines stay pinned until the user scrolls back
-    /// down to 0 (see `render_transcript`).
     pub scroll_from_bottom: usize,
-    /// Set by the render pass each frame so scrolling can clamp correctly.
     pub last_transcript_height: u16,
     pub last_total_lines: usize,
     pub should_quit: bool,
-    /// Transcript writer + lifecycle-hook dispatcher for this session.
     pub recorder: SessionRecorder,
-    /// A prompt accepted by `send()` but not yet started. The async event
-    /// loop picks it up and awaits the prompt-path hooks first - key
-    /// handling stays fully synchronous (and so do its tests).
     pub pending_prompt: Option<String>,
-    /// Whether the terminal currently reports mouse events to cupel. ON =
-    /// wheel scrolls the transcript; OFF ("selection mode") = the terminal
-    /// handles the mouse natively, so text can be selected and copied.
     pub mouse_captured: bool,
-    /// Set by the Ctrl+Y key handler; the event loop applies it (only the
-    /// loop owns the terminal and can issue the crossterm commands).
     pub mouse_toggle_requested: bool,
-    /// API keys entered via `/provider <name> <key>` this session - the
-    /// HIGHEST precedence tier (above env vars and settings.json). Each
-    /// entry is also auto-saved to ~/.cupel/settings.json; when that save
-    /// fails the key simply stays session-only. Writing keys back into
-    /// the process environment remains impossible: set_var is unsafe in
-    /// edition 2024 and therefore in this project forbidden.
     pub session_keys: std::collections::HashMap<String, String>,
-    /// Set by `/hot-reload`; the async event loop performs the actual
-    /// rebuild (it re-runs the bootstrap loader, which probes ollama and
-    /// awaits hooks - nothing a sync key handler may do).
     pub pending_reload: Option<ReloadTarget>,
-    /// A `/login` flow in progress. Dropping it cancels the background
-    /// task (login.rs), so esc, a replacing /login, /hot-reload, and
-    /// quit all clean up through the same door.
     pub login: Option<login::LoginFlow>,
-    /// Cell selected by a click in the conversation pane. Cleared by Esc,
-    /// /new, or clicking the block again.
     pub selected_cell: Option<usize>,
-    /// Raw text queued for the clipboard. The event loop turns it into an
-    /// OSC 52 escape sequence.
+    pub tools_expanded: bool,
+    pub frame: usize,
+    pub context_tokens: u64,
     pub pending_copy: Option<String>,
-    /// Hit-test state saved by the render pass each frame: which cell each
-    /// conversation-pane line belongs to, the pane's inner area, and the
-    /// line index at the top of the visible window.
     pub last_line_cells: Vec<Option<usize>>,
     pub last_chat_inner: Rect,
     pub last_top_line: usize,
+    pub last_tool_cells: Vec<Option<usize>>,
+    pub last_tools_inner: Rect,
 }
 
 /// One wakeup from a background source (see [`App::next_event`]).
@@ -103,30 +71,20 @@ pub struct App {
 /// boxing would buy nothing but an allocation per event.
 #[allow(clippy::large_enum_variant)]
 pub enum AppEvent {
-    /// The active run produced an event (None = its stream closed).
     Agent(Option<AgentEvent>),
-    /// The active login produced an event (None = its channel closed).
     Login(Option<login::LoginEvent>),
 }
 
 /// What `/hot-reload` asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReloadTarget {
-    /// Bare `/hot-reload`: update the RUNNING session in place - same id,
-    /// same history, same transcript file. Context-file changes arrive as
-    /// an appended DELTA message, never as a re-embedded full file.
     Current,
-    /// Resume the given session id: full rebuild with freshly loaded
-    /// configuration (incl. a fresh system prompt), history seeded from
-    /// that session's transcript.
     Resume(String),
 }
 
 impl App {
     #[must_use]
     pub fn new(agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
-        // The /command autocomplete catalog: built-ins and prompt
-        // templates, each labeled with its description.
         let mut command_candidates: Vec<Candidate> = commands::BUILTIN_COMMANDS
             .iter()
             .map(|c| Candidate {
@@ -228,10 +186,15 @@ impl App {
             pending_reload: None,
             login: None,
             selected_cell: None,
+            tools_expanded: false,
+            frame: 0,
+            context_tokens: 0,
             pending_copy: None,
             last_line_cells: Vec::new(),
             last_chat_inner: Rect::ZERO,
             last_top_line: 0,
+            last_tool_cells: Vec::new(),
+            last_tools_inner: Rect::ZERO,
         };
         app.replay_history(&history);
         // A startup condition (e.g. keyless start) leads the transcript, so
@@ -265,7 +228,13 @@ impl App {
                         UserContentBody::Text(text) => text.clone(),
                         UserContentBody::Blocks(_) => "(rich message)".to_string(),
                     };
-                    self.transcript.cells.push(Cell::User { text });
+                    let cell = match text.strip_prefix(cupel_agent::compaction::COMPACTION_MARKER) {
+                        Some(summary) => Cell::Summary {
+                            text: summary.trim_start().to_string(),
+                        },
+                        None => Cell::User { text },
+                    };
+                    self.transcript.cells.push(cell);
                 }
                 AgentMessage::Llm(Message::Assistant(assistant)) => {
                     for content in &assistant.content {
@@ -276,10 +245,15 @@ impl App {
                             AssistantContent::Text(t) => Cell::Assistant {
                                 text: t.text.clone(),
                             },
-                            AssistantContent::ToolCall(call) => Cell::Tool {
-                                id: call.id.clone(),
-                                name: call.name.clone(),
-                                args: compact(&call.arguments.to_string(), 200),
+                            AssistantContent::ToolCall(tool_call) => Cell::Tool {
+                                id: tool_call.id.clone(),
+                                name: tool_call.name.clone(),
+                                call: self
+                                    .agent
+                                    .describe_tool_call(&tool_call.name, &tool_call.arguments),
+                                expanded: self.tools_expanded,
+                                started_at: None,
+                                live: None,
                                 result: None,
                             },
                         };
@@ -287,46 +261,12 @@ impl App {
                     }
                     // Same error/usage bookkeeping as the live path, so
                     // /usage stays truthful across a resume.
-                    if matches!(
-                        assistant.stop_reason,
-                        StopReason::Error | StopReason::Aborted
-                    ) {
-                        self.transcript.cells.push(Cell::Error {
-                            text: assistant
-                                .error_message
-                                .clone()
-                                .unwrap_or_else(|| "unknown error".to_string()),
-                        });
-                    } else {
-                        let usage = &assistant.usage;
-                        self.totals.input += usage.input;
-                        self.totals.output += usage.output;
-                        self.totals.cache_read += usage.cache_read;
-                        self.totals.cost += usage.cost.total;
-                        self.transcript.cells.push(Cell::Usage {
-                            text: format!(
-                                "[{} in / {} out / {} cached, ${:.4}]",
-                                usage.input, usage.output, usage.cache_read, usage.cost.total
-                            ),
-                        });
-                    }
+                    self.account_assistant(assistant);
                 }
                 AgentMessage::Llm(Message::ToolResult(result)) => {
-                    let text: String = result
-                        .content
-                        .iter()
-                        .filter_map(|c| match c {
-                            ToolResultContent::Text(t) => Some(t.text.as_str()),
-                            ToolResultContent::Image(_) => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
                     self.transcript.attach_tool_result(
                         &result.tool_call_id,
-                        ToolOutcome {
-                            text,
-                            is_error: result.is_error,
-                        },
+                        tool_outcome(&result.content, result.details.as_ref(), result.is_error),
                     );
                 }
                 // Custom messages are internal bookkeeping, not display.
@@ -340,6 +280,10 @@ impl App {
         self.run_events.is_some()
     }
 
+    pub fn tick(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+
     pub fn on_terminal_event(&mut self, event: Event) {
         match event {
             // Windows terminals report key releases too; only act on press.
@@ -349,7 +293,7 @@ impl App {
                 self.autocomplete
                     .refresh(self.input.text(), self.input.cursor());
             }
-            // The wheel scrolls the transcript wherever the pointer is -
+            // The wheel scrolls the transcript wherever the pointer is the
             // same clamped movement as PgUp/PgDn, at the conventional
             // 3-lines-per-notch step. A left click selects the block under
             // the pointer. (Mouse events only arrive because mod.rs
@@ -371,18 +315,18 @@ impl App {
 
         // It consumes ONLY the keys it needs; everything else (Ctrl-C
         // included) falls through so session control never changes meaning.
-        // Visible - not merely open: a session with zero matches renders
+        // Visible but  not merely open: a session with zero matches renders
         // nothing, and an invisible popup swallowing Enter would make a
         // typo'd `/model xyz` un-submittable.
         if self.autocomplete.visible().is_some() {
             match (key.code, ctrl, alt) {
-                // Esc closes the popup - it does NOT abort the run. A second
+                // Esc closes the popup - it does not abort the run. A second
                 // Esc (popup now closed) aborts as usual.
                 (KeyCode::Esc, ..) => {
                     self.autocomplete.close();
                     return;
                 }
-                // Up/Down move the selection, NOT the prompt history.
+                // Up/Down move the selection, not the prompt history.
                 (KeyCode::Up, ..) => {
                     self.autocomplete.move_up();
                     return;
@@ -391,7 +335,7 @@ impl App {
                     self.autocomplete.move_down();
                     return;
                 }
-                // Tab or Enter accept - Enter does NOT submit while open.
+                // Tab or Enter accept but Enter does not submit while open.
                 (KeyCode::Tab, ..) | (KeyCode::Enter, false, false) => {
                     if let Some(completion) = self.autocomplete.accept(self.input.cursor()) {
                         self.input.replace_range(
@@ -400,9 +344,9 @@ impl App {
                             &completion.insert,
                         );
                     }
-                    // Refresh decides what happens next: a completed FILE no
+                    // Refresh decides what happens next: a completed file no
                     // longer forms a token (trailing space) so the popup
-                    // closes; a DIRECTORY still does, so it keeps completing.
+                    // closes; a directory still does, so it keeps completing.
                     self.autocomplete
                         .refresh(self.input.text(), self.input.cursor());
                     return;
@@ -423,7 +367,7 @@ impl App {
             (KeyCode::Char('d'), true, _) if self.input.is_empty() && !self.is_running() => {
                 self.should_quit = true;
             }
-            // A waiting login is the newest interaction - esc addresses
+            // A waiting login is the newest interaction but the esc addresses
             // it first; a second esc then aborts the run as usual.
             (KeyCode::Esc, ..) if self.login.is_some() => {
                 self.login = None; // Drop cancels the background task.
@@ -436,13 +380,18 @@ impl App {
 
             // Ctrl+Y toggles "selection mode": mouse capture off so the
             // TERMINAL owns the mouse again (select + copy text natively),
-            // then back on for wheel scrolling. Only requested here - the
+            // then back on for wheel scrolling. Only requested here when the
             // event loop owns the terminal and issues the actual commands.
             (KeyCode::Char('y'), true, _) => self.mouse_toggle_requested = true,
             // Ctrl+O copies: the clicked block, or - with nothing selected
             // - the latest answer, so the everyday "grab the result"
             // gesture needs no mouse at all.
             (KeyCode::Char('o'), true, _) => self.copy_selected(),
+            // Ctrl+T shows every tool result in full (and hides them again).
+            (KeyCode::Char('t'), true, _) => {
+                self.tools_expanded = !self.tools_expanded;
+                self.transcript.set_all_tools_expanded(self.tools_expanded);
+            }
             (KeyCode::PageUp, ..) => {
                 self.scroll_by(i64::from(self.last_transcript_height / 2).max(1));
             }
@@ -501,7 +450,7 @@ impl App {
     }
 
     /// Edits (typing, deleting, pasting) re-evaluate the popup and may OPEN
-    /// a session - completion is typing-driven.
+    /// a session but  completion is typing-driven.
     fn refresh_autocomplete(&mut self) {
         self.autocomplete
             .refresh(self.input.text(), self.input.cursor());
@@ -509,7 +458,7 @@ impl App {
 
     /// Cursor motion only keeps an ALREADY-OPEN session accurate (or closes
     /// it when the cursor leaves the token). Moving into an existing
-    /// `@token` never surprise-opens the popup - pi behaves the same.
+    /// `@token` never surprise-opens the popup.
     fn refresh_autocomplete_if_open(&mut self) {
         if self.autocomplete.is_open() {
             self.refresh_autocomplete();
@@ -711,13 +660,21 @@ impl App {
     /// geometry the render pass saved: window top line + row offset =
     /// visual line, and the line->cell map says which block that is.
     fn click(&mut self, column: u16, row: u16) {
-        let area = self.last_chat_inner;
-        if !area.contains(Position { x: column, y: row }) {
+        let position = Position { x: column, y: row };
+        let chat = self.last_chat_inner;
+        if chat.contains(position) {
+            let line = self.last_top_line + (row - chat.y) as usize;
+            let hit = self.last_line_cells.get(line).copied().flatten();
+            self.selected_cell = if hit == self.selected_cell { None } else { hit };
             return;
         }
-        let line = self.last_top_line + (row - area.y) as usize;
-        let hit = self.last_line_cells.get(line).copied().flatten();
-        self.selected_cell = if hit == self.selected_cell { None } else { hit };
+        let tools = self.last_tools_inner;
+        if tools.contains(position) {
+            let line = self.last_top_line + (row - tools.y) as usize;
+            if let Some(index) = self.last_tool_cells.get(line).copied().flatten() {
+                self.transcript.toggle_tool(index);
+            }
+        }
     }
 
     /// Ctrl+O: queue a block's raw text for the clipboard. The selected
@@ -759,7 +716,7 @@ impl App {
     /// the text as a prompt (steering when a run is active).
     fn submit(&mut self) {
         // Enter is consumed by the popup while open, so this is normally a
-        // no-op - it exists so no code path can submit with a live session.
+        // no-op, so no code path can submit with a live session.
         self.autocomplete.close();
         let text = self.input.submit();
         let trimmed = text.trim().to_string();
@@ -771,7 +728,7 @@ impl App {
             return;
         }
 
-        // /command dispatch, pi's order: built-ins are UI-local and never
+        // /command dispatch: built-ins are UI-local and never
         // reach the model; prompt templates expand into the prompt;
         // anything else falls through as literal text (a typo becomes a
         // question, not an error).
@@ -798,14 +755,14 @@ impl App {
         // calling it on every send is fine.
         crate::resources::ensure_project_dot_cupel(std::path::Path::new(&self.meta.cwd));
         if self.is_running() {
-            // Steering while a run is active is no longer supported;
-            // ignore the input while busy.
+            self.input.insert_str(text);
+            self.notice("the agent is working. esc aborts it; your text stays in the prompt box");
         } else {
             // Not started here: the event loop takes it via
             // `take_pending_prompt`, awaits the prompt-path hooks
             // (session-start / user-prompt-submit, plus settling a pending
-            // stop hook), THEN calls `start_run`. Keeping this method sync
-            // keeps every key handler - and their tests - sync.
+            // stop hook), then calls `start_run`. Keeping this method sync
+            // keeps every key handler.
             self.pending_prompt = Some(text.to_string());
         }
         // New activity: snap back to following the output.
@@ -820,16 +777,47 @@ impl App {
             text: text.to_string(),
         });
         match self.agent.prompt_text(text) {
-            Ok(events) => {
-                // Record the prompt so --resume replays the WHOLE turn.
-                self.recorder
-                    .record(&AgentMessage::user_text(text.to_string()));
-                self.run_events = Some(events);
-            }
+            Ok(events) => self.run_events = Some(events),
             Err(err) => self.transcript.cells.push(Cell::Error {
                 text: err.to_string(),
             }),
         }
+    }
+
+    fn account_assistant(&mut self, assistant: &cupel_core::types::AssistantMessage) {
+        if matches!(
+            assistant.stop_reason,
+            StopReason::Error | StopReason::Aborted
+        ) {
+            self.transcript.cells.push(Cell::Error {
+                text: assistant
+                    .error_message
+                    .clone()
+                    .unwrap_or_else(|| "unkown error".to_string()),
+            });
+            return;
+        }
+        if assistant.stop_reason == StopReason::Length {
+            self.transcript.cells.push(Cell::Error {
+                text: "response was truncated before completion (output token limit)".to_string(),
+            });
+        }
+        let usage = &assistant.usage;
+        self.totals.input += usage.input;
+        self.totals.output += usage.output;
+        self.totals.cache_read += usage.cache_read;
+        self.totals.cost += usage.cost.total;
+        self.context_tokens = if usage.total_tokens > 0 {
+            usage.total_tokens
+        } else {
+            usage.input + usage.output + usage.cache_read + usage.cache_write
+        };
+        self.transcript.cells.push(Cell::Usage {
+            text: format!(
+                "[{} in / {} out / {} cached, ${:.4}]",
+                usage.input, usage.output, usage.cache_read, usage.cost.total
+            ),
+        });
     }
 
     fn notice(&mut self, text: impl Into<String>) {
@@ -839,7 +827,7 @@ impl App {
     }
 
     /// The API key for `provider`: a key entered this session wins, then
-    /// the exported env var. Bedrock returns `None` - its AWS credential
+    /// the exported env var. Bedrock returns `None`. Its AWS credential
     /// chain resolves inside the provider itself.
     fn resolve_key(&self, provider: &str) -> Option<String> {
         self.session_keys
@@ -1075,10 +1063,9 @@ impl App {
                 } else {
                     self.agent.reset();
                     self.transcript.cells.clear();
-                    // The selection indexes into the cells just cleared.
                     self.selected_cell = None;
                     self.totals = Totals::default();
-                    self.notice("conversation cleared");
+                    self.context_tokens = 0;
                 }
             }
             "model" => {
@@ -1305,66 +1292,56 @@ impl App {
                     self.transcript.append_thinking(&delta);
                 }
                 AssistantMessageEvent::ToolCallEnd { tool_call, .. } => {
+                    let call = self
+                        .agent
+                        .describe_tool_call(&tool_call.name, &tool_call.arguments);
                     self.transcript.cells.push(Cell::Tool {
                         id: tool_call.id,
                         name: tool_call.name,
-                        args: compact(&tool_call.arguments.to_string(), 200),
+                        call,
+                        expanded: self.tools_expanded,
+                        started_at: None,
+                        live: None,
                         result: None,
                     });
                 }
                 _ => {}
             },
 
-            // Finalized ASSISTANT messages come back as events - the loop
-            // is the source of truth for them. User prompts never arrive
-            // this way (the loop emits MessageEnd only for assistant
-            // messages); start_run pushes and records them directly.
+            // Finalized assistant messages come back as events. User
+            // prompts never arrive this way (the loop emits MessageEnd
+            // only for assistant messages); start_run pushes
+            // and records them directly.
             AgentEvent::MessageEnd { message } => {
                 // Every finalized message rides into the transcript file.
                 self.recorder.record(&message);
-                if let AgentMessage::Llm(Message::Assistant(assistant)) = message {
-                    if matches!(
-                        assistant.stop_reason,
-                        StopReason::Error | StopReason::Aborted
-                    ) {
-                        self.transcript.cells.push(Cell::Error {
-                            text: assistant
-                                .error_message
-                                .unwrap_or_else(|| "unknown error".to_string()),
-                        });
-                    } else {
-                        let usage = &assistant.usage;
-                        self.totals.input += usage.input;
-                        self.totals.output += usage.output;
-                        self.totals.cache_read += usage.cache_read;
-                        self.totals.cost += usage.cost.total;
-                        self.transcript.cells.push(Cell::Usage {
-                            text: format!(
-                                "[{} in / {} out / {} cached, ${:.4}]",
-                                usage.input, usage.output, usage.cache_read, usage.cost.total
-                            ),
-                        });
-                    }
+                if let AgentMessage::Llm(Message::Assistant(assistant)) = &message {
+                    self.account_assistant(assistant);
                 }
             }
 
+            AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
+                self.transcript.mark_tool_started(&tool_call_id);
+            }
+            AgentEvent::ToolExecutionUpdate {
+                tool_call_id,
+                partial,
+                ..
+            } => {
+                let snapshot = tool_outcome(&partial.content, None, false).text;
+                self.transcript
+                    .attach_tool_progress(&tool_call_id, snapshot);
+            }
             AgentEvent::ToolExecutionEnd {
                 tool_call_id,
                 result,
                 is_error,
                 ..
             } => {
-                let text: String = result
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        ToolResultContent::Text(t) => Some(t.text.as_str()),
-                        ToolResultContent::Image(_) => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.transcript
-                    .attach_tool_result(&tool_call_id, ToolOutcome { text, is_error });
+                self.transcript.attach_tool_result(
+                    &tool_call_id,
+                    tool_outcome(&result.content, result.details.as_ref(), is_error),
+                );
             }
 
             AgentEvent::CompactionStart { reason } => {
@@ -1380,16 +1357,23 @@ impl App {
                 tokens_before,
                 tokens_after,
                 error,
+                summary,
             } => {
                 let text = match error {
-                    None => format!(
-                        "context compacted: ~{}k -> ~{}k tokens",
-                        tokens_before / 1000,
-                        tokens_after / 1000
-                    ),
+                    None => {
+                        self.context_tokens = tokens_after;
+                        format!(
+                            "context compacted: ~{}k -> ~{}k tokens",
+                            tokens_before / 1000,
+                            tokens_after / 1000,
+                        )
+                    }
                     Some(error) => format!("compaction failed: {error}"),
                 };
                 self.transcript.cells.push(Cell::Notice { text });
+                if let Some(summary) = summary {
+                    self.transcript.cells.push(Cell::Summary { text: summary });
+                }
             }
 
             AgentEvent::AutoRetry {
@@ -1456,11 +1440,30 @@ fn list_session_id_candidates(dir: &std::path::Path) -> Vec<Candidate> {
         .collect()
 }
 
-/// Truncate a one-line summary to at most `max_chars` characters.
-fn compact(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
+/// The transcript's view of a finished tool call: the text the model saw,
+/// plus the diff an edit ships in its `details`. Shared by the live path
+/// (ToolExecutionEnd) and the --resume replay, so both show the same thing.
+fn tool_outcome(
+    content: &[ToolResultContent],
+    details: Option<&serde_json::Value>,
+    is_error: bool,
+) -> ToolOutcome {
+    let text: String = content
+        .iter()
+        .filter_map(|c| match c {
+            ToolResultContent::Text(t) => Some(t.text.as_str()),
+            ToolResultContent::Image(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let diff = details
+        .and_then(|d| d.get("diff"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    ToolOutcome {
+        text,
+        is_error,
+        diff,
+        took: None,
     }
-    let prefix: String = s.chars().take(max_chars).collect();
-    format!("{prefix}...")
 }

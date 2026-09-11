@@ -41,24 +41,17 @@ struct BashArgs {
     timeout: Option<f64>,
 }
 
-// ---------------------------------------------------------------------------
-// Output accumulator
-// ---------------------------------------------------------------------------
-
 /// Streaming output tracker with bounded memory (see module docs).
 struct OutputAccumulator {
     max_lines: usize,
     max_bytes: usize,
     /// In-memory rolling tail, trimmed to ~2x `max_bytes`.
     tail: Vec<u8>,
-    /// Whether `tail` currently begins at a line boundary. After trimming it
-    /// usually starts mid-line; snapshots drop that partial first line.
     tail_at_line_boundary: bool,
     total_bytes: usize,
     completed_lines: usize,
     has_open_line: bool,
     current_line_bytes: usize,
-    /// Bytes received before the temp file was (maybe) opened.
     pending: Vec<u8>,
     temp: Option<(PathBuf, std::fs::File)>,
 }
@@ -107,7 +100,7 @@ impl OutputAccumulator {
         }
 
         // Rolling tail with a trim threshold above the display budget so we
-        // always have at least max_bytes of COMPLETE lines to show.
+        // always have at least max_bytes of complete lines to show.
         self.tail.extend_from_slice(data);
         let rolling_cap = self.max_bytes * 2;
         if self.tail.len() > rolling_cap * 2 {
@@ -191,10 +184,6 @@ impl OutputAccumulator {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The tool
-// ---------------------------------------------------------------------------
-
 pub struct BashTool {
     cwd: PathBuf,
     description: String,
@@ -229,7 +218,6 @@ fn kill_process_group(pid: u32) {
         .output();
 }
 
-/// How a command run ended.
 enum RunOutcome {
     Exited(Option<i32>),
     Aborted,
@@ -261,6 +249,18 @@ impl AgentTool for BashTool {
             },
             "required": ["command"]
         })
+    }
+
+    /// `$ <command>` - the shell prompt says "this ran", the command is
+    /// shown verbatim. The timeout rides along when the model set one.
+    fn describe_call(&self, args: &Value) -> String {
+        let Some(command) = args.get("command").and_then(Value::as_str) else {
+            return self.name().to_string();
+        };
+        match args.get("timeout").and_then(Value::as_f64) {
+            Some(timeout) => format!("$ {command} (timeout {timeout}s)"),
+            None => format!("$ {command}"),
+        }
     }
 
     async fn execute(
@@ -390,12 +390,11 @@ impl AgentTool for BashTool {
                 output.append(&chunk);
             }
             // Bounded reap: if the process somehow survived both kills, give
-            // up after a beat instead of hanging the turn - the OS reaps the
+            // up after a beat instead of hanging the turn. The OS reaps the
             // zombie when cupel exits, which beats a frozen agent.
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         }
 
-        // ---- Format the final result -----------------------------------------
         let (content, truncation, full_output_path) = output.snapshot();
         let mut text = if content.is_empty() {
             String::new()
@@ -516,6 +515,21 @@ mod tests {
             return Err("expected text".to_string());
         };
         Ok(text.text.clone())
+    }
+
+    #[test]
+    fn describe_call_is_the_shell_line() {
+        let tool = BashTool::new("/tmp");
+        assert_eq!(
+            tool.describe_call(&json!({"command": "cargo test -p cupel-core"})),
+            "$ cargo test -p cupel-core"
+        );
+        assert_eq!(
+            tool.describe_call(&json!({"command": "sleep 5", "timeout": 30})),
+            "$ sleep 5 (timeout 30s)"
+        );
+        // Arguments still streaming in (or malformed): the bare name.
+        assert_eq!(tool.describe_call(&json!({})), "bash");
     }
 
     #[tokio::test]

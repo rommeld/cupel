@@ -3,7 +3,7 @@
 //! Concurrency model: the run executes on a spawned Tokio task, so
 //! everything the run touches lives behind `Arc`s. State sits in
 //! `Arc<Mutex<...>>` with short lock scopes; the queues likewise. [`Agent::prompt`]
-//! hands back an [`AgentEventStream`] - the caller consumes events at its
+//! hands back an [`AgentEventStream`]. The caller consumes events at its
 //! own pace while the internal forwarder keeps [`AgentState`] up to date.
 
 use std::collections::HashSet;
@@ -28,14 +28,10 @@ use crate::types::{
 pub struct AgentState {
     pub system_prompt: String,
     pub model: Model,
-    /// `None` = thinking off.
     pub thinking_level: Option<ThinkingLevel>,
     pub messages: Vec<AgentMessage>,
-    /// True while a run is active.
     pub is_streaming: bool,
-    /// Tool call ids currently executing.
     pub pending_tool_calls: HashSet<String>,
-    /// Error from the most recent failed/aborted assistant turn.
     pub error_message: Option<String>,
 }
 
@@ -96,7 +92,6 @@ pub struct Agent {
     tool_execution: ToolExecutionMode,
     retry: RetryConfig,
     compaction: crate::compaction::CompactionConfig,
-    /// The active run: cancel token + its join handle.
     active: Option<(CancellationToken, tokio::task::JoinHandle<()>)>,
 }
 
@@ -165,6 +160,16 @@ impl Agent {
         Arc::clone(&self.registry)
     }
 
+    /// One line describung a tool call for a UI. The tool's own
+    /// `describe_call` or just the name for a tool the agent does not have.
+    #[must_use]
+    pub fn describe_tool_call(&self, name: &str, args: &serde_json::Value) -> String {
+        self.tools
+            .iter()
+            .find(|tool| tool.name() == name)
+            .map_or_else(|| name.to_string(), |tool| tool.describe_call(args))
+    }
+
     /// Set the thinking level for future requests (`None` = off).
     pub fn set_thinking_level(&self, level: Option<ThinkingLevel>) {
         self.state
@@ -176,8 +181,7 @@ impl Agent {
     /// The thinking level FUTURE runs will use - the read half of
     /// [`Agent::set_thinking_level`], for status displays. A cheap
     /// copy read under the lock, deliberately NOT a full state()
-    /// snapshot (which clones the message history) - this runs per
-    /// rendered frame.
+    /// snapshot (which clones the message history).
     #[must_use]
     pub fn thinking_level(&self) -> Option<ThinkingLevel> {
         self.state
@@ -186,8 +190,17 @@ impl Agent {
             .thinking_level
     }
 
-    /// Whether the CURRENT model supports reasoning at all - drives
-    /// whether a thinking level is worth displaying.
+    /// The current model's context window.
+    #[must_use]
+    pub fn context_window(&self) -> u64 {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .model
+            .context_window
+    }
+
+    /// Whether the current model supports reasoning at all.
     #[must_use]
     pub fn model_supports_reasoning(&self) -> bool {
         self.state
@@ -325,6 +338,9 @@ async fn forward_events(
             match &event {
                 AgentEvent::MessageEnd { message } => {
                     state.messages.push(message.clone());
+                }
+                AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
+                    state.pending_tool_calls.insert(tool_call_id.clone());
                 }
                 AgentEvent::ToolExecutionEnd { tool_call_id, .. } => {
                     state.pending_tool_calls.remove(tool_call_id);

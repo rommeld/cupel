@@ -31,9 +31,7 @@ pub const COMPACTION_MARKER: &str = "[Conversation summary - earlier history was
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompactionConfig {
     pub enabled: bool,
-    /// Tokens reserved for the summarization prompt and the next output.
     pub reserve_tokens: u64,
-    /// Approximate recent-context tokens kept verbatim after compaction.
     pub keep_recent_tokens: u64,
 }
 
@@ -46,10 +44,6 @@ impl Default for CompactionConfig {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Estimation
-// ---------------------------------------------------------------------------
 
 const CHARS_PER_TOKEN: u64 = 4;
 const ESTIMATED_IMAGE_CHARS: u64 = 4800;
@@ -142,10 +136,6 @@ pub fn should_compact(context_tokens: u64, context_window: u64, config: &Compact
     context_tokens > context_window.saturating_sub(config.reserve_tokens)
 }
 
-// ---------------------------------------------------------------------------
-// Cut-point selection
-// ---------------------------------------------------------------------------
-
 /// Index of the first message KEPT verbatim. Everything before it gets
 /// summarized. Walks back accumulating the keep budget, then snaps to the
 /// next user/custom message boundary (never between a tool call and its
@@ -174,10 +164,6 @@ fn find_cut_index(messages: &[AgentMessage], keep_recent_tokens: u64) -> usize {
     // orphaned calls, so even this cut is wire-safe.
     budget_start
 }
-
-// ---------------------------------------------------------------------------
-// Tier 1: tool-result pruning (free)
-// ---------------------------------------------------------------------------
 
 /// Replacement body for an elided tool result. Tells the model exactly how
 /// to recover: run the tool again.
@@ -224,12 +210,6 @@ fn elide_stale_tool_results(messages: &mut [AgentMessage]) -> usize {
     pruned
 }
 
-// ---------------------------------------------------------------------------
-// Tier 2: summarization
-// ---------------------------------------------------------------------------
-
-// pi's prompts, verbatim - the structured format is what makes summaries
-// actionable for the model that continues the work.
 pub const SUMMARIZATION_SYSTEM_PROMPT: &str = "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.";
 
 const SUMMARIZATION_PROMPT: &str = "The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.\n\nUse this EXACT format:\n\n## Goal\n[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]\n\n## Constraints & Preferences\n- [Any constraints, preferences, or requirements mentioned by user]\n- [Or \"(none)\" if none were mentioned]\n\n## Progress\n### Done\n- [x] [Completed tasks/changes]\n\n### In Progress\n- [ ] [Current work]\n\n### Blocked\n- [Issues preventing progress, if any]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale]\n\n## Next Steps\n1. [Ordered list of what should happen next]\n\n## Critical Context\n- [Any data, examples, or references needed to continue]\n- [Or \"(none)\" if not applicable]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages.";
@@ -310,15 +290,13 @@ pub enum CompactionError {
     SummarizationFailed(String),
 }
 
-/// Outcome of a successful compaction, for events/telemetry.
 #[derive(Debug, Clone)]
 pub struct CompactionOutcome {
     pub tokens_before: u64,
     pub tokens_after: u64,
-    /// Messages replaced by the tier-2 summary; 0 when pruning sufficed.
     pub summarized_messages: usize,
-    /// Tool results elided by the free tier-1 pass.
     pub pruned_tool_results: usize,
+    pub summary: Option<String>,
 }
 
 /// Compact `context.messages` in place, cheapest tier first:
@@ -340,8 +318,8 @@ pub async fn compact(
         return Err(CompactionError::NothingToCompact);
     }
 
-    // ---- Tier 1: free pruning ----------------------------------------------
-    // Elide only OUTSIDE the keep window (the recent tail stays verbatim -
+    // Tier 1: free pruning
+    // Elide only outside the keep window (the recent tail stays verbatim -
     // the model may be mid-task on those outputs). When this is enough,
     // return before any LLM call: no summarization cost, no summary at all.
     let pruned_tool_results = elide_stale_tool_results(&mut context.messages[..cut]);
@@ -353,11 +331,12 @@ pub async fn compact(
                 tokens_after,
                 summarized_messages: 0,
                 pruned_tool_results,
+                summary: None,
             });
         }
     }
 
-    // ---- Tier 2: summarize the (now pruned) old history ---------------------
+    // Tier 2: summarize the (now pruned) old history
     // The summary is built from the pruned messages: elided bodies cost the
     // summarization call almost nothing, and the key facts from tool output
     // live in the assistant's own text anyway.
@@ -375,7 +354,7 @@ pub async fn compact(
         _ => None,
     });
 
-    // ---- The summarization request -----------------------------------------
+    // The summarization request
     let conversation = serialize_conversation(to_summarize);
     let mut prompt = format!("<conversation>\n{conversation}\n</conversation>\n\n");
     if let Some(previous) = &previous_summary {
@@ -425,7 +404,7 @@ pub async fn compact(
         ));
     }
 
-    // ---- Splice the transcript ------------------------------------------------
+    // Splice the transcript
     let summarized_messages = to_summarize.len();
     let mut new_messages = vec![AgentMessage::user_text(format!(
         "{COMPACTION_MARKER}\n\n{summary}"
@@ -438,6 +417,7 @@ pub async fn compact(
         tokens_after: estimate_context_tokens(context),
         summarized_messages,
         pruned_tool_results,
+        summary: Some(summary),
     })
 }
 

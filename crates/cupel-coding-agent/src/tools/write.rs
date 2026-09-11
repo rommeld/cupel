@@ -63,6 +63,15 @@ impl AgentTool for WriteTool {
         })
     }
 
+    /// `write <path>` - like edit, the header says where; the result line
+    /// says how much.
+    fn describe_call(&self, args: &Value) -> String {
+        match args.get("path").and_then(Value::as_str) {
+            Some(path) => format!("write {path}"),
+            None => self.name().to_string(),
+        }
+    }
+
     async fn execute(
         &self,
         _tool_call_id: &str,
@@ -102,6 +111,16 @@ impl AgentTool for WriteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn describe_call_names_the_file() {
+        let tool = WriteTool::new("/tmp");
+        assert_eq!(
+            tool.describe_call(&json!({"path": "notes.md", "content": "x"})),
+            "write notes.md"
+        );
+        assert_eq!(tool.describe_call(&json!({"content": "x"})), "write");
+    }
 
     #[tokio::test]
     async fn writes_and_creates_parent_directories() {

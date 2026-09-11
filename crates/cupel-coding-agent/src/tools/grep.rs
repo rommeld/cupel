@@ -36,16 +36,13 @@ struct GrepArgs {
     ignore_case: bool,
     #[serde(default)]
     literal: bool,
-    /// Lines of context before/after each match.
     #[serde(default)]
     context: u64,
     limit: Option<usize>,
 }
 
 pub struct GrepTool {
-    /// The agent's working directory; relative paths resolve against it.
     cwd: PathBuf,
-    /// Pluggable search backend (grep today, index in iteration two).
     backend: Arc<dyn CodeSearch>,
     description: String,
 }
@@ -78,9 +75,7 @@ impl AgentTool for GrepTool {
     }
 
     fn parameters(&self) -> Value {
-        // Kept in sync with `GrepArgs` by hand. pi generates this from the
-        // TypeBox schema; a Rust equivalent would be the `schemars` derive -
-        // a nice later refinement, but one more macro to learn today.
+        // Kept in sync with `GrepArgs` by hand.
         json!({
             "type": "object",
             "properties": {
@@ -117,6 +112,22 @@ impl AgentTool for GrepTool {
         })
     }
 
+    /// `grep /pattern in <path> (<glob>) limit N`.
+    fn describe_call(&self, args: &Value) -> String {
+        let Some(pattern) = args.get("pattern").and_then(Value::as_str) else {
+            return self.name().to_string();
+        };
+        let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
+        let mut out = format!("grep /{pattern}/ in {path}");
+        if let Some(glob) = args.get("glob").and_then(Value::as_str) {
+            out.push_str(&format!(" ({glob})"));
+        }
+        if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
+            out.push_str(&format!(" limit {limit}"));
+        }
+        out
+    }
+
     async fn execute(
         &self,
         _tool_call_id: &str,
@@ -151,7 +162,6 @@ impl AgentTool for GrepTool {
             return Ok(AgentToolResult::text("No matches found"));
         }
 
-        // ---- Format matches ---------------------------------------------
         let format_path = |path: &Path| -> String {
             if searching_directory
                 && let Ok(relative) = path.strip_prefix(&search_path)
@@ -218,7 +228,6 @@ impl AgentTool for GrepTool {
             }
         }
 
-        // ---- Byte cap + actionable notices --------------------------------
         // No line limit here: the match limit already capped the row count.
         let raw_output = output_lines.join("\n");
         let truncation = truncate_head(
@@ -292,6 +301,22 @@ mod tests {
                 cupel_core::types::ToolResultContent::Image(_) => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn describe_call_reads_like_a_search() {
+        let tool = GrepTool::new("/tmp", Arc::new(GrepSearch::new("/tmp")));
+        assert_eq!(
+            tool.describe_call(&json!({"pattern": "fn main"})),
+            "grep /fn main/ in ."
+        );
+        assert_eq!(
+            tool.describe_call(
+                &json!({"pattern": "TODO", "path": "src", "glob": "*.rs", "limit": 50})
+            ),
+            "grep /TODO/ in src (*.rs) limit 50"
+        );
+        assert_eq!(tool.describe_call(&json!({"path": "src"})), "grep");
     }
 
     #[tokio::test]

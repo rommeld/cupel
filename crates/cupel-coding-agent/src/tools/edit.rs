@@ -27,9 +27,6 @@ const DIFF_CONTEXT_LINES: usize = 4;
 struct EditArgs {
     path: String,
     edits: Vec<Edit>,
-    // pi also accepts a legacy single {oldText, newText} pair at the top
-    // level; `prepare_arguments` folds that shape into `edits` before this
-    // struct ever sees it.
 }
 
 pub struct EditTool {
@@ -119,6 +116,15 @@ impl AgentTool for EditTool {
         })
     }
 
+    /// `edit <path>` - the diff below the header shows what changed, so the
+    /// header only needs to say where.
+    fn describe_call(&self, args: &Value) -> String {
+        match args.get("path").and_then(Value::as_str) {
+            Some(path) => format!("edit {path}"),
+            None => self.name().to_string(),
+        }
+    }
+
     async fn execute(
         &self,
         _tool_call_id: &str,
@@ -136,8 +142,7 @@ impl AgentTool for EditTool {
 
         // Hold the per-file lock across the whole read-modify-write cycle.
         // Cancellation is observed BETWEEN operations (not by interrupting
-        // them) so the lock always outlives the in-flight filesystem call -
-        // same reasoning as pi's throwIfAborted comment.
+        // them) so the lock always outlives the in-flight filesystem call.
         let _guard = lock_file_for_mutation(&absolute_path).await;
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
@@ -207,6 +212,16 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, content).unwrap();
         (dir, path)
+    }
+
+    #[test]
+    fn describe_call_names_the_file() {
+        let tool = EditTool::new("/tmp");
+        assert_eq!(
+            tool.describe_call(&json!({"path": "src/main.rs", "edits": []})),
+            "edit src/main.rs"
+        );
+        assert_eq!(tool.describe_call(&json!({"edits": []})), "edit");
     }
 
     #[tokio::test]
