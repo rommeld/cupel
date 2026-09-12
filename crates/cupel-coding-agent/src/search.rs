@@ -10,30 +10,28 @@ use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use tokio_util::sync::CancellationToken;
 
-/// A search request. Field-for-field mirror of pi's grep tool input.
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
-    /// Regex (or literal string when `literal` is set).
     pub pattern: String,
-    /// Directory or file to search; relative to the search root.
     pub path: Option<String>,
-    /// Glob filter, e.g. `*.rs` or `**/*.spec.ts`.
     pub glob: Option<String>,
     pub ignore_case: bool,
-    /// Treat `pattern` as a literal string instead of a regex.
     pub literal: bool,
-    /// Stop after this many matches.
-    pub limit: usize,
+    pub limit: SearchLimit,
+}
+
+/// How much of the search to run before stopping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchLimit {
+    Matches(usize),
+    Files { max_files: usize, per_file: usize },
 }
 
 /// One matching line.
 #[derive(Debug, Clone)]
 pub struct SearchMatch {
-    /// Absolute path of the file.
     pub path: PathBuf,
-    /// 1-based line number.
     pub line_number: u64,
-    /// The matching line's text (trailing newline stripped).
     pub line: String,
 }
 
@@ -41,7 +39,6 @@ pub struct SearchMatch {
 #[derive(Debug, Clone, Default)]
 pub struct SearchOutcome {
     pub matches: Vec<SearchMatch>,
-    /// True when the match limit cut the search short.
     pub limit_reached: bool,
 }
 
@@ -93,15 +90,10 @@ pub fn resolve_to_root(path: &str, root: &Path) -> PathBuf {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Grep backend
-// ---------------------------------------------------------------------------
-
 /// File-scan search backend using ripgrep's engine. Semantics match pi's
 /// `rg --json --line-number --hidden` invocation: respects `.gitignore`,
 /// includes hidden files (but never the `.git` directory itself).
 pub struct GrepSearch {
-    /// Root directory relative paths resolve against (the agent's cwd).
     root: PathBuf,
 }
 
@@ -122,7 +114,7 @@ impl CodeSearch for GrepSearch {
         let root = self.root.clone();
         // The grep/ignore crates are synchronous and CPU/IO heavy. Running
         // them on `spawn_blocking` keeps the async runtime's worker threads
-        // free - blocking inside an async fn would stall unrelated tasks.
+        // free.
         tokio::task::spawn_blocking(move || search_blocking(&root, &query, &cancel))
             .await
             .map_err(|e| SearchError::Io(std::io::Error::other(e)))?
@@ -131,7 +123,7 @@ impl CodeSearch for GrepSearch {
 
 /// Escape regex metacharacters so the pattern matches literally
 /// (rg's `--fixed-strings`).
-fn escape_regex(pattern: &str) -> String {
+pub(crate) fn escape_regex(pattern: &str) -> String {
     let mut escaped = String::with_capacity(pattern.len() * 2);
     for c in pattern.chars() {
         if matches!(
@@ -171,7 +163,6 @@ fn search_blocking(
         return Err(SearchError::PathNotFound(search_path.display().to_string()));
     }
 
-    // ---- Matcher ----------------------------------------------------------
     let pattern = if query.literal {
         escape_regex(&query.pattern)
     } else {
@@ -182,17 +173,13 @@ fn search_blocking(
         .build(&pattern)
         .map_err(|e| SearchError::InvalidPattern(e.to_string()))?;
 
-    // ---- Walker -----------------------------------------------------------
     let mut walker = WalkBuilder::new(&search_path);
     walker
-        // Include hidden files (rg --hidden) ...
         .hidden(false)
-        // ... but keep .gitignore/.ignore rules active (the default).
         .git_ignore(true)
         .git_exclude(true)
-        // Deviation from `rg --hidden`, which would descend into `.git`:
-        // matches inside git internals are never what a coding agent wants.
-        .filter_entry(|entry| entry.file_name() != ".git");
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .sort_by_file_path(Path::cmp);
 
     if let Some(glob) = &query.glob {
         let mut overrides = OverrideBuilder::new(&search_path);
@@ -206,28 +193,35 @@ fn search_blocking(
         );
     }
 
-    // ---- Searcher ---------------------------------------------------------
     let mut searcher = SearcherBuilder::new()
         .line_number(true)
-        // Skip binary files as soon as a NUL byte appears (rg's default).
         .binary_detection(BinaryDetection::quit(b'\x00'))
         .build();
 
+    // The two budget shapes unfold into three plain numbers so the loop below
+    // has one code path.
+    let (max_matches, max_files, per_file) = match query.limit {
+        SearchLimit::Matches(n) => (n.max(1), usize::MAX, usize::MAX),
+        SearchLimit::Files {
+            max_files,
+            per_file,
+        } => (usize::MAX, max_files.max(1), per_file.max(1)),
+    };
+
     let mut matches: Vec<SearchMatch> = Vec::new();
-    let limit = query.limit.max(1);
     // Shared counter lets the per-file sink stop the whole search at the
     // limit. Atomic because sink closures can't borrow `matches` mutably
     // while the outer loop also does.
     let count = Arc::new(AtomicUsize::new(0));
+    let mut files_with_matches = 0_usize;
     let mut limit_reached = false;
 
-    // Single-threaded walk => deterministic result order (like rg's
-    // single-threaded default when outputting to a pipe).
+    // Stored, single-threaded walk => deterministic result order.
     for entry in walker.build() {
         if cancel.is_cancelled() {
             return Err(SearchError::Aborted);
         }
-        if count.load(Ordering::Relaxed) >= limit {
+        if count.load(Ordering::Relaxed) >= max_matches || files_with_matches >= max_files {
             limit_reached = true;
             break;
         }
@@ -252,8 +246,9 @@ fn search_blocking(
                     line: line.trim_end_matches(['\r', '\n']).to_string(),
                 });
                 let seen = count_for_sink.fetch_add(1, Ordering::Relaxed) + 1;
-                // Returning Ok(false) stops the search in THIS file.
-                Ok(seen < limit)
+                // Returning Ok(false) stops the search in this file: at the
+                // global match limit or at the per-file cap.
+                Ok(seen < max_matches && file_matches.len() < per_file)
             }),
         );
         // Unreadable files are skipped silently, matching rg's behavior of
@@ -261,12 +256,15 @@ fn search_blocking(
         if result.is_err() {
             continue;
         }
+        if !file_matches.is_empty() {
+            files_with_matches += 1;
+        }
         matches.extend(file_matches);
     }
 
-    if count.load(Ordering::Relaxed) >= limit {
+    if count.load(Ordering::Relaxed) >= max_matches || files_with_matches >= max_files {
         limit_reached = true;
-        matches.truncate(limit);
+        matches.truncate(max_matches);
     }
 
     Ok(SearchOutcome {
@@ -335,7 +333,7 @@ mod tests {
             glob: None,
             ignore_case: false,
             literal: false,
-            limit: 100,
+            limit: SearchLimit::Matches(100),
         }
     }
 
@@ -394,9 +392,68 @@ mod tests {
         let root = temp_root("limit");
         write_tree(&root, &[("a.txt", "x\nx\nx\nx\nx\n")]);
         let mut query = base_query("x");
-        query.limit = 2;
+        query.limit = SearchLimit::Matches(2);
         let outcome = run(&root, query);
         assert_eq!(outcome.matches.len(), 2);
+        assert!(outcome.limit_reached);
+    }
+
+    /// Paths relative to `root`, forward slashes, in result order.
+    fn relative_paths(root: &Path, outcome: &SearchOutcome) -> Vec<String> {
+        outcome
+            .matches
+            .iter()
+            .map(|m| {
+                m.path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .display()
+                    .to_string()
+                    .replace('\\', "/")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn walk_order_is_sorted_by_path() {
+        let root = temp_root("sorted");
+        // Written in reverse order on purpose: the walk must not depend on
+        // creation or readdir order.
+        write_tree(
+            &root,
+            &[
+                ("zeta.txt", "hit\n"),
+                ("beta/inner.txt", "hit\n"),
+                ("alpha.txt", "hit\n"),
+            ],
+        );
+        let outcome = run(&root, base_query("hit"));
+        assert_eq!(
+            relative_paths(&root, &outcome),
+            ["alpha.txt", "beta/inner.txt", "zeta.txt"]
+        );
+    }
+
+    #[test]
+    fn files_limit_caps_per_file_and_stops_at_max_files() {
+        let root = temp_root("fileslimit");
+        write_tree(
+            &root,
+            &[
+                ("a.txt", "x\nx\nx\nx\n"),
+                ("b.txt", "x\n"),
+                ("c.txt", "x\n"),
+            ],
+        );
+        let mut query = base_query("x");
+        query.limit = SearchLimit::Files {
+            max_files: 2,
+            per_file: 2,
+        };
+        let outcome = run(&root, query);
+        // a.txt is capped at 2 of its 4 lines, b.txt takes the second file
+        // slot, c.txt is never opened.
+        assert_eq!(relative_paths(&root, &outcome), ["a.txt", "a.txt", "b.txt"]);
         assert!(outcome.limit_reached);
     }
 }

@@ -334,8 +334,8 @@ impl Transcript {
             | Cell::Thinking { text }
             | Cell::Error { text }
             | Cell::Notice { text }
-            | Cell::Usage { text } => Some(text),
-            Cell::Summary { text } => Some(text),
+            | Cell::Usage { text }
+            | Cell::Summary { text } => Some(text),
             Cell::Tool { .. } => None,
         }
     }

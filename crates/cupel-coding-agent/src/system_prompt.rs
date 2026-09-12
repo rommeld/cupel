@@ -24,6 +24,9 @@ pub fn build_system_prompt(
     let mut guidelines: Vec<&str> = Vec::new();
     if has("grep") {
         guidelines.push("Use grep to locate code before answering questions about it");
+        guidelines.push(
+            "Use grep outputMode=files to find which files define or use a name before reading them",
+        );
     }
     if has("read") {
         guidelines.push("Use read to examine files instead of cat or sed");
@@ -65,7 +68,6 @@ Guidelines:
 {guidelines}"
     );
 
-    // ---- Project context (eager): full contents, every request ------------
     if !context_files.is_empty() {
         prompt.push_str("\n\n<project_context>\n\nProject-specific instructions and guidelines:\n");
         for file in context_files {
@@ -84,8 +86,6 @@ Guidelines:
     prompt
 }
 
-/// Date as `YYYY-MM-DD` without pulling in chrono: days since the Unix epoch,
-/// converted via the civil-from-days algorithm (Howard Hinnant's classic).
 fn current_date() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

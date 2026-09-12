@@ -16,13 +16,18 @@ use tokio_util::sync::CancellationToken;
 
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 
-use crate::search::{CodeSearch, SearchQuery, resolve_to_root};
+use crate::search::{CodeSearch, SearchLimit, SearchQuery, resolve_to_root};
+use crate::tools::grep_rank::{Bucket, FileSummary, Ranker};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, GREP_MAX_LINE_LENGTH, TruncationOptions, format_size, truncate_head,
     truncate_line,
 };
 
 const DEFAULT_LIMIT: usize = 100;
+const FILES_DEFAULT_LIMIT: usize = 10;
+const FILES_PER_FILE_CAP: usize = 20;
+const FILES_RANKING_WINDOW: usize = 500;
+const FILES_PREVIEW_MAX_CHARS: usize = 120;
 
 /// Tool arguments. Deserializing into this struct IS the argument
 /// validation (unknown fields are ignored, wrong types are errors).
@@ -39,6 +44,17 @@ struct GrepArgs {
     #[serde(default)]
     context: u64,
     limit: Option<usize>,
+    #[serde(default)]
+    output_mode: OutputMode,
+}
+
+/// What the tool returns.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum OutputMode {
+    #[default]
+    Content,
+    Files,
 }
 
 pub struct GrepTool {
@@ -55,9 +71,12 @@ impl GrepTool {
             backend,
             description: format!(
                 "Search file contents for a pattern. Returns matching lines with file paths \
-                 and line numbers. Respects .gitignore. Output is truncated to {DEFAULT_LIMIT} \
-                 matches or {}KB (whichever is hit first). Long lines are truncated to \
-                 {GREP_MAX_LINE_LENGTH} chars.",
+                and line numbers. Respects .gitignore. Output is truncated to {DEFAULT_LIMIT} \
+                matches or {}KB (whichever is hit first). Long lines are truncated to \
+                {GREP_MAX_LINE_LENGTH} chars. outputMode \"files\" returns one line per file \
+                instead ({FILES_DEFAULT_LIMIT} by default), ranked with definitions first and \
+                test code last, each with its best matching line as preview - use it to learn \
+                which files to read.",
                 DEFAULT_MAX_BYTES / 1024
             ),
         }
@@ -105,7 +124,12 @@ impl AgentTool for GrepTool {
                 },
                 "limit": {
                     "type": "number",
-                    "description": "Maximum number of matches to return (default: 100)"
+                    "description": "Maximum number of matches to return (default: 100); in outputMode files, maximum number of files shown (default: 10)"
+                },
+                "outputMode": {
+                    "type": "string",
+                    "enum": ["content", "files"],
+                    "description": "content (default): matching lines. files: one line per file, ranked - definitions first, test code last - with the best matching line as preview"
                 }
             },
             "required": ["pattern"]
@@ -118,7 +142,12 @@ impl AgentTool for GrepTool {
             return self.name().to_string();
         };
         let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
-        let mut out = format!("grep /{pattern}/ in {path}");
+        let flag = if args.get("outputMode").and_then(Value::as_str) == Some("files") {
+            "-l "
+        } else {
+            ""
+        };
+        let mut out = format!("grep {flag}/{pattern}/ in {path}");
         if let Some(glob) = args.get("glob").and_then(Value::as_str) {
             out.push_str(&format!(" ({glob})"));
         }
@@ -136,30 +165,54 @@ impl AgentTool for GrepTool {
         _on_update: Option<ToolUpdateFn>,
     ) -> Result<AgentToolResult, ToolError> {
         let args: GrepArgs = serde_json::from_value(args)?;
-        let effective_limit = args.limit.unwrap_or(DEFAULT_LIMIT).max(1);
+        let effective_limit = args
+            .limit
+            .unwrap_or(match args.output_mode {
+                OutputMode::Content => DEFAULT_LIMIT,
+                OutputMode::Files => FILES_DEFAULT_LIMIT,
+            })
+            .max(1);
+        let limit = match args.output_mode {
+            OutputMode::Content => SearchLimit::Matches(effective_limit),
+            OutputMode::Files => SearchLimit::Files {
+                max_files: effective_limit.max(FILES_RANKING_WINDOW),
+                per_file: FILES_PER_FILE_CAP,
+            },
+        };
 
         // Where are we searching? Needed for both the backend query and for
         // making result paths relative + readable.
         let search_path = resolve_to_root(args.path.as_deref().unwrap_or("."), &self.cwd);
         let searching_directory = search_path.is_dir();
 
-        let outcome = self
-            .backend
-            .search(
-                SearchQuery {
-                    pattern: args.pattern,
-                    path: args.path,
-                    glob: args.glob,
-                    ignore_case: args.ignore_case,
-                    literal: args.literal,
-                    limit: effective_limit,
-                },
-                cancel,
-            )
-            .await?;
+        // The scope, spelled out for the no-match message: a model that sees
+        // what was searched where fixes a bad glob instead of retrying blind.
+        let scope = format!(
+            "/{}/ in {}{}",
+            args.pattern,
+            args.path.as_deref().unwrap_or("."),
+            args.glob
+                .as_deref()
+                .map_or_else(String::new, |glob| format!(" ({glob})"))
+        );
+        let query = SearchQuery {
+            pattern: args.pattern,
+            path: args.path,
+            glob: args.glob,
+            ignore_case: args.ignore_case,
+            literal: args.literal,
+            limit,
+        };
+        // Files mode needs to know what a definition of the pattern looks
+        // like; the ranker reads that off the query before the backend
+        // takes ownership of it.
+        let ranker = (args.output_mode == OutputMode::Files).then(|| Ranker::new(&query));
+        let outcome = self.backend.search(query, cancel).await?;
 
         if outcome.matches.is_empty() {
-            return Ok(AgentToolResult::text("No matches found"));
+            return Ok(AgentToolResult::text(format!(
+                "No matches found for {scope}"
+            )));
         }
 
         let format_path = |path: &Path| -> String {
@@ -174,6 +227,16 @@ impl AgentTool for GrepTool {
                 |n| n.to_string_lossy().into(),
             )
         };
+
+        if let Some(ranker) = ranker {
+            let ranked = ranker.rank(&outcome.matches, &search_path);
+            return Ok(render_files(
+                &ranked,
+                outcome.limit_reached,
+                effective_limit,
+                format_path,
+            ));
+        }
 
         // File cache so N matches in one file read it once (context mode).
         let mut file_cache: HashMap<PathBuf, Vec<String>> = HashMap::new();
@@ -272,6 +335,76 @@ impl AgentTool for GrepTool {
     }
 }
 
+/// `files` mode output: the best `limit` files, one line each.
+fn render_files(
+    ranked: &[FileSummary],
+    window_full: bool,
+    limit: usize,
+    format_path: impl Fn(&Path) -> String,
+) -> AgentToolResult {
+    let total = ranked.len();
+    let mut lines: Vec<String> = Vec::with_capacity(total.min(limit));
+    for file in ranked.iter().take(limit) {
+        let mut line = format!("{}:{}", format_path(&file.path), file.preview_line_number);
+        if file.defines_name {
+            line.push_str(" [def]");
+        }
+        let more = if file.matches >= FILES_PER_FILE_CAP {
+            "+"
+        } else {
+            ""
+        };
+        let plural = if file.matches == 1 { "" } else { "es" };
+        line.push_str(&format!(" ({}{more} match{plural}", file.matches));
+        match file.bucket {
+            Bucket::Source => {}
+            Bucket::Test => line.push_str(", test"),
+            Bucket::LowPriority => line.push_str(", low-priority"),
+        }
+        let (preview, _was_truncated) = truncate_line(file.preview.trim(), FILES_PREVIEW_MAX_CHARS);
+        line.push_str(&format!(")  {preview}"));
+        lines.push(line);
+    }
+
+    // Same byte cap as content mode. The line count is already bounded
+    // by the file limit.
+    let truncation = truncate_head(
+        &lines.join("\n"),
+        TruncationOptions {
+            max_lines: Some(usize::MAX),
+            max_bytes: None,
+        },
+    );
+    let mut output = truncation.content;
+    let mut details = serde_json::Map::new();
+    let mut notices: Vec<String> = Vec::new();
+    if total > limit || window_full {
+        // Only lower bound.
+        let more = if window_full { "+" } else { "" };
+        notices.push(format!(
+            "{} of {total}{more} files shown. Use limit={} for more, or refine pattern",
+            lines.len(),
+            limit * 2,
+        ));
+        details.insert("fileLimitReached".into(), json!(limit));
+    }
+    if truncation.truncated {
+        notices.push(format!("{} limit reached", format_size(DEFAULT_MAX_BYTES)));
+        details.insert("truncated".into(), json!(true));
+    }
+    if !notices.is_empty() {
+        output.push_str(&format!("\n\n[{}]", notices.join(". ")));
+    }
+
+    AgentToolResult {
+        content: vec![cupel_core::types::ToolResultContent::Text(
+            cupel_core::types::TextContent::plain(output),
+        )],
+        details: (!details.is_empty()).then_some(Value::Object(details)),
+        terminate: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +450,10 @@ mod tests {
             "grep /TODO/ in src (*.rs) limit 50"
         );
         assert_eq!(tool.describe_call(&json!({"path": "src"})), "grep");
+        assert_eq!(
+            tool.describe_call(&json!({"pattern": "Foo", "outputMode": "files"})),
+            "grep -l /Foo/ in ."
+        );
     }
 
     #[tokio::test]
@@ -333,7 +470,20 @@ mod tests {
         let root = temp_root("nomatch");
         std::fs::write(root.join("a.txt"), "nothing here\n").unwrap();
         let result = run_tool(&root, json!({"pattern": "unfindable_xyz"})).await;
-        assert_eq!(text_of(&result), "No matches found");
+        assert_eq!(
+            text_of(&result),
+            "No matches found for /unfindable_xyz/ in ."
+        );
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let result = run_tool(
+            &root,
+            json!({"pattern": "unfindable_xyz", "path": "src", "glob": "*.rs"}),
+        )
+        .await;
+        assert_eq!(
+            text_of(&result),
+            "No matches found for /unfindable_xyz/ in src (*.rs)"
+        );
     }
 
     #[tokio::test]
@@ -370,5 +520,74 @@ mod tests {
             )
             .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn files_mode_ranks_definitions_first_and_tests_last() {
+        let root = temp_root("filesmode");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(
+            root.join("src/user.rs"),
+            "use crate::Widget;\nfn go() {\n    Widget::new();\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/widget.rs"),
+            "pub struct Widget {\n    id: u32,\n}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("tests/it.rs"), "use app::Widget;\n").unwrap();
+        let result = run_tool(&root, json!({"pattern": "Widget", "outputMode": "files"})).await;
+        let text = text_of(&result);
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                "src/widget.rs:1 [def] (1 match)  pub struct Widget {",
+                "src/user.rs:1 (2 matches)  use crate::Widget;",
+                "tests/it.rs:1 (1 match, test)  use app::Widget;",
+            ],
+            "got: {text}"
+        );
+        assert!(result.details.is_none());
+    }
+
+    #[tokio::test]
+    async fn files_mode_limit_counts_files() {
+        let root = temp_root("fileslimit");
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            std::fs::write(root.join(name), "x\n".repeat(30)).unwrap();
+        }
+        let result = run_tool(
+            &root,
+            json!({"pattern": "x", "outputMode": "files", "limit": 2}),
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(
+            text.starts_with("a.txt:1 (20+ matches)  x\nb.txt:1 (20+ matches)  x"),
+            "got: {text}"
+        );
+        assert!(text.contains("2 of 3 files shown"), "got: {text}");
+        assert!(text.contains("limit=4"), "got: {text}");
+        assert_eq!(result.details.unwrap()["fileLimitReached"], 2);
+    }
+
+    #[tokio::test]
+    async fn files_mode_ranks_the_whole_window_before_applying_the_limit() {
+        let root = temp_root("fileswindow");
+        std::fs::write(root.join("a.rs"), "use crate::Widget;\n").unwrap();
+        std::fs::write(root.join("z.rs"), "pub struct Widget;\n").unwrap();
+        let result = run_tool(
+            &root,
+            json!({"pattern": "Widget", "outputMode": "files", "limit": 1}),
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(
+            text.starts_with("z.rs:1 [def] (1 match)  pub struct Widget;"),
+            "got: {text}"
+        );
+        assert!(text.contains("1 of 2 files shown"), "got: {text}");
     }
 }

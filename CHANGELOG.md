@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.13.0] - 2026-09-12
+
+- make the agent's coding session visible in the TUI     - announce every transcript message with MessageEnd
+- changelog: v0.12.0
+
 ## [v0.12.0] - 2026-09-06
 
 - add GPT-6 Astra support and model-specific reasoning limits - add Astra to OpenAI, Codex, and OpenRouter catalogs - support max thinking level - omit temperature for models which do not support - separate planning windows from long-context - preserve and enforce context ceilings

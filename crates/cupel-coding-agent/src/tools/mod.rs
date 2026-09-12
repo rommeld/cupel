@@ -2,6 +2,7 @@
 //!
 //! - [`read`] - file contents with offset/limit paging and image attachments
 //! - [`grep`] - content search over the [`crate::search`] backend
+//! - [`grep_rank`] - ranks files for grep's `files` output mode (definitions first, tests last)
 //! - [`edit`] - exact-text replacement with fuzzy fallback ([`edit_diff`])
 //! - [`write`] - create/overwrite whole files
 //! - [`bash`] - shell commands with bounded, tail-truncated output
@@ -23,5 +24,6 @@ pub mod edit;
 pub mod edit_diff;
 pub mod file_queue;
 pub mod grep;
+pub mod grep_rank;
 pub mod read;
 pub mod write;

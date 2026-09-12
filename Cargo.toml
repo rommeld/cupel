@@ -139,6 +139,7 @@ module_name_repetitions = "allow"
 mod_module_files = "allow"
 
 needless_pass_by_value = "allow"
+needless_raw_strings = "allow"
 
 pattern_type_mismatch = "allow"
 
@@ -174,6 +175,7 @@ std_instead_of_core = "allow"
 str-to-string = "allow"
 
 too_many_lines = "allow"
+
 
 unwrap_used = "allow"
 panic = "allow"

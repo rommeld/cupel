@@ -38,6 +38,18 @@ Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, Firew
 
 `AGENTS.md` (or `CLAUDE.md`) lives either in `~/.cupel` (global) or `<project>/.cupel` (project-specific). On a name collision, the most specific location wins: working directory > `.cupel/` > `~/.cupel`.
 
+### Agent tools
+
+#### Grep & Grep Rank
+
+| Metrik | Baseline (rg, published) | fff (veröffentlicht) | pgr | cupel |
+| ------ | ------------------------ | -------------------- | --- | ----- |
+| MRR | 0,318 | 0,306 | 0,405 | 0,455 |
+| Hit@1 | 26,0% | 18,0% | 34,0% | 40,0% |
+| Hit@3 | 34,0% | 42,0% | 42,0% | 50,0% |
+| Hit@5 | — | — | 52,0% | 54,0% |
+| Output (tokens) | 6566 | 1427 | 1587 | 64 |
+
 ### Slash commands
 
 `/help` lists everything. Built-ins (`/new`, `/model <id>`, `/provider <name> [api-key]`, `/thinking <level>`, `/review [path...]`, `/usage`, `/hot-reload`, `/session-id`, `/quit`) are handled locally. `/review` bundles the current project, specific paths, or a `--diff` into a code-review prompt. Markdown files in `prompts/<name>.md` (working directory, its `.cupel/` subdirectory, or `~/.cupel`) become `/name` prompt templates with bash-style `$1`/`$@`/`${@:2}` argument substitution. On a name collision, the most specific location wins.
