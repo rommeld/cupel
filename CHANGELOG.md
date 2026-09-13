@@ -6,7 +6,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.13.0] - 2026-09-12
 
 - make the agent's coding session visible in the TUI     - announce every transcript message with MessageEnd
-- changelog: v0.12.0
 
 ## [v0.12.0] - 2026-09-06
 
