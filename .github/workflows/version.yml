@@ -1,0 +1,78 @@
+# Version bump: run by hand (Actions > version > Run workflow) with the new
+# version, e.g. `0.2.0` or `0.2.0-beta`. Updates the `[workspace.package]`
+# version in the root Cargo.toml (every crate inherits it via
+# `version.workspace = true`), refreshes Cargo.lock, and commits to main.
+#
+# This does NOT release anything by itself - afterwards, tag the bump commit
+# (`git tag v0.2.0 && git push origin v0.2.0`) to trigger release.yml, which
+# builds the binaries, writes the changelog, and bumps the Homebrew tap.
+#
+# Why a workflow instead of a local edit: the version must stay in sync
+# between Cargo.toml and Cargo.lock, and this guarantees they cannot be
+# committed half-updated.
+
+name: version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version without the v prefix (e.g. 0.2.0 or 0.2.0-beta)"
+        required: true
+        type: string
+
+permissions:
+  contents: write # needed to push the bump commit to main
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The bump commit lands on main, even if the workflow is started
+          # from another ref in the UI.
+          ref: main
+
+      - name: Validate version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || {
+            echo "error: '$VERSION' is not a semver version like 0.2.0 or 0.2.0-beta" >&2
+            exit 1
+          }
+          git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && {
+            echo "error: tag v$VERSION already exists - was this version already released?" >&2
+            exit 1
+          }
+
+      - name: Update versions
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # Only the [workspace.package] version is rewritten - dependency
+          # versions elsewhere in the file are left alone.
+          awk -v v="$VERSION" '
+            /^\[workspace\.package\]/ { inpkg = 1 }
+            /^\[/ && !/^\[workspace\.package\]/ { inpkg = 0 }
+            inpkg && /^version = / && !done { print "version = \"" v "\""; done = 1; next }
+            { print }
+            END { if (!done) exit 1 }
+          ' Cargo.toml > Cargo.toml.tmp
+          mv Cargo.toml.tmp Cargo.toml
+          grep -n "^version = " Cargo.toml | head -1
+
+          # Refresh Cargo.lock so the lockfile records the new versions.
+          cargo check
+
+      - name: Commit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "cupel-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "version: v$VERSION"
+          git push
+          echo "::notice::Bumped to v$VERSION - tag this commit with 'v$VERSION' to start the release"
