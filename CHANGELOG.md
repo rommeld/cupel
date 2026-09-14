@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.15.0] - 2026-09-14
+
+- adjust CI and bump version in Cargo.toml according to changelog
+- re-write code comments to simplify content and increase understanding
+- render the transcript as one framed column
+
 ## [v0.14.0] - 2026-09-13
 
 - add version bump workflow with workspace-inherited crate versions
