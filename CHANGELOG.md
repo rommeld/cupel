@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.14.0] - 2026-09-13
+
+- add version bump workflow with workspace-inherited crate versions
+- exclude changelog bot commits from generated release notes
+- add ranking to grep for targeted search
+
 ## [v0.13.0] - 2026-09-12
 
 - make the agent's coding session visible in the TUI     - announce every transcript message with MessageEnd
