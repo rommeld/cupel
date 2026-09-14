@@ -1,15 +1,15 @@
 //! The `/review` built-in: bundle code into a review prompt.
 //!
-//! Unlike the other built-ins, `/review` is not UI-local - it BUILDS a
+//! Unlike the other built-ins, `/review` is not UI-local — it BUILDS a
 //! prompt (files or a git diff, with truncation) and the frontend sends it
 //! through the normal prompt path. Gathering is synchronous filesystem/git
 //! work, cheap enough for the TUI's key handler; the actual model call
 //! then runs through each frontend's usual async machinery.
 //!
 //! Invocations:
-//! - `/review`                    - the whole project (cwd, gitignore-aware)
-//! - `/review <path> [<path>...]` - specific files and/or directories
-//! - `/review --diff`             - the current git diff (HEAD vs working tree)
+//! — `/review`                    - the whole project (cwd, gitignore-aware)
+//! — `/review <path> [<path>...]` — specific files and/or directories
+//! — `/review --diff`             - the current git diff (HEAD vs working tree)
 //!
 //! Content limits lean on `truncate.rs`: a single explicitly named file
 //! gets the full tool budget; files swept up by a directory walk share a
@@ -43,7 +43,7 @@ const INSTRUCTIONS: &str = "Review the following code for correctness bugs, secu
 
 /// Build the `/review` prompt. `args` are the already-split command
 /// arguments; relative paths resolve against `cwd`. `Err` is a
-/// user-facing message (unknown path, no diff, ...) - nothing is sent.
+/// user-facing message (unknown path, no diff, ...) — nothing is sent.
 pub fn build_review_prompt(cwd: &Path, args: &[String]) -> Result<String, String> {
     let wants_diff = args.iter().any(|a| a == "--diff");
     if wants_diff && args.len() > 1 {
@@ -63,7 +63,7 @@ pub fn build_review_prompt(cwd: &Path, args: &[String]) -> Result<String, String
             if path.is_dir() {
                 collect_directory(&path, cwd, &mut bundle);
             } else if path.is_file() {
-                // An explicitly named file earns the full budget - the user
+                // An explicitly named file earns the full budget — the user
                 // asked for THIS file, so show as much of it as a read would.
                 push_file(&path, cwd, EXPLICIT_OPTIONS, &mut bundle);
             } else {
@@ -128,10 +128,10 @@ fn resolve(cwd: &Path, arg: &str) -> PathBuf {
 }
 
 /// Sweep a directory into the bundle: gitignore-aware (the same walker
-/// knobs as the grep tool and `@path` autocomplete - hidden files in,
+/// knobs as the grep tool and `@path` autocomplete — hidden files in,
 /// `.git` out), capped by file count and total bundle size, deterministic
 /// order. Skipped files are summarized so the model knows what it is NOT
-/// seeing - a silently partial review reads as a complete one.
+/// seeing — a silently partial review reads as a complete one.
 fn collect_directory(dir: &Path, cwd: &Path, bundle: &mut String) {
     let mut files: Vec<PathBuf> = ignore::WalkBuilder::new(dir)
         .hidden(false)
@@ -240,7 +240,7 @@ mod tests {
         let cwd = temp_root("walk");
         std::fs::create_dir_all(cwd.join("src")).unwrap();
         // .gitignore rules only apply INSIDE a git repo (the ignore crate's
-        // require_git default, same as the grep tool) - a bare .git dir
+        // require_git default, same as the grep tool) — a bare .git dir
         // marks this fixture as one, like the autocomplete tests do.
         std::fs::create_dir_all(cwd.join(".git")).unwrap();
         std::fs::write(cwd.join("src/main.rs"), "fn main() {}").unwrap();
@@ -303,7 +303,7 @@ mod tests {
         let err = build_review_prompt(&cwd, &args(&["--diff"])).unwrap_err();
         assert!(err.contains("no changes"));
 
-        // --diff mixed with paths is ambiguous - refuse.
+        // --diff mixed with paths is ambiguous — refuse.
         let err = build_review_prompt(&cwd, &args(&["--diff", "x.rs"])).unwrap_err();
         assert!(err.contains("cannot be combined"));
     }

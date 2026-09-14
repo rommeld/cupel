@@ -1,4 +1,4 @@
-//! `cupel` - entry point: parse args, wire the agent, pick a frontend.
+//! `cupel` — entry point: parse args, wire the agent, pick a frontend.
 //!
 //! Usage:
 //!   cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max
@@ -38,7 +38,7 @@ enum AppError {
 }
 
 fn main() -> std::process::ExitCode {
-    // Build the runtime explicitly instead of `#[tokio::main]` - same thing,
+    // Build the runtime explicitly instead of `#[tokio::main]` — same thing,
     // but you can see the moving part.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -111,7 +111,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                     "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium)] [--resume [id]] [--plain]\n\navailable models:\n",
                 );
                 // Built-ins + models.json layers; deliberately NOT the
-                // ollama probe - help must be instant and never touch the
+                // ollama probe — help must be instant and never touch the
                 // network. Discovered models appear in the TUI's /model.
                 let home = cupel_coding_agent::resources::config_home();
                 let cwd = std::env::current_dir().unwrap_or_default();
@@ -157,7 +157,7 @@ fn select_model(
     }
 
     // No --model, pass 1: first provider with CLOUD credentials wins, in
-    // catalog order. Bedrock carries no key through StreamOptions - the
+    // catalog order. Bedrock carries no key through StreamOptions — the
     // AWS chain resolves inside the provider. Keyless local models fall
     // through here (no env var, and normally not settings entry), so a
     // configured cloud key always beats a merely-running ollama.
@@ -179,7 +179,7 @@ fn select_model(
             }
         }
     }
-    // Pass 2: no cloud credentials anywhere - a keyless local model
+    // Pass 2: no cloud credentials anywhere — a keyless local model
     // (discovered ollama, models.json entry) is the last resort before
     // giving up.
     if let Some(model) = catalog.iter().find(|m| providers::is_keyless(m)) {
@@ -195,7 +195,7 @@ fn select_model(
     )
 }
 
-/// Install the tracing subscriber - the ONE place in the whole workspace
+/// Install the tracing subscriber — the ONE place in the whole workspace
 /// that consumes trace data (libraries only emit).
 ///
 /// Opt-in via `RUST_LOG`; without it no subscriber exists and every
@@ -215,7 +215,7 @@ fn init_tracing(interactive: bool) -> Option<std::path::PathBuf> {
     let filter = tracing_subscriber::EnvFilter::from_default_env();
 
     // FmtSpan::CLOSE prints a line when each span ends, WITH its measured
-    // duration - that's where provider-request and agent-run timing comes
+    // duration — that's where provider-request and agent-run timing comes
     // from (the events themselves don't carry durations).
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -243,13 +243,13 @@ async fn run() -> Result<(), AppError> {
         eprintln!("logging to {}", log_path.display());
     }
     let cwd = std::env::current_dir().map_err(AppError::CurrentDirectory)?;
-    // NOTE: the project .cupel/ directory is NOT scaffolded here - the
+    // NOTE: the project .cupel/ directory is NOT scaffolded here — the
     // frontends create it on the first agent interaction (resources::
     // ensure_project_dot_cupel), so just launching cupel leaves no trace.
 
     // bootstrap::load reads everything reloadable (context files, prompt
     // templates, model catalog incl. the bounded ollama probe, bash-deny
-    // rules, tools) in one place - the TUI's /hot-reload runs the SAME
+    // rules, tools) in one place — the TUI's /hot-reload runs the SAME
     // loader, so a reload can never drift from a fresh start.
     let registry = Arc::new(cupel_core::default_registry());
     let home = cupel_coding_agent::resources::config_home();
@@ -258,7 +258,7 @@ async fn run() -> Result<(), AppError> {
     // No credentials is FATAL only where it is unrecoverable. The TUI can
     // fix it at runtime (`/provider <name> <api-key>`, `/model`), so it
     // starts anyway on a fallback model and shows the message as its first
-    // notice. Plain mode has no such commands - it keeps the hard error.
+    // notice. Plain mode has no such commands — it keeps the hard error.
     // An explicit `--model` that fails stays fatal in both modes: a typo
     // should not silently start something else.
     let (model, api_key, startup_warning) = match select_model(
@@ -406,7 +406,7 @@ mod tests {
 
     /// A keyless local model (the ollama-discovery shape). Tests use ONLY
     /// keyless catalogs so pass 1 of select_model (which reads real env
-    /// vars - process-global, unmockable without unsafe) can never match,
+    /// vars — process-global, unmockable without unsafe) can never match,
     /// keeping the tests environment-independent.
     fn keyless_model(id: &str) -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
@@ -443,7 +443,7 @@ mod tests {
 
     /// A key-REQUIRING model on a provider id with NO env-var mapping:
     /// env_api_key returns None on every machine, so only the settings
-    /// tier can supply a key - the test stays environment-independent
+    /// tier can supply a key — the test stays environment-independent
     /// (same trick as keyless_model above, other direction).
     fn cloud_model(id: &str, provider: &str) -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
@@ -454,7 +454,7 @@ mod tests {
     }
 
     /// A codex catalog row (provider openai-codex has no env var, so
-    /// pass 1 can only match it through the auth.json arm - the test
+    /// pass 1 can only match it through the auth.json arm — the test
     /// stays environment-independent like the others).
     fn codex_model() -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
@@ -476,7 +476,7 @@ mod tests {
         let (model, _) = select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
         assert_eq!(model.id, "qwen3:8b");
 
-        // Logged in: codex wins, and carries NO startup key - the
+        // Logged in: codex wins, and carries NO startup key — the
         // api_key hook mints fresh access tokens per request instead.
         let credential = cupel_core::oauth::openai_codex::OAuthCredential {
             access: "a".into(),

@@ -59,7 +59,7 @@ impl Provider for StuckProvider {
         if call < 5 {
             let message = AssistantMessage {
                 content: vec![AssistantContent::ToolCall(ToolCall {
-                    // Unique id per attempt, IDENTICAL name + arguments -
+                    // Unique id per attempt, IDENTICAL name + arguments —
                     // the killer must key on the call, never on the id.
                     id: format!("call_{call}"),
                     name: "bash".into(),

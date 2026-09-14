@@ -1,7 +1,7 @@
 //! Session ingredients: everything a fresh agent session loads from disk,
 //! assembled in ONE place so startup (`main::run`) and the TUI's
 //! `/hot-reload` produce byte-identical results. Before this module the
-//! assembly lived inline in main.rs - hot-reload would have had to copy
+//! assembly lived inline in main.rs — hot-reload would have had to copy
 //! it, and the two paths would drift.
 
 use async_trait::async_trait;
@@ -58,7 +58,7 @@ pub struct Ingredients {
     /// keys stay home-only by construction). Loaded here so /hot-reload
     /// picks up hand edits to either file.
     pub settings: Settings,
-    /// The context files (AGENTS.md/CLAUDE.md) as loaded - kept alongside
+    /// The context files (AGENTS.md/CLAUDE.md) as loaded — kept alongside
     /// the system prompt they were embedded into, so a later in-place
     /// `/hot-reload` can DIFF against them instead of re-reading blind.
     pub context_files: Vec<crate::resources::ContextFile>,
@@ -86,7 +86,7 @@ pub async fn load(
         LoopKiller::new(settings.loop_killer_max_repeats()),
         home.clone(),
     );
-    // A project-side settings.json must never hold keys - warn once here,
+    // A project-side settings.json must never hold keys — warn once here,
     // on the same stderr channel as the models.json warnings.
     crate::settings::warn_project_settings(cwd);
 
@@ -113,13 +113,13 @@ pub async fn load(
 
 /// The ONE [`AgentHooks`] object a session run with: the bash guard and
 /// the loop killer behind a single trait object (`AgentOptions.hooks`
-/// hols exactly one). Fans out only `before_tool_call` - the sole hook
+/// hols exactly one). Fans out only `before_tool_call` — the sole hook
 /// either member cares about; every other AgentHooks method keeps its
 /// trait default. Extend the fan-out when a member grwos a new hook.
 pub struct SessionHooks {
     guard: BashGuard,
     loop_killer: LoopKiller,
-    /// Where auth.json lives - the api_key hook resolves subscription
+    /// Where auth.json lives — the api_key hook resolves subscription
     /// tokens per call (refreshing them near expiry).
     home: Option<PathBuf>,
     /// One shared client for those refresh calls.
@@ -141,7 +141,7 @@ impl SessionHooks {
 #[async_trait]
 impl AgentHooks for SessionHooks {
     /// The agent loop calls this before EVERY provider request (types.rs:
-    /// "Resolve an API key for a provider right before each call") - the
+    /// "Resolve an API key for a provider right before each call") — the
     /// designed home for expiring OAuth tokens. Key-based providers
     /// return None here and keep riding AgentOptions.api_key.
     async fn api_key(&self, provider: &str) -> Option<String> {
@@ -155,7 +155,7 @@ impl AgentHooks for SessionHooks {
         assistant: &AssistantMessage,
         tool_call: &ToolCall,
     ) -> Option<BeforeToolCallResult> {
-        // The killer OBSERVES every request call FIRST - including ones
+        // The killer OBSERVES every request call FIRST — including ones
         // the guard is about to veto: a model hammering a denied bash
         // command is looping too, and each guard block would otherwise
         // reset nothing while the loop spins forever. Once the killer

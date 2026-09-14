@@ -10,7 +10,7 @@
 //! 2. `~/.cupel/models.json`,
 //! 3. `<cwd>/.cupel/models.json`,
 //! 4. ollama auto-discovery (lowest: an explicit entry always beats a
-//!    discovered one - that is the user's override channel for context
+//!    discovered one — that is the user's override channel for context
 //!    window, reasoning, and compat flags).
 //!
 //! The catalog is resolved ONCE at startup in `main::run()` (discovery is a
@@ -24,7 +24,7 @@ use cupel_core::types::Model;
 /// Parse one `models.json`: a JSON array of Model descriptors in the
 /// workspace-wide camelCase serde form (`baseUrl`, `contextWindow`,
 /// `maxTokens`, ...). A missing file is simply an empty layer; a MALFORMED
-/// file is an error the caller must surface - unlike optional context
+/// file is an error the caller must surface — unlike optional context
 /// files, a config the user wrote by hand deserves a visible failure.
 pub fn load_models_file(path: &Path) -> Result<Vec<Model>, String> {
     let content = match std::fs::read_to_string(path) {
@@ -37,7 +37,7 @@ pub fn load_models_file(path: &Path) -> Result<Vec<Model>, String> {
 
 /// The user layers in precedence order: cupel home first, project second.
 /// Parse errors are announced on stderr (visible in scrollback before the
-/// TUI takes the screen - the same idiom as the "logging to ..." line) and
+/// TUI takes the screen — the same idiom as the "logging to ..." line) and
 /// the broken layer is skipped, never aborting startup.
 #[must_use]
 pub fn load_user_models(home: Option<&Path>, cwd: &Path) -> Vec<Vec<Model>> {
@@ -58,8 +58,8 @@ pub fn load_user_models(home: Option<&Path>, cwd: &Path) -> Vec<Vec<Model>> {
 }
 
 /// Merge catalog layers. An id collision REPLACES the earlier entry in
-/// place (keeping its position, so each provider's first model - its
-/// `/provider` default - stays stable); new ids append. Within one layer
+/// place (keeping its position, so each provider's first model — its
+/// `/provider` default — stays stable); new ids append. Within one layer
 /// the same rule applies, so a duplicated id in a single file is
 /// last-wins.
 #[must_use]
@@ -91,7 +91,7 @@ fn with_context_ceiling(existing: &Model, mut replacement: Model) -> Model {
     replacement
 }
 
-/// Drop entries whose `api` has no registered provider implementation -
+/// Drop entries whose `api` has no registered provider implementation —
 /// they would only fail at request time. Guards the same invariant the
 /// built-in catalog tests enforce ("every model has a registered
 /// provider"), extended to user input: warn and skip, never abort.
@@ -166,7 +166,7 @@ mod tests {
     }
 
     /// A minimal valid models.json entry (camelCase keys, like the README
-    /// example) - doubles as a schema regression test.
+    /// example) — doubles as a schema regression test.
     fn entry_json(id: &str, context_window: u64) -> serde_json::Value {
         serde_json::json!({
             "id": id,

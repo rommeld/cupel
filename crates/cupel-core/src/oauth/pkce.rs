@@ -15,7 +15,7 @@ pub struct Pkce {
     pub challenge: String,
 }
 
-/// base64url WITHOUT padding - RFC 7636 prescribes exactly this alphabet,
+/// base64url WITHOUT padding — RFC 7636 prescribes exactly this alphabet,
 /// and a trailing `=` would be percent-encoded into URL noise anyway.
 fn base64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn challenge_matches_the_rfc_7636_test_vector() {
-        // RFC 7636 appendix B pins this exact pair - if the hash, the
+        // RFC 7636 appendix B pins this exact pair — if the hash, the
         // encoding, or the padding handling is wrong, this cannot pass.
         assert_eq!(
             challenge_for("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),

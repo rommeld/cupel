@@ -133,7 +133,7 @@ fn supports_native_xhigh(model: &Model) -> bool {
 }
 
 /// Prompt caching is only available on newer Claude models. Application
-/// inference profiles hide the model name in the ARN - there the model's
+/// inference profiles hide the model name in the ARN — there the model's
 /// display name (user-controlled) is the only signal.
 fn supports_prompt_caching(model: &Model) -> bool {
     let candidates = match_candidates(model);
@@ -825,7 +825,7 @@ fn convert_tool_config(context: &Context) -> Result<Option<bedrock::ToolConfigur
     ))
 }
 
-/// Thinking configuration travels in `additionalModelRequestFields` - a
+/// Thinking configuration travels in `additionalModelRequestFields` — a
 /// free-form JSON escape hatch for model-family-specific parameters that the
 /// Converse schema doesn't cover.
 fn build_additional_model_request_fields(

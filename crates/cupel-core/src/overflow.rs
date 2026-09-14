@@ -1,7 +1,7 @@
 //! Context-overflow detection.
 //!
 //! When the transcript outgrows the model's context window, providers fail
-//! in three different ways - and the caller must recognize all of them to
+//! in three different ways — and the caller must recognize all of them to
 //! trigger compaction instead of surfacing a dead-end error:
 //!
 //! 1. **Error-based** (most providers): `stop_reason: Error` with a
@@ -10,7 +10,7 @@
 //! 2. **Silent acceptance** (z.ai style): the request "succeeds" but
 //!    `usage.input` exceeds the context window.
 //! 3. **Silent truncation** (Xiaomi MiMo style): input is truncated to fill
-//!    the window exactly, leaving no room to generate - detected as
+//!    the window exactly, leaving no room to generate — detected as
 //!    `stop_reason: Length` with zero output and a full window.
 //!
 //! Pattern matching uses the same compression trick as [`crate::retry`]
@@ -49,7 +49,7 @@ const OVERFLOW_PATTERNS: &[&[&str]] = &[
 
 /// Messages matching these are NOT overflow even when an overflow pattern
 /// also matches. Example: Bedrock throttling says "Too many tokens, please
-/// wait before trying again" - that's rate limiting, not overflow.
+/// wait before trying again" — that's rate limiting, not overflow.
 const NON_OVERFLOW_PATTERNS: &[&str] = &[
     "throttlingerror",
     "serviceunavailable",
@@ -91,12 +91,12 @@ pub fn is_context_overflow(message: &AssistantMessage, context_window: u64) -> b
     }
     let input_tokens = message.usage.input + message.usage.cache_read;
 
-    // Case 2: silent acceptance - "success" with more input than fits.
+    // Case 2: silent acceptance — "success" with more input than fits.
     if message.stop_reason == StopReason::Stop && input_tokens > context_window {
         return true;
     }
 
-    // Case 3: silent truncation - the window is full and generation got
+    // Case 3: silent truncation — the window is full and generation got
     // zero tokens of room.
     if message.stop_reason == StopReason::Length
         && message.usage.output == 0

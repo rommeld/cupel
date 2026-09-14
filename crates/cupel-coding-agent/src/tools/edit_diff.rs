@@ -1,6 +1,6 @@
 //! Why so much machinery for "replace old text with new text"? Because
 //! models are imperfect copyists. They echo file content with smart quotes
-//! flattened, trailing whitespace dropped, or Unicode dashes swapped - and a
+//! flattened, trailing whitespace dropped, or Unicode dashes swapped — and a
 //! byte-exact `indexOf` would reject the edit even though a human would call
 //! it unambiguous. The pipeline:
 //!
@@ -9,7 +9,7 @@
 //! 2. Try an exact match first. If that fails, retry in *fuzzy-normalized*
 //!    space (NFKC, trailing whitespace stripped, smart quotes/dashes/spaces
 //!    folded to ASCII).
-//! 3. Every `old_text` must be unique and edits must not overlap - both are
+//! 3. Every `old_text` must be unique and edits must not overlap — both are
 //!    hard errors with actionable messages, because silently picking one of
 //!    several matches corrupts files.
 //! 4. When fuzzy matching was used, only the LINES actually touched by a
@@ -388,7 +388,7 @@ pub fn generate_diff_string(old: &str, new: &str, context_lines: usize) -> DiffS
     let mut next_new_line = 1_usize;
 
     // `grouped_ops` clusters changes and gives `context_lines` of equal lines
-    // around each cluster - exactly the shape pi builds by hand.
+    // around each cluster — exactly the shape pi builds by hand.
     for group in diff.grouped_ops(context_lines) {
         for (op_index, op) in group.iter().enumerate() {
             for change in diff.iter_changes(op) {

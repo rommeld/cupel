@@ -1,11 +1,11 @@
 //! Tools the coding agent exposes to the model.
 //!
-//! - [`read`] - file contents with offset/limit paging and image attachments
-//! - [`grep`] - content search over the [`crate::search`] backend
-//! - [`grep_rank`] - ranks files for grep's `files` output mode (definitions first, tests last)
-//! - [`edit`] - exact-text replacement with fuzzy fallback ([`edit_diff`])
-//! - [`write`] - create/overwrite whole files
-//! - [`bash`] - shell commands with bounded, tail-truncated output
+//! — [`read`] — file contents with offset/limit paging and image attachments
+//! — [`grep`] — content search over the [`crate::search`] backend
+//! — [`grep_rank`] — ranks files for grep's `files` output mode (definitions first, tests last)
+//! — [`edit`] — exact-text replacement with fuzzy fallback ([`edit_diff`])
+//! — [`write`] — create/overwrite whole files
+//! — [`bash`] — shell commands with bounded, tail-truncated output
 //!
 //! Mutating tools (`edit`, `write`) serialize per file through
 //! [`file_queue`] because the agent loop runs tool batches in parallel.
@@ -14,7 +14,7 @@
 //! over what `bash` can already do).
 //!
 //! Note on permissions: like pi, tools execute without per-call user
-//! approval - the trust boundary is launching cupel in a directory at all.
+//! approval — the trust boundary is launching cupel in a directory at all.
 //! A permission hook can veto calls via
 //! [`AgentHooks::before_tool_call`](cupel_agent::AgentHooks::before_tool_call)
 //! when a stricter policy is needed.

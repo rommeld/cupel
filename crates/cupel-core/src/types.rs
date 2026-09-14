@@ -87,7 +87,7 @@ impl TextContent {
 
 /// Extended-thinking content. `thinking_signature` is the cryptographic
 /// signature some providers require to *replay* a thinking block on the next
-/// turn. `redacted` marks thinking the provider hid behind a safety filter -
+/// turn. `redacted` marks thinking the provider hid behind a safety filter —
 /// the encrypted blob still rides along in the signature for continuity.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

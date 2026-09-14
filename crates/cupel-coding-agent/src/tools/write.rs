@@ -63,7 +63,7 @@ impl AgentTool for WriteTool {
         })
     }
 
-    /// `write <path>` - like edit, the header says where; the result line
+    /// `write <path>` — like edit, the header says where; the result line
     /// says how much.
     fn describe_call(&self, args: &Value) -> String {
         match args.get("path").and_then(Value::as_str) {

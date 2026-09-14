@@ -40,8 +40,8 @@ impl EditTool {
     }
 
     /// Compatibility shim for raw arguments (pi's `prepareArguments`):
-    /// - `edits` sent as a JSON *string* (Opus 4.6, GLM 5.1 do this),
-    /// - legacy top-level `oldText`/`newText` folded into `edits`.
+    /// — `edits` sent as a JSON *string* (Opus 4.6, GLM 5.1 do this),
+    /// — legacy top-level `oldText`/`newText` folded into `edits`.
     fn prepare_arguments(mut args: Value) -> Value {
         let Some(map) = args.as_object_mut() else {
             return args;
@@ -116,7 +116,7 @@ impl AgentTool for EditTool {
         })
     }
 
-    /// `edit <path>` - the diff below the header shows what changed, so the
+    /// `edit <path>` — the diff below the header shows what changed, so the
     /// header only needs to say where.
     fn describe_call(&self, args: &Value) -> String {
         match args.get("path").and_then(Value::as_str) {

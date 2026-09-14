@@ -2,10 +2,10 @@
 //! and tool executions, plus a stateful [`Agent`](agent::Agent) wrapper.
 //!
 //! Layering:
-//! - [`agent_loop`] - the pure loop: context in, events + new messages out.
+//! — [`agent_loop`] — the pure loop: context in, events + new messages out.
 //!   No state of its own; testable in isolation.
-//! - [`agent`] - owns a transcript, queues, and abort handling on top.
-//! - [`types`] - messages, tools, hooks, events.
+//! — [`agent`] — owns a transcript, queues, and abort handling on top.
+//! — [`types`] — messages, tools, hooks, events.
 
 pub mod agent;
 pub mod agent_loop;

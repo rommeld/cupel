@@ -1,4 +1,4 @@
-//! OpenAI Codex OAuth flow - login with a ChatGPT Plus/Pro
+//! OpenAI Codex OAuth flow — login with a ChatGPT Plus/Pro
 //! subscription instead of an API key.
 //!
 //! The flow is the one the official Codex CLI ships:
@@ -556,7 +556,7 @@ pub async fn poll_device_auth(
 mod tests {
     use super::*;
 
-    /// Build an unsigned JWT-shaped token around `payload` - three
+    /// Build an unsigned JWT-shaped token around `payload` — three
     /// base64url segments; the signature is junk because nothing here
     /// verifies it.
     pub(crate) fn fake_jwt(payload: &Value) -> String {
@@ -660,7 +660,7 @@ mod tests {
         );
 
         // A well-formed response whose access token carries no account
-        // claim is ALSO rejected - the header cannot be built without it.
+        // claim is ALSO rejected — the header cannot be built without it.
         let json = serde_json::json!({
             "access_token": fake_jwt(&serde_json::json!({"sub": "x"})),
             "refresh_token": "r",
@@ -694,7 +694,7 @@ mod tests {
             account_id: "acc".to_string(),
         };
         let json = serde_json::to_value(&credential).expect("serializes");
-        // accountId camelCase - the auth.json shape pi writes too.
+        // accountId camelCase — the auth.json shape pi writes too.
         assert_eq!(json["accountId"], "acc");
         let back: OAuthCredential = serde_json::from_value(json).expect("parses");
         assert_eq!(back, credential);
@@ -728,7 +728,7 @@ mod tests {
 
         let http = reqwest::Client::new();
         let base = format!("http://127.0.0.1:{port}");
-        // Noise first: wrong route, then wrong state - the server answers
+        // Noise first: wrong route, then wrong state — the server answers
         // both AND keeps waiting.
         let response = http
             .get(format!("{base}/favicon.ico"))

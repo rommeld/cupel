@@ -1,7 +1,7 @@
 //! End-to-end proof that the bash denylist actually stops execution: a
 //! scripted mock provider asks for `rm -rf /`, and the assertion is on
-//! what flows back through the REAL agent loop - a blocked error
-//! tool-result - not on the guard in isolation (guard.rs unit tests cover
+//! what flows back through the REAL agent loop — a blocked error
+//! tool-result — not on the guard in isolation (guard.rs unit tests cover
 //! that). Pattern copied from cupel-agent/tests/retry.rs.
 
 #![allow(clippy::tests_outside_test_module)]

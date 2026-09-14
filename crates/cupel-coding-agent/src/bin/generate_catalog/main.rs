@@ -7,7 +7,7 @@
 //!
 //!     cargo run -p cupel-coding-agent --bin generate-catalog
 //!
-//! It never runs at cupel runtime - the catalog is data checked into git.
+//! It never runs at cupel runtime — the catalog is data checked into git.
 
 mod curation;
 mod models_dev;
@@ -40,7 +40,7 @@ async fn run() -> Result<(), String> {
     let wanted: Vec<&str> = PROVIDERS.iter().map(|p| p.models_dev_id).collect();
     let catalog = models_dev::parse_wanted(&raw, &wanted)?;
     let mut models = build_models(PROVIDERS, &catalog)?;
-    // Codex rides BEHIND the models.dev providers - pi appends its
+    // Codex rides BEHIND the models.dev providers — pi appends its
     // codexModels after the fetched catalog the same way. Appended here
     // (not inside build_models) so the join stays a pure function of the
     // curation table.
@@ -63,7 +63,7 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// One bounded GET - mirrors the ollama probe's spirit: explicit
+/// One bounded GET — mirrors the ollama probe's spirit: explicit
 /// timeout, HTTP errors surfaced with the URL in the message.
 async fn fetch(url: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
@@ -102,7 +102,7 @@ fn build_models(
     Ok(models)
 }
 
-/// The pinned Codex rows as cupel Models - no models.dev join, the
+/// The pinned Codex rows as cupel Models — no models.dev join, the
 /// curation table IS the data (see curation.rs for why).
 fn openai_codex_models() -> Vec<Model> {
     OPENAI_CODEX_MODELS
@@ -274,7 +274,7 @@ fn with_temperature_knob(
 }
 
 /// models.dev knows text/image/pdf/audio/video; cupel's InputModality
-/// only text/image - the rest is dropped (documentd deviation).
+/// only text/image — the rest is dropped (documentd deviation).
 fn input_modalities(raw: &[String]) -> Vec<InputModality> {
     let mut out = Vec::new();
     for modality in raw {
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(model.name, "Claude Sonnet 5");
         assert_eq!(model.api.as_str(), Api::ANTHROPIC_MESSAGES);
         assert_eq!(model.provider.as_str(), "anthropic");
-        // pdf is dropped - cupel only models text and image input.
+        // pdf is dropped — cupel only models text and image input.
         assert_eq!(model.input, vec![InputModality::Text, InputModality::Image]);
         assert!((model.cost.cached_write - 2.5).abs() < f64::EPSILON);
         assert_eq!(model.context_window, 1_000_000);

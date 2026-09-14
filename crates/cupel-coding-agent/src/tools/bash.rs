@@ -2,17 +2,17 @@
 //! stdout+stderr into a bounded accumulator. The design constraints all come
 //! from real agent behavior:
 //!
-//! - **Bounded memory, full fidelity.** A command can print gigabytes. The
+//! — **Bounded memory, full fidelity.** A command can print gigabytes. The
 //!   accumulator keeps only a rolling tail in memory (the model gets the
-//!   LAST 2000 lines / 50 KB - errors live at the end), and spills the
+//!   LAST 2000 lines / 50 KB — errors live at the end), and spills the
 //!   complete output to a temp file the moment limits are exceeded, so the
 //!   truncation notice can say "Full output: /tmp/...".
-//! - **Kill the whole tree.** `cargo test` spawns children; killing just the
+//! — **Kill the whole tree.** `cargo test` spawns children; killing just the
 //!   shell leaves them running. The child gets its own process group, and
 //!   abort/timeout kills the group. Because this workspace forbids `unsafe`
 //!   (no direct `libc::kill`), the group kill shells out to `kill -9 -PGID`
 //!   - one extra process spawn on the rare abort path is a fine trade.
-//! - **Exit codes are errors.** A non-zero exit becomes an error tool result
+//! — **Exit codes are errors.** A non-zero exit becomes an error tool result
 //!   (with the output attached) so the model *sees* failure as failure.
 
 use std::path::PathBuf;
@@ -211,7 +211,7 @@ fn kill_process_group(pid: u32) {
     let _ = std::process::Command::new("kill")
         // `--` is required: a negative PID (= process group) looks like an
         // option flag otherwise. BSD kill (macOS) tolerates its absence,
-        // Linux's procps kill does NOT - it silently refuses, the group
+        // Linux's procps kill does NOT — it silently refuses, the group
         // survives, and "timeout" waits out the full command (caught by CI
         // on the first-ever Linux run).
         .args(["-9", "--", &format!("-{pid}")])
@@ -251,7 +251,7 @@ impl AgentTool for BashTool {
         })
     }
 
-    /// `$ <command>` - the shell prompt says "this ran", the command is
+    /// `$ <command>` — the shell prompt says "this ran", the command is
     /// shown verbatim. The timeout rides along when the model set one.
     fn describe_call(&self, args: &Value) -> String {
         let Some(command) = args.get("command").and_then(Value::as_str) else {

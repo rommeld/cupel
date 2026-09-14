@@ -1,22 +1,22 @@
-//! ChatGPT Codex backend provider - the `OpenAI` Responses dialect behind
+//! ChatGPT Codex backend provider — the `OpenAI` Responses dialect behind
 //! a ChatGPT Plus/Pro subscription.
 //!
 //! The STREAM is the plain Responses SSE stream; what differs is
 //! everything around it:
 //!
-//! - **URL**: `{base_url}/codex/responses` on `chatgpt.com/backend-api`,
+//! — **URL**: `{base_url}/codex/responses` on `chatgpt.com/backend-api`,
 //!   not `api.openai.com/v1/responses`.
-//! - **Auth**: the bearer token is a ChatGPT OAuth ACCESS token (see
+//! — **Auth**: the bearer token is a ChatGPT OAuth ACCESS token (see
 //!   `crate::oauth::openai_codex`), and the backend additionally demands
-//!   the `chatgpt-account-id` header - extracted from that very token's
+//!   the `chatgpt-account-id` header — extracted from that very token's
 //!   JWT claim on every request.
-//! - **Body**: `store: false` is mandatory (the backend rejects true),
+//! — **Body**: `store: false` is mandatory (the backend rejects true),
 //!   the system prompt travels in the `instructions` field instead of a
-//!   leading message item, and there is no `max_output_tokens` - the
+//!   leading message item, and there is no `max_output_tokens` — the
 //!   backend manages the output budget itself.
 //!
 //! Deliberately NOT mirrored from pi: the WebSocket transport (pi's
-//! default, with SSE as fallback - cupel speaks the fallback, which the
+//! default, with SSE as fallback — cupel speaks the fallback, which the
 //! backend fully supports), zstd request compression, service tiers, and
 //! the tool-search machinery. Each is an optimization on top of this
 //! exact SSE path.
@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(body["tool_choice"], json!("auto"));
         assert_eq!(body["parallel_tool_calls"], json!(true));
         assert_eq!(body["prompt_cache_key"], json!("session-abc"));
-        // max_tokens was SET in the options - and must not be sent.
+        // max_tokens was SET in the options — and must not be sent.
         assert!(body.get("max_output_tokens").is_none());
     }
 
@@ -432,7 +432,7 @@ mod tests {
             json!({"effort": "low", "summary": "auto"})
         );
 
-        // Off omits the parameter entirely - never effort "none" here.
+        // Off omits the parameter entirely — never effort "none" here.
         let body = build_request_body(&model, &context, &StreamOptions::default());
         assert!(body.get("reasoning").is_none());
         // Encrypted reasoning stays included even with thinking off.
@@ -467,7 +467,7 @@ mod tests {
         assert!(body.get("temperature").is_none(), "{body}");
 
         // A GPT-5.5 row (max -> null pinned by the generator) clamps max
-        // down to xhigh - the level below it on the scale.
+        // down to xhigh — the level below it on the scale.
         let mut gpt55 = codex_model();
         gpt55
             .thinking_level_map
@@ -493,7 +493,7 @@ mod tests {
         let tool = &body["tools"][0];
         assert_eq!(tool["type"], json!("function"));
         assert_eq!(tool["name"], json!("read"));
-        // Present AND null - get() distinguishes that from absent.
+        // Present AND null — get() distinguishes that from absent.
         assert!(tool.get("strict").is_some_and(Value::is_null));
     }
 

@@ -3,13 +3,13 @@
 //! Each submodule translates between the unified types in [`crate::types`]
 //! and one vendor wire protocol:
 //!
-//! - [`anthropic`] - Anthropic Messages API (SSE)
-//! - [`openai_responses`] - `OpenAI` Responses API (SSE)
-//! - [`openai_completions`] - `OpenAI` Chat Completions API (SSE) - the
+//! — [`anthropic`] — Anthropic Messages API (SSE)
+//! — [`openai_responses`] — `OpenAI` Responses API (SSE)
+//! — [`openai_completions`] — `OpenAI` Chat Completions API (SSE) — the
 //!   protocol most "OpenAI-compatible" vendors (Fireworks, OpenRouter, ...) speak
-//! - [`openai_codex_responses`] - the ChatGPT Codex backend's Responses
+//! — [`openai_codex_responses`] — the ChatGPT Codex backend's Responses
 //!   dialect (SSE), driven by ChatGPT OAuth tokens instead of API keys
-//! - [`bedrock`] - AWS Bedrock `ConverseStream` (binary event stream via the
+//! — [`bedrock`] — AWS Bedrock `ConverseStream` (binary event stream via the
 //!   official AWS SDK)
 //!
 //! All providers follow the same stream functions:

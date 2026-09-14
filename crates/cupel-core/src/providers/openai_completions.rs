@@ -1,7 +1,7 @@
 //! `OpenAI` Chat Completions API provider.
 //!
 //! This is the oldest and most widely
-//! cloned LLM wire protocol - Fireworks, Groq, Together, `DeepSeek`, and
+//! cloned LLM wire protocol — Fireworks, Groq, Together, `DeepSeek`, and
 //! dozens of other providers expose "OpenAI-compatible" endpoints that speak
 //! it. That ubiquity is also its curse: every clone deviates a little, so
 //! this file is half protocol and half compatibility knobs.
@@ -10,7 +10,7 @@
 //! the SSE body carries `ChatCompletionChunk` JSON. Unlike Anthropic's
 //! block-indexed events, chunks have ONE choice whose `delta` may carry
 //! `content`, a reasoning field, and/or `tool_calls` keyed by their own
-//! index - so we accumulate one text block, one thinking block, and a map
+//! index — so we accumulate one text block, one thinking block, and a map
 //! of tool-call blocks.
 
 use serde::Deserialize;
@@ -44,7 +44,7 @@ enum ThinkingFormat {
     Openai,
     /// `thinking: {type: enabled|disabled}` plus optional `reasoning_effort`.
     Deepseek,
-    /// OpenRouter's unified `reasoning: {effort: ...}` object - one scale
+    /// OpenRouter's unified `reasoning: {effort: ...}` object — one scale
     /// the router translates for every vendor behind it.
     Openrouter,
 }
@@ -77,7 +77,7 @@ struct CompletionsCompat {
     send_session_affinity_headers: bool,
     thinking_format: ThinkingFormat,
     /// Endpoint requires a Bearer API key. Local servers (ollama,
-    /// llama-server) accept anonymous requests - `requiresApiKey: false`
+    /// llama-server) accept anonymous requests — `requiresApiKey: false`
     /// lets a keyless request proceed without an Authorization header.
     requires_api_key: bool,
     /// Whether the model accepts `temperature` (GPT-6 Astra rejects it;
@@ -174,7 +174,7 @@ async fn run(
 ) -> Result<()> {
     // Compat is parsed BEFORE key resolution: `requiresApiKey: false`
     // (local servers) turns a missing key from a hard error into a keyless
-    // request. A key that IS present is always sent - ollama ignores it,
+    // request. A key that IS present is always sent — ollama ignores it,
     // and authenticated proxies keep working.
     let compat = completions_compat(model);
     let api_key = match options.api_key.clone() {
@@ -633,7 +633,7 @@ fn build_request_body(
                     body["reasoning"] = json!({"effort": mapped_effort(model, level)});
                 } else {
                     // "off": a map entry `off -> null` means the model cannot stop
-                    // thinking - omit the parameter. Any other state send an explicit
+                    // thinking — omit the parameter. Any other state send an explicit
                     // effort: the mapped off value, or OpenRouter's own "none".
                     match model.thinking_level_map.as_ref().and_then(|m| m.get("off")) {
                         Some(None) => {}
@@ -750,7 +750,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                 last_was_tool_result = false;
                 let mut message = json!({"role": "assistant"});
 
-                // Assistant text goes as a plain STRING - the standard format.
+                // Assistant text goes as a plain STRING — the standard format.
                 // Sending block arrays makes some clones (DeepSeek via NIM)
                 // mirror the structure literally in their next answer.
                 let text: String = assistant
@@ -779,7 +779,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                         message["content"] = json!(text);
                     }
                 } else if compat.requires_thinking_as_text {
-                    // No tags around it - tags teach the model to mimic them.
+                    // No tags around it — tags teach the model to mimic them.
                     let mut combined: Vec<String> =
                         thinking.iter().map(|t| t.thinking.clone()).collect();
                     if !text.is_empty() {
@@ -822,7 +822,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                     message["tool_calls"] = Value::Array(tool_calls);
                 }
 
-                // "Either content or tool_calls" - fully empty messages (e.g.
+                // "Either content or tool_calls" — fully empty messages (e.g.
                 // from aborted turns) get skipped.
                 if message.get("content").is_none() && message.get("tool_calls").is_none() {
                     i += 1;
@@ -942,7 +942,7 @@ mod tests {
     #[test]
     fn malformed_compat_falls_back_to_all_defaults() {
         // A type error fails the WHOLE parse, which `.ok()` turns into the
-        // defaults - so a typo'd requiresApiKey silently demands a key
+        // defaults — so a typo'd requiresApiKey silently demands a key
         // again. Pinned here so a future change to per-field tolerance is
         // a conscious decision.
         let compat = completions_compat(&model_with_compat(Some(serde_json::json!({

@@ -3,18 +3,18 @@
 //! When a turn ends with `stop_reason: Error`, the agent needs to decide:
 //! is this worth retrying (a 529 "overloaded", a dropped connection), or
 //! would a retry just burn money (invalid request, exhausted quota)? The
-//! answer lives in the error TEXT because that's all providers give us -
+//! answer lives in the error TEXT because that's all providers give us —
 //! our unified error path collapses HTTP status, SDK exception names, and
 //! stream-level error events into one message string.
 //!
 //! This module only CLASSIFIES. Retry policy (budget, backoff, restarting
-//! the turn) lives in the agent loop - same split as pi, where this
+//! the turn) lives in the agent loop — same split as pi, where this
 //! classifier sits in the ai package and the policy in agent-session.
 //!
 //! Implementation note: pi matches with regexes like `rate.?limit` (any
 //! separator between the words). Instead of pulling in the `regex` crate for
-//! that, we *compress* both the message and the patterns - lowercase, keep
-//! only `[a-z0-9]` - so "Rate Limit", "rate-limit", and "RateLimit" all
+//! that, we *compress* both the message and the patterns — lowercase, keep
+//! only `[a-z0-9]` — so "Rate Limit", "rate-limit", and "RateLimit" all
 //! become "ratelimit". Same effect, one allocation, and the pattern tables
 //! stay readable.
 
@@ -94,7 +94,7 @@ fn compress(text: &str) -> String {
 /// Does this failed assistant message look like a TRANSIENT provider or
 /// transport error, i.e. should the caller consider restarting the turn?
 ///
-/// Only `stop_reason: Error` qualifies - an `Aborted` message means the
+/// Only `stop_reason: Error` qualifies — an `Aborted` message means the
 /// user cancelled, and retrying against the user's intent would be hostile.
 #[must_use]
 pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {

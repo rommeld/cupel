@@ -1,4 +1,4 @@
-//! The curated built-in catalog - WHICH models cupel ships, plus the
+//! The curated built-in catalog — WHICH models cupel ships, plus the
 //! cupel-side knowledge models.dev does not carry: base URLs (missing
 //! upstream for anthropic/openai), the API family per model, compat
 //! quirks, and thinking-map exceptions.
@@ -30,7 +30,7 @@ pub enum Thinking {
     /// Budget-based thinking (Anthropic budget path and the Fireworks
     /// anthropic-compat endpoint): no map, every cupel level allowed.
     /// models.dev's effort options describe those vendors' NATIVE APIs,
-    /// not the anthropic-compat endpoint cupel drives - deriving a map
+    /// not the anthropic-compat endpoint cupel drives — deriving a map
     /// here would wrongly disable levels.
     Budget,
     /// Derive from models.dev effort values (models_dev.rs).
@@ -49,7 +49,7 @@ pub enum Window {
     PriceTier,
 }
 
-/// Named compat templates - the per-API quirk blobs from the old
+/// Named compat templates — the per-API quirk blobs from the old
 /// hand-written catalog, now defined in exactly one place.
 pub enum Compat {
     None,
@@ -106,7 +106,7 @@ pub struct CuratedProvider {
 }
 
 /// GLM 5.2 on Fireworks: cupel levels remapped onto Fireworks' effort
-/// scale - off maps to none, minimal is unsupported, low /medium collapse
+/// scale — off maps to none, minimal is unsupported, low /medium collapse
 /// to high. The xhigh entry is dead under cupel's key-absence rule
 /// (model.rs) but kept verbatim from the old catalog.
 const GLM52_THINKING: &[(&str, Option<&str>)] = &[
@@ -120,7 +120,7 @@ const GLM52_THINKING: &[(&str, Option<&str>)] = &[
 /// Kimi K2.7 Code on OpenRouter is always-thinking.
 const KIMI_K27_CODE_OPENROUTER_THINKING: &[(&str, Option<&str>)] = &[("off", None)];
 
-// Compact row constructors, one per model family - the same shape the
+// Compact row constructors, one per model family — the same shape the
 // old catalog.rs used (fireworks_anthropic / fireworks_glm52 helpers).
 const fn anthropic(id: &'static str, rename: Option<&'static str>) -> Curated {
     Curated {
@@ -299,13 +299,13 @@ pub const PROVIDERS: &[CuratedProvider] = &[
 /// One Codex model, pinned by hand. models.dev has no `openai-codex`
 /// provider (subscription backends carry no public price sheet), so pi
 /// keeps an explicit list in generate-models.ts ("we keep a small,
-/// explicit list to avoid aliases") - this table is that list, verbatim:
+/// explicit list to avoid aliases") — this table is that list, verbatim:
 /// same ids, names, prices, and limits.
 ///
 /// The `id` is the BACKEND's model name; the generator namespaces the
 /// catalog id as `codex/<id>` and stores the backend name in compat's
 /// `requestModel`. That split exists because cupel's catalog is one flat
-/// id namespace (merge_models replaces by id, /model addresses by id) -
+/// id namespace (merge_models replaces by id, /model addresses by id) —
 /// and the openai provider already owns "gpt-5.6-sol" etc.
 pub struct PinnedCodex {
     pub id: &'static str,
@@ -315,7 +315,7 @@ pub struct PinnedCodex {
     /// $/M: input, output, cache read, cache write.
     pub cost: (f64, f64, f64, f64),
     /// Whether the >272k long-context tier applies (input x2, output
-    /// x1.5, cache x2 - pi's withOpenAiLongContextPricing).
+    /// x1.5, cache x2 — pi's withOpenAiLongContextPricing).
     pub long_context_tier: bool,
     pub context_window: u64,
     /// The backend's `max_context_window` when it exceeds context_window

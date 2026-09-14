@@ -163,7 +163,7 @@ impl Provider for AnthropicProvider {
         let http = self.http.clone();
 
         // The whole body is wrapped so *any* error becomes an `Error` event on
-        // the stream - the caller-facing contract is "never panic, never
+        // the stream — the caller-facing contract is "never panic, never
         // reject; report failures in-band".
         tokio::spawn(async move {
             if let Err(err) = run(&http, &model, &context, &options, &sink).await {
@@ -714,7 +714,7 @@ fn build_request_body(
                 }
             }
             None => {
-                // Explicitly disable thinking - unless the model's level map
+                // Explicitly disable thinking — unless the model's level map
                 // marks "off" as unsupported (entry present but null).
                 let off_unsupported = model
                     .thinking_level_map

@@ -2,16 +2,16 @@
 //!
 //! Two kinds, dispatched in this order by the frontends:
 //!
-//! 1. **Built-ins** (`/help`, `/new`, `/model`, ...) - intercepted by the UI
+//! 1. **Built-ins** (`/help`, `/new`, `/model`, ...) — intercepted by the UI
 //!    and never sent to the model.
-//! 2. **Prompt templates** - markdown files in `<root>/prompts/*.md` (same
+//! 2. **Prompt templates** — markdown files in `<root>/prompts/*.md` (same
 //!    resource roots as AGENTS.md: cupel home, project `.cupel/`, project
 //!    root). `/name args` expands the file's
 //!    body with bash-style argument substitution and sends THAT as the
 //!    prompt. This is how users package reusable prompts.
 //!
 //! Anything else starting with `/` passes through to the model as literal
-//! text - a typo becomes a question, not an error.
+//! text — a typo becomes a question, not an error.
 
 use std::path::{Path, PathBuf};
 
@@ -47,11 +47,11 @@ pub fn parse_command_args(args: &str) -> Vec<String> {
 /// Substitute argument placeholders in a template body. Supported forms
 /// (all 1-indexed, matching bash and pi):
 ///
-/// - `$1`, `$2`, ... - positional argument (empty when missing)
-/// - `$@` / `$ARGUMENTS` - all arguments joined with spaces
-/// - `${N:-default}` - positional N, or `default` when missing/empty
-/// - `${@:N}` - arguments from N onward
-/// - `${@:N:L}` - L arguments starting at N
+/// — `$1`, `$2`, ... — positional argument (empty when missing)
+/// — `$@` / `$ARGUMENTS` — all arguments joined with spaces
+/// — `${N:-default}` — positional N, or `default` when missing/empty
+/// — `${@:N}` — arguments from N onward
+/// — `${@:N:L}` — L arguments starting at N
 ///
 /// Replacement is single-pass over the template only: argument VALUES that
 /// contain `$1` etc. are not recursively substituted.
@@ -157,7 +157,7 @@ pub fn load_prompt_templates(roots: &[PathBuf]) -> Vec<PromptTemplate> {
     let mut templates: Vec<PromptTemplate> = Vec::new();
     for root in roots {
         let Ok(entries) = std::fs::read_dir(root.join("prompts")) else {
-            continue; // No prompts directory - perfectly normal.
+            continue; // No prompts directory — perfectly normal.
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -322,7 +322,7 @@ mod tests {
     fn templates_load_expand_and_project_overrides() {
         let global = std::env::temp_dir().join("cupel-commands-global");
         let project = std::env::temp_dir().join("cupel-commands-project");
-        // The project's `.cupel/` directory - a root between home and cwd.
+        // The project's `.cupel/` directory — a root between home and cwd.
         let dot_cupel = project.join(".cupel");
         let _ = std::fs::remove_dir_all(&global);
         let _ = std::fs::remove_dir_all(&project);

@@ -144,7 +144,7 @@ impl Agent {
         self.api_key = api_key;
     }
 
-    /// The fallback API key FUTURE runs will use - the read half of
+    /// The fallback API key FUTURE runs will use — the read half of
     /// [`AGENT::set_api_key`], so frontends and tests can verify which
     /// credential a reload or switch resolved without sending a request.
     #[must_use]
@@ -153,7 +153,7 @@ impl Agent {
     }
 
     /// The provider registry this agent dispatches through. Cheap (Arc
-    /// clone); lets a frontend REBUILD an agent - the TUI's /hot-reload -
+    /// clone); lets a frontend REBUILD an agent — the TUI's /hot-reload —
     /// without re-plumbing the registry from startup.
     #[must_use]
     pub fn registry(&self) -> Arc<Registry> {
@@ -178,7 +178,7 @@ impl Agent {
             .thinking_level = level;
     }
 
-    /// The thinking level FUTURE runs will use - the read half of
+    /// The thinking level FUTURE runs will use — the read half of
     /// [`Agent::set_thinking_level`], for status displays. A cheap
     /// copy read under the lock, deliberately NOT a full state()
     /// snapshot (which clones the message history).
@@ -241,7 +241,7 @@ impl Agent {
 
     /// Start a run with a plain text prompt.
     ///
-    /// Returns the run's event stream. Consume it (or drop it - state still
+    /// Returns the run's event stream. Consume it (or drop it — state still
     /// updates) and call [`Agent::wait_for_idle`] before the next prompt.
     pub fn prompt_text(&mut self, text: impl Into<String>) -> Result<AgentEventStream, AgentError> {
         self.prompt(vec![AgentMessage::user_text(text)])
@@ -311,7 +311,7 @@ impl Agent {
             .await;
         });
 
-        // Task 2: forwarder - reduces every event into AgentState (pi's
+        // Task 2: forwarder — reduces every event into AgentState (pi's
         // `processEvents`), then re-emits it to the caller.
         let state = Arc::clone(&self.state);
         let handle = tokio::spawn(async move {

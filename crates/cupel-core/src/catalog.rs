@@ -1,4 +1,4 @@
-//! The built-in model catalog - GENERATED DATA, do not edit by hand.
+//! The built-in model catalog — GENERATED DATA, do not edit by hand.
 //!
 //! `catalog.json` is produced by the dev-time generator
 //! (`cargo run -p cupel-coding-agent --bin generate-catalog`), which
@@ -11,7 +11,7 @@
 
 use crate::types::Model;
 
-/// Embedded at compile time - the runtime never touches the network or
+/// Embedded at compile time — the runtime never touches the network or
 /// the filesystem for the built-in catalog.
 const CATALOG_JSON: &str = include_str!("catalog.json");
 
@@ -20,7 +20,7 @@ pub fn builtin_models() -> Vec<Model> {
     // Invariant-backed expect: the file is generated, validated, and
     // round-trip-checked by generate-catalog and committed to git. A
     // failure here means catalog.json types::Model diverged (or the
-    // file was hand-edited) - regenerate instead of editing.
+    // file was hand-edited) — regenerate instead of editing.
     serde_json::from_str(CATALOG_JSON).expect(
         "catalog.json is generated data; regenrate it with \
          `cargo run -p cupel-coding-agent --bin generate-catalog`",
@@ -68,7 +68,7 @@ mod tests {
     fn fireworks_models_ride_the_expected_endpoints() {
         // The invariant the old 10/2 count test was really protecting:
         // Fireworks models pair anthropic-messages with /inference and
-        // openai-completions with /inference/v1 - never mixed up.
+        // openai-completions with /inference/v1 — never mixed up.
         let mut seen = 0;
         for model in builtin_models() {
             if model.provider.as_str() != Provider::FIREWORKS {
@@ -217,7 +217,7 @@ mod tests {
             assert_eq!(model.context_window, 272_000, "{id}");
         }
         // minimal: unsupported on the API (clamps up to low), pinned to
-        // "low" on Codex like every other Codex row - same wire result.
+        // "low" on Codex like every other Codex row — same wire result.
         let api = models
             .iter()
             .find(|m| m.id == "gpt-6-astra")
@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn codex_models_ride_the_chatgpt_backend() {
-        // The subscription rows: namespaced ids (cupel's flat id space -
+        // The subscription rows: namespaced ids (cupel's flat id space —
         // the openai provider owns the bare gpt-5.6 ids), the ChatGPT
         // backend URL, and a compat requestModel carrying the WIRE name
         // the namespacing hid.

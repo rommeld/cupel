@@ -7,12 +7,12 @@
 //! (`decodeSseLine`/`flushSseEvent`); this is a direct port.
 //!
 //! Design notes for the Rust version:
-//! - The decoder is *push-based*: the caller feeds raw network chunks into
+//! — The decoder is *push-based*: the caller feeds raw network chunks into
 //!   [`SseDecoder::push`] and receives zero or more complete events. This
 //!   fits `reqwest`'s `bytes_stream()` which yields chunks at arbitrary
-//!   boundaries - an event may be split across chunks, or one chunk may
+//!   boundaries — an event may be split across chunks, or one chunk may
 //!   contain many events.
-//! - We buffer bytes (not `String`) because a chunk may end in the middle of
+//! — We buffer bytes (not `String`) because a chunk may end in the middle of
 //!   a multi-byte UTF-8 character. Lines are only converted to text once a
 //!   line break proves they are complete.
 
@@ -115,7 +115,7 @@ impl SseDecoder {
             "event" => self.event = Some(value.to_string()),
             "data" => self.data.push(value.to_string()),
             // `id` and `retry` fields exist in the spec but no provider we
-            // support uses them, so they are ignored - same as pi.
+            // support uses them, so they are ignored — same as pi.
             _ => {}
         }
         None

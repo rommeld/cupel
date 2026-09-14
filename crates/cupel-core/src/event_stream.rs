@@ -29,7 +29,7 @@ pub struct EventSink {
 }
 
 /// Create linked pair (stream, sink). The provider keeps the sink and hands
-/// the stream back to the caller - mirroring how `streamAnthropic()` returns a
+/// the stream back to the caller — mirroring how `streamAnthropic()` returns a
 /// stream object immediately while continues in the background.
 #[must_use]
 pub fn assistant_message_channel() -> (AssistantMessageStream, EventSink) {
@@ -38,7 +38,7 @@ pub fn assistant_message_channel() -> (AssistantMessageStream, EventSink) {
 }
 
 impl EventSink {
-    /// Emit one event. Returns `false` if the consumer has dropped the stream -
+    /// Emit one event. Returns `false` if the consumer has dropped the stream —
     /// the provider task should treat that so "stop working".
     #[must_use]
     pub fn emit(&self, event: AssistantMessageEvent) -> bool {

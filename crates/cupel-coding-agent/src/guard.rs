@@ -1,7 +1,7 @@
 //! The bash denylist guard: cupel's first tool-execution guardrail.
 //!
 //! The agent loop asks [`AgentHooks::before_tool_call`] before EVERY tool
-//! execution - a veto point that has existed in cupel-agent from the start
+//! execution — a veto point that has existed in cupel-agent from the start
 //! but was unused until now. [`BashGuard`] implements it for the `bash`
 //! tool: a command matching any deny pattern is blocked, and the model
 //! receives an error tool-result naming the pattern (so it can adapt
@@ -16,9 +16,9 @@
 //! ```
 //!
 //! The effective list is the UNION of the built-in defaults (`rm -rf` and
-//! friends) and both files - deny rules from different layers never cancel
+//! friends) and both files — deny rules from different layers never cancel
 //! each other. Matching is deliberately conservative: every line of the
-//! command is tested, and a match anywhere blocks - even inside a quoted
+//! command is tested, and a match anywhere blocks — even inside a quoted
 //! string (`echo "rm -rf"` is blocked too). A false positive costs one
 //! polite error the model can rephrase around; a false negative costs the
 //! user's files.

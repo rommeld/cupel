@@ -68,7 +68,7 @@ fn estimate_message_tokens(message: &Message) -> u64 {
 ///
 /// Trick from pi: the most recent successful assistant message carries
 /// *exact* token usage from the provider. Use that as an anchor and only
-/// estimate the messages that came after it - far more accurate than
+/// estimate the messages that came after it — far more accurate than
 /// estimating the entire transcript.
 #[must_use]
 pub fn estimate_context_tokens(context: &Context) -> u64 {

@@ -10,7 +10,7 @@
 //! Events: `session-start`, `user-prompt-submit`, `stop`, `session-end`.
 //! Each hook receives one JSON payload on stdin and must exit; stdout and
 //! stderr are captured for debug logging, never shown in the UI. Hooks can
-//! observe but not veto - a failing, missing, or slow hook is at most a
+//! observe but not veto — a failing, missing, or slow hook is at most a
 //! `tracing::warn`, never a broken session.
 
 use std::path::{Path, PathBuf};
@@ -63,7 +63,7 @@ struct HookPayload {
 /// background tasks `fire_background` spawns.
 struct HookConfig {
     /// Directories containing `hooks/` trees, in run order (home first,
-    /// project second - same precedence direction as resource roots).
+    /// project second — same precedence direction as resource roots).
     roots: Vec<PathBuf>,
     session_id: String,
     session_ref: PathBuf,
@@ -77,7 +77,7 @@ struct HookConfig {
 /// `stop` and steering-time events fire in the BACKGROUND (a TUI must not
 /// freeze at run end), but strictly ordered: each background dispatch first
 /// awaits the previous one, and [`HookRunner::settle`] lets the prompt path
-/// wait for the chain to drain - so a `stop` hook is guaranteed to have
+/// wait for the chain to drain — so a `stop` hook is guaranteed to have
 /// finished before the next prompt's hooks fire.
 pub struct HookRunner {
     config: Arc<HookConfig>,
@@ -100,7 +100,7 @@ impl HookRunner {
         }
     }
 
-    /// Test hook: shrink the per-hook timeout (private - production always
+    /// Test hook: shrink the per-hook timeout (private — production always
     /// uses the default).
     #[cfg(test)]
     fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -175,7 +175,7 @@ async fn dispatch_event(config: &HookConfig, event_name: &str, payload: String) 
 
 /// All executable files in `<root>/hooks/<event>/` across the roots, each
 /// directory's entries sorted by filename for a predictable run order.
-/// Missing directories are simply empty - hooks are optional.
+/// Missing directories are simply empty — hooks are optional.
 fn hook_scripts(roots: &[PathBuf], event_name: &str) -> Vec<PathBuf> {
     let mut scripts = Vec::new();
     for root in roots {

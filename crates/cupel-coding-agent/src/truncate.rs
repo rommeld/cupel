@@ -1,8 +1,8 @@
 //! Tool output flows straight into the model's context window, so every tool
-//! caps its output. Two independent limits apply - whichever is hit first
+//! caps its output. Two independent limits apply — whichever is hit first
 //! wins:
-//! - line limit (default 2000 lines)
-//! - byte limit (default 50 KB)
+//! — line limit (default 2000 lines)
+//! — byte limit (default 50 KB)
 //!
 //! Truncation never returns partial lines (except the tail-truncation edge
 //! case where a single line exceeds the whole byte budget).
@@ -168,7 +168,7 @@ pub fn truncate_tail(content: &str, options: TruncationOptions) -> TruncationRes
         let line_bytes = line.len() + usize::from(!kept.is_empty());
         if kept_bytes + line_bytes > max_bytes {
             truncated_by = TruncatedBy::Bytes;
-            // Edge case: not even one full line fits - keep the line's TAIL,
+            // Edge case: not even one full line fits — keep the line's TAIL,
             // cut at a char boundary (Rust: byte slicing must respect UTF-8).
             if kept.is_empty() {
                 let mut start = line.len().saturating_sub(max_bytes);

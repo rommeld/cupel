@@ -6,16 +6,16 @@
 //! Those jobs belong to the agent and CLI crates.
 //!
 //! Module map:
-//! - [`types`] - the unified data model (messages, models, options, events)
-//! - [`event_stream`] - the async channel providers stream events through
-//! - [`error`] - error types
-//! - [`provider`] - the [`Provider`](provider::Provider) trait + registry
-//! - [`providers`] - the concrete adapters (Anthropic, `OpenAI`, Bedrock)
-//! - [`model`] - model registry, cost math, thinking-level clamping
-//! - [`catalog`] - a small built-in model catalog
-//! - [`sse`] / [`json_util`] / [`transform`] / [`options_util`] - shared
+//! — [`types`] — the unified data model (messages, models, options, events)
+//! — [`event_stream`] — the async channel providers stream events through
+//! — [`error`] — error types
+//! — [`provider`] — the [`Provider`](provider::Provider) trait + registry
+//! — [`providers`] — the concrete adapters (Anthropic, `OpenAI`, Bedrock)
+//! — [`model`] — model registry, cost math, thinking-level clamping
+//! — [`catalog`] — a small built-in model catalog
+//! — [`sse`] / [`json_util`] / [`transform`] / [`options_util`] — shared
 //!   plumbing used by the providers
-//! - [`oauth`] - OAuth login flows for subscription providers
+//! — [`oauth`] — OAuth login flows for subscription providers
 
 pub mod catalog;
 pub mod error;
@@ -34,7 +34,7 @@ pub mod types;
 
 use std::sync::Arc;
 
-/// A [`provider::Registry`] with all built-in providers registered - the
+/// A [`provider::Registry`] with all built-in providers registered — the
 /// usual entry point for applications.
 #[must_use]
 pub fn default_registry() -> provider::Registry {

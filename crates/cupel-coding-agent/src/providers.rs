@@ -1,11 +1,11 @@
 //! Provider credential resolution, shared by startup (`select_model` in
-//! main.rs) and the runtime `/provider` + `/model` built-ins - one place
+//! main.rs) and the runtime `/provider` + `/model` built-ins — one place
 //! that knows which environment variable each provider reads and how the
 //! key sources layer: session-entered key > exported env var >
 //! `~/.cupel/settings.json` (see `crate::settings`).
 //!
 //! Note on `export`: keys entered at runtime CANNOT be written back into
-//! the process environment - `std::env::set_var` is unsafe in edition 2024
+//! the process environment — `std::env::set_var` is unsafe in edition 2024
 //! (not thread-safe) and this workspace forbids unsafe code. Runtime keys
 //! therefore live in the frontend's session state; settings.json is the
 //! PERSISTENT home for keys, and exported variables remain a startup-time
@@ -34,7 +34,7 @@ pub fn env_api_key(provider: &str) -> Option<String> {
 
 /// The pure precedence core: an exported env var beats the settings file.
 /// Parameterized (like resources::resolve_config_home) so tests can prove
-/// the order without reading process-global env vars - this is the ONLY
+/// the order without reading process-global env vars — this is the ONLY
 /// env-free place where the prcedence is provable.
 #[must_use]
 pub fn resolve_key_layers(env: Option<String>, settings: Option<&str>) -> Option<String> {
@@ -73,7 +73,7 @@ pub fn catalog_providers(models: &[Model]) -> Vec<(String, Model)> {
 }
 
 /// Whether a model's endpoint takes no API key at all (compat
-/// `requiresApiKey: false` - local servers like ollama/llama-server; see
+/// `requiresApiKey: false` — local servers like ollama/llama-server; see
 /// cupel-core's CompletionsCompat).
 #[must_use]
 pub fn is_keyless(model: &Model) -> bool {
@@ -85,7 +85,7 @@ pub fn is_keyless(model: &Model) -> bool {
         == Some(false)
 }
 
-/// A provider counts as keyless when EVERY one of its models is - drives
+/// A provider counts as keyless when EVERY one of its models is — drives
 /// the `/provider` status line and select_model's last-resort local
 /// default. (A mixed provider still needs its key.)
 #[must_use]
@@ -102,7 +102,7 @@ pub fn provider_is_keyless(models: &[Model], provider: &str) -> bool {
 
 /// Whether `/provider <name> <key>` has anywhere to put a key: everything
 /// except amazon-bedrock (its AWS chain has no key slot) and all-keyless
-/// local providers. Custom models.json providers DO qualify - session
+/// local providers. Custom models.json providers DO qualify — session
 /// memory and settings.jons are per-provider-id maps, unlike the closed
 /// env_var_name match that used to gate this (and locked custom providers
 /// out of keys entirely).
@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(env_var_name("openai"), Some("OPENAI_API_KEY"));
         assert_eq!(env_var_name("fireworks"), Some("FIREWORKS_API_KEY"));
         assert_eq!(env_var_name("openrouter"), Some("OPENROUTER_API_KEY"));
-        // Bedrock has no key variable - the AWS chain handles it.
+        // Bedrock has no key variable — the AWS chain handles it.
         assert_eq!(env_var_name("amazon-bedrock"), None);
         assert_eq!(env_var_name("unknown"), None);
     }

@@ -11,7 +11,7 @@
 //! 1. a match line defines the searched name itself
 //!    (`pub struct Foo`, `func Foo(`, `class Foo:` for the pattern `Foo`);
 //! 2. a match line is a definition of SOMETHING that mentions the name
-//!    (`func (s *Store) WriteFoo(` - the loose queries models actually send);
+//!    (`func (s *Store) WriteFoo(` — the loose queries models actually send);
 //! 3. the file's bucket by path convention: source before tests before the
 //!    low-signal periphery (examples, fixtures, mocks, vendored code);
 //! 4. the number of matches, capped so a busy file cannot outrank a quiet
@@ -153,7 +153,7 @@ fn is_match(matcher: Option<&RegexMatcher>, line: &str) -> bool {
 
 /// Visibility and qualifier words that may precede a definition keyword.
 const MODIFIERS: &str = r"(?:pub(?:\([^)]*\))?|export|default|async|unsafe|extern|static|const|abstract|final|override)\s+";
-/// Keywords that introduce an item - a function, type, module - in the
+/// Keywords that introduce an item — a function, type, module — in the
 /// common languages. Items are definitions at any indentation.
 const ITEM_KEYWORDS: &str = "fn|func|function|def|class|struct|enum|union|trait|interface|impl|type|typedef|mod|static|macro_rules!|record|protocol";
 /// Keywords that introduce a binding. Only a binding at column 0 is a
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn unembeddable_pattern_switches_only_the_name_signal_off() {
         // An anchored pattern is valid regex but can never match inside
-        // the name template: no panic, no name definitions - the shape
+        // the name template: no panic, no name definitions — the shape
         // signal still works.
         let ranker = Ranker::new(&query("^fn main"));
         assert!(!defines(&ranker, "fn main() {}"));
@@ -390,7 +390,7 @@ mod tests {
         }
         let ranked = Ranker::new(&query("Foo")).rank(&matches, root);
         let paths: Vec<&str> = ranked.iter().map(|f| f.path.to_str().unwrap()).collect();
-        // b and c are both at the cap - equal, so path order decides.
+        // b and c are both at the cap — equal, so path order decides.
         assert_eq!(
             paths,
             ["/project/b.txt", "/project/c.txt", "/project/a.txt"]

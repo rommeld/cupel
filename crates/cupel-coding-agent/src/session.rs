@@ -10,7 +10,7 @@
 //! at most the in-flight message.
 //!
 //! Like `.cupel/` scaffolding, the transcript is created LAZILY on the
-//! first agent interaction - launching and quitting cupel leaves no trace.
+//! first agent interaction — launching and quitting cupel leaves no trace.
 //! Persisted history is never rewritten by compaction (compaction only
 //! mutates a run's private context snapshot), so a transcript is always the
 //! full conversation; resume replays it and the loop re-compacts as needed.
@@ -41,7 +41,7 @@ pub struct TranscriptHeader {
 }
 
 /// The cwd as a filesystem-safe directory name: every char outside
-/// `[A-Za-z0-9_-]` becomes `-`. `/a/b` and `/a-b` can collide - acceptable
+/// `[A-Za-z0-9_-]` becomes `-`. `/a/b` and `/a-b` can collide — acceptable
 /// for a per-user convenience layout, and the header records the real cwd.
 #[must_use]
 pub fn project_slug(cwd: &Path) -> String {
@@ -58,14 +58,14 @@ pub fn project_slug(cwd: &Path) -> String {
         .collect()
 }
 
-/// `<home>/sessions/<slug>` - `None` (no resolvable home) disables
+/// `<home>/sessions/<slug>` — `None` (no resolvable home) disables
 /// persistence entirely.
 #[must_use]
 pub fn sessions_dir(home: Option<&Path>, cwd: &Path) -> Option<PathBuf> {
     Some(home?.join("sessions").join(project_slug(cwd)))
 }
 
-/// The newest transcript (by modification time) for this project - what a
+/// The newest transcript (by modification time) for this project — what a
 /// bare `--resume` picks.
 #[must_use]
 pub fn find_latest(home: Option<&Path>, cwd: &Path) -> Option<PathBuf> {
@@ -100,7 +100,7 @@ pub struct SessionSummary {
 const LABEL_MAX_CHARS: usize = 60;
 
 /// Summarize every readable transcript in `dir`, newest first (by header
-/// start time). Unreadable files are skipped with a warning - one corrupt
+/// start time). Unreadable files are skipped with a warning — one corrupt
 /// transcript must not hide the rest of the listing.
 #[must_use]
 pub fn list_sessions_in(dir: &Path) -> Vec<SessionSummary> {
@@ -204,7 +204,7 @@ pub fn load_transcript(path: &Path) -> Result<(TranscriptHeader, Vec<AgentMessag
 
 /// Owns one session's transcript file and hook dispatch. Constructed
 /// unconditionally by `main` and threaded into the frontends; with no
-/// resolvable cupel home it degrades to a no-op (hooks still run - they
+/// resolvable cupel home it degrades to a no-op (hooks still run — they
 /// only need directories, not the home).
 pub struct SessionRecorder {
     header: TranscriptHeader,
@@ -218,14 +218,14 @@ pub struct SessionRecorder {
 }
 
 impl SessionRecorder {
-    /// Pure constructor - touches no filesystem. `home` should be
+    /// Pure constructor — touches no filesystem. `home` should be
     /// [`crate::resources::config_home`].
     #[must_use]
     pub fn new(home: Option<PathBuf>, cwd: &Path, session_id: &str, model_id: &str) -> Self {
         let path =
             sessions_dir(home.as_deref(), cwd).map(|d| d.join(format!("{session_id}.jsonl")));
         // Hook roots mirror the resource roots (home, then project .cupel),
-        // minus the raw cwd - hooks/ at the repo root would be clutter.
+        // minus the raw cwd — hooks/ at the repo root would be clutter.
         let mut hook_roots = Vec::new();
         if let Some(home) = &home {
             hook_roots.push(home.clone());
@@ -263,7 +263,7 @@ impl SessionRecorder {
     /// A prompt is about to start a run. Settles any pending `stop` hook
     /// first (ordering guarantee for external consumers), lazily creates
     /// the transcript, then fires `session-start` (once) and
-    /// `user-prompt-submit` - both awaited, bounded by the hook timeout.
+    /// `user-prompt-submit` — both awaited, bounded by the hook timeout.
     pub async fn before_prompt(&mut self, prompt: &str) {
         self.ensure_file();
         if !self.started {
@@ -307,18 +307,18 @@ impl SessionRecorder {
     }
 
     /// cupel is exiting normally: drain the hook chain, then `session-end`.
-    /// (A killed process skips this - the transcript is still intact thanks
+    /// (A killed process skips this — the transcript is still intact thanks
     /// to per-message flushing.)
     pub async fn end_session(&mut self) {
         // Only a session that actually started (had a prompt) announces an
-        // end - launch+quit stays completely silent.
+        // end — launch+quit stays completely silent.
         if self.started {
             self.hooks.dispatch(HookEvent::SessionEnd).await;
         }
     }
 
     /// Open the transcript for appending, writing the header if (and only
-    /// if) the file is new - on resume the original header is kept. Every
+    /// if) the file is new — on resume the original header is kept. Every
     /// failure disables persistence for the session with one warning.
     fn ensure_file(&mut self) {
         if self.file.is_some() {

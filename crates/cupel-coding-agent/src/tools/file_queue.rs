@@ -2,7 +2,7 @@
 //!
 //! The agent loop runs tool calls in PARALLEL by default. Two edits to the
 //! same file racing each other means the second one reads stale content and
-//! either fails to match or silently reverts the first - so mutations to the
+//! either fails to match or silently reverts the first — so mutations to the
 //! same file must run one at a time, while different files stay parallel.
 //!
 //! pi builds this from chained promises. In Rust the same guarantee is one
@@ -22,7 +22,7 @@ use tokio::sync::Mutex as AsyncMutex;
 /// A `std::sync::Mutex` protects the MAP (held only for microseconds while
 /// looking up/inserting); the `tokio::sync::Mutex` inside is the actual
 /// per-file lock (held across await points for the whole mutation). Mixing
-/// the two like this is the standard pattern - never hold a std mutex across
+/// the two like this is the standard pattern — never hold a std mutex across
 /// an await.
 fn registry() -> &'static StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>> {
     static REGISTRY: OnceLock<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> = OnceLock::new();
@@ -40,7 +40,7 @@ fn queue_key(path: &Path) -> PathBuf {
 ///
 /// ```ignore
 /// let _guard = lock_file_for_mutation(&absolute_path).await;
-/// // read, edit, write - no other mutation can interleave on this file
+/// // read, edit, write — no other mutation can interleave on this file
 /// ```
 pub async fn lock_file_for_mutation(path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
     let lock = {

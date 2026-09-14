@@ -1,7 +1,7 @@
 //! Plain mode: the line-based REPL (formerly the whole `main.rs`).
 //!
 //! Used when stdout is not a terminal (pipes, CI) or with `--plain`. It
-//! prints raw text with a little ANSI color and no screen management -
+//! prints raw text with a little ANSI color and no screen management —
 //! exactly what you want when the output is being captured.
 
 use std::io::Write as _;
@@ -72,7 +72,7 @@ pub async fn run(
                     continue;
                 }
                 // Same builder as the TUI; here the whole path is
-                // synchronous - gather, then fall through to the ordinary
+                // synchronous — gather, then fall through to the ordinary
                 // (blocking) prompt round-trip below.
                 "review" => {
                     let review_args = crate::commands::parse_command_args(
@@ -100,8 +100,8 @@ pub async fn run(
         }
 
         // First real agent interaction: scaffold the project .cupel/
-        // directory (idempotent, never fails). Deferred to here - not
-        // startup - so `cupel --plain < /dev/null` etc. leave no trace.
+        // directory (idempotent, never fails). Deferred to here — not
+        // startup — so `cupel --plain < /dev/null` etc. leave no trace.
         crate::resources::ensure_project_dot_cupel(std::path::Path::new(&meta.cwd));
         // Transcript + hooks: creates the transcript lazily, settles any
         // pending stop hook, fires session-start (once) and

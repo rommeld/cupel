@@ -1,4 +1,4 @@
-//! A minimal serde mirror of the models.dev catalog - only what the
+//! A minimal serde mirror of the models.dev catalog — only what the
 //! generator reads. models.dev ships ~60 providers in fluctuating
 //! shapes, so parsing happens in two stages: the outer file is read as
 //! generic JSON, and only the providers named in curation.rs are
@@ -11,7 +11,7 @@ use cupel_core::types::ThinkingLevelMap;
 use serde::Deserialize;
 
 /// One provider block. Each model stays raw JSON until it is actually
-/// curated - only curated entries must parse as [`ModelEntry`].
+/// curated — only curated entries must parse as [`ModelEntry`].
 #[derive(Debug, Deserialize)]
 pub struct ProviderEntry {
     pub models: BTreeMap<String, serde_json::Value>,
@@ -153,8 +153,8 @@ impl ProviderEntry {
 
 /// Derive cupel's thinkingLevelMap from models.dev effort values.
 ///
-/// - an entry 'level -> null` disables that level,
-/// - a SUPPORTED level needs NO entry (the provider's identity fallback
+/// — an entry 'level -> null` disables that level,
+/// — a SUPPORTED level needs NO entry (the provider's identity fallback
 /// sends the level's own name),
 /// xhigh is special-cased by supported_thinking_levels: it is
 /// selectable onyl while its key is ABSENT. Supported xhigh/max
@@ -172,7 +172,7 @@ pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<Thi
             _ => {}
         }
     }
-    // No effort scale at all (budget/toggle-only models): no map -
+    // No effort scale at all (budget/toggle-only models): no map —
     // every cupel level stays selectable, the provider maps levels to
     // token budgets.
     if effort.is_empty() {
