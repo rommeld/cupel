@@ -9,11 +9,10 @@
 //! 2. UI-only state (tool results attached to their calls, expansion
 //!    ) has an obvious home that the agent knows nothing about.
 //!
-//! The view is two panes: conversation (user, reasoning, answers) on the
-//! left, tool traffic on the right. [`Transcript::steps`] groups the flat
-//! cell list into horizontal bands, and [`Transcript::to_columns`] renders
-//! each band across the same rows in both panes - that row alignment (plus
-//! a shared band number) is what assigns a tool call to its reasoning step.
+//! The view is ONE column: cells render top to bottom in the order they
+//! happened, tool calls inline between the reasoning that triggered them
+//! and the prose that follows. [`Transcript::to_lines`] flattens the cells
+//! into styled lines plus a line->cell map for mouse hit-testing.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -69,21 +68,12 @@ pub struct ToolOutcome {
     pub took: Option<Duration>,
 }
 
-/// One horizontal band of the two-pane view: the conversation cells on the
-/// left and the tool calls they triggered on the right. Both panes render
-/// a band across the same rows.
-pub struct Step {
-    pub left: Vec<usize>,
-    pub right: Vec<usize>,
-    pub marker: Option<usize>,
-}
-
-/// The two aligned panes plus the hit-test map, rebuilt every frame.
-pub struct Columns {
-    pub left: Vec<Line<'static>>,
-    pub right: Vec<Line<'static>>,
+/// The rendered column plus its hit-test map, rebuilt every frame.
+pub struct Rendered {
+    pub lines: Vec<Line<'static>>,
+    /// For each visual line: which cell it renders. `None` for the blank
+    /// spacer between cells. A mouse click resolves through this map.
     pub cell_at: Vec<Option<usize>>,
-    pub tool_at: Vec<Option<usize>>,
 }
 
 #[derive(Default)]
@@ -197,134 +187,46 @@ impl Transcript {
         }
     }
 
-    /// Group cells into visual bands: tool cells go right, everything else
-    /// left. A new band starts at every user prompt (turn boundary) and
-    /// whenever conversation output follows tool calls.
+    /// Flatten every cell into styled, wrapped lines for the given inner
+    /// width. `selected` tints that cell's lines so the user sees what
+    /// Ctrl+O would copy. Called once per frame; cheap enough at
+    /// chat-transcript sizes that we don't cache (ratatui diffs the actual
+    /// terminal writes anyway).
     #[must_use]
-    pub fn steps(&self) -> Vec<Step> {
-        let mut out: Vec<Step> = Vec::new();
-        let mut number = 0; // tool-band counter, reset per turn
-        for (index, cell) in self.cells.iter().enumerate() {
-            let is_tool = matches!(cell, Cell::Tool { .. });
-            let is_user = matches!(cell, Cell::User { .. });
-            if is_user {
-                number = 0;
-            }
-            let break_band = match out.last() {
-                None => true,
-                Some(last) => is_user || (!is_tool && !last.right.is_empty()),
-            };
-            if break_band {
-                out.push(Step {
-                    left: Vec::new(),
-                    right: Vec::new(),
-                    marker: None,
-                });
-            }
-            let step = out.last_mut().expect("pushed above");
-            if is_tool {
-                if step.right.is_empty() {
-                    number += 1;
-                    step.marker = Some(number);
-                }
-                step.right.push(index);
-            } else {
-                step.left.push(index);
-            }
-        }
-        out
-    }
-
-    /// Render the two aligned panes for the given inner widths. `selected`
-    /// tints that cell's lines so the user sees what Ctrl+O would copy.
-    /// Called once per frame; cheap enough at chat-transcript sizes that we
-    /// don't cache (ratatui diffs the actual terminal writes anyway).
-    #[must_use]
-    pub fn to_columns(
-        &self,
-        left_width: u16,
-        right_width: u16,
-        selected: Option<usize>,
-    ) -> Columns {
-        let left_width = left_width.max(10) as usize;
-        let right_width = right_width.max(10) as usize;
-        let mut columns = Columns {
-            left: Vec::new(),
-            right: Vec::new(),
+    pub fn to_lines(&self, width: u16, selected: Option<usize>) -> Rendered {
+        let width = width.max(10) as usize;
+        let mut rendered = Rendered {
+            lines: Vec::new(),
             cell_at: Vec::new(),
-            tool_at: Vec::new(),
         };
-
-        for step in self.steps() {
-            // A blank spacer between bands, but not at the very top.
-            if !columns.left.is_empty() {
-                push_chrome(&mut columns, Line::default(), Line::default());
+        for (index, cell) in self.cells.iter().enumerate() {
+            // A blank spacer between cells, but not at the very top.
+            if !rendered.lines.is_empty() {
+                rendered.lines.push(Line::default());
+                rendered.cell_at.push(None);
             }
-            // The band rule: the SAME number at the SAME row in both panes.
-            // The visible thread from a reasoning step to its tool calls
-            // even when the two sides have very different heights.
-            if let Some(number) = step.marker {
-                push_chrome(
-                    &mut columns,
-                    band_rule(number, left_width),
-                    band_rule(number, right_width),
-                );
-            }
-
-            let mut left: Vec<Line<'static>> = Vec::new();
-            let mut cell_at: Vec<Option<usize>> = Vec::new();
-            for (position, &index) in step.left.iter().enumerate() {
-                if position > 0 {
-                    left.push(Line::default());
-                    cell_at.push(None);
+            let mut lines = cell_lines(cell, width);
+            if selected == Some(index) {
+                // The line style paints first, spans patch on top: a
+                // bg-only style tints the row without touching the
+                // span foregrounds.
+                for line in &mut lines {
+                    line.style = line.style.patch(theme::SELECTED);
                 }
-                let mut lines = conversation_lines(&self.cells[index], left_width);
-                if selected == Some(index) {
-                    // The line style paints first, spans patch on top: a
-                    // bg-only style tints the row without touching the
-                    // span foregrounds.
-                    for line in &mut lines {
-                        line.style = line.style.patch(theme::SELECTED);
-                    }
-                }
-                cell_at.extend(std::iter::repeat_n(Some(index), lines.len()));
-                left.append(&mut lines);
             }
-
-            let mut right: Vec<Line<'static>> = Vec::new();
-            let mut tool_at: Vec<Option<usize>> = Vec::new();
-            for (position, &index) in step.right.iter().enumerate() {
-                if position > 0 {
-                    right.push(Line::default());
-                    tool_at.push(None);
-                }
-                let mut lines = tool_lines(&self.cells[index], right_width);
-                tool_at.extend(std::iter::repeat_n(Some(index), lines.len()));
-                right.append(&mut lines);
-            }
-
-            // This is the whole alignment tric.
-            while left.len() < right.len() {
-                left.push(Line::default());
-                cell_at.push(None);
-            }
-            while right.len() < left.len() {
-                right.push(Line::default());
-                tool_at.push(None);
-            }
-
-            columns.left.append(&mut left);
-            columns.cell_at.append(&mut cell_at);
-            columns.right.append(&mut right);
-            columns.tool_at.append(&mut tool_at);
+            rendered
+                .cell_at
+                .extend(std::iter::repeat_n(Some(index), lines.len()));
+            rendered.lines.append(&mut lines);
         }
-        columns
+        rendered
     }
 
     /// The raw text a copy places on the clipboard. The unrendered cell
     /// content (no `> ` prefix, no wrapping, markdown source exactly as
-    /// the model wrote it). Tool cells return None: they live in the right
-    /// pane and stay out of the copy feature.
+    /// the model wrote it). Tool cells return None: a click on them toggles
+    /// the preview instead of selecting, so they stay out of the copy
+    /// feature.
     #[must_use]
     pub fn copy_text(&self, index: usize) -> Option<&str> {
         match self.cells.get(index)? {
@@ -341,27 +243,9 @@ impl Transcript {
     }
 }
 
-/// Append one chrome line (band rule or spacer) to both panes at once,
-/// keeping the three parallel vectors in lockstep.
-fn push_chrome(columns: &mut Columns, left: Line<'static>, right: Line<'static>) {
-    columns.left.push(left);
-    columns.right.push(right);
-    columns.cell_at.push(None);
-    columns.tool_at.push(None);
-}
-
-fn band_rule(number: usize, width: usize) -> Line<'static> {
-    let label = format!("─ {number} ");
-    let fill = width.saturating_sub(label.chars().count());
-    Line::from(Span::styled(
-        format!("{label}{}", "─".repeat(fill)),
-        theme::STEP_RULE,
-    ))
-}
-
-/// Everything except tool calls, which render via [`tool_lines`]
-/// into the right pane.
-fn conversation_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
+/// Styled, wrapped lines for one cell. Tool cells delegate to
+/// [`tool_lines`]; everything else is conversation.
+fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     match cell {
         Cell::User { text } => {
@@ -403,7 +287,7 @@ fn conversation_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
                 theme::REASONING,
             ));
         }
-        Cell::Tool { .. } => {}
+        Cell::Tool { .. } => out.extend(tool_lines(cell, width)),
     }
     out
 }
@@ -578,7 +462,7 @@ pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// Split `"foo bar  baz"` into `["foo ", "bar  ", "baz"]` - words own their
+/// Split `"foo bar  baz"` into `["foo ", "bar  ", "baz"]` words own their
 /// trailing whitespace so wrapping never eats spacing.
 fn split_keeping_spaces(line: &str) -> Vec<&str> {
     let mut out = Vec::new();
@@ -792,27 +676,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_map_points_clicks_at_the_right_tool_cell() {
-        let mut t = Transcript::default();
-        t.append_thinking("short");
-        t.cells.push(tool("1"));
-        t.cells.push(tool("2"));
-        let columns = t.to_columns(40, 40, None);
-        assert_eq!(columns.tool_at.len(), columns.right.len());
-        assert_eq!(columns.tool_at[0], None, "the band rule is chrome");
-        assert_eq!(columns.tool_at[1], Some(1), "first tool's header");
-        assert_eq!(
-            columns
-                .tool_at
-                .iter()
-                .rposition(|c| *c == Some(2))
-                .map(|_| 2),
-            Some(2),
-            "second tool is mapped"
-        );
-    }
-
-    #[test]
     fn diff_replaces_result_text_and_colors_by_marker() {
         let cell = Cell::Tool {
             id: "1".into(),
@@ -903,98 +766,17 @@ mod tests {
     }
 
     #[test]
-    fn steps_split_tools_right_and_break_on_the_next_thought() {
+    fn tools_render_inline_in_event_order() {
         let mut t = Transcript::default();
-        t.cells.push(Cell::User {
-            text: "task".into(),
-        });
-        t.append_thinking("first thought");
+        t.append_thinking("let me look");
         t.cells.push(tool("1"));
-        t.cells.push(tool("2"));
-        t.append_thinking("second thought");
-        t.cells.push(tool("3"));
-        t.append_assistant("done");
-
-        let steps = t.steps();
-        assert_eq!(steps.len(), 3);
-        // Band 1: prompt + first thought, with the two calls it triggered.
-        assert_eq!(steps[0].left, vec![0, 1]);
-        assert_eq!(steps[0].right, vec![2, 3]);
-        assert_eq!(steps[0].marker, Some(1));
-        // Band 2: the thought AFTER tool results starts a fresh band.
-        assert_eq!(steps[1].left, vec![4]);
-        assert_eq!(steps[1].right, vec![5]);
-        assert_eq!(steps[1].marker, Some(2));
-        // Band 3: trailing prose, no tools, no number.
-        assert_eq!(steps[2].left, vec![6]);
-        assert!(steps[2].right.is_empty());
-        assert_eq!(steps[2].marker, None);
-    }
-
-    #[test]
-    fn step_numbers_restart_at_every_user_prompt() {
-        let mut t = Transcript::default();
-        t.cells.push(Cell::User { text: "one".into() });
-        t.cells.push(tool("1"));
-        t.cells.push(Cell::User { text: "two".into() });
-        t.cells.push(tool("2"));
-        let steps = t.steps();
-        assert_eq!(steps.len(), 2);
-        assert_eq!(steps[0].marker, Some(1));
-        assert_eq!(steps[1].marker, Some(1), "numbering is turn-scoped");
-    }
-
-    #[test]
-    fn columns_keep_both_panes_the_same_height() {
-        let mut t = Transcript::default();
-        t.append_thinking("short");
-        t.cells.push(Cell::Tool {
-            id: "1".into(),
-            name: "read".into(),
-            call: "{}".into(),
-            started_at: None,
-            live: None,
-            expanded: false,
-            result: Some(ToolOutcome {
-                text: "a\nb\nc\nd".into(),
-                is_error: false,
-                diff: None,
-                took: None,
-            }),
-        });
-        t.append_thinking("after");
-        let columns = t.to_columns(40, 40, None);
-
-        // The invariant everything else rests on: one shared window can
-        // slice both panes.
-        assert_eq!(columns.left.len(), columns.right.len());
-        assert_eq!(columns.left.len(), columns.cell_at.len());
-
-        // The band rule carries the same number at the same row...
-        let left_rule = columns
-            .left
-            .iter()
-            .position(|l| line_text(l).starts_with("─ 1 "));
-        let right_rule = columns
-            .right
-            .iter()
-            .position(|l| line_text(l).starts_with("─ 1 "));
-        assert!(left_rule.is_some(), "band rule missing on the left");
-        assert_eq!(left_rule, right_rule, "rule rows must align");
-
-        // ...and the second thought renders BELOW the tool block: the
-        // left pane was padded so the next band starts aligned.
-        let after_row = columns
-            .left
-            .iter()
-            .position(|l| line_text(l) == "after")
-            .expect("second thought rendered");
-        let last_tool_row = columns
-            .right
-            .iter()
-            .rposition(|l| line_text(l).contains('d'))
-            .expect("tool preview rendered");
-        assert!(after_row > last_tool_row, "alignment padding missing");
+        t.append_assistant("found it");
+        let texts: Vec<String> = t.to_lines(40, None).lines.iter().map(line_text).collect();
+        // One column, a blank spacer between cells, no band rule anywhere.
+        assert_eq!(
+            texts,
+            vec!["let me look", "", "{}", "  ...", "", "found it"]
+        );
     }
 
     #[test]
@@ -1003,11 +785,13 @@ mod tests {
         t.append_thinking("short");
         t.cells.push(tool("1"));
         t.append_thinking("after");
-        let columns = t.to_columns(40, 40, None);
-        assert_eq!(columns.cell_at[0], None, "the band rule is chrome");
-        assert_eq!(columns.cell_at[1], Some(0), "the thinking line");
+        let rendered = t.to_lines(40, None);
+        assert_eq!(rendered.cell_at.len(), rendered.lines.len());
+        assert_eq!(rendered.cell_at[0], Some(0), "the thinking line");
+        assert_eq!(rendered.cell_at[1], None, "the spacer is chrome");
+        assert_eq!(rendered.cell_at[2], Some(1), "the tool's header line");
         assert_eq!(
-            *columns.cell_at.last().unwrap(),
+            *rendered.cell_at.last().unwrap(),
             Some(2),
             "the second thought"
         );
@@ -1017,10 +801,10 @@ mod tests {
     fn selected_cell_lines_carry_the_highlight_background() {
         let mut t = Transcript::default();
         t.append_assistant("hello world");
-        let selected = t.to_columns(40, 40, Some(0));
-        assert_eq!(selected.left[0].style.bg, theme::SELECTED.bg);
-        let unselected = t.to_columns(40, 40, None);
-        assert_eq!(unselected.left[0].style.bg, None);
+        let selected = t.to_lines(40, Some(0));
+        assert_eq!(selected.lines[0].style.bg, theme::SELECTED.bg);
+        let unselected = t.to_lines(40, None);
+        assert_eq!(unselected.lines[0].style.bg, None);
     }
 
     #[test]

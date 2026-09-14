@@ -2,7 +2,7 @@
 //!
 //! The TUI is a classic reducer: two event sources (terminal input, agent
 //! events) mutate one `App`, and the render pass in `ui.rs` draws whatever
-//! the `App` currently says. No state lives in the widgets - that's the
+//! the `App` currently says. No state lives in the widgets that's the
 //! immediate-mode contract that keeps ratatui apps easy to reason about.
 
 use futures_util::StreamExt as _;
@@ -59,15 +59,13 @@ pub struct App {
     pub context_tokens: u64,
     pub pending_copy: Option<String>,
     pub last_line_cells: Vec<Option<usize>>,
-    pub last_chat_inner: Rect,
+    pub last_transcript_inner: Rect,
     pub last_top_line: usize,
-    pub last_tool_cells: Vec<Option<usize>>,
-    pub last_tools_inner: Rect,
 }
 
 /// One wakeup from a background source (see [`App::next_event`]).
 /// The size skew (AgentEvent is ~300 bytes, LoginEvent a Vec-sized
-/// String) is fine for a value that lives one loop turn on the stack -
+/// String) is fine for a value that lives one loop turn on the stack
 /// boxing would buy nothing but an allocation per event.
 #[allow(clippy::large_enum_variant)]
 pub enum AppEvent {
@@ -101,7 +99,7 @@ impl App {
             });
         }
         // Argument value sets: after `/model ` the popup offers the catalog,
-        // after `/thinking ` the levels - no more typing ids from memory.
+        // after `/thinking ` the levels no more typing ids from memory.
         // meta.models is the MERGED catalog (builtins + models.json +
         // discovered ollama models), resolved once at startup.
         let model_candidates: Vec<Candidate> = meta
@@ -150,7 +148,7 @@ impl App {
             is_dir: false,
         }];
         // `/hot-reload <id>` completes from the transcripts on disk. Only
-        // file stems are read (no parsing) - App::new must stay fast.
+        // file stems are read (no parsing) App::new must stay fast.
         let session_candidates: Vec<Candidate> = recorder
             .sessions_dir()
             .map(list_session_id_candidates)
@@ -191,14 +189,12 @@ impl App {
             context_tokens: 0,
             pending_copy: None,
             last_line_cells: Vec::new(),
-            last_chat_inner: Rect::ZERO,
+            last_transcript_inner: Rect::ZERO,
             last_top_line: 0,
-            last_tool_cells: Vec::new(),
-            last_tools_inner: Rect::ZERO,
         };
         app.replay_history(&history);
         // A startup condition (e.g. keyless start) leads the transcript, so
-        // it is the first thing the user reads - and scrolls away like any
+        // it is the first thing the user reads and scrolls away like any
         // other notice instead of blocking the session.
         if let Some(warning) = app.meta.startup_warning.take() {
             app.notice(warning);
@@ -320,7 +316,7 @@ impl App {
         // typo'd `/model xyz` un-submittable.
         if self.autocomplete.visible().is_some() {
             match (key.code, ctrl, alt) {
-                // Esc closes the popup - it does not abort the run. A second
+                // Esc closes the popup it does not abort the run. A second
                 // Esc (popup now closed) aborts as usual.
                 (KeyCode::Esc, ..) => {
                     self.autocomplete.close();
@@ -383,7 +379,7 @@ impl App {
             // then back on for wheel scrolling. Only requested here when the
             // event loop owns the terminal and issues the actual commands.
             (KeyCode::Char('y'), true, _) => self.mouse_toggle_requested = true,
-            // Ctrl+O copies: the clicked block, or - with nothing selected
+            // Ctrl+O copies: the clicked block, or with nothing selected
             // - the latest answer, so the everyday "grab the result"
             // gesture needs no mouse at all.
             (KeyCode::Char('o'), true, _) => self.copy_selected(),
@@ -480,13 +476,13 @@ impl App {
         }
     }
 
-    /// Bare `/hot-reload`: the RUNNING session continues - same id, same
+    /// Bare `/hot-reload`: the RUNNING session continues same id, same
     /// history, same transcript file, and no session-end hook (the session
     /// is not ending). Fresh templates, models, bash-deny rules, and tools
     /// are swapped in. Context files (AGENTS.md/CLAUDE.md) get DELTA
     /// treatment: the system prompt keeps the text embedded at session
     /// start, and only a unified diff of what changed on disk is appended
-    /// to the conversation - the full file is never sent twice.
+    /// to the conversation the full file is never sent twice.
     async fn reload_in_place(self, cwd: &std::path::Path) -> Self {
         let state = self.agent.state();
         let registry = self.agent.registry();
@@ -547,7 +543,7 @@ impl App {
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
         if let Some(message) = delta_message {
-            // The transcript file gets the update too - a later --resume
+            // The transcript file gets the update too a later --resume
             // replays the same conversation the model saw.
             app.recorder.record(&message);
             app.notice(
@@ -560,7 +556,7 @@ impl App {
     }
 
     /// `/hot-reload <session-id>`: full rebuild with freshly loaded
-    /// configuration (incl. a fresh system prompt - a resumed session gets
+    /// configuration (incl. a fresh system prompt a resumed session gets
     /// the CURRENT context files embedded), history seeded from that
     /// session's transcript.
     async fn reload_resume(mut self, cwd: &std::path::Path, id: &str) -> Self {
@@ -597,7 +593,7 @@ impl App {
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
         // Session-entered keys still win, but the settings tier must come
-        // from the FRESH ingredients - self.meta.settings is the stale
+        // from the FRESH ingredients self.meta.settings is the stale
         // copy this reload replaces (hand edits would be lost otherwise).
         let provider = state.model.provider.as_str();
         options.api_key = self
@@ -654,32 +650,31 @@ impl App {
         self.mouse_captured
     }
 
-    /// A left click in the conversation pane selects the block under the
-    /// pointer (the Ctrl+O copy target); clicking it again - or clicking
-    /// chrome - deselects. Terminal coordinates resolve through the
-    /// geometry the render pass saved: window top line + row offset =
-    /// visual line, and the line->cell map says which block that is.
+    /// A left click selects the block under the pointer (the Ctrl+O copy
+    /// target); clicking it again or clicking chrome deselects. A
+    /// click on a tool cell toggles its preview instead. Terminal
+    /// coordinates resolve through the geometry the render pass saved:
+    /// window top line + row offset = visual line, and the line->cell map
+    /// says which block that is.
     fn click(&mut self, column: u16, row: u16) {
-        let position = Position { x: column, y: row };
-        let chat = self.last_chat_inner;
-        if chat.contains(position) {
-            let line = self.last_top_line + (row - chat.y) as usize;
-            let hit = self.last_line_cells.get(line).copied().flatten();
-            self.selected_cell = if hit == self.selected_cell { None } else { hit };
+        let inner = self.last_transcript_inner;
+        if !inner.contains(Position { x: column, y: row }) {
             return;
         }
-        let tools = self.last_tools_inner;
-        if tools.contains(position) {
-            let line = self.last_top_line + (row - tools.y) as usize;
-            if let Some(index) = self.last_tool_cells.get(line).copied().flatten() {
-                self.transcript.toggle_tool(index);
-            }
+        let line = self.last_top_line + (row - inner.y) as usize;
+        let hit = self.last_line_cells.get(line).copied().flatten();
+        if let Some(index) = hit
+            && matches!(self.transcript.cells.get(index), Some(Cell::Tool { .. }))
+        {
+            self.transcript.toggle_tool(index);
+            return;
         }
+        self.selected_cell = if hit == self.selected_cell { None } else { hit };
     }
 
     /// Ctrl+O: queue a block's raw text for the clipboard. The selected
     /// block wins; without a selection the most recent Answer is the
-    /// target. Only QUEUED here - the event loop owns the terminal and
+    /// target. Only QUEUED here the event loop owns the terminal and
     /// emits the actual OSC 52 sequence (same split as the mouse toggle).
     fn copy_selected(&mut self) {
         let index = self.selected_cell.or_else(|| {
@@ -692,14 +687,14 @@ impl App {
             self.notice("nothing to copy - click a block, or finish a turn for an answer");
             return;
         };
-        // Tool cells are never selectable (they have no line in the map),
-        // so copy_text only misses on stale state - fail soft.
+        // Tool cells are never selectable (a click toggles them instead),
+        // so copy_text only misses on stale state fail soft.
         let Some(text) = self.transcript.copy_text(index).map(str::to_string) else {
             return;
         };
         let chars = text.chars().count();
         self.pending_copy = Some(text);
-        // "sent", not "copied": OSC 52 is fire-and-forget - the terminal
+        // "sent", not "copied": OSC 52 is fire-and-forget the terminal
         // decides whether it honors the sequence.
         self.notice(format!("sent {chars} chars to the clipboard (OSC 52)"));
     }
@@ -748,7 +743,7 @@ impl App {
 
     /// Route a prompt to the agent: new run when idle, steering when busy.
     fn send(&mut self, text: &str) {
-        // A prompt is headed for the agent - the "first interaction" moment
+        // A prompt is headed for the agent the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately NOT at
         // startup (launching + quitting cupel must leave no trace), and not
         // for local built-ins like /help. Idempotent and never fails, so
@@ -848,7 +843,7 @@ impl App {
         self.agent.set_model(model);
     }
 
-    /// `/provider` - list providers, or switch to one (optionally handing
+    /// `/provider` list providers, or switch to one (optionally handing
     /// over an API key, which is kept for the session AND saved to
     /// ~/.cupel/settings.json).
     fn handle_provider_command(&mut self, args: &str) {
@@ -860,7 +855,7 @@ impl App {
             let mut lines = vec!["providers (/provider <name> [api-key]):".to_string()];
             for (provider, model) in crate::providers::catalog_providers(&self.meta.models) {
                 // The order of these arms MIRRORS resolve_key's precedence
-                // (session > env > settings) - keep the two in sync, or the
+                // (session > env > settings) keep the two in sync, or the
                 // listing lies about which key a request would use.
                 let status = if provider == "amazon-bedrock" {
                     if crate::providers::has_aws_credentials() {
@@ -870,7 +865,7 @@ impl App {
                     }
                 } else if provider == "openai-codex" {
                     // Subscription auth: the credential is a stored LOGIN,
-                    // never a key - mirror auth.json, not the key tiers.
+                    // never a key mirror auth.json, not the key tiers.
                     if crate::auth::has_credential(self.meta.home.as_deref(), &provider) {
                         "logged in with ChatGPT (/logout openai-codex)".to_string()
                     } else {
@@ -898,7 +893,7 @@ impl App {
                 } else if let Some(var) = crate::providers::env_var_name(&provider) {
                     format!("no key ({var} unset)")
                 } else {
-                    // Custom providers have no env var at all - pointing at
+                    // Custom providers have no env var at all pointing at
                     // one would be misleading; /provider is ther channel.
                     format!("no key (set with /provider {provider} <api-key>")
                 };
@@ -943,7 +938,7 @@ impl App {
                         saved_note = format!("; key saved to {}", path.display());
                     }
                     // SaveError carries paths and parse reasons, never the
-                    // key - safe to interpolate.
+                    // key safe to interpolate.
                     Err(e) => self.notice(format!(
                         "warning: key not saved ({e}) - it stays active for this session only"
                     )),
@@ -1039,8 +1034,8 @@ impl App {
                 self.notice(lines.join("\n"));
             }
             "review" => {
-                // Builds the (truncated) code bundle synchronously - cheap
-                // local fs/git work - then SENDS it like any prompt, so the
+                // Builds the (truncated) code bundle synchronously cheap
+                // local fs/git work then SENDS it like any prompt, so the
                 // model call rides the normal async run path.
                 let review_args = commands::parse_command_args(args);
                 match crate::review::build_review_prompt(
@@ -1130,7 +1125,7 @@ impl App {
         true
     }
 
-    /// `/login` - start a subscription login, or feed a pasted redirect
+    /// `/login` start a subscription login, or feed a pasted redirect
     /// into the one that is waiting.
     fn handle_login_command(&mut self, args: &str) {
         let mut parts = args.split_whitespace();
@@ -1191,7 +1186,7 @@ impl App {
         self.login = Some(flow);
     }
 
-    /// `/logout` - list stored logins, or remove one from auth.json.
+    /// `/logout` list stored logins, or remove one from auth.json.
     fn handle_logout_command(&mut self, args: &str) {
         let name = args.trim();
         if name.is_empty() {
@@ -1210,12 +1205,12 @@ impl App {
         match crate::auth::delete_credential(self.meta.home.as_deref(), name) {
             Ok(true) => self.notice(format!("{name} logged out - credential removed")),
             Ok(false) => self.notice(format!("no stored login for {name} (/logout lists them)")),
-            // SaveError never carries token values - safe to show.
+            // SaveError never carries token values safe to show.
             Err(e) => self.notice(format!("logout failed: {e}")),
         }
     }
 
-    /// A login event arrived (never blocks - pure state + notices).
+    /// A login event arrived (never blocks pure state + notices).
     pub fn on_login_event(&mut self, event: Option<login::LoginEvent>) {
         match event {
             Some(login::LoginEvent::Notice(text)) => self.notice(text),
@@ -1230,7 +1225,7 @@ impl App {
                 self.notice(format!("login failed: {error}"));
             }
             // Channel closed without Done: the task was cancelled and its
-            // final send raced the drop - nothing to report.
+            // final send raced the drop nothing to report.
             None => self.login = None,
         }
     }
@@ -1246,7 +1241,7 @@ impl App {
     }
 
     /// The two background sources, multiplexed behind ONE `&mut self`
-    /// future - mod.rs cannot hold two `app.next_...()` branches in its
+    /// future mod.rs cannot hold two `app.next_...()` branches in its
     /// select! (each would borrow `app` mutably). Inside the method the
     /// borrows split field-by-field, which is exactly what the borrow
     /// checker is happy to prove.
@@ -1395,12 +1390,12 @@ impl App {
         }
 
         // While following (offset 0) the view sticks to the newest output;
-        // while scrolled up it stays put. Nothing to do either way - the
+        // while scrolled up it stays put. Nothing to do either way the
         // bottom-anchored render handles both.
     }
 
     async fn finish_run(&mut self) {
-        // The trailing assistant prose was the run's fnal answer -
+        // The trailing assistant prose was the run's fnal answer
         // promote it so the turn visibly ends with its results.
         self.transcript.promote_final_answer();
         self.run_events = None;
@@ -1413,7 +1408,7 @@ impl App {
 }
 
 /// Session-id completion candidates: transcript file stems, newest first
-/// by modification time. Deliberately does NOT parse the transcripts -
+/// by modification time. Deliberately does NOT parse the transcripts
 /// this runs in `App::new`.
 fn list_session_id_candidates(dir: &std::path::Path) -> Vec<Candidate> {
     let Ok(entries) = std::fs::read_dir(dir) else {

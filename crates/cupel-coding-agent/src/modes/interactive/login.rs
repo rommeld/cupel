@@ -2,7 +2,7 @@
 //!
 //! A login WAITS on things the key handler must never wait on: a browser
 //! redirect hitting port 1455, or a device-code poll loop. So the flow
-//! runs as a spawned task that talks back over a channel - the exact
+//! runs as a spawned task that talks back over a channel the exact
 //! shape of a run's `AgentEventStream`: the `select!` in mod.rs wakes on
 //! [`LoginEvent`]s and the App turns them into transcript notices.
 //!
@@ -10,7 +10,7 @@
 //! cupel's translation swaps the modal prompt for commands: the browser
 //! URL arrives as a notice, and the manual fallback is a second
 //! `/login openai-codex <redirect-url>` invocation racing the callback
-//! server - the same race pi runs between its server and its paste
+//! server the same race pi runs between its server and its paste
 //! prompt (openai-codex.ts, `loginOpenAICodex`).
 
 use std::path::PathBuf;
@@ -52,7 +52,7 @@ impl LoginFlow {
     }
 }
 
-/// Dropping the flow cancels its task - one place instead of one per
+/// Dropping the flow cancels its task one place instead of one per
 /// exit path (esc, /new login, hot-reload, quit).
 impl Drop for LoginFlow {
     fn drop(&mut self) {
@@ -70,13 +70,13 @@ pub fn spawn_browser(home: Option<PathBuf>) -> LoginFlow {
     let task_cancel = cancel.clone();
     tokio::spawn(async move {
         let result = tokio::select! {
-            // biased: a cancel that raced the finish line still wins -
+            // biased: a cancel that raced the finish line still wins
             // the user asked to stop, so stop.
             biased;
             () = task_cancel.cancelled() => Err("login cancelled".to_string()),
             result = browser_flow(home, &event_tx, code_rx) => result,
         };
-        // The receiver may already be gone (esc dropped the flow) - fine.
+        // The receiver may already be gone (esc dropped the flow) fine.
         let _ = event_tx.send(LoginEvent::Done(result));
     });
     LoginFlow {
@@ -202,7 +202,7 @@ async fn device_flow(
     finish(home, &credential)
 }
 
-/// Parse a pasted redirect/code and hold it against THIS flow's state -
+/// Parse a pasted redirect/code and hold it against THIS flow's state
 /// pure so tests can pin the acceptance rules without a browser.
 fn manual_input_to_code(input: &str, state: &str) -> Result<String, String> {
     let (code, pasted_state) = openai_codex::parse_authorization_input(input);
@@ -210,7 +210,7 @@ fn manual_input_to_code(input: &str, state: &str) -> Result<String, String> {
         && pasted_state != state
     {
         // A stale paste from an EARLIER attempt would exchange fine but
-        // bind the wrong PKCE verifier - reject it up front.
+        // bind the wrong PKCE verifier reject it up front.
         return Err("state mismatch - paste the redirect of THIS login attempt".to_string());
     }
     code.ok_or_else(|| "no authorization code in the pasted input".to_string())
@@ -233,7 +233,7 @@ fn finish(home: Option<PathBuf>, credential: &OAuthCredential) -> Result<String,
     }
 }
 
-/// Open a URL in the platform browser - pi's open-browser.ts, ported:
+/// Open a URL in the platform browser pi's open-browser.ts, ported:
 /// never through a shell (cmd.exe re-parses metacharacters, which would
 /// make URLs injectable), always detached, always best-effort (the
 /// notice above shows the URL either way).
@@ -253,7 +253,7 @@ fn open_browser(url: &str) {
         .spawn();
 }
 
-/// Test-only flow around dummy channels - lets App tests exercise the
+/// Test-only flow around dummy channels lets App tests exercise the
 /// esc/paste/event paths without a server, browser, or network.
 #[cfg(test)]
 pub(crate) fn stub_flow() -> (
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn manual_input_enforces_the_state_check() {
-        // Right state (or none at all - a bare code) passes...
+        // Right state (or none at all a bare code) passes...
         assert_eq!(
             manual_input_to_code("http://localhost:1455/auth/callback?code=c1&state=s1", "s1"),
             Ok("c1".to_string())
@@ -304,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_code_channel_is_single_use() {
-        // A LoginFlow shell around dummy channels - no server, no
+        // A LoginFlow shell around dummy channels no server, no
         // browser, no network; only the paste state machine.
         let (_event_tx, events) = tokio::sync::mpsc::unbounded_channel();
         let (code_tx, mut code_rx) = tokio::sync::oneshot::channel();

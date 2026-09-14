@@ -1,17 +1,17 @@
-//! Markdown rendering for assistant prose - a hand-rolled SUBSET on
+//! Markdown rendering for assistant prose a hand-rolled SUBSET on
 //! ratatui's primitives (Span -> Line), no parser crate.
 //!
-//! ratatui ships no markdown widget - its docs model text as Span/
+//! ratatui ships no markdown widget its docs model text as Span/
 //! Line/Style and leave the translation to the app. Ecosystem
 //! renderers exist, but LLM output uses small, regular slice of
 //! markdown.
 //!
 //! Styling model: every asccent is a PATCH onto the cell's base style
-//! (Style::patch - set fields win, unset fields inherit), so plain text
+//! (Style::patch set fields win, unset fields inherit), so plain text
 //! renders byte-identical to the pre-markdown path and an Answer cell
 //! keeps its magenta identity under bold/italic. Streaming: to_lines
 //! re-renders every frame, so a not-yet-closed `**`or ``` simply styles
-//! the rest of the line/cell until the closing delimiter arrives - the
+//! the rest of the line/cell until the closing delimiter arrives the
 //! next delta self-corrects it.
 
 use ratatui::style::{Modifier, Style};
@@ -45,7 +45,7 @@ pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
         }
         // Tables needs lookahead (a pipe row is only a table when the NEXT
         // line is a separator row), so they are handled here where the
-        // slice is available - everything else is per-line.
+        // slice is available everything else is per-line.
         if trimmed.starts_with('|')
             && is_table_separator(lines.get(i + 1).copied().unwrap_or("default"))
         {
@@ -61,7 +61,7 @@ pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
     out
 }
 
-/// The effective style for the current flag state - computed at flush
+/// The effective style for the current flag state computed at flush
 /// time, so nested emphasis composes via path stacking.
 fn inline_style(base: Style, bold: bool, italic: bool, strike: bool) -> Style {
     let mut style = base;
@@ -86,7 +86,7 @@ fn flush(segements: &mut Vec<(String, Style)>, current: &mut String, style: Styl
 
 /// Split one line of markdown into styled segments. Delimiters toggle
 /// flags; the text between two flushes shares one style. Unclosed
-/// delimiters style the rest of the line - correct for streaming, where
+/// delimiters style the rest of the line correct for streaming, where
 /// the closing half may simply not have arrived yet.
 fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
     let chars: Vec<char> = text.chars().collect();
@@ -132,7 +132,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
                     i += 2;
                 } else {
                     // Underscores never toggle INSIDE a word (CommonMark's
-                    // intraword rule) - snake_style stays literal
+                    // intraword rule) snake_style stays literal
                     let intraword = c == '_'
                         && i > 0
                         && chars[i - 1].is_alphanumeric()
@@ -143,7 +143,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
                         continue;
                     }
                     // Simplified flanking rule: a single marker OPENS only
-                    // before a non-space and CLOSES only after one - so
+                    // before a non-space and CLOSES only after one so
                     // "a*b" and snake_case stay literal.
                     let can_open = chars.get(i + 1).is_some_and(|n| !n.is_whitespace());
                     let can_close = i > 0 && !chars[i - 1].is_whitespace();
@@ -176,7 +176,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
             }
         }
     }
-    // An unclosed code span keeps the code style - see the module doc.
+    // An unclosed code span keeps the code style see the module doc.
     let final_style = if code {
         base.patch(theme::MD_CODE)
     } else {
@@ -237,7 +237,7 @@ fn push_wrapped_spans(
     }
     words.push(&flat[start..]);
 
-    // 3) Greedy fill, exactly like wrap_line - the only new twist is the
+    // 3) Greedy fill, exactly like wrap_line the only new twist is the
     // prefix on line one and the hanging indent afterwards.
     let prefix_width = first_prefix
         .as_ref()
@@ -291,7 +291,7 @@ fn push_wrapped_spans(
     emit(&mut line, &mut first, out);
 }
 
-/// Group consecutive same-style chars back into spans - the inverse of
+/// Group consecutive same-style chars back into spans the inverse of
 /// the flatten in step 1, done last so wrapping never has to think about
 /// span boundaries.
 fn group_runs(chars: &[(char, Style)]) -> Vec<Span<'static>> {
@@ -317,7 +317,7 @@ fn group_runs(chars: &[(char, Style)]) -> Vec<Span<'static>> {
     spans
 }
 
-/// Display columns of a string (CJK-aware) - the same math wrap_line uses.
+/// Display columns of a string (CJK-aware) the same math wrap_line uses.
 fn display_width(text: &str) -> usize {
     text.chars().map(|c| c.width().unwrap_or(0)).sum()
 }
@@ -364,7 +364,7 @@ fn render_block_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, bas
         return;
     }
 
-    // Blockqoute: one level (nested '>' collapse into it) - a receded
+    // Blockqoute: one level (nested '>' collapse into it) a receded
     // bar-prefixed run, inline markup still active inside.
     if let Some(rest) = trimmed.strip_prefix('>') {
         let quote = base.patch(theme::MD_QUOTE);
@@ -412,7 +412,7 @@ fn split_list_marker(text: &str) -> Option<(String, &str)> {
 }
 
 /// One line inside a fenced block: monospace is inherent in a terminal,
-/// so the "code look" is a full-width PANEL - every wrapped chunk is
+/// so the "code look" is a full-width PANEL every wrapped chunk is
 /// padded to the terminal width so the background forms one surface
 /// (a bg colors only the cells under its own characters).
 fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize) {
@@ -430,14 +430,14 @@ fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize) {
     }
 }
 
-/// A separator row: pipes, dashes, colons, spaces - and at least one dash.
+/// A separator row: pipes, dashes, colons, spaces and at least one dash.
 fn is_table_separator(line: &str) -> bool {
     let t = line.trim();
     t.starts_with('|') && t.contains('-') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
 }
 
 /// Cells of one pipe row: outer pipes are chrome, inner pipes split.
-/// (Escaped \| is outside the subset - noted in the module doc.)
+/// (Escaped \| is outside the subset noted in the module doc.)
 fn split_cless(row: &str) -> Vec<String> {
     let t = row.trim();
     let t = t.strip_prefix('|').unwrap_or(t);
@@ -574,7 +574,7 @@ mod tests {
             .collect()
     }
 
-    /// The style of the span containing `needle` - panics when absent.
+    /// The style of the span containing `needle` panics when absent.
     fn style_of(lines: &[Line<'_>], needle: &str) -> Style {
         lines
             .iter()
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn plain_text_renders_exactly_like_before() {
         // THE invariant: no markdown syntax = one span, base style,
-        // identical wrapping - the renderer is a strict superset.
+        // identical wrapping the renderer is a strict superset.
         let base = Style::new().fg(Color::Magenta);
         let lines = render("hello brave new world", 11, base);
         assert_eq!(flat_text(&lines), ["hello ", "brave new ", "world"]);
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn unclosed_streaming_delimiters_style_the_tail() {
-        // Mid-stream a closing ** may not have arrived yet - the tail
+        // Mid-stream a closing ** may not have arrived yet the tail
         // renders bold and self-corrects on the next delta.
         let lines = render("a **stream", 80, Style::new());
         assert!(
@@ -759,7 +759,7 @@ mod tests {
             style_of(&lines, "1").add_modifier.contains(Modifier::BOLD),
             "inline markup inside cells"
         );
-        // Every row is equally wide - alignment is the whole point.
+        // Every row is equally wide alignment is the whole point.
         let w0 = display_width(&text[0]);
         assert!(
             text.iter().take(4).all(|t| display_width(t) == w0),

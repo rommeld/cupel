@@ -1,6 +1,6 @@
 //! The render pass: `App` state in, one frame out.
 //!
-//! ratatui is immediate mode - this function redescribes the ENTIRE screen
+//! ratatui is immediate mode this function redescribes the ENTIRE screen
 //! every frame, and the library diffs against the previous frame to emit
 //! minimal terminal writes. So there is no "update the widget" anywhere;
 //! there is only state (in `App`) and this projection of it.
@@ -36,7 +36,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     render_transcript(frame, app, transcript_area);
     render_input(frame, app, input_area);
     render_footer(frame, app, footer_area);
-    // Drawn LAST so it overdraws the transcript's bottom rows - in
+    // Drawn LAST so it overdraws the transcript's bottom rows in
     // immediate-mode rendering, paint order IS the z-order.
     render_autocomplete(frame, app, transcript_area, input_area);
 }
@@ -94,46 +94,19 @@ fn render_autocomplete(frame: &mut Frame<'_>, app: &App, transcript_area: Rect, 
 }
 
 fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    // The tools pane exists only once there is tool traffic; a pure chat
-    // keeps the full width for prose.
-    let has_tools = app
-        .transcript
-        .cells
-        .iter()
-        .any(|cell| matches!(cell, transcript::Cell::Tool { .. }));
-    let (chat_area, tools_area) = if has_tools {
-        let [chat, tools] = Layout::horizontal([
-            Constraint::Percentage(CHAT_PANE_PERCENT),
-            Constraint::Percentage(100 - CHAT_PANE_PERCENT),
-        ])
-        .areas(area);
-        (chat, Some(tools))
-    } else {
-        (area, None)
-    };
+    // The block renders first, content after `inner` subtracts the
+    // border AND the padding, so the Paragraph below never touches the
+    // frame.
+    let block = pane_block(" conversation ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    // Blocks render first, content after - `inner` subtracts borders AND
-    // padding, so the Paragraphs below never touch the chrome.
-    let chat_block = pane_block(" conversation ");
-    let chat_inner = chat_block.inner(chat_area);
-    frame.render_widget(chat_block, chat_area);
-    let tools_inner = tools_area.map(|tools_area| {
-        let block = pane_block(" tools ");
-        let inner = block.inner(tools_area);
-        frame.render_widget(block, tools_area);
-        inner
-    });
-
-    let columns = app.transcript.to_columns(
-        chat_inner.width,
-        tools_inner.map_or(0, |inner| inner.width),
-        app.selected_cell,
-    );
-    let total = columns.left.len();
-    let height = chat_inner.height as usize;
+    let rendered = app.transcript.to_lines(inner.width, app.selected_cell);
+    let total = rendered.lines.len();
+    let height = inner.height as usize;
 
     // Keep the reader's place: the offset is measured from the BOTTOM, and
-    // new output moves the bottom - a fixed offset would slide the view.
+    // new output moves the bottom a fixed offset would slide the view.
     // Growing it by exactly the growth pins the visible lines; at 0
     // (follow mode) the view sticks to the tail on purpose.
     if app.scroll_from_bottom > 0 {
@@ -142,38 +115,23 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 
     // Remember geometry so key/mouse handlers can clamp and hit-test.
     app.last_total_lines = total;
-    app.last_transcript_height = chat_inner.height;
+    app.last_transcript_height = inner.height;
     let max_scroll = total.saturating_sub(height);
     app.scroll_from_bottom = app.scroll_from_bottom.min(max_scroll);
 
-    // Bottom-anchored window: offset 0 shows the newest lines. The SAME
-    // window slices both panes - that lockstep is what keeps a band's
-    // reasoning and tool calls on the same rows while scrolling.
+    // Bottom-anchored window: offset 0 shows the newest lines.
     let end = total - app.scroll_from_bottom;
     let start = end.saturating_sub(height);
     app.last_top_line = start;
-    app.last_chat_inner = chat_inner;
-    app.last_top_line = start;
-    app.last_chat_inner = chat_inner;
-    app.last_line_cells = columns.cell_at;
-    app.last_tools_inner = tools_inner.unwrap_or(Rect::ZERO);
-    app.last_tool_cells = columns.tool_at;
+    app.last_transcript_inner = inner;
+    app.last_line_cells = rendered.cell_at;
 
-    frame.render_widget(
-        Paragraph::new(columns.left[start..end].to_vec()),
-        chat_inner,
-    );
-    if let Some(tools_inner) = tools_inner {
-        frame.render_widget(
-            Paragraph::new(columns.right[start..end].to_vec()),
-            tools_inner,
-        );
-    }
+    frame.render_widget(Paragraph::new(rendered.lines[start..end].to_vec()), inner);
 
-    // ONE scrollbar for the lockstep panes, on the transcript's right
-    // edge; the vertical margin spares the border corner glyphs. Rendered
-    // only when there is something to scroll - a permanently full bar
-    // would read as decoration.
+    // The scrollbar rides the frame's right edge; the vertical margin
+    // spares the border corner glyphs. Rendered only when there is
+    // something to scroll a permanently full bar would read as
+    // decoration.
     if total > height {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
@@ -209,13 +167,10 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
 }
 
-/// Left pane share of the transcript width: prose needs more room than
-/// tool call previews.
-const CHAT_PANE_PERCENT: u16 = 60;
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// The shared look of both transcript panes: dim border, dim title, one
-/// column of padding so text never sticks to a border line.
+/// The transcript frame: dim border, dim title, one column of padding so
+/// text never sticks to the border line.
 fn pane_block(title: &'static str) -> Block<'static> {
     Block::new()
         .borders(Borders::ALL)
@@ -247,7 +202,7 @@ fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
             for (i, chunk) in chunks.iter().enumerate() {
                 let chunk_chars = chunk.chars().count();
                 // Landing exactly on a chunk boundary means "before the
-                // first char of the NEXT chunk" - inserting there joins the
+                // first char of the NEXT chunk" inserting there joins the
                 // next chunk's word, so that is where the char will appear.
                 // Only at the very end of the line does the cursor trail
                 // the last chunk instead.
@@ -366,7 +321,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     );
 }
 
-/// Display name for a thinking level - the same lowercase words the
+/// Display name for a thinking level the same lowercase words the
 /// /thinking command accepts, so footer and command speak one language.
 fn thinking_level_name(level: cupel_core::types::ThinkingLevel) -> &'static str {
     use cupel_core::types::ThinkingLevel;
@@ -384,7 +339,7 @@ fn thinking_level_name(level: cupel_core::types::ThinkingLevel) -> &'static str 
 mod tests {
     //! Headless render tests: ratatui's `TestBackend` draws frames into an
     //! in-memory buffer, so the full render path is testable without a
-    //! terminal (or an API key - the Agent is constructed but never run).
+    //! terminal (or an API key the Agent is constructed but never run).
 
     use super::*;
     use crate::modes::SessionMeta;
@@ -401,13 +356,13 @@ mod tests {
         test_app_in("/tmp")
     }
 
-    /// App rooted at a specific cwd - the autocomplete tests point this at
+    /// App rooted at a specific cwd the autocomplete tests point this at
     /// a temp tree with known files.
     fn test_app_in(cwd: &str) -> App {
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let agent = Agent::new(AgentOptions::new(model, registry));
-        // home: None disables persistence + hooks - tests touch no disk.
+        // home: None disables persistence + hooks tests touch no disk.
         let recorder = crate::session::SessionRecorder::new(
             None,
             std::path::Path::new(cwd),
@@ -469,7 +424,7 @@ mod tests {
 
     /// Draw the app and return the style painted at the first occurrence
     /// of `needle`. ASCII needles only: the byte index of the match is
-    /// then also its column. Panics when the needle is not on screen -
+    /// then also its column. Panics when the needle is not on screen
     /// that is a failed test either way, and panicking here gives the
     /// missing-text message instead of a confusing style mismatch.
     fn style_of(app: &mut App, needle: &str) -> ratatui::style::Style {
@@ -537,7 +492,7 @@ mod tests {
             },
             recorder,
         );
-        // First cell is the warning notice - the session is usable, not
+        // First cell is the warning notice the session is usable, not
         // blocked.
         assert!(matches!(
             &app.transcript.cells[0],
@@ -766,7 +721,7 @@ mod tests {
         let messages = app.agent.state().messages;
         assert_eq!(messages.len(), 2, "history + appended delta");
         // The system prompt was NOT rebuilt (test agent starts with an
-        // empty one - re-embedding would have injected the rules).
+        // empty one re-embedding would have injected the rules).
         assert!(!app.agent.state().system_prompt.contains("RULE"));
         // The appended message is the DELTA, not the whole file: the
         // changed line travels, distant unchanged lines do not.
@@ -1070,7 +1025,7 @@ mod tests {
     #[test]
     fn visual_cursor_matches_word_wrapping() {
         // width 10 word-wraps "hello world" as ["hello ", "world"]. A plain
-        // column-wrap computation would report (1, 1) here - the regression
+        // column-wrap computation would report (1, 1) here the regression
         // this test pins down.
         assert_eq!(visual_cursor("hello world", 11, 10), (1, 5));
         // On the chunk boundary (after "hello "): inserting there joins the
@@ -1241,7 +1196,7 @@ mod tests {
                 }),
             });
         }
-        // 120 columns: the marker line fits the tools pane unwrapped.
+        // Wide enough that the marker line renders unwrapped.
         let screen = draw(&mut app, 120, 40);
         assert!(
             screen.contains("... (3 more lines, ctrl+t to expand)"),
@@ -1254,14 +1209,14 @@ mod tests {
 
         // A click on the first tool's header expands just that cell.
         let line = app
-            .last_tool_cells
+            .last_line_cells
             .iter()
             .position(|cell| *cell == Some(1))
             .expect("first tool mapped");
-        let row = app.last_tools_inner.y + (line - app.last_top_line) as u16;
+        let row = app.last_transcript_inner.y + (line - app.last_top_line) as u16;
         app.on_terminal_event(Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: app.last_tools_inner.x + 1,
+            column: app.last_transcript_inner.x + 1,
             row,
             modifiers: KeyModifiers::NONE,
         }));
@@ -1276,6 +1231,10 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(
+            app.selected_cell, None,
+            "a tool click toggles, it never selects"
+        );
         let screen = draw(&mut app, 120, 40);
         assert_eq!(screen.matches("row 9").count(), 1, "{screen}");
 
@@ -1645,7 +1604,7 @@ mod tests {
     fn model_and_thinking_arguments_autocomplete_end_to_end() {
         let mut app = test_app();
         // Accepting `/model ` from the command popup rolls straight into
-        // the model list - no extra keystroke needed.
+        // the model list no extra keystroke needed.
         type_text(&mut app, "/mod");
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         assert_eq!(app.input.text(), "/model ");
@@ -1818,7 +1777,7 @@ mod tests {
         assert!(warned, "expected the not-saved warning");
     }
 
-    /// A key-requiring model on a provider id with no env-var mapping -
+    /// A key-requiring model on a provider id with no env-var mapping
     /// the same env-independence trick as main.rs's select_model tests.
     fn acme_model() -> cupel_core::types::Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
@@ -1863,7 +1822,7 @@ mod tests {
         )));
         // Accepted into session memory (the old env_var_name gate is gone);
         // with home: None the save fails soft (NoHome warning), which this
-        // test does not mind - the acceptance is the point.
+        // test does not mind the acceptance is the point.
         assert_eq!(
             app.session_keys.get("acme").map(String::as_str),
             Some("secret-1")
@@ -1999,34 +1958,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_pane_appears_with_the_first_tool_call() {
-        let mut app = test_app();
-        app.transcript.cells.push(Cell::Assistant {
-            text: "chatting".into(),
-        });
-        let screen = draw(&mut app, 80, 20);
-        assert!(screen.contains(" conversation "), "{screen}");
-        assert!(
-            !screen.contains(" tools "),
-            "no tool traffic yet:\n{screen}"
-        );
-
-        app.transcript.cells.push(Cell::Tool {
-            id: "1".into(),
-            name: "grep".into(),
-            call: "grep /bug/ in .".into(),
-            expanded: false,
-            started_at: None,
-            live: None,
-            result: None,
-        });
-        let screen = draw(&mut app, 80, 20);
-        assert!(screen.contains(" tools "), "pane must appear:\n{screen}");
-        assert!(screen.contains("grep /bug/ in ."), "{screen}");
-    }
-
-    #[test]
-    fn band_rule_ties_reasoning_and_tool_rows_together() {
+    fn the_transcript_is_one_framed_column() {
         let mut app = test_app();
         app.transcript.cells.push(Cell::User {
             text: "task".into(),
@@ -2041,11 +1973,26 @@ mod tests {
             live: None,
             result: None,
         });
-        let screen = draw(&mut app, 90, 20);
-        // The SAME band number must sit on ONE screen row in both panes -
-        // that shared row is the reasoning->tool association.
-        let banded = screen.lines().any(|row| row.matches("─ 1 ").count() == 2);
-        assert!(banded, "band number missing or misaligned:\n{screen}");
+        app.transcript.append_assistant("found it");
+        let screen = draw(&mut app, 80, 20);
+        // One frame: no tools pane, no band rule.
+        assert!(screen.contains(" conversation "), "{screen}");
+        assert!(!screen.contains(" tools "), "{screen}");
+        assert!(!screen.contains("─ 1 "), "{screen}");
+        // Cells follow each other top to bottom in event order...
+        let row_of = |needle: &str| {
+            screen
+                .lines()
+                .position(|row| row.contains(needle))
+                .unwrap_or_else(|| panic!("{needle:?} missing:\n{screen}"))
+        };
+        assert!(row_of("> task") < row_of("let me look"));
+        assert!(row_of("let me look") < row_of("read src/main.rs"));
+        assert!(row_of("read src/main.rs") < row_of("found it"));
+        // ...and the padding keeps every line off the frame: border, one
+        // blank column, then text.
+        let row = screen.lines().nth(row_of("> task")).unwrap();
+        assert!(row.starts_with("│ > task"), "{row:?}");
     }
 
     #[test]
@@ -2081,17 +2028,17 @@ mod tests {
         let _ = draw(&mut app, 80, 24); // teach the app its geometry
 
         // Resolve the thinking cell's screen row through the same map the
-        // click handler uses - the test then exercises the real geometry
+        // click handler uses the test then exercises the real geometry
         // math instead of hardcoding a row.
         let line = app
             .last_line_cells
             .iter()
             .position(|cell| *cell == Some(1))
             .expect("thinking line mapped");
-        let row = app.last_chat_inner.y + (line - app.last_top_line) as u16;
+        let row = app.last_transcript_inner.y + (line - app.last_top_line) as u16;
         app.on_terminal_event(Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column: app.last_chat_inner.x + 1,
+            column: app.last_transcript_inner.x + 1,
             row,
             modifiers: KeyModifiers::NONE,
         }));
@@ -2195,7 +2142,7 @@ mod tests {
 
     #[test]
     fn login_command_validates_before_spawning_anything() {
-        // Every path here must answer WITHOUT starting a flow - the
+        // Every path here must answer WITHOUT starting a flow the
         // real flows bind port 1455 and open a browser.
         let mut app = test_app();
         submit_command(&mut app, "/login");

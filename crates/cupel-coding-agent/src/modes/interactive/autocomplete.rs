@@ -8,7 +8,7 @@
 //!
 //! Deviations from pi, both deliberate: the file list comes from the
 //! `ignore` crate instead of shelling out to the `fd` binary (cupel links
-//! its search engines - same policy as grep), and instead of re-running the
+//! its search engines same policy as grep), and instead of re-running the
 //! walk per keystroke we walk once per directory prefix and filter the
 //! cached list live (a subprocess per keystroke is idiomatic Node,
 //! wasteful in-process).
@@ -32,7 +32,7 @@ pub const MAX_VISIBLE: usize = 8;
 pub struct FileToken {
     /// CHAR index of the `@` in the buffer.
     pub start: usize,
-    /// Text between `@` (or `@"`) and the cursor - the fuzzy query.
+    /// Text between `@` (or `@"`) and the cursor the fuzzy query.
     pub query: String,
     /// Opened as `@"` (the accepted path will be quoted).
     pub quoted: bool,
@@ -40,7 +40,7 @@ pub struct FileToken {
 
 /// Find the `@`-token the cursor is currently inside, if any.
 ///
-/// Rules (pi's): the `@` must sit at a token start - beginning of text or
+/// Rules (pi's): the `@` must sit at a token start beginning of text or
 /// right after whitespace (including newlines, so tokens never span lines).
 /// Only text BEFORE the cursor forms the query; `user@host` never triggers
 /// because its `@` follows a non-space character. Quoted tokens (`@"...`)
@@ -100,7 +100,7 @@ pub fn command_token_at_cursor(text: &str, cursor: usize) -> Option<String> {
 /// The FIRST-argument token of a settled `/command`, if the cursor is in
 /// it: `/model son|` yields `("model", "son", 7)`. Picks up exactly where
 /// [`command_token_at_cursor`] stops (a space settles the name), and stops
-/// itself once the first argument is settled the same way - `/model x y`
+/// itself once the first argument is settled the same way `/model x y`
 /// completes nothing. Returns `(command name, argument query, CHAR index
 /// where the argument starts)`.
 #[must_use]
@@ -146,7 +146,7 @@ pub struct Candidate {
     pub is_dir: bool,
 }
 
-/// Bounded, gitignore-aware walk - the same knobs as the grep backend
+/// Bounded, gitignore-aware walk the same knobs as the grep backend
 /// (hidden files in, `.git` out) plus followed symlinks, matching pi's fd
 /// invocation. `prefix` re-roots the walk for directory drill-down while
 /// keeping displays relative to the project root.
@@ -206,7 +206,7 @@ pub struct Completion {
     pub is_dir: bool,
 }
 
-/// What a session is completing - decides token detection and insertion.
+/// What a session is completing decides token detection and insertion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionKind {
     Files,
@@ -434,7 +434,7 @@ impl Autocomplete {
         let session = self.session.as_ref()?;
         let candidate = session.matches.get(session.selected)?;
 
-        // Commands replace the whole `/query` with `/name ` - the trailing
+        // Commands replace the whole `/query` with `/name ` the trailing
         // space settles the name and moves typing on to the arguments.
         if session.kind == SessionKind::Commands {
             return Some(Completion {
@@ -639,7 +639,7 @@ mod tests {
     fn command_token_only_at_input_start_before_whitespace() {
         assert_eq!(command_token_at_cursor("/he", 3), Some("he".to_string()));
         assert_eq!(command_token_at_cursor("/", 1), Some(String::new()));
-        // Once a space is typed, the name is settled - no more completion.
+        // Once a space is typed, the name is settled no more completion.
         assert_eq!(command_token_at_cursor("/model gpt", 10), None);
         // Not at input start: no trigger.
         assert_eq!(command_token_at_cursor("a /he", 5), None);
@@ -719,7 +719,7 @@ mod tests {
         ac.refresh("/thinking off ", 14);
         assert!(ac.visible().is_none());
 
-        // Unregistered commands don't intercept - their args stay free-form.
+        // Unregistered commands don't intercept their args stay free-form.
         ac.refresh("/help top", 9);
         assert!(!ac.is_open());
     }

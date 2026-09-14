@@ -42,7 +42,7 @@ pub async fn run(
     recorder: crate::session::SessionRecorder,
 ) -> std::io::Result<()> {
     // `ratatui::init` enters raw mode + the alternate screen and installs a
-    // panic hook that restores the terminal - without that, a panic would
+    // panic hook that restores the terminal without that, a panic would
     // leave the user's shell in raw mode (no echo, no line editing).
     let mut terminal = ratatui::init();
     // Mouse capture (wheel-scrolling) and bracketed paste are opt-in and NOT
@@ -52,7 +52,7 @@ pub async fn run(
     // panic hook is chained so the release runs BEFORE ratatui's restore.
     //
     // Bracketed paste makes a terminal paste arrive as ONE Event::Paste
-    // instead of a stream of key presses - without it, every newline in the
+    // instead of a stream of key presses without it, every newline in the
     // pasted text would hit the Enter handler and submit a partial prompt.
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let ratatui_hook = std::panic::take_hook();
@@ -78,7 +78,7 @@ pub async fn run(
 ///
 /// The reader thread parks in `read()` forever; when the app quits we simply
 /// drop the receiver and let the thread die with the process. A shutdown
-/// handshake would need `poll()` with a timeout - complexity that buys
+/// handshake would need `poll()` with a timeout complexity that buys
 /// nothing for a process about to exit.
 fn spawn_input_thread() -> tokio::sync::mpsc::UnboundedReceiver<Event> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -125,8 +125,8 @@ async fn event_loop(
             }
         }
 
-        // Ctrl+O queued a copy: emit it as OSC 52 - the "set clipboard"
-        // escape sequence - straight to stdout. It paints nothing, so
+        // Ctrl+O queued a copy: emit it as OSC 52 the "set clipboard"
+        // escape sequence straight to stdout. It paints nothing, so
         // ratatui's frame diff never notices; the TERMINAL (not cupel)
         // performs the actual clipboard write, which is why this works
         // across SSH sessions too.
@@ -189,7 +189,7 @@ async fn event_loop(
 /// Shape: `ESC ] 52 ; c ; <base64> BEL`. 52 is the clipboard opcode, `c`
 /// selects the system CLIPBOARD (not the X11 primary selection), and the
 /// payload travels base64-encoded because clipboard text may contain any
-/// byte - including the BEL that would otherwise end the sequence early.
+/// byte including the BEL that would otherwise end the sequence early.
 fn osc52(text: &str) -> String {
     use base64::Engine as _;
     let payload = base64::engine::general_purpose::STANDARD.encode(text);

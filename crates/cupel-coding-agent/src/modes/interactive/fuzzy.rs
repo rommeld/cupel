@@ -5,16 +5,16 @@
 //! adjacent), and a score decides ranking. LOWER is better, because the
 //! score is mostly penalties:
 //!
-//! - consecutive-match streaks earn `-5 * streak` (typing "main" should
+//! consecutive-match streaks earn `-5 * streak` (typing "main" should
 //!   love `main.rs`),
-//! - gaps between matches cost `+2 * gap`,
-//! - matching right after a word boundary (`space - _ . / :`) earns `-10`
+//! gaps between matches cost `+2 * gap`,
+//! matching right after a word boundary (`space _ . / :`) earns `-10`
 //!   ("mr" should hit `main.rs` via m..r-after-dot),
-//! - later positions cost `+0.1 * index` (prefer early matches),
-//! - an exact full match earns a decisive `-100`.
+//! later positions cost `+0.1 * index` (prefer early matches),
+//! an exact full match earns a decisive `-100`.
 //!
 //! One quirk ported as-is: if the query fails, retry with its trailing
-//! letter/digit halves swapped (`"v2" <-> "2v"`) at a `+5` penalty -
+//! letter/digit halves swapped (`"v2" <-> "2v"`) at a `+5` penalty
 //! version-ish queries match either spelling.
 
 /// Score one candidate against one query token. `None` = no match.
