@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-agent"
-version = "0.1.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "cupel-core",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-coding-agent"
-version = "0.1.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-core"
-version = "0.1.0"
+version = "0.14.0"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",

@@ -1,0 +1,82 @@
+name: sync-version
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "CHANGELOG.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/sync-version.yml"
+
+permissions:
+  contents: write # needed to push the sync commit to main
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Read latest version from CHANGELOG.md
+        id: changelog
+        run: |
+          set -euo pipefail
+          latest=$(grep -m1 '^## \[v' CHANGELOG.md | sed -E 's/^## \[v([^]]+)\].*/\1/')
+          if [ -z "$latest" ]; then
+            echo "error: could not find a '## [vX.Y.Z]' heading in CHANGELOG.md" >&2
+            exit 1
+          fi
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Read current version from Cargo.toml
+        id: cargo
+        run: |
+          set -euo pipefail
+          current=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "([^"]+)".*/\1/')
+          if [ -z "$current" ]; then
+            echo "error: could not read workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$current" >> "$GITHUB_OUTPUT"
+
+      - name: Sync Cargo.toml and Cargo.lock
+        if: steps.changelog.outputs.version != steps.cargo.outputs.version
+        env:
+          VERSION: ${{ steps.changelog.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Rewrite only the version inside [workspace.package] so dependency
+          # versions elsewhere in the file are left untouched.
+          awk -v v="$VERSION" '
+            /^\[workspace\.package\]/ { inpkg = 1 }
+            /^\[/ && !/^\[workspace\.package\]/ { inpkg = 0 }
+            inpkg && /^version = / && !done { print "version = \"" v "\""; done = 1; next }
+            { print }
+            END { if (!done) exit 1 }
+          ' Cargo.toml > Cargo.toml.tmp
+          mv Cargo.toml.tmp Cargo.toml
+
+          # Refresh Cargo.lock so it records the new workspace versions.
+          cargo check --workspace
+
+          echo "::notice::Synced Cargo.toml/Cargo.lock to v$VERSION"
+
+      - name: Commit and push
+        if: steps.changelog.outputs.version != steps.cargo.outputs.version
+        env:
+          VERSION: ${{ steps.changelog.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "cupel-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git diff --cached --quiet || {
+            git commit -m "version: sync to v$VERSION from CHANGELOG.md"
+            git push
+          }

@@ -10,9 +10,7 @@ members = [
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/rommeld/cupel"
-# Single source of truth for the cupel version: every crate inherits this
-# (`version.workspace = true`), and the `version` workflow bumps only here.
-version = "0.1.0"
+version = "0.14.0"
 
 [workspace.dependencies]
 cupel-core = { path = "crates/cupel-core" }
