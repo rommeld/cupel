@@ -170,13 +170,13 @@ const fn fireworks_anthropic(id: &'static str) -> Curated {
     }
 }
 
-const fn fireworks_glm(id: &'static str) -> Curated {
+const fn fireworks_completions(id: &'static str, thinking: Thinking) -> Curated {
     Curated {
         id,
         rename: None,
         api: Api::OPENAI_COMPLETIONS,
         base_url: FIREWORKS_COMPLETIONS_BASE_URL,
-        thinking: Thinking::Explicit(GLM52_THINKING),
+        thinking,
         compat: Compat::FireworksCompletions,
         window: Window::ModelsDev,
     }
@@ -266,8 +266,19 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             fireworks_anthropic("accounts/fireworks/models/qwen3p7-plus"),
             fireworks_anthropic("accounts/fireworks/models/kimi-k3"),
             fireworks_anthropic("accounts/fireworks/routers/kimi-k3-fast"),
-            fireworks_glm("accounts/fireworks/models/glm-5p2"),
-            fireworks_glm("accounts/fireworks/routers/glm-5p2-fast"),
+            fireworks_completions(
+                "accounts/fireworks/models/glm-5p2",
+                Thinking::Explicit(GLM52_THINKING),
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/glm-5p2-fast",
+                Thinking::Explicit(GLM52_THINKING),
+            ),
+            fireworks_completions("accounts/fireworks/models/glm-5p3", Thinking::FromEffort),
+            fireworks_completions(
+                "accounts/fireworks/models/glm-5p3-flash",
+                Thinking::FromEffort,
+            ),
         ],
     },
     CuratedProvider {

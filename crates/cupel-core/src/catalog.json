@@ -608,6 +608,65 @@
     }
   },
   {
+    "id": "accounts/fireworks/models/glm-5p3",
+    "name": "GLM 5.3",
+    "api": "openai-completions",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 1.4,
+      "output": 4.4,
+      "cachedRead": 0.26,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048573,
+    "maxTokens": 262144,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false
+    }
+  },
+  {
+    "id": "accounts/fireworks/models/glm-5p3-flash",
+    "name": "GLM 5.3 Flash",
+    "api": "openai-completions",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.5,
+      "cachedRead": 0.03,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048573,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false
+    }
+  },
+  {
     "id": "qwen/qwen3.8-max-0902",
     "name": "Qwen3.8 Max 0902",
     "api": "openai-completions",

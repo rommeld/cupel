@@ -243,6 +243,28 @@ mod tests {
     }
 
     #[test]
+    fn fireworks_glm53_rows_keep_the_native_effort_scale() {
+        // GLM 5.3 and 5.3 Flash ride completions like GLM 5.2, but with the
+        // derived low/high/max map instead of the 5.2 remap: low stays low,
+        // off cannot be switched (no reasoning_effort is sent), medium and
+        // xhigh clamp to their neighbours at request time, max stays absent.
+        let models = builtin_models();
+        for id in [
+            "accounts/fireworks/models/glm-5p3",
+            "accounts/fireworks/models/glm-5p3-flash",
+        ] {
+            let model = models.iter().find(|m| m.id == id).expect(id);
+            assert_eq!(model.api.as_str(), Api::OPENAI_COMPLETIONS, "{id}");
+            let map = model.thinking_level_map.as_ref().expect("map");
+            assert_eq!(map.get("off"), Some(&None), "{id}");
+            assert_eq!(map.get("medium"), Some(&None), "{id}");
+            assert_eq!(map.get("xhigh"), Some(&None), "{id}");
+            assert!(!map.contains_key("low"), "{id}: low keeps its own name");
+            assert!(!map.contains_key("max"), "{id}: max key would DISABLE it");
+        }
+    }
+
+    #[test]
     fn codex_models_ride_the_chatgpt_backend() {
         // The subscription rows: namespaced ids (cupel's flat id space —
         // the openai provider owns the bare gpt-5.6 ids), the ChatGPT
