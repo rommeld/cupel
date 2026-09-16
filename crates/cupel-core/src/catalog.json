@@ -287,10 +287,10 @@
       "image"
     ],
     "cost": {
-      "input": 3.0,
-      "output": 15.0,
-      "cachedRead": 0.3,
-      "cachedWrite": 3.75
+      "input": 3.3,
+      "output": 16.5,
+      "cachedRead": 0.33,
+      "cachedWrite": 4.125
     },
     "contextWindow": 200000,
     "maxTokens": 64000
@@ -310,10 +310,10 @@
       "image"
     ],
     "cost": {
-      "input": 2.0,
-      "output": 10.0,
-      "cachedRead": 0.2,
-      "cachedWrite": 2.5
+      "input": 2.2,
+      "output": 11.0,
+      "cachedRead": 0.22,
+      "cachedWrite": 2.75
     },
     "contextWindow": 1000000,
     "maxTokens": 128000
@@ -334,10 +334,10 @@
       "image"
     ],
     "cost": {
-      "input": 10.0,
-      "output": 50.0,
-      "cachedRead": 1.0,
-      "cachedWrite": 12.5
+      "input": 11.0,
+      "output": 55.0,
+      "cachedRead": 1.1,
+      "cachedWrite": 13.75
     },
     "contextWindow": 1000000,
     "maxTokens": 128000
@@ -452,8 +452,7 @@
     "baseUrl": "https://api.fireworks.ai/inference",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "cost": {
       "input": 0.3,
@@ -651,8 +650,8 @@
       "image"
     ],
     "cost": {
-      "input": 0.66,
-      "output": 3.4,
+      "input": 0.7062,
+      "output": 3.21,
       "cachedRead": 0.18,
       "cachedWrite": 0.0
     },
@@ -682,11 +681,11 @@
     "cost": {
       "input": 1.4,
       "output": 4.4,
-      "cachedRead": 0.14,
+      "cachedRead": 0.26,
       "cachedWrite": 0.0
     },
     "contextWindow": 1310720,
-    "maxTokens": 262144,
+    "maxTokens": 943717,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -709,13 +708,13 @@
       "text"
     ],
     "cost": {
-      "input": 0.626748,
-      "output": 1.253496,
-      "cachedRead": 0.052229,
+      "input": 1.6,
+      "output": 3.2,
+      "cachedRead": 0.135,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 384000,
+    "maxTokens": 393216,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
