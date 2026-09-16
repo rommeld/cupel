@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.15.2] - 2026-09-16
+
+- add four Fireworks models: GLM 5.3, GLM 5.3 Flash, Qwen 3.8 Max, DeepSeek V4.1 Flash
+- add eight OpenRouter models: Kimi K3, GLM 5.3 Flash, DeepSeek V4 snapshots, Muse Spark 1.3, Inkling, Laguna S 2.1
+- repair model.dev drift in the catalog and sync Cargo.lock to v0.15.1
+
 ## [v0.15.1] - 2026-09-16
 
 - update Rust version to 1.98.1 and adjust clippy hints for inline mods and inline trait bounds
