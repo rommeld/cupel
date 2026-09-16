@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.15.1] - 2026-09-16
+
+- update Rust version to 1.98.1 and adjust clippy hints for inline mods and inline trait bounds
+- move AGENTS.md to project directory
+
 ## [v0.15.0] - 2026-09-14
 
 - adjust CI and bump version in Cargo.toml according to changelog
