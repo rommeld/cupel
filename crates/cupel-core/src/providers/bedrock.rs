@@ -149,10 +149,6 @@ fn supports_prompt_caching(model: &Model) -> bool {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Worker
-// ---------------------------------------------------------------------------
-
 #[tracing::instrument(name = "bedrock_request", skip_all, fields(model = %model.id, provider = %model.provider.as_str()))]
 async fn run(
     model: &Model,
@@ -163,7 +159,7 @@ async fn run(
     let client = build_client(model, options).await;
     let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
 
-    // ---- max_tokens / thinking budget (mirrors pi's streamSimple) ---------
+    // max_tokens / thinking budget
     let is_claude = is_claude_model(model);
     let mut max_tokens: Option<u64> = options.max_tokens.or_else(|| {
         // Claude models get an explicit cap; other families use their own
@@ -187,7 +183,7 @@ async fn run(
         thinking_budget_override = Some(adjusted.thinking_budget.min(clamped.saturating_sub(1024)));
     }
 
-    // ---- Build the ConverseStream request ----------------------------------
+    // Build the ConverseStream request
     let mut request = client
         .converse_stream()
         .model_id(&model.id)
@@ -213,7 +209,7 @@ async fn run(
         request = request.additional_model_request_fields(json_to_document(&fields));
     }
 
-    // ---- Send + stream -------------------------------------------------------
+    // Send + stream
     let response = with_cancel(options, request.send())
         .await?
         .map_err(|e| InferenceError::Other(format_sdk_error(&e)))?;
@@ -502,9 +498,11 @@ fn is_standard_bedrock_endpoint(base_url: &str) -> bool {
         && (host.ends_with(".amazonaws.com") || host.ends_with(".amazonaws.com.cn"))
 }
 
-fn format_sdk_error<E: core::fmt::Display, R: core::fmt::Debug>(
-    err: &aws_sdk_bedrockruntime::error::SdkError<E, R>,
-) -> String {
+fn format_sdk_error<E, R>(err: &aws_sdk_bedrockruntime::error::SdkError<E, R>) -> String
+where
+    E: core::fmt::Display,
+    R: core::fmt::Debug,
+{
     use aws_sdk_bedrockruntime::error::SdkError;
     match err {
         // The service error carries the actual API message (validation,
@@ -524,10 +522,6 @@ fn map_stop_reason(reason: &bedrock::StopReason) -> StopReason {
         _ => StopReason::Error,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Request conversion
-// ---------------------------------------------------------------------------
 
 fn cache_point() -> Result<bedrock::ContentBlock> {
     Ok(bedrock::ContentBlock::CachePoint(

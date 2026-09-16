@@ -65,7 +65,7 @@ pub fn transform_messages(
         })
         .collect();
 
-    // ---- Pass 2: drop broken turns, pair up orphaned tool calls ----------
+    // Drop broken turns, pair up orphaned tool calls
     let mut result: Vec<Message> = Vec::with_capacity(transformed.len());
     let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
     let mut existing_result_ids: HashSet<String> = HashSet::new();

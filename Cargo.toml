@@ -112,6 +112,8 @@ impl_trait_in_params = "allow"
 indexing_slicing = "allow"
 string_slice = "allow"
 
+inline_modules = "allow"
+
 integer_division = "allow"
 integer_division_remainder_used = "allow"
 
