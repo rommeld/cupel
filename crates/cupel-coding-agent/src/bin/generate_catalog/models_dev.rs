@@ -340,6 +340,42 @@ mod tests {
     }
 
     #[test]
+    fn glm53_shaped_effort_keeps_low_and_max_and_disables_the_rest() {
+        // GLM 5.3 (OpenRouter and Fireworks): low/high/max, no toggle. The
+        // shape the GLM 5.2 remap must NOT be reused for: low keeps its own
+        // name, off cannot be switched, medium/xhigh clamp at request time.
+        let options = [effort(&["low", "high", "max"])];
+        let map = thinking_level_map_from_effort(&options).expect("map derived");
+        assert_eq!(
+            map,
+            map_of(&[
+                ("medium", None),
+                ("minimal", None),
+                ("off", None),
+                ("xhigh", None),
+            ])
+        );
+        // DeepSeek V4 and Kimi K3: the same scale plus a toggle, so off is
+        // left to the toggle (no entry) and the rest stays.
+        let options = [ReasoningOption::Toggle {}, effort(&["low", "high", "max"])];
+        let map = thinking_level_map_from_effort(&options).expect("map derived");
+        assert_eq!(
+            map,
+            map_of(&[("medium", None), ("minimal", None), ("xhigh", None)])
+        );
+    }
+
+    #[test]
+    fn inkling_shaped_effort_disables_xhigh_but_keeps_max() {
+        // The mirror image of scales_without_max_get_an_explicit_null: a
+        // scale that skips xhigh but ends at max pins xhigh -> null and
+        // leaves max ABSENT (a present key would disable it).
+        let options = [effort(&["none", "minimal", "low", "medium", "high", "max"])];
+        let map = thinking_level_map_from_effort(&options).expect("map derived");
+        assert_eq!(map, map_of(&[("off", Some("none")), ("xhigh", None)]));
+    }
+
+    #[test]
     fn temperature_defaults_to_supported() {
         // The hand-written Default: a sparse entry (no `temperature` key)
         // must NOT read as "rejects temperature".

@@ -279,8 +279,13 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 "moonshotai/kimi-k2.7-code",
                 Thinking::Explicit(KIMI_K27_CODE_OPENROUTER_THINKING),
             ),
+            openrouter("moonshotai/kimi-k3", Thinking::FromEffort),
             openrouter("z-ai/glm-5.3", Thinking::FromEffort),
+            openrouter("z-ai/glm-5.3-flash", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-pro", Thinking::FromEffort),
+            openrouter("deepseek/deepseek-v4-pro-0813", Thinking::FromEffort),
+            openrouter("deepseek/deepseek-v4-flash-0731", Thinking::FromEffort),
+            openrouter("deepseek/deepseek-v4.1-flash", Thinking::FromEffort),
             openrouter("x-ai/grok-4.6", Thinking::FromEffort),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
             Curated {
@@ -292,6 +297,9 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 compat: Compat::OpenrouterCompletions,
                 window: Window::PriceTier,
             },
+            openrouter("meta/muse-spark-1.3", Thinking::FromEffort),
+            openrouter("thinkingmachines/inkling", Thinking::FromEffort),
+            openrouter("poolside/laguna-s-2.1", Thinking::FromEffort),
         ],
     },
 ];

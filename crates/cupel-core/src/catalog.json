@@ -663,6 +663,35 @@
     }
   },
   {
+    "id": "moonshotai/kimi-k3",
+    "name": "Kimi K3",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.648138,
+      "output": 13.282724,
+      "cachedRead": 0.302644,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
     "id": "z-ai/glm-5.3",
     "name": "GLM-5.3",
     "api": "openai-completions",
@@ -692,6 +721,36 @@
     }
   },
   {
+    "id": "z-ai/glm-5.3-flash",
+    "name": "GLM-5.3-Flash",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.09,
+      "output": 0.3,
+      "cachedRead": 0.018,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1310720,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
     "id": "deepseek/deepseek-v4-pro",
     "name": "DeepSeek V4 Pro",
     "api": "openai-completions",
@@ -715,6 +774,91 @@
     },
     "contextWindow": 1048576,
     "maxTokens": 393216,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "deepseek/deepseek-v4-pro-0813",
+    "name": "DeepSeek V4 Pro 0813",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "xhigh": null
+    },
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.57948,
+      "output": 1.73844,
+      "cachedRead": 0.018438,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 393216,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "deepseek/deepseek-v4-flash-0731",
+    "name": "DeepSeek V4 Flash 0731",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "xhigh": null
+    },
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.06,
+      "output": 0.12,
+      "cachedRead": 0.012,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1310720,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "deepseek/deepseek-v4.1-flash",
+    "name": "DeepSeek V4.1 Flash",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.6,
+      "cachedRead": 0.003,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 384000,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -824,6 +968,84 @@
     "compat": {
       "supportsDeveloperRole": false,
       "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "meta/muse-spark-1.3",
+    "name": "Muse Spark 1.3",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.25,
+      "output": 4.25,
+      "cachedRead": 0.15,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "thinkingmachines/inkling",
+    "name": "Inkling",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "off": "none",
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.0,
+      "output": 4.05,
+      "cachedRead": 0.17,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 471859,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "poolside/laguna-s-2.1",
+    "name": "Laguna S 2.1",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.09,
+      "output": 0.18,
+      "cachedRead": 0.009,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
     }
   },
