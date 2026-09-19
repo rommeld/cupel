@@ -16,7 +16,7 @@
 //!    replacement are rewritten from normalized text; untouched lines keep
 //!    their original bytes (`apply_replacements_preserving_unchanged_lines`).
 
-use unicode_normalization::UnicodeNormalization as _;
+use crate::tools::patch_update::normalize_for_fuzzy_match;
 
 // ---------------------------------------------------------------------------
 // Line-ending and BOM handling
@@ -57,38 +57,6 @@ pub fn strip_bom(content: &str) -> (&'static str, &str) {
     content
         .strip_prefix('\u{FEFF}')
         .map_or(("", content), |rest| ("\u{FEFF}", rest))
-}
-
-// ---------------------------------------------------------------------------
-// Fuzzy normalization
-// ---------------------------------------------------------------------------
-
-/// Normalize text for fuzzy matching: NFKC, strip trailing whitespace per
-/// line, fold typographic quotes/dashes/spaces to their ASCII equivalents.
-#[must_use]
-pub fn normalize_for_fuzzy_match(text: &str) -> String {
-    let nfkc: String = text.nfkc().collect();
-    nfkc.split('\n')
-        .map(|line| {
-            line.trim_end()
-                .chars()
-                .map(|c| match c {
-                    // Smart single quotes.
-                    '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
-                    // Smart double quotes.
-                    '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
-                    // Hyphens, dashes, minus signs.
-                    '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
-                    // Non-breaking and typographic spaces.
-                    '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => {
-                        ' '
-                    }
-                    other => other,
-                })
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 // ---------------------------------------------------------------------------
