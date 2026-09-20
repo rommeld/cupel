@@ -8,7 +8,7 @@
 //! pi builds this from chained promises. In Rust the same guarantee is one
 //! `tokio::Mutex` per file: lock, do the work, drop the guard. Files are
 //! keyed by their *canonical* path so `./src/a.rs` and `src/a.rs` (or a
-//! symlink) share a lock; a file that doesn't exist yet (write tool) falls
+//! symlink) share a lock; a file that doesn't exist yet (a patch adding it) falls
 //! back to the absolute path.
 
 use std::collections::HashMap;

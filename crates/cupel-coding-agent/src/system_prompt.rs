@@ -31,21 +31,10 @@ pub fn build_system_prompt(
     if has("read") {
         guidelines.push("Use read to examine files instead of cat or sed");
     }
-    if has("edit") {
-        guidelines.push("Use edit for precise changes (edits[].oldText must match exactly)");
-        guidelines.push(
-            "When changing multiple separate locations in one file, use one edit call with \
-             multiple entries in edits[] instead of multiple edit calls",
-        );
-        guidelines.push(
-            "Keep edits[].oldText as small as possible while still being unique in the \
-            file. Do not pad with large unchanged regions.",
-        );
-    }
     if has("apply_patch") {
         guidelines.push(
-            "Use apply_patch to create, delete, or rename files and to \
-            change several files at once; give every hunk 3 lines of context so it is\
+            "Use apply_patch for all file changes: create, delete, or rename files and to \
+            change several files at once; give every hunk 3 lines of context so it is \
             unique in the file",
         );
     }

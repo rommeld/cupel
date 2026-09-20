@@ -25,12 +25,12 @@ use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{TextContent, ToolResultContent};
 
 use crate::search::resolve_to_root;
-use crate::tools::edit_diff::{
-    detect_line_ending, generate_diff_string, normalize_to_lf, restore_line_endings, strip_bom,
-};
 use crate::tools::file_queue::lock_file_for_mutation;
 use crate::tools::patch_parser::{Hunk, parse_patch};
 use crate::tools::patch_update::apply_chunks;
+use crate::tools::text_diff::{
+    detect_line_ending, generate_diff_string, normalize_to_lf, restore_line_endings, strip_bom,
+};
 
 const DIFF_CONTEXT_LINES: usize = 4;
 const NEW_FILE_PREVIEW_LINES: usize = 20;

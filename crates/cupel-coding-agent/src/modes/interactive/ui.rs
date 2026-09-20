@@ -1090,8 +1090,8 @@ mod tests {
                 }),
                 AssistantContent::ToolCall(ToolCall {
                     id: "call_2".into(),
-                    name: "edit".into(),
-                    arguments: serde_json::json!({"path": "src/main.rs"}),
+                    name: "apply_patch".into(),
+                    arguments: serde_json::json!({"input": "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-bug();\n+fix();\n*** End Patch"}),
                 }),
             ],
             api: Api::from("mock"),
@@ -1104,11 +1104,11 @@ mod tests {
             error_message: None,
             timestamp: now_ms(),
         };
-        let edit_rules = ToolResultMessage {
+        let patch_main = ToolResultMessage {
             tool_call_id: "call_2".into(),
-            tool_name: "edit".into(),
+            tool_name: "apply_patch".into(),
             content: vec![cupel_core::types::ToolResultContent::Text(
-                TextContent::plain("Successfully replaced 1 block(s) in src/main.rs."),
+                TextContent::plain("Success. Updated the following files:\nM src/main.rs"),
             )],
             details: Some(serde_json::json!({"diff": "-1 bug();\n+1 fix();"})),
             is_error: false,
@@ -1129,7 +1129,7 @@ mod tests {
             AgentMessage::user_text("old question"),
             AgentMessage::Llm(Message::Assistant(assistant)),
             AgentMessage::Llm(Message::ToolResult(tool_result)),
-            AgentMessage::Llm(Message::ToolResult(edit_rules)),
+            AgentMessage::Llm(Message::ToolResult(patch_main)),
         ];
         let agent = Agent::new(options);
         let recorder = crate::session::SessionRecorder::new(
@@ -1168,7 +1168,7 @@ mod tests {
             "tool result attached:\n{screen}"
         );
         assert!(screen.contains("+1 fix();"), "diff replayed:\n{screen}");
-        assert!(!screen.contains("Successfully"), "{screen}");
+        assert!(!screen.contains("Updated the following"), "{screen}");
     }
 
     #[test]
@@ -1495,12 +1495,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_edit_result_renders_as_a_colored_diff() {
+    async fn a_patch_result_renders_as_a_colored_diff() {
         let mut app = test_app();
         app.transcript.cells.push(Cell::Tool {
             id: "call_1".into(),
-            name: "edit".into(),
-            call: "edit a.rs".into(),
+            name: "apply_patch".into(),
+            call: "apply_patch M a.rs".into(),
             expanded: false,
             started_at: None,
             live: None,
@@ -1508,11 +1508,11 @@ mod tests {
         });
         app.on_agent_event(Some(AgentEvent::ToolExecutionEnd {
             tool_call_id: "call_1".into(),
-            tool_name: "edit".into(),
+            tool_name: "apply_patch".into(),
             result: cupel_agent::types::AgentToolResult {
                 content: vec![cupel_core::types::ToolResultContent::Text(
                     cupel_core::types::TextContent::plain(
-                        "Successfully replaced 1 block(s) in a.rs",
+                        "Success. Updated the following files:\nM a.rs",
                     ),
                 )],
                 details: Some(
@@ -1527,7 +1527,7 @@ mod tests {
         let screen = draw(&mut app, 80, 24);
         assert!(screen.contains("-2     old();"), "{screen}");
         assert!(screen.contains("+2     new();"), "{screen}");
-        assert!(!screen.contains("Successfully"), "{screen}");
+        assert!(!screen.contains("Updated the following"), "{screen}");
         assert_eq!(style_of(&mut app, "+2     new();").fg, Some(Color::Green));
         assert_eq!(style_of(&mut app, "-2     old();").fg, Some(Color::Red));
         assert_eq!(style_of(&mut app, "1 fn a() {").fg, Some(Color::DarkGray));

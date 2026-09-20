@@ -386,8 +386,8 @@ fn previews_the_tail(tool_name: &str) -> bool {
     tool_name == "bash"
 }
 
-/// Diff lines, styled by their first byte. The edit tool's diff format
-/// (edit_diff.rs) puts the marker first.
+/// Diff lines, styled by their first byte. The patch tool's diff format
+/// (text_diff.rs) puts the marker first.
 /// `-12 old`, `+12 new`, `12 context`, and a `   ...` row between hunks.
 fn push_diff(out: &mut Vec<Line<'static>>, diff: &str, width: usize) {
     for line in diff.lines() {
@@ -679,13 +679,13 @@ mod tests {
     fn diff_replaces_result_text_and_colors_by_marker() {
         let cell = Cell::Tool {
             id: "1".into(),
-            name: "edit".into(),
+            name: "apply_patch".into(),
             call: "{}".into(),
             expanded: false,
             started_at: None,
             live: None,
             result: Some(ToolOutcome {
-                text: "Successfully replaced 1 block(s) in a.rs".into(),
+                text: "Success. Updated the following files:\nM a.rs".into(),
                 is_error: false,
                 diff: Some(" 1 fn main() {\n-2     old();\n+2     new();\n 3 }".into()),
                 took: None,
@@ -703,8 +703,8 @@ mod tests {
         assert_eq!(lines[3].spans[0].style, theme::DIFF_ADD);
         assert_eq!(lines[4].spans[0].style, theme::DIFF_CTX);
         assert!(
-            !texts.iter().any(|t| t.contains("Successfully")),
-            "the confirmation line is for the mode, not the screen"
+            !texts.iter().any(|t| t.contains("Updated the following")),
+            "the confirmation line is for the model, not the screen"
         );
     }
 

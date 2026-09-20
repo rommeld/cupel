@@ -1,7 +1,7 @@
 //! Apply the `@@` chunks of an `*** Update File:` hunk to a file's text.
 //!
-//! A port of Codex's seek_sequence.rs and file_update.rs. The tools hands this module
-//! BOM-free, LF-normalized text, the same way `edit` feeds [`super::edit_diff`]; line
+//! A port of Codex's seek_sequence.rs and file_update.rs. The tool hands this module
+//! BOM-free, LF-normalized text (the round trip lives in [`super::text_diff`]); line
 //! endings and the BOM are restored by the tool on write.
 //!
 //! Two ideas carry the whole module:
@@ -101,8 +101,8 @@ pub fn normalize_for_fuzzy_match(text: &str) -> String {
 
 /// The most permissive comparison key: surrounding whitespace dropped and smart
 /// quotes, dashes and typographic spaces folded as ASCII, so a patch typed in
-/// plain ASCII still applies to a file with typographic punctuation. cupel's
-/// edit tool owns the folding table already; NFKC on top of Codex's table is the
+/// plain ASCII still applies to a file with typographic punctuation. The folding
+/// table came over from the former edit tool; NFKC on top of Codex's table is the
 /// one difference.
 fn normalise(line: &str) -> String {
     normalize_for_fuzzy_match(line.trim())

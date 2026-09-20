@@ -20,7 +20,7 @@ Defines the basic agent and its loop primitive. It wires a system prompt, messag
 
 ### 3. `cupel-coding-agent`
 
-Implements the concrete coding-agent experience: a terminal UI, `@file-path` fuzzy file referencing, slash commands (`/help`, `/new`, `/model`, `/provider`, `/thinking`, `/review`, `/usage`, `/hot-reload`, `/session-id`, `/quit`), prompt templates loaded from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools (`read`, `grep`, `write`, `edit`, `bash`). It uses the `grep` crate family (`grep-matcher`, `grep-regex`, `grep-searcher`) as the underlying engine for the **grep tool** and `ratatui` for the TUI. The crate also includes a simple `cupel` CLI for calling functionality from the terminal.
+Implements the concrete coding-agent experience: a terminal UI, `@file-path` fuzzy file referencing, slash commands (`/help`, `/new`, `/model`, `/provider`, `/thinking`, `/review`, `/usage`, `/hot-reload`, `/session-id`, `/quit`), prompt templates loaded from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools (`read`, `grep`, `apply_patch`, `bash`). It uses the `grep` crate family (`grep-matcher`, `grep-regex`, `grep-searcher`) as the underlying engine for the **grep tool** and `ratatui` for the TUI. The crate also includes a simple `cupel` CLI for calling functionality from the terminal.
 
 ## Install
 
@@ -39,6 +39,10 @@ Currently supported providers: Anthropic, OpenAI (Responses), AWS Bedrock, Firew
 `AGENTS.md` (or `CLAUDE.md`) lives either in `~/.cupel` (global) or `<project>/.cupel` (project-specific). On a name collision, the most specific location wins: working directory > `.cupel/` > `~/.cupel`.
 
 ### Agent tools
+
+#### apply_patch
+
+`apply_patch` replaces pi's `write` and `edit`: the model sends one `*** Begin Patch` / `*** End Patch` envelope (the format of OpenAI's Codex) that creates, deletes, renames, or patches any number of files. Every hunk is matched against the file first (exact, then ignoring trailing whitespace, then with typographic punctuation folded); if any hunk fails, nothing is written.
 
 #### Grep & Grep Rank
 

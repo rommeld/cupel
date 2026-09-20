@@ -18,20 +18,13 @@ use crate::loop_killer::LoopKiller;
 use crate::search::GrepSearch;
 use crate::settings::Settings;
 use crate::system_prompt::build_system_prompt;
-use crate::tools::{
-    apply_patch::ApplyPatchTool, bash::BashTool, edit::EditTool, grep::GrepTool, read::ReadTool,
-};
+use crate::tools::{apply_patch::ApplyPatchTool, bash::BashTool, grep::GrepTool, read::ReadTool};
 
 /// Name + one-line snippet per tool for the system prompt (full
 /// descriptions travel in the tool schemas).
 pub const TOOL_SUMMARIES: &[(&str, &str)] = &[
     ("read", "Read file contents"),
     ("bash", "Execute bash commands (ls, find, cargo, etc.)"),
-    (
-        "edit",
-        "Make precise file edits with exact text replacement, including multiple disjoint edits \
-         in one call",
-    ),
     (
         "apply_patch",
         "Create, delete, rename, and patch files with one *** Begin Patch / *** End Patch \
@@ -99,7 +92,6 @@ pub async fn load(
     let tools: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(ReadTool::new(cwd)),
         Arc::new(BashTool::new(cwd)),
-        Arc::new(EditTool::new(cwd)),
         Arc::new(ApplyPatchTool::new(cwd)),
         Arc::new(GrepTool::new(cwd, backend)),
     ];
@@ -221,7 +213,7 @@ mod tests {
         assert!(ingredients.system_prompt.contains("ALWAYS SAY PING"));
         assert!(ingredients.templates.iter().any(|t| t.name == "greet"));
         assert!(ingredients.models.iter().any(|m| m.id == "local-test"));
-        assert_eq!(ingredients.tools.len(), 5);
+        assert_eq!(ingredients.tools.len(), 4);
         assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
         assert_eq!(ingredients.settings.loop_killer_max_repeats(), Some(2));
         assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
