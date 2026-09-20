@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.16.0] - 2026-09-20
+
+- move line-ending/BOM handling and diff rendering from edit_diff to text_diff behind apply_patch
+- replace write with apply_patch: one Begin/End Patch envelope creates, deletes, renames, and patches files, verified before any write
+- add the apply_patch parser and update-hunk matcher, a port of Codex's apply-patch crate
+
 ## [v0.15.2] - 2026-09-16
 
 - add four Fireworks models: GLM 5.3, GLM 5.3 Flash, Qwen 3.8 Max, DeepSeek V4.1 Flash
