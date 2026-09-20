@@ -5,9 +5,11 @@
 //! — [`grep_rank`] — ranks files for grep's `files` output mode (definitions first, tests last)
 //! — [`edit`] — exact-text replacement with fuzzy fallback ([`edit_diff`])
 //! — [`write`] — create/overwrite whole files
+//! - [`apply_patch`] - create/delete/rename/patch files with Codex's patch envelope
+//!   ([`patch_parser`] reads it, [`patch_update`] applies update hunks to text)
 //! — [`bash`] — shell commands with bounded, tail-truncated output
 //!
-//! Mutating tools (`edit`, `write`) serialize per file through
+//! Mutating tools (`edit`, `apply_patch`) serialize per file through
 //! [`file_queue`] because the agent loop runs tool batches in parallel.
 //!
 //! Still to port from pi: `find` and `ls` (both are convenience wrappers
@@ -19,6 +21,7 @@
 //! [`AgentHooks::before_tool_call`](cupel_agent::AgentHooks::before_tool_call)
 //! when a stricter policy is needed.
 
+pub mod apply_patch;
 pub mod bash;
 pub mod edit;
 pub mod edit_diff;
@@ -28,4 +31,3 @@ pub mod grep_rank;
 pub mod patch_parser;
 pub mod patch_update;
 pub mod read;
-pub mod write;

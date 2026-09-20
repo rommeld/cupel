@@ -19,7 +19,7 @@ use crate::search::GrepSearch;
 use crate::settings::Settings;
 use crate::system_prompt::build_system_prompt;
 use crate::tools::{
-    bash::BashTool, edit::EditTool, grep::GrepTool, read::ReadTool, write::WriteTool,
+    apply_patch::ApplyPatchTool, bash::BashTool, edit::EditTool, grep::GrepTool, read::ReadTool,
 };
 
 /// Name + one-line snippet per tool for the system prompt (full
@@ -32,7 +32,11 @@ pub const TOOL_SUMMARIES: &[(&str, &str)] = &[
         "Make precise file edits with exact text replacement, including multiple disjoint edits \
          in one call",
     ),
-    ("write", "Create or overwrite files"),
+    (
+        "apply_patch",
+        "Create, delete, rename, and patch files with one *** Begin Patch / *** End Patch \
+        envelope",
+    ),
     (
         "grep",
         "Search file contents for patterns (respects .gitignore)",
@@ -96,7 +100,7 @@ pub async fn load(
         Arc::new(ReadTool::new(cwd)),
         Arc::new(BashTool::new(cwd)),
         Arc::new(EditTool::new(cwd)),
-        Arc::new(WriteTool::new(cwd)),
+        Arc::new(ApplyPatchTool::new(cwd)),
         Arc::new(GrepTool::new(cwd, backend)),
     ];
 

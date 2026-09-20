@@ -38,12 +38,16 @@ pub fn build_system_prompt(
              multiple entries in edits[] instead of multiple edit calls",
         );
         guidelines.push(
-            "Keep edits[].oldText as small as possible while still being unique in the file. \
-             Do not pad with large unchanged regions.",
+            "Keep edits[].oldText as small as possible while still being unique in the \
+            file. Do not pad with large unchanged regions.",
         );
     }
-    if has("write") {
-        guidelines.push("Use write only for new files or complete rewrites");
+    if has("apply_patch") {
+        guidelines.push(
+            "Use apply_patch to create, delete, or rename files and to \
+            change several files at once; give every hunk 3 lines of context so it is\
+            unique in the file",
+        );
     }
     guidelines.push("Be concise in your responses");
     guidelines.push("Show file paths clearly when working with files");
