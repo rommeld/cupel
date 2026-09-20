@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.16.1] - 2026-09-20
+
+- move commands in footer to align to the left
+
 ## [v0.16.0] - 2026-09-20
 
 - move line-ending/BOM handling and diff rendering from edit_diff to text_diff behind apply_patch
