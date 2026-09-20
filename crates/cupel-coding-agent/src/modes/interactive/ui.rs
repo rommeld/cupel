@@ -298,11 +298,12 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         window / 1000,
     );
     // The mouse hint tracks selection mode, so it never lies about what
-    // the wheel currently does.
-    let right = if app.mouse_captured {
-        "enter send · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select "
+    // the wheel currently does. It shares the status row's left margin —
+    // a right-aligned hint row would sit staggered against it.
+    let hints = if app.mouse_captured {
+        " enter send · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
     } else {
-        "enter send · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll "
+        " enter send · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =
@@ -311,12 +312,8 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Paragraph::new(Span::styled(left, theme::CHROME)),
         status_row,
     );
-    let padding = (area.width as usize).saturating_sub(right.chars().count());
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(" ".repeat(padding)),
-            Span::styled(right, theme::CHROME),
-        ])),
+        Paragraph::new(Span::styled(hints, theme::CHROME)),
         hints_row,
     );
 }
