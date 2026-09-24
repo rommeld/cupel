@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/ade2934b-199b-4838-b38c-d5595685bf85" alt="Projektlogo" width="200">
+  <img width="1122" height="1402" alt="image" src="https://github.com/user-attachments/assets/2f558950-e5f2-44dd-8950-86b7c46ef13c" />
 </p>
 
 # cupel
