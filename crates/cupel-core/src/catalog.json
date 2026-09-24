@@ -709,8 +709,8 @@
       "image"
     ],
     "cost": {
-      "input": 0.7062,
-      "output": 3.21,
+      "input": 0.6562,
+      "output": 3.3,
       "cachedRead": 0.18,
       "cachedWrite": 0.0
     },
@@ -738,9 +738,9 @@
       "image"
     ],
     "cost": {
-      "input": 2.648138,
-      "output": 13.282724,
-      "cachedRead": 0.302644,
+      "input": 3.0,
+      "output": 15.0,
+      "cachedRead": 0.3,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -797,13 +797,13 @@
       "image"
     ],
     "cost": {
-      "input": 0.09,
-      "output": 0.3,
-      "cachedRead": 0.018,
+      "input": 0.15,
+      "output": 0.5,
+      "cachedRead": 0.05,
       "cachedWrite": 0.0
     },
     "contextWindow": 1310720,
-    "maxTokens": 131072,
+    "maxTokens": 943718,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -826,13 +826,13 @@
       "text"
     ],
     "cost": {
-      "input": 1.6,
-      "output": 3.2,
-      "cachedRead": 0.135,
+      "input": 0.892272,
+      "output": 1.784544,
+      "cachedRead": 0.074356,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 393216,
+    "maxTokens": 384000,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -854,13 +854,13 @@
       "text"
     ],
     "cost": {
-      "input": 0.57948,
-      "output": 1.73844,
-      "cachedRead": 0.018438,
+      "input": 0.462,
+      "output": 1.386,
+      "cachedRead": 0.0154,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 393216,
+    "maxTokens": 384000,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -882,9 +882,9 @@
       "text"
     ],
     "cost": {
-      "input": 0.06,
-      "output": 0.12,
-      "cachedRead": 0.012,
+      "input": 0.03,
+      "output": 0.32,
+      "cachedRead": 0.016,
       "cachedWrite": 0.0
     },
     "contextWindow": 1310720,
@@ -917,7 +917,7 @@
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 384000,
+    "maxTokens": 393216,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
