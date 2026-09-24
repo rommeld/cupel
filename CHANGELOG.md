@@ -3,6 +3,15 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.17.0] - 2026-09-24
+
+- Test Sonnet 5 and Opus 5 adaptive request bodies and off behavior
+- Move Claude Sonnet 5 and Opus 5 to adaptive thinking in the catalog
+- Add GPT-6 Sol and Luna across OpenAI, OpenRouter, and Codex catalogs
+- Add Claude Opus 5.5 with adaptive thinking and request-body tests
+- Refresh models.dev pricing and output limits for OpenRouter models
+- modify README. Make it more readable
+
 ## [v0.16.1] - 2026-09-20
 
 - move commands in footer to align to the left
