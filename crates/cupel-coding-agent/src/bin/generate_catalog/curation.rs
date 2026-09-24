@@ -206,6 +206,20 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         cupel_id: Provider::ANTHROPIC,
         models: &[
             anthropic("claude-sonnet-5", None),
+            Curated {
+                id: "claude-opus-5-5",
+                rename: None,
+                api: Api::ANTHROPIC_MESSAGES,
+                base_url: ANTHROPIC_BASE_URL,
+                // Opus 5.5 is adaptive-only like Fable 5: `thinking:
+                // {type: "disabled"}` and `budget_tokens` both return a
+                // 400, so effort levels replace budgets. models.dev lists
+                // effort low..max and no toggle, which derives
+                // off -> null: the provider then omits `thinking`.
+                thinking: Thinking::FromEffort,
+                compat: Compat::AdaptiveAnthropic,
+                window: Window::ModelsDev,
+            },
             anthropic("claude-opus-5", None),
             Curated {
                 id: "claude-fable-5",

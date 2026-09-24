@@ -243,6 +243,34 @@ mod tests {
     }
 
     #[test]
+    fn opus55_row_is_adaptive_only() {
+        // Claude Opus 5.5 answers `thinking: {type: "disabled"}` and
+        // `budget_tokens` with a 400 at every effort level. The row must
+        // take the adaptive path (effort, no temperature) and pin "off"
+        // to null, so the provider omits `thinking` instead of disabling it.
+        let models = builtin_models();
+        let model = models
+            .iter()
+            .find(|m| m.id == "claude-opus-5-5")
+            .expect("claude-opus-5-5 in catalog");
+        assert_eq!(model.provider.as_str(), Provider::ANTHROPIC);
+        assert_eq!(
+            model.compat,
+            Some(serde_json::json!({
+                "forceAdaptiveThinking": true,
+                "supportsTemperature": false,
+            }))
+        );
+        let map = model.thinking_level_map.as_ref().expect("map");
+        assert_eq!(map.get("off"), Some(&None));
+        assert_eq!(map.get("minimal"), Some(&None));
+        assert!(!map.contains_key("xhigh"), "xhigh key would DISABLE it");
+        assert!(!map.contains_key("max"), "max key would DISABLE it");
+        assert_eq!(model.context_window, 1_000_000);
+        assert_eq!(model.max_tokens, 128_000);
+    }
+
+    #[test]
     fn fireworks_glm53_rows_keep_the_native_effort_scale() {
         // GLM 5.3 and 5.3 Flash ride completions like GLM 5.2, but with the
         // derived low/high/max map instead of the 5.2 remap: low stays low,

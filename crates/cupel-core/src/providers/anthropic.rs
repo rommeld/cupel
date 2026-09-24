@@ -1081,3 +1081,91 @@ fn convert_tools(
             .collect(),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{UserMessage, now_ms};
+
+    /// A row from the shipped catalog, not a hand-built fixture: these
+    /// tests break if catalog.json and this provider drift apart.
+    fn catalog_model(id: &str) -> Model {
+        crate::catalog::builtin_models()
+            .into_iter()
+            .find(|m| m.id == id)
+            .expect("model in catalog")
+    }
+
+    fn hello() -> Context {
+        Context {
+            system_prompt: Some("You are cupel.".to_string()),
+            messages: vec![Message::User(UserMessage {
+                content: UserContentBody::Text("hi".to_string()),
+                timestamp: now_ms(),
+            })],
+            tools: None,
+        }
+    }
+
+    /// The body exactly as `run` builds it, minus the network.
+    fn body_for(model: &Model, options: &StreamOptions) -> Value {
+        let compat = anthropic_compat(model);
+        build_request_body(model, &hello(), options, &compat, false)
+    }
+
+    #[test]
+    fn opus55_off_omits_thinking_and_temperature() {
+        // `/thinking off` arrives as `reasoning: None`. A budget model
+        // turns that into an explicit `disabled` and keeps temperature ...
+        let options = StreamOptions {
+            temperature: Some(0.2),
+            ..StreamOptions::default()
+        };
+        let haiku = catalog_model("claude-haiku-4-5");
+        let body = body_for(&haiku, &options);
+        assert_eq!(body["thinking"], json!({"type": "disabled"}));
+        assert_eq!(body["temperature"], json!(0.2));
+
+        // ... both of which Opus 5.5 answers with a 400. Its "off": null
+        // entry makes the provider send no `thinking` at all (the API then
+        // thinks adaptively at its default effort, medium), and
+        // supportsTemperature: false drops the sampling parameter.
+        let opus = catalog_model("claude-opus-5-5");
+        let body = body_for(&opus, &options);
+        assert!(body.get("thinking").is_none(), "{body}");
+        assert!(body.get("output_config").is_none(), "{body}");
+        assert!(body.get("temperature").is_none(), "{body}");
+    }
+
+    #[test]
+    fn opus55_levels_map_to_adaptive_effort() {
+        let opus = catalog_model("claude-opus-5-5");
+        for (level, effort) in [
+            // No "minimal" effort upstream: the map's null entry falls
+            // back to the provider default, which is "low".
+            (ThinkingLevel::Minimal, "low"),
+            (ThinkingLevel::Low, "low"),
+            (ThinkingLevel::Medium, "medium"),
+            (ThinkingLevel::High, "high"),
+            (ThinkingLevel::XHigh, "xhigh"),
+            (ThinkingLevel::Max, "max"),
+        ] {
+            let options = StreamOptions {
+                reasoning: Some(level),
+                ..StreamOptions::default()
+            };
+            let body = body_for(&opus, &options);
+            // Adaptive, never `enabled` with a `budget_tokens`.
+            assert_eq!(
+                body["thinking"],
+                json!({"type": "adaptive", "display": "summarized"}),
+                "{level:?}"
+            );
+            assert_eq!(
+                body["output_config"],
+                json!({"effort": effort}),
+                "{level:?}"
+            );
+        }
+    }
+}
