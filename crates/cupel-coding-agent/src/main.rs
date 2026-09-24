@@ -453,24 +453,19 @@ mod tests {
         model
     }
 
-    /// A codex catalog row (provider openai-codex has no env var, so
-    /// pass 1 can only match it through the auth.json arm — the test
-    /// stays environment-independent like the others).
-    fn codex_model() -> Model {
-        let mut model = cupel_core::catalog::builtin_models().remove(0);
-        model.id = "codex/test".to_string();
-        model.provider = cupel_core::types::Provider::from("openai-codex");
-        model.compat = None;
-        model
-    }
-
     #[test]
     fn select_model_picks_codex_when_logged_in() {
         let args = parse(&[]).unwrap();
         let home = std::env::temp_dir().join("cupel-select-codex");
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
-        let catalog = vec![codex_model(), keyless_model("qwen3:8b")];
+        // Real Codex rows pin the shipped default. This provider has no
+        // env var, so the test stays independent of exported API keys.
+        let mut catalog: Vec<Model> = cupel_core::catalog::builtin_models()
+            .into_iter()
+            .filter(|m| m.provider.as_str() == "openai-codex")
+            .collect();
+        catalog.push(keyless_model("qwen3:8b"));
 
         // Not logged in: codex is skipped, the keyless local wins.
         let (model, _) = select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
@@ -488,7 +483,14 @@ mod tests {
             .unwrap();
         let (model, key) =
             select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
-        assert_eq!(model.id, "codex/test");
+        assert_eq!(model.id, "codex/gpt-6-sol");
+        assert!(key.is_none());
+
+        // An explicit selection still overrides the Codex default.
+        let args = parse(&["--model", "codex/gpt-6-astra"]).unwrap();
+        let (model, key) =
+            select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
+        assert_eq!(model.id, "codex/gpt-6-astra");
         assert!(key.is_none());
     }
 

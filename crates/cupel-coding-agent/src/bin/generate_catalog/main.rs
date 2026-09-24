@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn codex_rows_are_pinned_namespaced_and_tiered() {
         let models = openai_codex_models();
-        assert_eq!(models.len(), 8, "pi's explicit codex list");
+        assert_eq!(models.len(), 10, "eight earlier rows plus GPT-6 Sol/Luna");
         for model in &models {
             // The id namespacing contract the provider's wire_model undoes.
             let request_model = model
@@ -573,12 +573,15 @@ mod tests {
             assert_eq!(model.api.as_str(), Api::OPENAI_CODEX_RESPONSES);
             assert_eq!(model.provider.as_str(), Provider::OPENAI_CODEX);
         }
-        // Spot checks against pi's generate-models.ts values.
-        let astra = &models[0];
         assert_eq!(
-            astra.id, "codex/gpt-6-astra",
+            models[0].id, "codex/gpt-6-sol",
             "first row = /provider default"
         );
+        // Spot checks against pi's generate-models.ts values.
+        let astra = models
+            .iter()
+            .find(|m| m.id == "codex/gpt-6-astra")
+            .expect("astra row");
         assert_eq!(astra.context_window, 272_000);
         assert_eq!(
             astra.max_context_window,
@@ -617,7 +620,7 @@ mod tests {
                 .is_none()
         );
         assert!(gpt55.max_context_window.is_none());
-        let spark = models.last().expect("eight rows");
+        let spark = models.last().expect("ten rows");
         assert_eq!(spark.context_window, 128_000);
         assert!(spark.cost.tiers.is_none(), "spark has no long-context tier");
         assert_eq!(spark.input, vec![InputModality::Text], "spark is text-only");

@@ -2231,6 +2231,7 @@ mod tests {
         let notice = last_notice(&app);
         assert!(notice.contains("logged in with ChatGPT"), "{notice}");
         assert!(notice.contains("/provider openai-codex"), "{notice}");
+        assert!(notice.contains("default codex/gpt-6-sol"), "{notice}");
     }
 
     #[test]
@@ -2268,10 +2269,15 @@ mod tests {
         let notice = last_notice(&app);
         assert!(
             notice.contains(
-                "openai-codex  - default codex/gpt-6-astra, not logged in - /login openai-codex"
+                "openai-codex  - default codex/gpt-6-sol, not logged in - /login openai-codex"
             ),
             "{notice}"
         );
+        submit_command(&mut app, "/provider openai-codex");
+        assert_eq!(app.meta.provider, "openai-codex");
+        assert_eq!(app.meta.model_name, "GPT-6 Sol");
+        let notice = last_notice(&app);
+        assert!(notice.contains("model codex/gpt-6-sol;"), "{notice}");
         // And the key path is closed: codex takes logins, not keys.
         submit_command(&mut app, "/provider openai-codex sk-pasted");
         let notice = app

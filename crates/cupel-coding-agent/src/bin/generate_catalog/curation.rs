@@ -43,7 +43,7 @@ pub enum Thinking {
 pub enum Window {
     /// models.dev's `limit.context` verbatim.
     ModelsDev,
-    /// OpenAI's long-context family (GPT-5.6, GPT-6 Astra): the planning
+    /// OpenAI's long-context family (GPT-5.6, GPT-6): the planning
     /// window is the long-context PRICE tier's threshold, and models.dev's
     /// `limit.input` becomes `maxContextWindow`.
     PriceTier,
@@ -194,6 +194,21 @@ const fn openrouter(id: &'static str, thinking: Thinking) -> Curated {
     }
 }
 
+/// OpenAI's GPT-6 family through OpenRouter: the same completions row
+/// as `openrouter`, but planned against the 272k price tier like the
+/// direct openai rows (Window::PriceTier instead of ModelsDev).
+const fn openrouter_openai(id: &'static str) -> Curated {
+    Curated {
+        id,
+        rename: None,
+        api: Api::OPENAI_COMPLETIONS,
+        base_url: OPENROUTER_COMPLETIONS_BASE_URL,
+        thinking: Thinking::FromEffort,
+        compat: Compat::OpenrouterCompletions,
+        window: Window::PriceTier,
+    }
+}
+
 /// Table order = catalog order = /model and /provider order.
 ///
 /// claude-sonnet-5 MUST stay the very first row: test fixtures acroos
@@ -242,6 +257,8 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         cupel_id: Provider::OPENAI,
         models: &[
             openai("gpt-6-astra", None),
+            openai("gpt-6-sol", None),
+            openai("gpt-6-luna", None),
             openai("gpt-5.6-sol", Some("GPT-5.6 Solar")),
             openai("gpt-5.6-luna", None),
             openai("gpt-5.6-terra", None),
@@ -313,15 +330,9 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("deepseek/deepseek-v4.1-flash", Thinking::FromEffort),
             openrouter("x-ai/grok-4.6", Thinking::FromEffort),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
-            Curated {
-                id: "openai/gpt-6-astra",
-                rename: None,
-                api: Api::OPENAI_COMPLETIONS,
-                base_url: OPENROUTER_COMPLETIONS_BASE_URL,
-                thinking: Thinking::FromEffort,
-                compat: Compat::OpenrouterCompletions,
-                window: Window::PriceTier,
-            },
+            openrouter_openai("openai/gpt-6-astra"),
+            openrouter_openai("openai/gpt-6-sol"),
+            openrouter_openai("openai/gpt-6-luna"),
             openrouter("meta/muse-spark-1.3", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling", Thinking::FromEffort),
             openrouter("poolside/laguna-s-2.1", Thinking::FromEffort),
@@ -332,8 +343,12 @@ pub const PROVIDERS: &[CuratedProvider] = &[
 /// One Codex model, pinned by hand. models.dev has no `openai-codex`
 /// provider (subscription backends carry no public price sheet), so pi
 /// keeps an explicit list in generate-models.ts ("we keep a small,
-/// explicit list to avoid aliases") — this table is that list, verbatim:
-/// same ids, names, prices, and limits.
+/// explicit list to avoid aliases") — this table mirrors that list: same
+/// ids, names, prices, and limits. Two exceptions as of 2026-09-22:
+/// GPT-5.4 and 5.4 mini stay although pi 0.86 dropped them, and GPT-6
+/// Sol and Luna are here before pi has them — their limits and levels
+/// from Codex CLI's models.json (openai/codex#47332), their prices from
+/// OpenAI plus models.dev (cache write, no temperature).
 ///
 /// The `id` is the BACKEND's model name; the generator namespaces the
 /// catalog id as `codex/<id>` and stores the backend name in compat's
@@ -357,25 +372,46 @@ pub struct PinnedCodex {
     /// The backend's effort scale, verbatim from Codex CLI's models.json
     /// (`supported_reasong_levels`), minus its `ultra` entry.
     pub levels: &'static [&'static str],
-    /// Whether the model accepts `temperature` (Astra rejects it).
+    /// Whether the model accepts `temperature` (GPT-6 rejects it).
     pub temperature: bool,
 }
 
 /// The two effort scales the Codex backend advertises today: every row
-/// stops at xhigh except the 5.6 family and Astra, which add max.
+/// stops at xhigh except the GPT-5.6 and GPT-6 families, which add max.
 const CODEX_LEVELS_TO_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
 const CODEX_LEVELS_TO_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Row order = catalog order: the first row is the `/provider
-/// openai-codex` default. gpt-5.6-sol leads to match the openai
-/// provider's curation (same family, same default instinct); pi lists
-/// alphabetically, which would make the light Spark model the default.
+/// openai-codex` default. gpt-6-sol leads by choice; the remaining
+/// models keep their relative order. Other providers keep their defaults.
 pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
+    PinnedCodex {
+        id: "gpt-6-sol",
+        name: "GPT-6 Sol",
+        vision: true,
+        cost: (2.0, 10.0, 0.2, 2.5),
+        long_context_tier: true,
+        context_window: 272_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
     PinnedCodex {
         id: "gpt-6-astra",
         name: "GPT-6 Astra",
         vision: true,
         cost: (10.0, 50.0, 1.0, 12.5),
+        long_context_tier: true,
+        context_window: 272_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
+    PinnedCodex {
+        id: "gpt-6-luna",
+        name: "GPT-6 Luna",
+        vision: true,
+        cost: (0.1, 0.5, 0.01, 0.125),
         long_context_tier: true,
         context_window: 272_000,
         max_context_window: Some(872_000),

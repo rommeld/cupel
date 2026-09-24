@@ -193,6 +193,46 @@ mod tests {
     }
 
     #[test]
+    fn sol_luna_rows_switch_off_where_the_scale_has_none() {
+        // GPT-6 Sol and Luna share Astra's shape (no temperature, xhigh
+        // and max selectable) with ONE difference: models.dev lists
+        // "none" on their effort scale, so off is sent as effort "none".
+        // The Codex backend's scale has no none, so off stays disabled.
+        let models = builtin_models();
+        for id in [
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "openai/gpt-6-sol",
+            "openai/gpt-6-luna",
+            "codex/gpt-6-sol",
+            "codex/gpt-6-luna",
+        ] {
+            let model = models.iter().find(|m| m.id == id).expect(id);
+            assert_eq!(
+                model
+                    .compat
+                    .as_ref()
+                    .and_then(|c| c.get("supportsTemperature")),
+                Some(&serde_json::json!(false)),
+                "{id}"
+            );
+            let map = model.thinking_level_map.as_ref().expect("map");
+            let off = if id.starts_with("codex/") {
+                None
+            } else {
+                Some("none".to_string())
+            };
+            assert_eq!(map.get("off"), Some(&off), "{id}");
+            assert!(
+                !map.contains_key("xhigh"),
+                "{id}: xhigh key would DISABLE it"
+            );
+            assert!(!map.contains_key("max"), "{id}: max key would DISABLE it");
+            assert_eq!(model.context_window, 272_000, "{id}");
+        }
+    }
+
+    #[test]
     fn astra_rows_carry_the_documented_limits() {
         // GPT-6 Astra in all three dialects: no temperature, no off, no
         // minimal, and BOTH top levels selectable (keys absent).

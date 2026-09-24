@@ -1217,7 +1217,7 @@ impl App {
             Some(login::LoginEvent::Done(Ok(summary))) => {
                 self.login = None;
                 self.notice(format!(
-                    "{summary}\nswitch with /provider openai-codex (default codex/gpt-6-astra)"
+                    "{summary}\nswitch with /provider openai-codex (default codex/gpt-6-sol)"
                 ));
             }
             Some(login::LoginEvent::Done(Err(error))) => {

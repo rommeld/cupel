@@ -193,6 +193,80 @@
     }
   },
   {
+    "id": "gpt-6-sol",
+    "name": "GPT-6 Sol",
+    "api": "openai-responses",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "none"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 2.5,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 4.0,
+          "output": 15.0,
+          "cachedRead": 0.4,
+          "cachedWrite": 5.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 922000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "gpt-6-luna",
+    "name": "GPT-6 Luna",
+    "api": "openai-responses",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "none"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cachedRead": 0.01,
+      "cachedWrite": 0.125,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 0.2,
+          "output": 0.75,
+          "cachedRead": 0.02,
+          "cachedWrite": 0.25
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 922000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "gpt-5.6-sol",
     "name": "GPT-5.6 Solar",
     "api": "openai-responses",
@@ -1059,6 +1133,84 @@
     }
   },
   {
+    "id": "openai/gpt-6-sol",
+    "name": "GPT-6 Sol",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "none"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 2.5,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 4.0,
+          "output": 15.0,
+          "cachedRead": 0.4,
+          "cachedWrite": 5.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 922000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "openai/gpt-6-luna",
+    "name": "GPT-6 Luna",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "none"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cachedRead": 0.01,
+      "cachedWrite": 0.125,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 0.2,
+          "output": 0.75,
+          "cachedRead": 0.02,
+          "cachedWrite": 0.25
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 922000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
     "id": "meta/muse-spark-1.3",
     "name": "Muse Spark 1.3",
     "api": "openai-completions",
@@ -1137,6 +1289,44 @@
     }
   },
   {
+    "id": "codex/gpt-6-sol",
+    "name": "GPT-6 Sol",
+    "api": "openai-codex-responses",
+    "provider": "openai-codex",
+    "baseUrl": "https://chatgpt.com/backend-api",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": "low",
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 2.5,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 4.0,
+          "output": 15.0,
+          "cachedRead": 0.4,
+          "cachedWrite": 5.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 872000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6-sol",
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "codex/gpt-6-astra",
     "name": "GPT-6 Astra",
     "api": "openai-codex-responses",
@@ -1171,6 +1361,44 @@
     "maxTokens": 128000,
     "compat": {
       "requestModel": "gpt-6-astra",
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "codex/gpt-6-luna",
+    "name": "GPT-6 Luna",
+    "api": "openai-codex-responses",
+    "provider": "openai-codex",
+    "baseUrl": "https://chatgpt.com/backend-api",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": "low",
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cachedRead": 0.01,
+      "cachedWrite": 0.125,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 0.2,
+          "output": 0.75,
+          "cachedRead": 0.02,
+          "cachedWrite": 0.25
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 872000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6-luna",
       "supportsTemperature": false
     }
   },
