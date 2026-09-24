@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn keyless_detection_reads_the_compat_flag() {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
-        assert!(!is_keyless(&model), "no compat = key required");
+        assert!(!is_keyless(&model), "no requiresApiKey = key required");
         model.compat = Some(serde_json::json!({"requiresApiKey": false}));
         assert!(is_keyless(&model));
         model.compat = Some(serde_json::json!({"requiresApiKey": true}));

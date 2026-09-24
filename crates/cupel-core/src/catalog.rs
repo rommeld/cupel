@@ -35,12 +35,12 @@ mod tests {
     #[test]
     fn first_model_is_the_anthropic_default() {
         // Fixtures across the workspace call builtin_models().remove(0)
-        // and expect "a plain Anthropic model with no compat blob";
+        // and expect an Anthropic model; the ones that need a specific
+        // compat blob (keyless, codex) overwrite it themselves.
         // /provider's per-provider default is first-in-catalog-order.
         let first = builtin_models().remove(0);
         assert_eq!(first.id, "claude-sonnet-5");
         assert_eq!(first.provider.as_str(), Provider::ANTHROPIC);
-        assert!(first.compat.is_none());
     }
 
     #[test]
@@ -308,6 +308,36 @@ mod tests {
         assert!(!map.contains_key("max"), "max key would DISABLE it");
         assert_eq!(model.context_window, 1_000_000);
         assert_eq!(model.max_tokens, 128_000);
+    }
+
+    #[test]
+    fn sonnet5_and_opus5_rows_are_adaptive() {
+        // Both models answer `budget_tokens` with a 400, like Opus 5.5:
+        // both rows take the adaptive path (effort, no temperature).
+        // "off" is where they differ. models.dev lists a toggle for
+        // Sonnet 5, so "off" gets no entry and the provider sends
+        // `disabled`, which Sonnet 5 accepts. Opus 5 has no toggle:
+        // off -> null, and the provider leaves `thinking` out.
+        let models = builtin_models();
+        for (id, off) in [("claude-sonnet-5", None), ("claude-opus-5", Some(&None))] {
+            let model = models.iter().find(|m| m.id == id).expect("row in catalog");
+            assert_eq!(
+                model.compat,
+                Some(serde_json::json!({
+                    "forceAdaptiveThinking": true,
+                    "supportsTemperature": false,
+                })),
+                "{id}"
+            );
+            let map = model.thinking_level_map.as_ref().expect("map");
+            assert_eq!(map.get("off"), off, "{id}");
+            assert_eq!(map.get("minimal"), Some(&None), "{id}");
+            assert!(
+                !map.contains_key("xhigh"),
+                "{id}: xhigh key would DISABLE it"
+            );
+            assert!(!map.contains_key("max"), "{id}: max key would DISABLE it");
+        }
     }
 
     #[test]

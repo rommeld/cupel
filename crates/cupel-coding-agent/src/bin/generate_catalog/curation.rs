@@ -134,6 +134,24 @@ const fn anthropic(id: &'static str, rename: Option<&'static str>) -> Curated {
     }
 }
 
+/// Claude models that answer `budget_tokens` with a 400 (Sonnet 5,
+/// Opus 5, Opus 5.5, Fable 5): effort levels replace token budgets, and
+/// `temperature` is rejected too. The level map comes from models.dev's
+/// effort list: a model listed with a toggle keeps "off" (the provider
+/// sends `thinking: {type: "disabled"}`), one without a toggle gets
+/// off -> null (the provider leaves `thinking` out).
+const fn anthropic_adaptive(id: &'static str) -> Curated {
+    Curated {
+        id,
+        rename: None,
+        api: Api::ANTHROPIC_MESSAGES,
+        base_url: ANTHROPIC_BASE_URL,
+        thinking: Thinking::FromEffort,
+        compat: Compat::AdaptiveAnthropic,
+        window: Window::ModelsDev,
+    }
+}
+
 const fn openai(id: &'static str, rename: Option<&'static str>) -> Curated {
     Curated {
         id,
@@ -220,33 +238,10 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models_dev_id: "anthropic",
         cupel_id: Provider::ANTHROPIC,
         models: &[
-            anthropic("claude-sonnet-5", None),
-            Curated {
-                id: "claude-opus-5-5",
-                rename: None,
-                api: Api::ANTHROPIC_MESSAGES,
-                base_url: ANTHROPIC_BASE_URL,
-                // Opus 5.5 is adaptive-only like Fable 5: `thinking:
-                // {type: "disabled"}` and `budget_tokens` both return a
-                // 400, so effort levels replace budgets. models.dev lists
-                // effort low..max and no toggle, which derives
-                // off -> null: the provider then omits `thinking`.
-                thinking: Thinking::FromEffort,
-                compat: Compat::AdaptiveAnthropic,
-                window: Window::ModelsDev,
-            },
-            anthropic("claude-opus-5", None),
-            Curated {
-                id: "claude-fable-5",
-                rename: None,
-                api: Api::ANTHROPIC_MESSAGES,
-                base_url: ANTHROPIC_BASE_URL,
-                // Fable 5 is adaptive-only: effort levels instead of
-                // token budgets, and no temperature parameter.
-                thinking: Thinking::FromEffort,
-                compat: Compat::AdaptiveAnthropic,
-                window: Window::ModelsDev,
-            },
+            anthropic_adaptive("claude-sonnet-5"),
+            anthropic_adaptive("claude-opus-5-5"),
+            anthropic_adaptive("claude-opus-5"),
+            anthropic_adaptive("claude-fable-5"),
             anthropic("claude-haiku-4-5", Some("Claude Haiku 4.5")),
             anthropic("claude-sonnet-4-6", None),
             anthropic("claude-sonnet-4-5", Some("Claude Sonnet 4.5")),
