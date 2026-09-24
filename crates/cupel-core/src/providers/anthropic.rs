@@ -1084,8 +1084,12 @@ fn convert_tools(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::types::{UserMessage, now_ms};
+    use serde_json::{Value, json};
+
+    use crate::providers::anthropic::{anthropic_compat, build_request_body};
+    use crate::types::{
+        Context, Message, Model, StreamOptions, ThinkingLevel, UserContentBody, UserMessage, now_ms,
+    };
 
     /// A row from the shipped catalog, not a hand-built fixture: these
     /// tests break if catalog.json and this provider drift apart.
@@ -1166,6 +1170,65 @@ mod tests {
                 json!({"effort": effort}),
                 "{level:?}"
             );
+        }
+    }
+
+    #[test]
+    fn sonnet5_and_opus5_off_never_send_temperature() {
+        // `/thinking off` with a temperature set. Sonnet 5 has no "off"
+        // entry in its map (models.dev lists a toggle), so it gets the
+        // explicit `disabled` that it accepts. Opus 5 has "off": null
+        // and gets no `thinking` at all: the API then thinks adaptively
+        // at its default effort, high. Neither may carry `temperature`,
+        // a non-default value is a 400 on both.
+        let options = StreamOptions {
+            temperature: Some(0.2),
+            ..StreamOptions::default()
+        };
+        let sonnet = catalog_model("claude-sonnet-5");
+        let body = body_for(&sonnet, &options);
+        assert_eq!(body["thinking"], json!({"type": "disabled"}));
+        assert!(body.get("output_config").is_none(), "{body}");
+        assert!(body.get("temperature").is_none(), "{body}");
+
+        let opus = catalog_model("claude-opus-5");
+        let body = body_for(&opus, &options);
+        assert!(body.get("thinking").is_none(), "{body}");
+        assert!(body.get("output_config").is_none(), "{body}");
+        assert!(body.get("temperature").is_none(), "{body}");
+    }
+
+    #[test]
+    fn sonnet5_and_opus5_levels_map_to_adaptive_effort() {
+        // cupel's default level is medium, so before these rows went
+        // adaptive, the very first request to the default model carried
+        // a `budget_tokens` and came back as a 400.
+        for id in ["claude-sonnet-5", "claude-opus-5"] {
+            let model = catalog_model(id);
+            for (level, effort) in [
+                (ThinkingLevel::Minimal, "low"),
+                (ThinkingLevel::Low, "low"),
+                (ThinkingLevel::Medium, "medium"),
+                (ThinkingLevel::High, "high"),
+                (ThinkingLevel::XHigh, "xhigh"),
+                (ThinkingLevel::Max, "max"),
+            ] {
+                let options = StreamOptions {
+                    reasoning: Some(level),
+                    ..StreamOptions::default()
+                };
+                let body = body_for(&model, &options);
+                assert_eq!(
+                    body["thinking"],
+                    json!({"type": "adaptive", "display": "summarized"}),
+                    "{id} {level:?}"
+                );
+                assert_eq!(
+                    body["output_config"],
+                    json!({"effort": effort}),
+                    "{id} {level:?}"
+                );
+            }
         }
     }
 }
