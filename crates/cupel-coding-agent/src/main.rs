@@ -5,7 +5,8 @@
 //!  (default: medium; high for codex/gpt-6-sol)] [--plain]
 //!
 //! Frontend selection: the ratatui TUI when stdout is a real terminal, the
-//! plain line REPL when piped or when `--plain` is given.
+//! plain frontend when piped or when `--plain` is given. Non-TTY stdin is
+//! consumed as one prompt; TTY stdin uses a line REPL.
 //!
 //! Model selection: `--model` picks from the built-in catalog; without it,
 //! a ChatGPT login defaults to `openai-codex`; otherwise the first provider
