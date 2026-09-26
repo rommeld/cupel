@@ -6,7 +6,7 @@
 
 A cupel is a small vessel for refining precious metals. This project borrows that idea: it separates useful code context from repository noise, then feeds that refined signal into fast, local agent workflows.
 
-`cupel` is a lean Rust coding agent focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval. It is heavily inspired by my former favourite agent [pi](https://pi.dev) (a **MASTERPIECE**).
+`cupel` is a lean Rust coding agent focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval.
 
 ## Contents
 

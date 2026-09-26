@@ -1,4 +1,4 @@
-//! Frontends ("modes") for the coding agent, mirroring pi's `modes/` layout:
+//! Frontends ("modes") for the coding agent:
 //!
 //! — [`interactive`] — the ratatui TUI (default when stdout is a terminal)
 //! — [`plain`] — a line-based REPL on a TTY, or one prompt from piped stdin

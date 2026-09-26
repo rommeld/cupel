@@ -1,6 +1,6 @@
 # Project
 
-`cupel` is a lean Rust coding harness focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval. Architectural decisions are inspired by [pi.dev](https://pi.dev).
+`cupel` is a lean Rust coding harness focused on provider-neutral inference, deterministic tooling, CLI/TUI workflows, and efficient code retrieval.
 
 ## Behavioral Guidelines
 
