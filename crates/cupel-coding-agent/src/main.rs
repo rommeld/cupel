@@ -2,15 +2,15 @@
 //!
 //! Usage:
 //!   cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max
-//!  (default: medium)] [--plain]
+//!  (default: medium; high for codex/gpt-6-sol)] [--plain]
 //!
 //! Frontend selection: the ratatui TUI when stdout is a real terminal, the
 //! plain line REPL when piped or when `--plain` is given.
 //!
 //! Model selection: `--model` picks from the built-in catalog; without it,
-//! the first provider with credentials wins, in catalog order (Anthropic,
-//! `OpenAI`, Bedrock/AWS, Fireworks, `OpenRouter`, Codex/ChatGPT login).
-//! Thinking defaults to medium; --thinking off disables it.
+//! a ChatGPT login defaults to `openai-codex`; otherwise the first provider
+//! with credentials wins in catalog order.
+//! Thinking defaults to medium (high for codex/gpt-6-sol); --thinking off disables it.
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
@@ -62,9 +62,14 @@ enum ResumeTarget {
 
 struct CliArgs {
     model: Option<String>,
-    thinking: Option<ThinkingLevel>,
+    thinking: ThinkingChoice,
     plain: bool,
     resume: Option<ResumeTarget>,
+}
+
+enum ThinkingChoice {
+    Default,
+    Explicit(Option<ThinkingLevel>),
 }
 
 /// Parameterized on the iterator (instead of reading `std::env::args`
@@ -72,7 +77,7 @@ struct CliArgs {
 fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
     let mut parsed = CliArgs {
         model: None,
-        thinking: Some(ThinkingLevel::Medium),
+        thinking: ThinkingChoice::Default,
         plain: false,
         resume: None,
     };
@@ -84,7 +89,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--thinking" | "-t" => {
                 let value = iter.next().ok_or("--thinking requires a value")?;
-                parsed.thinking = match value.as_str() {
+                parsed.thinking = ThinkingChoice::Explicit(match value.as_str() {
                     "off" => None,
                     "minimal" => Some(ThinkingLevel::Minimal),
                     "low" => Some(ThinkingLevel::Low),
@@ -93,7 +98,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                     "xhigh" => Some(ThinkingLevel::XHigh),
                     "max" => Some(ThinkingLevel::Max),
                     other => return Err(format!("unknown thinking level: {other}")),
-                };
+                });
             }
             "--plain" => parsed.plain = true,
             // The id is optional: a bare `--resume` (next arg missing or
@@ -108,7 +113,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium)] [--resume [id]] [--plain]\n\navailable models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [id]] [--plain]\n\navailable models:\n",
                 );
                 // Built-ins + models.json layers; deliberately NOT the
                 // ollama probe — help must be instant and never touch the
@@ -134,6 +139,19 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
     Ok(parsed)
 }
 
+fn thinking_level(args: &CliArgs, model: &Model) -> Option<ThinkingLevel> {
+    match args.thinking {
+        ThinkingChoice::Explicit(level) => level,
+        ThinkingChoice::Default => Some(
+            if model.id == "codex/gpt-6-sol" && model.provider.as_str() == "openai-codex" {
+                ThinkingLevel::High
+            } else {
+                ThinkingLevel::Medium
+            },
+        ),
+    }
+}
+
 /// Pick a model + API key from CLI args and the MERGED catalog (built-ins,
 /// models.json layers, discovered local models). Credential knowledge
 /// lives in `providers.rs`, shared with the TUI's `/provider` command;
@@ -156,7 +174,17 @@ fn select_model(
         return Ok((model, key));
     }
 
-    // No --model, pass 1: first provider with CLOUD credentials wins, in
+    // A stored ChatGPT login makes Codex the default, regardless of where
+    // its models occur in the catalog or which other keys are configured.
+    if cupel_coding_agent::auth::has_credential(home, "openai-codex")
+        && let Some(model) = catalog
+            .iter()
+            .find(|m| m.provider.as_str() == "openai-codex")
+    {
+        return Ok((model.clone(), None));
+    }
+
+    // Otherwise, first provider with CLOUD credentials wins, in
     // catalog order. Bedrock carries no key through StreamOptions — the
     // AWS chain resolves inside the provider. Keyless local models fall
     // through here (no env var, and normally not settings entry), so a
@@ -166,12 +194,7 @@ fn select_model(
             "amazon-bedrock" if providers::has_aws_credentials() => {
                 return Ok((model.clone(), None));
             }
-            // Codex carries no key either: a stored ChatGPT login is the
-            // credential, and the api_key HOOK turns it into a fresh
-            // access token per request (bootstrap::SessionHooks).
-            "openai-codex" if cupel_coding_agent::auth::has_credential(home, "openai-codex") => {
-                return Ok((model.clone(), None));
-            }
+            "openai-codex" => {} // OAuth only, never a settings key.
             provider => {
                 if let Some(key) = providers::resolve_api_key(provider, settings) {
                     return Ok((model.clone(), Some(key)));
@@ -271,7 +294,9 @@ async fn run() -> Result<(), AppError> {
         Err(e) if !use_plain && args.model.is_none() => {
             let fallback = ingredients
                 .models
-                .first()
+                .iter()
+                .find(|m| m.provider.as_str() == "openai-codex")
+                .or_else(|| ingredients.models.first())
                 .cloned()
                 .ok_or_else(|| AppError::ModelSelection(e.clone()))?;
             let warning = format!(
@@ -321,7 +346,7 @@ async fn run() -> Result<(), AppError> {
     options.system_prompt = ingredients.system_prompt;
     options.tools = ingredients.tools;
     options.api_key = api_key;
-    options.thinking_level = args.thinking;
+    options.thinking_level = thinking_level(&args, &model);
     options.tool_execution = ToolExecutionMode::Parallel;
     options.session_id = Some(session_id);
     options.messages = seeded_messages;
@@ -389,17 +414,36 @@ mod tests {
     }
 
     #[test]
-    fn thinking_defaults_to_medium_and_off_still_disables() {
-        // pi parity: no flag means medium...
-        assert_eq!(parse(&[]).unwrap().thinking, Some(ThinkingLevel::Medium));
-        // ...and the explicit opt-out still maps to None (= off).
-        assert!(parse(&["--thinking", "off"]).unwrap().thinking.is_none());
+    fn thinking_defaults_to_high_for_codex_sol_only_and_respects_overrides() {
+        let codex = cupel_core::catalog::builtin_models()
+            .into_iter()
+            .find(|m| m.id == "codex/gpt-6-sol")
+            .expect("shipped Codex default");
+        let other_codex = cupel_core::catalog::builtin_models()
+            .into_iter()
+            .find(|m| m.id == "codex/gpt-6-astra")
+            .expect("shipped Codex model");
+        let args = parse(&[]).unwrap();
+        assert_eq!(thinking_level(&args, &codex), Some(ThinkingLevel::High));
         assert_eq!(
-            parse(&["--thinking", "high"]).unwrap().thinking,
-            Some(ThinkingLevel::High)
+            thinking_level(&args, &other_codex),
+            Some(ThinkingLevel::Medium)
         );
         assert_eq!(
-            parse(&["--thinking", "max"]).unwrap().thinking,
+            thinking_level(&args, &keyless_model("local")),
+            Some(ThinkingLevel::Medium)
+        );
+        // Even an explicit off is distinct from an unspecified default.
+        assert_eq!(
+            thinking_level(&parse(&["--thinking", "off"]).unwrap(), &codex),
+            None
+        );
+        assert_eq!(
+            thinking_level(&parse(&["--thinking", "medium"]).unwrap(), &codex),
+            Some(ThinkingLevel::Medium)
+        );
+        assert_eq!(
+            thinking_level(&parse(&["--thinking", "max"]).unwrap(), &codex),
             Some(ThinkingLevel::Max)
         );
     }
@@ -459,17 +503,21 @@ mod tests {
         let home = std::env::temp_dir().join("cupel-select-codex");
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
-        // Real Codex rows pin the shipped default. This provider has no
-        // env var, so the test stays independent of exported API keys.
-        let mut catalog: Vec<Model> = cupel_core::catalog::builtin_models()
-            .into_iter()
-            .filter(|m| m.provider.as_str() == "openai-codex")
-            .collect();
+        // A configured cloud provider precedes Codex in catalog order.
+        // Codex has no env var, so the test stays independent of exported keys.
+        let mut catalog = vec![cloud_model("cloud-1", "test-cloud")];
+        catalog.extend(
+            cupel_core::catalog::builtin_models()
+                .into_iter()
+                .filter(|m| m.provider.as_str() == "openai-codex"),
+        );
         catalog.push(keyless_model("qwen3:8b"));
+        let mut settings = Settings::default();
+        settings.providers.insert("test-cloud".into(), "key".into());
 
-        // Not logged in: codex is skipped, the keyless local wins.
-        let (model, _) = select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
-        assert_eq!(model.id, "qwen3:8b");
+        // Without login, the configured cloud provider wins.
+        let (model, _) = select_model(&args, &catalog, &settings, Some(&home)).unwrap();
+        assert_eq!(model.id, "cloud-1");
 
         // Logged in: codex wins, and carries NO startup key — the
         // api_key hook mints fresh access tokens per request instead.
@@ -481,17 +529,15 @@ mod tests {
         };
         cupel_coding_agent::auth::save_credential(Some(&home), "openai-codex", &credential)
             .unwrap();
-        let (model, key) =
-            select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
+        let (model, key) = select_model(&args, &catalog, &settings, Some(&home)).unwrap();
         assert_eq!(model.id, "codex/gpt-6-sol");
         assert!(key.is_none());
 
-        // An explicit selection still overrides the Codex default.
-        let args = parse(&["--model", "codex/gpt-6-astra"]).unwrap();
-        let (model, key) =
-            select_model(&args, &catalog, &Settings::default(), Some(&home)).unwrap();
-        assert_eq!(model.id, "codex/gpt-6-astra");
-        assert!(key.is_none());
+        // Explicit --model still overrides the Codex default.
+        let args = parse(&["--model", "cloud-1"]).unwrap();
+        let (model, key) = select_model(&args, &catalog, &settings, Some(&home)).unwrap();
+        assert_eq!(model.id, "cloud-1");
+        assert_eq!(key.as_deref(), Some("key"));
     }
 
     #[test]
