@@ -3,6 +3,27 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.18.0] - 2026-09-26
+
+- fix: clean up plain-mode bash commands on termination
+- test(bash): tolerate CI scheduling gaps in background output
+- fix(bash): use bash instead of the user's login shell
+- docs: describe cupel without pi branding
+- fix(plain): fail on terminal model errors
+- fix(plain): submit piped stdin as one prompt
+- fix(plain): reject TUI-only commands and filter help
+- fix(plain): clean up captured output and command help
+- fix(bash): return when the shell exits, not when its pipes close
+- fix(catalog): remove Codex Spark from pinned models
+- fix(catalog): drop unsupported Codex GPT-5.4 rows
+- feat(cli): prefer Codex login and tune Sol thinking default
+- test(tui): verify /exit no longer quits
+- Update README.md
+- Update README.md
+- Update README.md
+- Update README.md
+- Update README.md
+
 ## [v0.17.0] - 2026-09-24
 
 - Test Sonnet 5 and Opus 5 adaptive request bodies and off behavior
