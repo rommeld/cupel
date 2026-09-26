@@ -13,6 +13,30 @@ use cupel_core::types::{AssistantMessageEvent, Message, ToolResultContent};
 use crate::modes::SessionMeta;
 use crate::session::SessionRecorder;
 
+#[derive(Debug, PartialEq, Eq)]
+enum PlainCommand {
+    Quit,
+    Help,
+    Review,
+    TuiOnly,
+    Prompt,
+}
+
+fn plain_command(name: &str) -> PlainCommand {
+    match name {
+        "quit" => PlainCommand::Quit,
+        "help" => PlainCommand::Help,
+        "review" => PlainCommand::Review,
+        _ if crate::commands::BUILTIN_COMMANDS
+            .iter()
+            .any(|command| command.name == name) =>
+        {
+            PlainCommand::TuiOnly
+        }
+        _ => PlainCommand::Prompt,
+    }
+}
+
 // Keep exactly one blank line between reasoning and the next output.
 // Deltas may split the final newlines across multiple events.
 fn reasoning_newlines(previous: usize, delta: &str) -> usize {
@@ -73,21 +97,28 @@ pub async fn run(
             break;
         }
 
-        // Slash commands: a minimal built-in set for plain mode (the TUI
-        // has the full one), plus prompt-template expansion. Unknown
-        // /commands pass through to the model as literal text.
+        // Slash commands: only supported built-ins run locally. TUI-only
+        // built-ins show a notice; unknown commands and prompt templates
+        // retain their usual behavior.
         let mut prompt = input.to_string();
         if let Some(rest) = input.strip_prefix('/') {
-            match rest
+            let name = rest
                 .split_once(char::is_whitespace)
-                .map_or(rest, |(n, _)| n)
-            {
-                "quit" => break,
-                "help" => {
-                    for c in crate::commands::BUILTIN_COMMANDS {
+                .map_or(rest, |(n, _)| n);
+            match plain_command(name) {
+                PlainCommand::Quit => break,
+                PlainCommand::Help => {
+                    for c in crate::commands::BUILTIN_COMMANDS
+                        .iter()
+                        .filter(|c| plain_command(c.name) != PlainCommand::TuiOnly)
+                    {
                         println!("  /{}  - {}", c.name, c.description);
                     }
-                    for t in &meta.templates {
+                    for t in meta
+                        .templates
+                        .iter()
+                        .filter(|t| plain_command(&t.name) == PlainCommand::Prompt)
+                    {
                         println!("  /{}  - {}", t.name, t.description);
                     }
                     println!();
@@ -96,7 +127,7 @@ pub async fn run(
                 // Same builder as the TUI; here the whole path is
                 // synchronous — gather, then fall through to the ordinary
                 // (blocking) prompt round-trip below.
-                "review" => {
+                PlainCommand::Review => {
                     let review_args = crate::commands::parse_command_args(
                         rest.split_once(char::is_whitespace).map_or("", |(_, a)| a),
                     );
@@ -111,7 +142,15 @@ pub async fn run(
                         }
                     }
                 }
-                _ => {
+                PlainCommand::TuiOnly => {
+                    if matches!(name, "model" | "provider") {
+                        println!("/{name} is TUI-only; use --model <id> at startup in plain mode");
+                    } else {
+                        println!("/{name} is TUI-only; use cupel in an interactive terminal");
+                    }
+                    continue;
+                }
+                PlainCommand::Prompt => {
                     if let Some(expanded) =
                         crate::commands::expand_prompt_template(input, &meta.templates)
                     {
@@ -289,7 +328,33 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
-    use crate::modes::plain::{reasoning_newlines, reasoning_separator};
+    use crate::modes::plain::{
+        PlainCommand, plain_command, reasoning_newlines, reasoning_separator,
+    };
+
+    #[test]
+    fn plain_help_only_advertises_supported_builtins() {
+        let supported: Vec<_> = crate::commands::BUILTIN_COMMANDS
+            .iter()
+            .filter(|command| plain_command(command.name) != PlainCommand::TuiOnly)
+            .map(|command| command.name)
+            .collect();
+        assert_eq!(supported, ["help", "quit", "review"]);
+        for name in [
+            "new",
+            "model",
+            "provider",
+            "login",
+            "logout",
+            "thinking",
+            "session-id",
+            "hot-reload",
+            "usage",
+        ] {
+            assert_eq!(plain_command(name), PlainCommand::TuiOnly, "{name}");
+        }
+        assert_eq!(plain_command("unknown"), PlainCommand::Prompt);
+    }
 
     #[test]
     fn reasoning_spacing_handles_split_and_existing_newlines() {
