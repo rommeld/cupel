@@ -1017,6 +1017,19 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(app.should_quit);
+
+        // /exit is not a command: it is neither offered nor handled locally.
+        let mut app = test_app();
+        type_text(&mut app, "/ex");
+        assert!(app.autocomplete.visible().is_none());
+        type_text(&mut app, "it");
+        assert!(app.autocomplete.visible().is_none());
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        assert!(!app.should_quit);
+        assert_eq!(app.pending_prompt.as_deref(), Some("/exit"));
     }
 
     #[test]
