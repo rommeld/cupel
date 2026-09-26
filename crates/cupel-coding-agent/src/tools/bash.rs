@@ -1,4 +1,4 @@
-//! Runs `$SHELL -c <command>` in the agent's working directory, streaming
+//! Runs bash in the agent's working directory, streaming
 //! stdout+stderr into a bounded accumulator. The design constraints all come
 //! from real agent behavior:
 //!
@@ -19,7 +19,8 @@
 //!   hours. Once the shell exits, reading stops as soon as the pipes stay
 //!   quiet for 100 ms; the background process itself keeps running.
 
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -227,6 +228,38 @@ fn kill_process_group(pid: u32) {
         .output();
 }
 
+fn is_executable(path: &Path) -> bool {
+    path.metadata().is_ok_and(|metadata| {
+        if !metadata.is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            metadata.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
+    })
+}
+
+fn resolve_shell(system_bash: &Path, path: Option<&OsStr>) -> PathBuf {
+    if is_executable(system_bash) {
+        return system_bash.to_path_buf();
+    }
+    path.and_then(|path| {
+        std::env::split_paths(path)
+            .map(|dir| dir.join("bash"))
+            .filter(|candidate| is_executable(candidate))
+            // PATH entries can be relative to cupel's process directory;
+            // commands execute with the agent's (possibly different) cwd.
+            .find_map(|candidate| candidate.canonicalize().ok())
+    })
+    .unwrap_or_else(|| PathBuf::from("sh"))
+}
+
 enum RunOutcome {
     Exited(Option<i32>),
     Aborted,
@@ -296,9 +329,8 @@ impl AgentTool for BashTool {
             return Err("Operation aborted".into());
         }
 
-        // The user's shell, falling back to bash. `-c` runs one command
-        // string, exactly how pi's shell config resolves on Unix.
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        // Commands are written for bash, regardless of the user's login shell.
+        let shell = resolve_shell(Path::new("/bin/bash"), std::env::var_os("PATH").as_deref());
         let mut command = tokio::process::Command::new(shell);
         command
             .arg("-c")
@@ -576,6 +608,52 @@ mod tests {
         );
         // Arguments still streaming in (or malformed): the bare name.
         assert_eq!(tool.describe_call(&json!({})), "bash");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_selection_prefers_executable_bash_over_path_and_falls_back_to_sh() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = std::env::temp_dir().join(format!(
+            "cupel-shell-selection-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let preferred = root.join("system-bash");
+        let from_path = bin.join("bash");
+        let path = std::env::join_paths([&bin]).unwrap();
+
+        std::fs::write(&from_path, "").unwrap();
+        assert_eq!(resolve_shell(&preferred, Some(&path)), PathBuf::from("sh"));
+        std::fs::set_permissions(&from_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            resolve_shell(&preferred, Some(&path)),
+            from_path.canonicalize().unwrap()
+        );
+
+        std::fs::write(&preferred, "").unwrap();
+        std::fs::set_permissions(&preferred, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(resolve_shell(&preferred, Some(&path)), preferred);
+        assert_eq!(resolve_shell(&preferred, None), preferred);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn runs_bash_syntax_instead_of_the_login_shell() {
+        let out = run(
+            json!({"command": "for i in 1 2 3; do echo $i; done; echo BASH_VERSION=$BASH_VERSION"}),
+        )
+        .await
+        .unwrap();
+        assert!(out.contains("1\n2\n3\n"), "got: {out}");
+        assert!(
+            out.contains("BASH_VERSION=") && !out.contains("BASH_VERSION=\n"),
+            "got: {out}"
+        );
     }
 
     #[tokio::test]
