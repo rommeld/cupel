@@ -14,6 +14,10 @@
 //!   - one extra process spawn on the rare abort path is a fine trade.
 //! — **Exit codes are errors.** A non-zero exit becomes an error tool result
 //!   (with the output attached) so the model *sees* failure as failure.
+//! — **The shell's exit ends the call, not the pipes'.** A background
+//!   process (`server &`) inherits stdout/stderr and can hold them open for
+//!   hours. Once the shell exits, reading stops as soon as the pipes stay
+//!   quiet for 100 ms; the background process itself keeps running.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -33,6 +37,11 @@ use crate::truncate::{
 
 /// Minimum interval between streamed progress updates to the UI.
 const UPDATE_THROTTLE: Duration = Duration::from_millis(100);
+
+/// How long to keep reading after the shell has exited (pi's
+/// `EXIT_STDIO_GRACE_MS`). Output that a background process is still
+/// writing restarts the wait with every chunk, so it is not cut off.
+const EXIT_STDIO_GRACE: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Deserialize)]
 struct BashArgs {
@@ -331,9 +340,16 @@ impl AgentTool for BashTool {
             .timeout
             .map(|secs| tokio::time::Instant::now() + Duration::from_secs_f64(secs));
 
-        // Main loop: pump output chunks, racing cancellation and the timeout.
+        // Set once the shell exits: its status, and the moment we stop
+        // waiting for output a background process might still write.
+        let mut exited: Option<(std::process::ExitStatus, tokio::time::Instant)> = None;
+
+        // Main loop: pump output chunks, racing cancellation, the timeout,
+        // and the shell's own exit.
         let mut outcome: Option<RunOutcome> = None;
         while outcome.is_none() {
+            // A copy for the timer below, so its future doesn't borrow `exited`.
+            let quiet_until = exited.map(|(_, quiet_until)| quiet_until);
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
@@ -363,6 +379,10 @@ impl AgentTool for BashTool {
                     match chunk {
                         Some(chunk) => {
                             output.append(&chunk);
+                            // Still writing after the shell exited: keep listening.
+                            if let Some((_, quiet_until)) = &mut exited {
+                                *quiet_until = tokio::time::Instant::now() + EXIT_STDIO_GRACE;
+                            }
                             if let Some(on_update) = &on_update
                                 && last_update.elapsed() >= UPDATE_THROTTLE
                             {
@@ -372,11 +392,27 @@ impl AgentTool for BashTool {
                             }
                         }
                         // Both pipes closed: the command is done writing.
+                        // `wait` returns at once if the shell already exited.
                         None => {
                             let status = child.wait().await?;
                             outcome = Some(RunOutcome::Exited(status.code()));
                         }
                     }
+                }
+                // The shell exited, but a background process it started
+                // (`server &`) may hold the pipes open for hours. Don't wait
+                // for them to close; start the quiet timer instead.
+                status = child.wait(), if exited.is_none() => {
+                    exited = Some((status?, tokio::time::Instant::now() + EXIT_STDIO_GRACE));
+                }
+                () = async {
+                    match quiet_until {
+                        Some(quiet_until) => tokio::time::sleep_until(quiet_until).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    // Shell gone and no output for EXIT_STDIO_GRACE: done.
+                    outcome = exited.map(|(status, _)| RunOutcome::Exited(status.code()));
                 }
             }
         }
@@ -477,7 +513,12 @@ impl AgentTool for BashTool {
     }
 }
 
-/// Copy one pipe into the chunk channel until EOF.
+/// Copy one pipe into the chunk channel until EOF, or until the run stops
+/// listening. The second case matters when a background process keeps the
+/// pipe open after the shell exits: returning drops `pipe`, which closes
+/// our end of it (pi calls `stream.destroy()` for the same reason). Its
+/// later writes then fail with EPIPE, so a background server should log to
+/// a file (`server > server.log 2>&1 &`).
 fn spawn_reader(
     mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
@@ -485,7 +526,12 @@ fn spawn_reader(
     tokio::spawn(async move {
         let mut buffer = [0_u8; 8192];
         loop {
-            match pipe.read(&mut buffer).await {
+            let read = tokio::select! {
+                read = pipe.read(&mut buffer) => read,
+                // The run finished and dropped the receiver.
+                () = tx.closed() => break,
+            };
+            match read {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     if tx.send(buffer[..n].to_vec()).await.is_err() {
@@ -582,6 +628,39 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("aborted"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn background_process_does_not_hold_the_call_open() {
+        // `sleep 10 &` inherits the pipes and keeps them open for 10 s. The
+        // call must end right after the shell exits, with the shell's code.
+        let started = std::time::Instant::now();
+        let out = run(json!({"command": "sleep 10 & echo started"}))
+            .await
+            .unwrap();
+        assert!(out.contains("started"), "got: {out}");
+        let err = run(json!({"command": "sleep 10 & exit 3"}))
+            .await
+            .unwrap_err();
+        assert!(err.contains("exited with code 3"), "got: {err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited for the background process"
+        );
+    }
+
+    #[tokio::test]
+    async fn output_after_the_shell_exits_is_kept() {
+        // A background writer keeps printing after the shell is gone. Each
+        // chunk restarts the quiet timer, so all ten ticks arrive; a fixed
+        // 100 ms cutoff after the exit would lose the later ones.
+        let out = run(json!({
+            "command": "sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do echo tick$i; sleep 0.02; done' & echo started"
+        }))
+        .await
+        .unwrap();
+        assert!(out.contains("started"), "got: {out}");
+        assert!(out.contains("tick10"), "got: {out}");
     }
 
     #[tokio::test]
