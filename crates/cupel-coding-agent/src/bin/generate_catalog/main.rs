@@ -560,7 +560,19 @@ mod tests {
     #[test]
     fn codex_rows_are_pinned_namespaced_and_tiered() {
         let models = openai_codex_models();
-        assert_eq!(models.len(), 10, "eight earlier rows plus GPT-6 Sol/Luna");
+        assert_eq!(
+            models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            [
+                "codex/gpt-6-sol",
+                "codex/gpt-6-astra",
+                "codex/gpt-6-luna",
+                "codex/gpt-5.6-sol",
+                "codex/gpt-5.6-luna",
+                "codex/gpt-5.6-terra",
+                "codex/gpt-5.5",
+                "codex/gpt-5.3-codex-spark",
+            ]
+        );
         for model in &models {
             // The id namespacing contract the provider's wire_model undoes.
             let request_model = model
@@ -620,7 +632,7 @@ mod tests {
                 .is_none()
         );
         assert!(gpt55.max_context_window.is_none());
-        let spark = models.last().expect("ten rows");
+        let spark = models.last().expect("spark row");
         assert_eq!(spark.context_window, 128_000);
         assert!(spark.cost.tiers.is_none(), "spark has no long-context tier");
         assert_eq!(spark.input, vec![InputModality::Text], "spark is text-only");
