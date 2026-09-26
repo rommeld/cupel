@@ -1,8 +1,7 @@
 //! Plain mode: the line-based REPL (formerly the whole `main.rs`).
 //!
 //! Used when stdout is not a terminal (pipes, CI) or with `--plain`. It
-//! prints raw text with a little ANSI color and no screen management —
-//! exactly what you want when the output is being captured.
+//! prints unstyled text with no screen management so it can be captured.
 
 use std::io::Write as _;
 
@@ -14,6 +13,29 @@ use cupel_core::types::{AssistantMessageEvent, Message, ToolResultContent};
 use crate::modes::SessionMeta;
 use crate::session::SessionRecorder;
 
+// Keep exactly one blank line between reasoning and the next output.
+// Deltas may split the final newlines across multiple events.
+fn reasoning_newlines(previous: usize, delta: &str) -> usize {
+    if delta.bytes().all(|byte| byte == b'\n') {
+        (previous + delta.len()).min(2)
+    } else {
+        delta
+            .bytes()
+            .rev()
+            .take_while(|byte| *byte == b'\n')
+            .count()
+            .min(2)
+    }
+}
+
+fn reasoning_separator(newlines: usize) -> &'static str {
+    match newlines {
+        0 => "\n\n",
+        1 => "\n",
+        _ => "",
+    }
+}
+
 pub async fn run(
     mut agent: Agent,
     meta: &SessionMeta,
@@ -21,7 +43,7 @@ pub async fn run(
 ) -> Result<(), String> {
     println!("cupel - {} ({})", meta.model_name, meta.provider);
     println!(
-        "tools: read, bash, edit, write, grep | cwd: {} | 'exit' to quit\n",
+        "tools: read, grep, apply_patch, bash | cwd: {} | 'exit' to quit\n",
         meta.cwd
     );
     // Non-empty history at startup = a resumed session (seeded via
@@ -110,9 +132,10 @@ pub async fn run(
 
         let mut events = agent.prompt_text(&prompt).map_err(|e| e.to_string())?;
 
-        // Render the event stream. Text deltas print incrementally; thinking
-        // is dimmed; tool calls appear as one-liners.
+        // Render the event stream without terminal styling. Text deltas
+        // print incrementally; tool calls appear as one-liners.
         let mut in_thinking = false;
+        let mut thinking_newlines = 0;
         while let Some(event) = events.next().await {
             match event {
                 // Every finalized message (user, assistant, tool result)
@@ -122,8 +145,7 @@ pub async fn run(
                 AgentEvent::MessageUpdate { event } => match event {
                     AssistantMessageEvent::TextDelta { delta, .. } => {
                         if in_thinking {
-                            // Close the dim ANSI style from thinking output.
-                            print!("\x1b[0m\n\n");
+                            print!("{}", reasoning_separator(thinking_newlines));
                             in_thinking = false;
                         }
                         print!("{delta}");
@@ -131,19 +153,22 @@ pub async fn run(
                     }
                     AssistantMessageEvent::ThinkingDelta { delta, .. } => {
                         if !in_thinking {
-                            print!("\x1b[2m"); // dim
-                            in_thinking = true;
+                            thinking_newlines = 0;
                         }
+                        thinking_newlines = reasoning_newlines(thinking_newlines, &delta);
+                        in_thinking = true;
                         print!("{delta}");
                         std::io::stdout().flush().ok();
                     }
                     AssistantMessageEvent::ToolCallEnd { tool_call, .. } => {
                         if in_thinking {
-                            print!("\x1b[0m\n\n");
+                            print!("{}", reasoning_separator(thinking_newlines));
                             in_thinking = false;
+                        } else {
+                            println!();
                         }
                         println!(
-                            "\n\x1b[36m[{}]\x1b[0m",
+                            "[{}]",
                             agent.describe_tool_call(&tool_call.name, &tool_call.arguments)
                         );
                     }
@@ -152,6 +177,9 @@ pub async fn run(
                 AgentEvent::ToolExecutionEnd {
                     result, is_error, ..
                 } => {
+                    if is_error {
+                        print!("error: ");
+                    }
                     if let Some(diff) = result
                         .details
                         .as_ref()
@@ -159,12 +187,7 @@ pub async fn run(
                         .and_then(serde_json::Value::as_str)
                     {
                         for line in diff.lines() {
-                            let color = match line.as_bytes().first() {
-                                Some(b'+') => "\x1b[32m",
-                                Some(b'-') => "\x1b[31m",
-                                _ => "\x1b[2m",
-                            };
-                            println!("{color}{line}\x1b[0m");
+                            println!("{line}");
                         }
                     } else {
                         let text: String = result
@@ -178,37 +201,38 @@ pub async fn run(
                             .join("\n");
                         let preview: Vec<&str> = text.lines().take(10).collect();
                         let more = text.lines().count().saturating_sub(preview.len());
-                        let style = if is_error { "\x1b[31m" } else { "\x1b[2m" };
-                        println!("{style}{}\x1b[0m", preview.join("\n"));
+                        println!("{}", preview.join("\n"));
                         if more > 0 {
-                            println!("\x1b[2m... ({more} more lines)\x1b[0m");
+                            println!("... ({more} more lines)");
                         }
                     }
                 }
                 AgentEvent::TurnEnd { message, .. } => {
+                    let ended_thinking = in_thinking;
                     if in_thinking {
-                        print!("\x1b[0m\n\n");
+                        print!("{}", reasoning_separator(thinking_newlines));
                         in_thinking = false;
                     }
                     if let AgentMessage::Llm(Message::Assistant(assistant)) = message.as_ref() {
+                        let prefix = if ended_thinking { "" } else { "\n" };
                         if let Some(error) = &assistant.error_message {
-                            println!("\n\x1b[31merror: {error}\x1b[0m");
+                            println!("{prefix}error: {error}");
                         }
                         if assistant.stop_reason == cupel_core::types::StopReason::Length {
                             println!(
-                                "\n\x1b[31merror: response was truncated before completion \
-                                (output token limit)\x1b[0m"
+                                "{prefix}error: response was truncated before completion \
+                                (output token limit)"
                             );
                         }
                         let usage = &assistant.usage;
                         println!(
-                            "\n\x1b[2m[{} in / {} out / {} cached, ${:.4}]\x1b[0m",
+                            "{prefix}[{} in / {} out / {} cached, ${:.4}]",
                             usage.input, usage.output, usage.cache_read, usage.cost.total
                         );
                     }
                 }
                 AgentEvent::CompactionStart { .. } => {
-                    println!("\x1b[33mcompacting context...\x1b[0m");
+                    println!("compacting context...");
                 }
                 AgentEvent::CompactionEnd {
                     tokens_before,
@@ -218,16 +242,16 @@ pub async fn run(
                 } => match error {
                     None => {
                         println!(
-                            "\x1b[33mcontext compacted: ~{}k -> ~{}k tokens\x1b[0m",
+                            "context compacted: ~{}k -> ~{}k tokens",
                             tokens_before / 1000,
                             tokens_after / 1000
                         );
                         // The checkpoint the agent works from now.
                         if let Some(summary) = summary {
-                            println!("\x1b[2m{summary}\x1b[0m\n");
+                            println!("{summary}\n");
                         }
                     }
-                    Some(error) => println!("\x1b[31mcompaction failed: {error}\x1b[0m"),
+                    Some(error) => println!("compaction failed: {error}"),
                 },
                 AgentEvent::AutoRetry {
                     attempt,
@@ -236,12 +260,12 @@ pub async fn run(
                     error_message,
                 } => {
                     if in_thinking {
-                        print!("\x1b[0m\n\n");
+                        print!("{}", reasoning_separator(thinking_newlines));
                         in_thinking = false;
                     }
                     println!(
-                        "\x1b[33mretrying in {:.1}s (attempt {attempt}/{max_attempts}): \
-                         {error_message}\x1b[0m",
+                        "retrying in {:.1}s (attempt {attempt}/{max_attempts}): \
+                         {error_message}",
                         delay_ms as f64 / 1000.0
                     );
                 }
@@ -261,4 +285,25 @@ pub async fn run(
     // Normal exit (EOF, `exit`, `/quit`): announce session-end to hooks.
     recorder.end_session().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::modes::plain::{reasoning_newlines, reasoning_separator};
+
+    #[test]
+    fn reasoning_spacing_handles_split_and_existing_newlines() {
+        let mut newlines = reasoning_newlines(0, "summary\n");
+        newlines = reasoning_newlines(newlines, "\n");
+        assert_eq!(reasoning_separator(newlines), "");
+        assert_eq!(
+            reasoning_separator(reasoning_newlines(0, "summary\n")),
+            "\n"
+        );
+        assert_eq!(
+            reasoning_separator(reasoning_newlines(0, "summary")),
+            "\n\n"
+        );
+        assert_eq!(reasoning_newlines(2, "more"), 0);
+    }
 }

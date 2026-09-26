@@ -253,7 +253,7 @@ fn init_tracing(interactive: bool) -> Option<std::path::PathBuf> {
             .init();
         Some(path)
     } else {
-        builder.with_writer(std::io::stderr).init();
+        builder.with_ansi(false).with_writer(std::io::stderr).init();
         None
     }
 }
