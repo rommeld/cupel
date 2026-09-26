@@ -239,8 +239,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "provider",
-        description: "Switch provider: /provider <name> [api-key] (key is saved to
-        ~/.cupel/settings.json; no argument lists them)",
+        description: "Switch provider: /provider <name> [api-key] (key is saved to ~/.cupel/settings.json; no argument lists them)",
     },
     BuiltinCommand {
         name: "login",
@@ -282,6 +281,13 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn builtin_descriptions_are_single_line() {
+        for command in BUILTIN_COMMANDS {
+            assert!(!command.description.contains('\n'), "{}", command.name);
+        }
     }
 
     #[test]
