@@ -288,6 +288,12 @@ async fn run_loop(
                 tool_results: tool_results.clone(),
             });
 
+            // A cancelled tool has finished cleaning up its child processes.
+            // Do not start another model request even if it asked for more tools.
+            if cancel.is_cancelled() {
+                return;
+            }
+
             if hooks.should_stop_after_turn(&message, &tool_results).await {
                 break;
             }
