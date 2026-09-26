@@ -17,7 +17,7 @@
 //! — **The shell's exit ends the call, not the pipes'.** A background
 //!   process (`server &`) inherits stdout/stderr and can hold them open for
 //!   hours. Once the shell exits, reading stops as soon as the pipes stay
-//!   quiet for 100 ms; the background process itself keeps running.
+//!   quiet for 500 ms; the background process itself keeps running.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -39,10 +39,10 @@ use crate::truncate::{
 /// Minimum interval between streamed progress updates to the UI.
 const UPDATE_THROTTLE: Duration = Duration::from_millis(100);
 
-/// How long to keep reading after the shell has exited (pi's
-/// `EXIT_STDIO_GRACE_MS`). Output that a background process is still
-/// writing restarts the wait with every chunk, so it is not cut off.
-const EXIT_STDIO_GRACE: Duration = Duration::from_millis(100);
+/// How long to keep reading after the shell has exited. Give background
+/// writers room for scheduling delays on busy hosts; every chunk restarts
+/// the timer, while silent processes cannot hold the call open indefinitely.
+const EXIT_STDIO_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Deserialize)]
 struct BashArgs {
@@ -729,11 +729,11 @@ mod tests {
 
     #[tokio::test]
     async fn output_after_the_shell_exits_is_kept() {
-        // A background writer keeps printing after the shell is gone. Each
-        // chunk restarts the quiet timer, so all ten ticks arrive; a fixed
-        // 100 ms cutoff after the exit would lose the later ones.
+        // Ten ticks take longer than the grace interval. Each chunk must
+        // extend the wait, but the gap between ticks remains comfortably
+        // below the grace interval even on a loaded macOS CI runner.
         let out = run(json!({
-            "command": "sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do echo tick$i; sleep 0.02; done' & echo started"
+            "command": "sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do echo tick$i; sleep 0.08; done' & echo started"
         }))
         .await
         .unwrap();
