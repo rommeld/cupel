@@ -339,11 +339,9 @@ pub const PROVIDERS: &[CuratedProvider] = &[
 /// provider (subscription backends carry no public price sheet), so pi
 /// keeps an explicit list in generate-models.ts ("we keep a small,
 /// explicit list to avoid aliases") — this table mirrors that list: same
-/// ids, names, prices, and limits. Two exceptions as of 2026-09-22:
-/// GPT-5.4 and 5.4 mini stay although pi 0.86 dropped them, and GPT-6
-/// Sol and Luna are here before pi has them — their limits and levels
-/// from Codex CLI's models.json (openai/codex#47332), their prices from
-/// OpenAI plus models.dev (cache write, no temperature).
+/// ids, names, prices, and limits. GPT-6 Sol and Luna's limits and levels
+/// come from Codex CLI's models.json (openai/codex#47332), their prices
+/// from OpenAI plus models.dev (cache write, no temperature).
 ///
 /// The `id` is the BACKEND's model name; the generator namespaces the
 /// catalog id as `codex/<id>` and stores the backend name in compat's
@@ -353,7 +351,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
 pub struct PinnedCodex {
     pub id: &'static str,
     pub name: &'static str,
-    /// Codex Spark is text-only; everything else takes images too.
+    /// Whether the model accepts image input.
     pub vision: bool,
     /// $/M: input, output, cache read, cache write.
     pub cost: (f64, f64, f64, f64),
@@ -453,39 +451,6 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (5.0, 30.0, 0.5, 0.0),
         long_context_tier: true,
         context_window: 272_000,
-        max_context_window: None,
-        levels: CODEX_LEVELS_TO_XHIGH,
-        temperature: true,
-    },
-    PinnedCodex {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        vision: true,
-        cost: (2.5, 15.0, 0.25, 0.0),
-        long_context_tier: true,
-        context_window: 272_000,
-        max_context_window: None,
-        levels: CODEX_LEVELS_TO_XHIGH,
-        temperature: true,
-    },
-    PinnedCodex {
-        id: "gpt-5.4-mini",
-        name: "GPT-5.4 mini",
-        vision: true,
-        cost: (0.75, 4.5, 0.075, 0.0),
-        long_context_tier: false,
-        context_window: 272_000,
-        max_context_window: None,
-        levels: CODEX_LEVELS_TO_XHIGH,
-        temperature: true,
-    },
-    PinnedCodex {
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        vision: false,
-        cost: (1.75, 14.0, 0.175, 0.0),
-        long_context_tier: false,
-        context_window: 128_000,
         max_context_window: None,
         levels: CODEX_LEVELS_TO_XHIGH,
         temperature: true,
