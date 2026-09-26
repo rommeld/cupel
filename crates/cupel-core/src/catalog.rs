@@ -412,6 +412,6 @@ mod tests {
                 model.id
             );
         }
-        assert_eq!(seen, 8, "only supported Codex models belong in the catalog");
+        assert_eq!(seen, 7, "only supported Codex models belong in the catalog");
     }
 }

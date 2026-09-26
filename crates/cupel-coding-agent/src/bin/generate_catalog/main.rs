@@ -570,7 +570,6 @@ mod tests {
                 "codex/gpt-5.6-luna",
                 "codex/gpt-5.6-terra",
                 "codex/gpt-5.5",
-                "codex/gpt-5.3-codex-spark",
             ]
         );
         for model in &models {
@@ -632,9 +631,5 @@ mod tests {
                 .is_none()
         );
         assert!(gpt55.max_context_window.is_none());
-        let spark = models.last().expect("spark row");
-        assert_eq!(spark.context_window, 128_000);
-        assert!(spark.cost.tiers.is_none(), "spark has no long-context tier");
-        assert_eq!(spark.input, vec![InputModality::Text], "spark is text-only");
     }
 }

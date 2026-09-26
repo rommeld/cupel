@@ -351,7 +351,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
 pub struct PinnedCodex {
     pub id: &'static str,
     pub name: &'static str,
-    /// Codex Spark is text-only; everything else takes images too.
+    /// Whether the model accepts image input.
     pub vision: bool,
     /// $/M: input, output, cache read, cache write.
     pub cost: (f64, f64, f64, f64),
@@ -451,17 +451,6 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (5.0, 30.0, 0.5, 0.0),
         long_context_tier: true,
         context_window: 272_000,
-        max_context_window: None,
-        levels: CODEX_LEVELS_TO_XHIGH,
-        temperature: true,
-    },
-    PinnedCodex {
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        vision: false,
-        cost: (1.75, 14.0, 0.175, 0.0),
-        long_context_tier: false,
-        context_window: 128_000,
         max_context_window: None,
         levels: CODEX_LEVELS_TO_XHIGH,
         temperature: true,

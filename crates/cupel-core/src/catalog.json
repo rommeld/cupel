@@ -1564,32 +1564,5 @@
     "compat": {
       "requestModel": "gpt-5.5"
     }
-  },
-  {
-    "id": "codex/gpt-5.3-codex-spark",
-    "name": "GPT-5.3 Codex Spark",
-    "api": "openai-codex-responses",
-    "provider": "openai-codex",
-    "baseUrl": "https://chatgpt.com/backend-api",
-    "reasoning": true,
-    "thinkingLevelMap": {
-      "max": null,
-      "minimal": "low",
-      "off": null
-    },
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 1.75,
-      "output": 14.0,
-      "cachedRead": 0.175,
-      "cachedWrite": 0.0
-    },
-    "contextWindow": 128000,
-    "maxTokens": 128000,
-    "compat": {
-      "requestModel": "gpt-5.3-codex-spark"
-    }
   }
 ]
