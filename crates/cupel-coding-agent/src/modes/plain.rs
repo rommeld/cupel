@@ -1,9 +1,9 @@
-//! Plain mode: the line-based REPL (formerly the whole `main.rs`).
+//! Plain mode: a line-based REPL on a TTY, or one prompt from piped stdin.
 //!
 //! Used when stdout is not a terminal (pipes, CI) or with `--plain`. It
 //! prints unstyled text with no screen management so it can be captured.
 
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 
 use futures_util::StreamExt as _;
 
@@ -60,6 +60,17 @@ fn reasoning_separator(newlines: usize) -> &'static str {
     }
 }
 
+fn read_prompt(reader: &mut impl std::io::BufRead, piped: bool) -> Result<Option<String>, String> {
+    let mut text = String::new();
+    let bytes = if piped {
+        reader.read_to_string(&mut text)
+    } else {
+        reader.read_line(&mut text)
+    }
+    .map_err(|error| error.to_string())?;
+    Ok((bytes != 0).then_some(text))
+}
+
 pub async fn run(
     mut agent: Agent,
     meta: &SessionMeta,
@@ -81,14 +92,17 @@ pub async fn run(
     }
 
     let stdin = std::io::stdin();
+    let piped = !stdin.is_terminal();
+    let mut reader = stdin.lock();
     loop {
-        print!("> ");
-        std::io::stdout().flush().ok();
-
-        let mut line = String::new();
-        if stdin.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
-            break; // EOF (Ctrl-D)
+        if !piped {
+            print!("> ");
+            std::io::stdout().flush().ok();
         }
+
+        let Some(line) = read_prompt(&mut reader, piped)? else {
+            break; // EOF (Ctrl-D on a TTY, or the end of a pipe)
+        };
         let input = line.trim();
         if input.is_empty() {
             continue;
@@ -329,8 +343,29 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use crate::modes::plain::{
-        PlainCommand, plain_command, reasoning_newlines, reasoning_separator,
+        PlainCommand, plain_command, read_prompt, reasoning_newlines, reasoning_separator,
     };
+
+    #[test]
+    fn piped_input_is_one_multiline_prompt_but_tty_input_is_line_based() {
+        let mut piped = std::io::Cursor::new("first\nsecond\n");
+        assert_eq!(
+            read_prompt(&mut piped, true).unwrap().as_deref(),
+            Some("first\nsecond\n")
+        );
+        assert!(read_prompt(&mut piped, true).unwrap().is_none());
+
+        let mut tty = std::io::Cursor::new("first\nsecond\n");
+        assert_eq!(
+            read_prompt(&mut tty, false).unwrap().as_deref(),
+            Some("first\n")
+        );
+        assert_eq!(
+            read_prompt(&mut tty, false).unwrap().as_deref(),
+            Some("second\n")
+        );
+        assert!(read_prompt(&mut tty, false).unwrap().is_none());
+    }
 
     #[test]
     fn plain_help_only_advertises_supported_builtins() {
