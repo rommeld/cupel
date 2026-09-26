@@ -66,6 +66,12 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "timedout",
     "timeout",
     "terminated",
+    // The same failures in reqwest's words (the list above is pi's, worded
+    // by Node's fetch). "error sending request" = nothing came back, pi's
+    // "fetch failed"; "error decoding response body" = the stream broke
+    // mid-response, pi's "terminated".
+    "errorsendingrequest",
+    "errordecodingresponsebody",
     // WebSocket transports report close/error text instead of HTTP text.
     "websocketclosed",
     "websocketerror",
@@ -149,6 +155,9 @@ mod tests {
             "Anthropic stream ended before message_stop",
             "Request timed out",
             "Throttling error: Too many requests, please retry your request",
+            // reqwest transport failures, before and during the response.
+            "HTTP transport error: error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+            "HTTP transport error: error decoding response body",
         ] {
             assert!(
                 is_retryable_assistant_error(&message(StopReason::Error, Some(error))),
