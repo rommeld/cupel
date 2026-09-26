@@ -6,6 +6,7 @@
 use std::io::{IsTerminal as _, Write as _};
 
 use futures_util::StreamExt as _;
+use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _};
 
 use cupel_agent::{Agent, AgentEvent, AgentMessage};
 use cupel_core::types::{AssistantMessageEvent, Message, StopReason, ToolResultContent};
@@ -74,15 +75,46 @@ fn turn_failure(reason: StopReason, message: Option<&str>) -> Option<String> {
     )
 }
 
-fn read_prompt(reader: &mut impl std::io::BufRead, piped: bool) -> Result<Option<String>, String> {
+async fn read_prompt(
+    reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
+    piped: bool,
+) -> Result<Option<String>, String> {
     let mut text = String::new();
     let bytes = if piped {
-        reader.read_to_string(&mut text)
+        reader.read_to_string(&mut text).await
     } else {
-        reader.read_line(&mut text)
+        reader.read_line(&mut text).await
     }
     .map_err(|error| error.to_string())?;
     Ok((bytes != 0).then_some(text))
+}
+
+#[cfg(unix)]
+struct TerminationSignals {
+    term: tokio::signal::unix::Signal,
+    hup: tokio::signal::unix::Signal,
+    int: tokio::signal::unix::Signal,
+}
+
+#[cfg(unix)]
+impl TerminationSignals {
+    fn new() -> Result<Self, String> {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        Ok(Self {
+            term: signal(SignalKind::terminate()).map_err(|error| error.to_string())?,
+            hup: signal(SignalKind::hangup()).map_err(|error| error.to_string())?,
+            int: signal(SignalKind::interrupt()).map_err(|error| error.to_string())?,
+        })
+    }
+
+    async fn recv(&mut self) -> i32 {
+        tokio::select! {
+            _ = self.term.recv() => 15,
+            _ = self.hup.recv() => 1,
+            _ = self.int.recv() => 2,
+        }
+    }
 }
 
 pub async fn run(
@@ -105,17 +137,26 @@ pub async fn run(
         );
     }
 
-    let stdin = std::io::stdin();
+    #[cfg(unix)]
+    let mut signals = TerminationSignals::new()?;
     let mut last_run_error = None;
-    let piped = !stdin.is_terminal();
-    let mut reader = stdin.lock();
+    let piped = !std::io::stdin().is_terminal();
+    let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
     loop {
         if !piped {
             print!("> ");
             std::io::stdout().flush().ok();
         }
 
-        let Some(line) = read_prompt(&mut reader, piped)? else {
+        #[cfg(unix)]
+        let read = tokio::select! {
+            biased;
+            signal = signals.recv() => std::process::exit(128 + signal),
+            read = read_prompt(&mut reader, piped) => read?,
+        };
+        #[cfg(not(unix))]
+        let read = read_prompt(&mut reader, piped).await?;
+        let Some(line) = read else {
             break; // EOF (Ctrl-D on a TTY, or the end of a pipe)
         };
         let input = line.trim();
@@ -207,7 +248,24 @@ pub async fn run(
         // print incrementally; tool calls appear as one-liners.
         let mut in_thinking = false;
         let mut thinking_newlines = 0;
-        while let Some(event) = events.next().await {
+        loop {
+            #[cfg(unix)]
+            let event = tokio::select! {
+                biased;
+                signal = signals.recv() => {
+                    // Tool cancellation kills the command's detached process
+                    // group. Wait for the agent to finish before exiting.
+                    agent.abort();
+                    drop(events);
+                    agent.wait_for_idle().await;
+                    recorder.end_session().await;
+                    std::process::exit(128 + signal);
+                }
+                event = events.next() => event,
+            };
+            #[cfg(not(unix))]
+            let event = events.next().await;
+            let Some(event) = event else { break };
             match event {
                 // Every finalized message (user, assistant, tool result)
                 // rides into the transcript; display still renders from the
@@ -392,25 +450,25 @@ mod tests {
         assert!(turn_failure(StopReason::ToolUse, None).is_none());
     }
 
-    #[test]
-    fn piped_input_is_one_multiline_prompt_but_tty_input_is_line_based() {
+    #[tokio::test]
+    async fn piped_input_is_one_multiline_prompt_but_tty_input_is_line_based() {
         let mut piped = std::io::Cursor::new("first\nsecond\n");
         assert_eq!(
-            read_prompt(&mut piped, true).unwrap().as_deref(),
+            read_prompt(&mut piped, true).await.unwrap().as_deref(),
             Some("first\nsecond\n")
         );
-        assert!(read_prompt(&mut piped, true).unwrap().is_none());
+        assert!(read_prompt(&mut piped, true).await.unwrap().is_none());
 
         let mut tty = std::io::Cursor::new("first\nsecond\n");
         assert_eq!(
-            read_prompt(&mut tty, false).unwrap().as_deref(),
+            read_prompt(&mut tty, false).await.unwrap().as_deref(),
             Some("first\n")
         );
         assert_eq!(
-            read_prompt(&mut tty, false).unwrap().as_deref(),
+            read_prompt(&mut tty, false).await.unwrap().as_deref(),
             Some("second\n")
         );
-        assert!(read_prompt(&mut tty, false).unwrap().is_none());
+        assert!(read_prompt(&mut tty, false).await.unwrap().is_none());
     }
 
     #[test]
