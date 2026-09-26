@@ -8,7 +8,7 @@ use std::io::{IsTerminal as _, Write as _};
 use futures_util::StreamExt as _;
 
 use cupel_agent::{Agent, AgentEvent, AgentMessage};
-use cupel_core::types::{AssistantMessageEvent, Message, ToolResultContent};
+use cupel_core::types::{AssistantMessageEvent, Message, StopReason, ToolResultContent};
 
 use crate::modes::SessionMeta;
 use crate::session::SessionRecorder;
@@ -60,6 +60,20 @@ fn reasoning_separator(newlines: usize) -> &'static str {
     }
 }
 
+fn turn_failure(reason: StopReason, message: Option<&str>) -> Option<String> {
+    let fallback = match reason {
+        StopReason::Error => "model request failed",
+        StopReason::Aborted => "model request aborted",
+        _ => return None,
+    };
+    Some(
+        message
+            .filter(|text| !text.is_empty())
+            .unwrap_or(fallback)
+            .to_string(),
+    )
+}
+
 fn read_prompt(reader: &mut impl std::io::BufRead, piped: bool) -> Result<Option<String>, String> {
     let mut text = String::new();
     let bytes = if piped {
@@ -92,6 +106,7 @@ pub async fn run(
     }
 
     let stdin = std::io::stdin();
+    let mut last_run_error = None;
     let piped = !stdin.is_terminal();
     let mut reader = stdin.lock();
     loop {
@@ -184,6 +199,9 @@ pub async fn run(
         recorder.before_prompt(&prompt).await;
 
         let mut events = agent.prompt_text(&prompt).map_err(|e| e.to_string())?;
+        // Retry/compaction can recover from an earlier failed turn. Only
+        // the final turn of the last run determines the process exit code.
+        last_run_error = None;
 
         // Render the event stream without terminal styling. Text deltas
         // print incrementally; tool calls appear as one-liners.
@@ -268,12 +286,11 @@ pub async fn run(
                     }
                     if let AgentMessage::Llm(Message::Assistant(assistant)) = message.as_ref() {
                         let prefix = if ended_thinking { "" } else { "\n" };
-                        if let Some(error) = &assistant.error_message {
-                            println!("{prefix}error: {error}");
-                        }
-                        if assistant.stop_reason == cupel_core::types::StopReason::Length {
-                            println!(
-                                "{prefix}error: response was truncated before completion \
+                        last_run_error =
+                            turn_failure(assistant.stop_reason, assistant.error_message.as_deref());
+                        if assistant.stop_reason == StopReason::Length {
+                            eprintln!(
+                                "error: response was truncated before completion \
                                 (output token limit)"
                             );
                         }
@@ -337,14 +354,43 @@ pub async fn run(
 
     // Normal exit (EOF, `exit`, `/quit`): announce session-end to hooks.
     recorder.end_session().await;
-    Ok(())
+    // main formats errors on stderr and returns a nonzero exit status.
+    last_run_error.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::modes::plain::{
         PlainCommand, plain_command, read_prompt, reasoning_newlines, reasoning_separator,
+        turn_failure,
     };
+    use cupel_core::types::StopReason;
+
+    #[test]
+    fn only_terminal_model_failures_produce_an_error() {
+        assert_eq!(
+            turn_failure(StopReason::Error, Some("provider returned HTTP 400")),
+            Some("provider returned HTTP 400".into())
+        );
+        assert_eq!(
+            turn_failure(StopReason::Aborted, None),
+            Some("model request aborted".into())
+        );
+        assert_eq!(
+            turn_failure(StopReason::Error, None),
+            Some("model request failed".into())
+        );
+        assert_eq!(
+            turn_failure(StopReason::Error, Some("")),
+            Some("model request failed".into())
+        );
+        // A later successful turn clears an error from an earlier retry.
+        let mut last_error = turn_failure(StopReason::Error, Some("retryable"));
+        assert!(last_error.is_some());
+        last_error = turn_failure(StopReason::Stop, None);
+        assert!(last_error.is_none());
+        assert!(turn_failure(StopReason::ToolUse, None).is_none());
+    }
 
     #[test]
     fn piped_input_is_one_multiline_prompt_but_tty_input_is_line_based() {
