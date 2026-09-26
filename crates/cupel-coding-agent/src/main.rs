@@ -1,7 +1,7 @@
 //! `cupel` — entry point: parse args, wire the agent, pick a frontend.
 //!
 //! Usage:
-//!   cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max
+//!  cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max
 //!  (default: medium; high for codex/gpt-6-sol)] [--plain]
 //!
 //! Frontend selection: the ratatui TUI when stdout is a real terminal, the
@@ -9,16 +9,18 @@
 //! consumed as one prompt; TTY stdin uses a line REPL.
 //!
 //! Model selection: `--model` picks from the built-in catalog; without it,
-//! a ChatGPT login defaults to `openai-codex`; otherwise the first provider
+//! the `default` preset from settings.json decides; without that, a
+//! ChatGPT login defaults to `openai-codex`; otherwise the first provider
 //! with credentials wins in catalog order.
-//! Thinking defaults to medium (high for codex/gpt-6-sol); --thinking off disables it.
+//! Thinking defaults to the default preset's level, else to medium (high
+//! for codex/gpt-6-sol); --thinking off disables it.
 
 use std::io::IsTerminal as _;
 use std::sync::Arc;
 
 use cupel_agent::{Agent, AgentOptions, ToolExecutionMode};
 use cupel_coding_agent::modes::{self, SessionMeta};
-use cupel_coding_agent::settings::Settings;
+use cupel_coding_agent::settings::{DEFAULT_PRESET, Preset, Settings};
 use cupel_core::types::{Model, ThinkingLevel};
 use thiserror::Error;
 
@@ -140,16 +142,19 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
     Ok(parsed)
 }
 
-fn thinking_level(args: &CliArgs, model: &Model) -> Option<ThinkingLevel> {
+fn thinking_level(args: &CliArgs, model: &Model, preset: Option<&Preset>) -> Option<ThinkingLevel> {
     match args.thinking {
         ThinkingChoice::Explicit(level) => level,
-        ThinkingChoice::Default => Some(
-            if model.id == "codex/gpt-6-sol" && model.provider.as_str() == "openai-codex" {
-                ThinkingLevel::High
-            } else {
-                ThinkingLevel::Medium
-            },
-        ),
+        ThinkingChoice::Default => match preset {
+            Some(preset) => preset.thinking_level.level(),
+            None => Some(
+                if model.id == "codex/gpt-6-sol" && model.provider.as_str() == "openai-codex" {
+                    ThinkingLevel::High
+                } else {
+                    ThinkingLevel::Medium
+                },
+            ),
+        },
     }
 }
 
@@ -157,6 +162,8 @@ fn thinking_level(args: &CliArgs, model: &Model) -> Option<ThinkingLevel> {
 /// models.json layers, discovered local models). Credential knowledge
 /// lives in `providers.rs`, shared with the TUI's `/provider` command;
 /// keys sources at startup: exported env var, then ~/.cupel/settings.json.
+/// Precedence: `--model`> the `default` preset > a ChatGPT login > the
+/// first provider with cedentials > a keyless local model.
 fn select_model(
     args: &CliArgs,
     catalog: &[Model],
@@ -171,6 +178,20 @@ fn select_model(
             .find(|m| m.id == *wanted)
             .cloned()
             .ok_or_else(|| format!("unknown model: {wanted} (see --help for the list)"))?;
+        let key = providers::resolve_api_key(model.provider.as_str(), settings);
+        return Ok((model, key));
+    }
+
+    // The default preset is explicit configuration: an unknown model is an
+    // error like a mistyped --model, never a silent start on something else.
+    if let Some(preset) = settings.presets.get(DEFAULT_PRESET) {
+        let model = preset.find_model(catalog).cloned().ok_or_else(|| {
+            format!(
+                "unknown model in the default preset: {}/{} (fix \"model\" in settings.json; \
+                see --help for the list)",
+                preset.provider, preset.model,
+            )
+        })?;
         let key = providers::resolve_api_key(model.provider.as_str(), settings);
         return Ok((model, key));
     }
@@ -284,7 +305,9 @@ async fn run() -> Result<(), AppError> {
     // starts anyway on a fallback model and shows the message as its first
     // notice. Plain mode has no such commands — it keeps the hard error.
     // An explicit `--model` that fails stays fatal in both modes: a typo
-    // should not silently start something else.
+    // should not silently start something else. The same goes for the
+    // default preset's model.
+    let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
     let (model, api_key, startup_warning) = match select_model(
         &args,
         &ingredients.models,
@@ -292,7 +315,7 @@ async fn run() -> Result<(), AppError> {
         home.as_deref(),
     ) {
         Ok((model, key)) => (model, key, None),
-        Err(e) if !use_plain && args.model.is_none() => {
+        Err(e) if !use_plain && args.model.is_none() && preset.is_none() => {
             let fallback = ingredients
                 .models
                 .iter()
@@ -344,10 +367,13 @@ async fn run() -> Result<(), AppError> {
     );
 
     let mut options = AgentOptions::new(model.clone(), registry);
-    options.system_prompt = ingredients.system_prompt;
+    options.system_prompt = cupel_coding_agent::system_prompt::with_preset_prompt(
+        &ingredients.system_prompt,
+        preset.and_then(|preset| preset.prompt.as_deref()),
+    );
     options.tools = ingredients.tools;
     options.api_key = api_key;
-    options.thinking_level = thinking_level(&args, &model);
+    options.thinking_level = thinking_level(&args, &model, preset);
     options.tool_execution = ToolExecutionMode::Parallel;
     options.session_id = Some(session_id);
     options.messages = seeded_messages;
@@ -366,6 +392,7 @@ async fn run() -> Result<(), AppError> {
         home,
         startup_warning,
         context_files: ingredients.context_files,
+        base_system_prompt: ingredients.system_prompt,
     };
 
     // The TUI takes over the whole screen; that only makes sense on a real
@@ -412,41 +439,6 @@ mod tests {
     fn unknown_arguments_still_error() {
         assert!(parse(&["--bogus"]).is_err());
         assert!(parse(&["--model"]).is_err(), "--model needs a value");
-    }
-
-    #[test]
-    fn thinking_defaults_to_high_for_codex_sol_only_and_respects_overrides() {
-        let codex = cupel_core::catalog::builtin_models()
-            .into_iter()
-            .find(|m| m.id == "codex/gpt-6-sol")
-            .expect("shipped Codex default");
-        let other_codex = cupel_core::catalog::builtin_models()
-            .into_iter()
-            .find(|m| m.id == "codex/gpt-6-astra")
-            .expect("shipped Codex model");
-        let args = parse(&[]).unwrap();
-        assert_eq!(thinking_level(&args, &codex), Some(ThinkingLevel::High));
-        assert_eq!(
-            thinking_level(&args, &other_codex),
-            Some(ThinkingLevel::Medium)
-        );
-        assert_eq!(
-            thinking_level(&args, &keyless_model("local")),
-            Some(ThinkingLevel::Medium)
-        );
-        // Even an explicit off is distinct from an unspecified default.
-        assert_eq!(
-            thinking_level(&parse(&["--thinking", "off"]).unwrap(), &codex),
-            None
-        );
-        assert_eq!(
-            thinking_level(&parse(&["--thinking", "medium"]).unwrap(), &codex),
-            Some(ThinkingLevel::Medium)
-        );
-        assert_eq!(
-            thinking_level(&parse(&["--thinking", "max"]).unwrap(), &codex),
-            Some(ThinkingLevel::Max)
-        );
     }
 
     /// A keyless local model (the ollama-discovery shape). Tests use ONLY
@@ -568,5 +560,95 @@ mod tests {
         let args = parse(&["--model", "cloud-1"]).unwrap();
         let (_, key) = select_model(&args, &catalog, &settings, None).unwrap();
         assert_eq!(key.as_deref(), Some("from-settings"));
+    }
+
+    #[test]
+    fn thinking_defaults_to_high_for_codex_sol_only_and_respects_overrides() {
+        let codex = cupel_core::catalog::builtin_models()
+            .into_iter()
+            .find(|m| m.id == "codex/gpt-6-sol")
+            .expect("shipped Codex default");
+        let other_codex = cupel_core::catalog::builtin_models()
+            .into_iter()
+            .find(|m| m.id == "codex/gpt-6-astra")
+            .expect("shipped Codex model");
+        let args = parse(&[]).unwrap();
+        assert_eq!(
+            thinking_level(&args, &codex, None),
+            Some(ThinkingLevel::High)
+        );
+        assert_eq!(
+            thinking_level(&args, &other_codex, None),
+            Some(ThinkingLevel::Medium)
+        );
+        assert_eq!(
+            thinking_level(&args, &keyless_model("local"), None),
+            Some(ThinkingLevel::Medium)
+        );
+        // Even an explicit off is distinct from an unspecified default.
+        assert_eq!(
+            thinking_level(&parse(&["--thinking", "off"]).unwrap(), &codex, None),
+            None
+        );
+        assert_eq!(
+            thinking_level(&parse(&["--thinking", "medium"]).unwrap(), &codex, None),
+            Some(ThinkingLevel::Medium)
+        );
+        assert_eq!(
+            thinking_level(&parse(&["--thinking", "max"]).unwrap(), &codex, None),
+            Some(ThinkingLevel::Max)
+        );
+    }
+
+    /// Settings whose `default` preset names `provider`/`model`.
+    fn with_default_preset(provider: &str, model: &str) -> Settings {
+        let mut settings = Settings::default();
+        settings.presets.insert(
+            DEFAULT_PRESET.into(),
+            Preset {
+                provider: provider.into(),
+                model: model.into(),
+                thinking_level: cupel_coding_agent::settings::ThinkingSetting::Off,
+                prompt: None,
+            },
+        );
+        settings
+    }
+
+    #[test]
+    fn the_default_preset_picks_the_startup_model_unless_model_is_given() {
+        let catalog = vec![keyless_model("qwen3:8b"), keyless_model("llama3:8b")];
+        let settings = with_default_preset("ollama", "llama3:8b");
+
+        // Without --model the preset beats the keyless auto-pick (qwen3:8b).
+        let (model, _) = select_model(&parse(&[]).unwrap(), &catalog, &settings, None).unwrap();
+        assert_eq!(model.id, "llama3:8b");
+
+        // An explicit --model beats the preset.
+        let args = parse(&["--model", "qwen3:8b"]).unwrap();
+        let (model, _) = select_model(&args, &catalog, &settings, None).unwrap();
+        assert_eq!(model.id, "qwen3:8b");
+
+        // Provider AND id must match: a mismatch is an error that names
+        // the preset, not a silent fallback to the auto-pick.
+        let settings = with_default_preset("anthropic", "llama3:8b");
+        let err = select_model(&parse(&[]).unwrap(), &catalog, &settings, None).unwrap_err();
+        assert!(err.contains("default preset: anthropic/llama3:8b"), "{err}");
+    }
+
+    #[test]
+    fn the_default_preset_sets_the_thinking_level_unless_thinking_is_given() {
+        let model = keyless_model("local");
+        let settings = with_default_preset("ollama", "local");
+        let preset = settings.presets.get(DEFAULT_PRESET);
+
+        // The preset says off, which beats the built-in medium.
+        assert_eq!(thinking_level(&parse(&[]).unwrap(), &model, preset), None);
+        // An explicit --thinking beats the preset.
+        let args = parse(&["--thinking", "high"]).unwrap();
+        assert_eq!(
+            thinking_level(&args, &model, preset),
+            Some(ThinkingLevel::High)
+        );
     }
 }

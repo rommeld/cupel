@@ -38,4 +38,8 @@ pub struct SessionMeta {
     /// the agent's system prompt). Bare `/hot-reload` diffs the files on
     /// disk against THESE and appends only the delta to the conversation.
     pub context_files: Vec<crate::resources::ContextFile>,
+    /// The system prompt without a preset prompt, as bootstrap built it.
+    /// `/preset` appends the chosen preset's prompt to this, so switching
+    /// presets replaces the previous preset prompt instead of stacking it.
+    pub base_system_prompt: String,
 }

@@ -1,5 +1,12 @@
 {
   "loopKiller": {
     "maxRepeats": 3
+  },
+  "model": {
+    "default": {
+      "provider": "openai-codex",
+      "model": "codex/gpt-6-sol",
+      "thinkingLevel": "xhigh"
+    }
   }
 }

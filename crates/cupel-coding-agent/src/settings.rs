@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use cupel_core::types::{Model, ThinkingLevel};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -24,9 +25,94 @@ pub struct Settings {
     /// into a file whose author never wrote that key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_killer: Option<LoopKillerSettings>,
+    /// Named model presets from the `"model"` section: `/preset <name>`
+    /// switches to one, and the one named [`Default_PRESET`] picks the
+    /// startup model. THe JSON key stays `model` (the file's vocabulary).
+    /// BTreeMap: sorted names for listings and a deterministic save, same as
+    /// `providers`. skip_serializing_if: a key save must not inject `"model": {}`.
+    #[serde(rename = "model", default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub presets: BTreeMap<String, Preset>,
     /// Every unknown top-level field, round-tripped through save.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The preset `cupel` applies at startup. `--model` and `--thinking`
+/// still override its fields one by one.
+pub const DEFAULT_PRESET: &str = "default";
+
+/// One named preset. `provider`, `model`, and `thinkingLevel` are
+/// required. serde rejects a preset without them, and with it the whole
+/// file (the same visible-failure tier as any malformed settings.json).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Preset {
+    pub provider: String,
+    pub model: String,
+    pub thinking_level: ThinkingSetting,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+impl Preset {
+    /// The catalog model this preset names. Provider and id must match,
+    /// `modelRegistry.find(provider, id)`, so a provider that does not
+    /// fit the model is reported instead of silently ignored.
+    ///
+    /// The explicit `'a`ties a result to `models`: without it, lifetime
+    /// elision would tie it to `&self`, and the result would keep the
+    /// preset borrowed instead of the catalog.
+    #[must_use]
+    pub fn find_model<'a>(&self, models: &'a [Model]) -> Option<&'a Model> {
+        models
+            .iter()
+            .find(|model| model.provider.as_str() == self.provider && model.id == self.model)
+    }
+}
+
+/// A preset's `thinkingLevel`: the seven words `/thinking` accepts.
+/// `lowercase` instead of the file`s usual camelCase keeps `xhigh`
+/// spelled `xhigh` (camelCase would demand `xHigh`). An unkown word
+/// fails to parse, and serde's error lists all seven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingSetting {
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl ThinkingSetting {
+    /// The agent's representation, where `None` means off.
+    #[must_use]
+    pub fn level(self) -> Option<ThinkingLevel> {
+        match self {
+            Self::Off => None,
+            Self::Minimal => Some(ThinkingLevel::Minimal),
+            Self::Low => Some(ThinkingLevel::Low),
+            Self::Medium => Some(ThinkingLevel::Medium),
+            Self::High => Some(ThinkingLevel::High),
+            Self::XHigh => Some(ThinkingLevel::XHigh),
+            Self::Max => Some(ThinkingLevel::Max),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
 }
 
 /// Loop-killer configuration: how many times the SAME tool call (same
@@ -64,9 +150,12 @@ impl Settings {
     /// round-trip, which only ever writes the home file.
     #[must_use]
     pub fn layered(home: Settings, project: Settings) -> Settings {
+        let mut presets = home.presets;
+        presets.extend(project.presets);
         Settings {
             providers: home.providers,
             loop_killer: project.loop_killer.or(home.loop_killer),
+            presets,
             extra: home.extra,
         }
     }
@@ -82,6 +171,7 @@ impl core::fmt::Debug for Settings {
             .field("providers", &self.providers.keys().collect::<Vec<_>>())
             .field("extra", &self.extra.keys().collect::<Vec<_>>())
             .field("loopKiller", &self.loop_killer)
+            .field("model", &self.presets.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }
 }
@@ -573,5 +663,106 @@ mod tests {
             load_project_settings(&root).loop_killer_max_repeats(),
             Some(2)
         );
+    }
+
+    #[test]
+    fn presets_parse_required_fields_and_an_optional_prompt() {
+        let parsed: Settings = serde_json::from_str(
+            r#"{"model": {
+                "default": {"provider": "openai-codex", "model": "codex/gpt-6-sol",
+                            "thinkingLevel": "xhigh"},
+                "fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                         "thinkingLevel": "off", "prompt": "Answer briefly."}
+            }}"#,
+        )
+        .unwrap();
+        let default = &parsed.presets[DEFAULT_PRESET];
+        assert_eq!(default.model, "codex/gpt-6-sol");
+        assert_eq!(default.thinking_level.level(), Some(ThinkingLevel::XHigh));
+        assert_eq!(default.prompt, None);
+        // "off" is a real choice, not a missing value: the agent's None.
+        let fast = &parsed.presets["fast"];
+        assert_eq!(fast.thinking_level.level(), None);
+        assert_eq!(fast.prompt.as_deref(), Some("Answer briefly."));
+        // A known field now - it must NOT fall into the extra map.
+        assert!(parsed.extra.is_empty());
+    }
+
+    #[test]
+    fn presets_without_a_required_field_or_with_an_unknown_level_are_rejected() {
+        let missing = serde_json::from_str::<Settings>(
+            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5"}}}"#,
+        )
+        .unwrap_err();
+        assert!(missing.to_string().contains("thinkingLevel"), "{missing}");
+
+        let typo = serde_json::from_str::<Settings>(
+            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                                   "thinkingLevel": "hihg"}}}"#,
+        )
+        .unwrap_err();
+        // serde lists the valid words, so the fix is obvious.
+        assert!(typo.to_string().contains("xhigh"), "{typo}");
+    }
+
+    #[test]
+    fn save_keeps_presets_and_injects_no_empty_model_section() {
+        let home = temp_root("save-presets");
+        let written = r#"{"model": {"fast": {"provider": "anthropic",
+            "model": "claude-haiku-4-5", "thinkingLevel": "xhigh", "prompt": "Be brief."}}}"#;
+        std::fs::write(home.join("settings.json"), written).unwrap();
+        save_provider_key(Some(&home), "anthropic", "sk-a").unwrap();
+        let saved = load_settings(&home.join("settings.json")).unwrap();
+        let expected: Settings = serde_json::from_str(written).unwrap();
+        assert_eq!(saved.presets, expected.presets);
+
+        // A file without presets gets no `"model": {}` from a key save.
+        let fresh = temp_root("save-no-presets");
+        save_provider_key(Some(&fresh), "anthropic", "sk-a").unwrap();
+        let text = std::fs::read_to_string(fresh.join("settings.json")).unwrap();
+        assert!(!text.contains("\"model\""), "{text}");
+    }
+
+    #[test]
+    fn layered_merges_presets_by_name_and_the_project_wins() {
+        let preset = |model: &str| Preset {
+            provider: "anthropic".into(),
+            model: model.into(),
+            thinking_level: ThinkingSetting::Low,
+            prompt: None,
+        };
+        let mut home = Settings::default();
+        home.presets
+            .insert("default".into(), preset("home-default"));
+        home.presets.insert("fast".into(), preset("home-fast"));
+        let mut project = Settings::default();
+        project
+            .presets
+            .insert("fast".into(), preset("project-fast"));
+        project
+            .presets
+            .insert("plan".into(), preset("project-plan"));
+
+        let merged = Settings::layered(home, project);
+        let models: Vec<&str> = merged.presets.values().map(|p| p.model.as_str()).collect();
+        // Sorted by name: default (home only), fast (project wins), plan.
+        assert_eq!(models, ["home-default", "project-fast", "project-plan"]);
+    }
+
+    #[test]
+    fn a_preset_finds_its_model_only_under_the_right_provider() {
+        let catalog = cupel_core::catalog::builtin_models();
+        let mut preset = Preset {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+            thinking_level: ThinkingSetting::Low,
+            prompt: None,
+        };
+        let found = preset.find_model(&catalog).map(|model| model.id.as_str());
+        assert_eq!(found, Some("claude-haiku-4-5"));
+
+        // Right id, wrong provider: not found.
+        preset.provider = "openrouter".into();
+        assert!(preset.find_model(&catalog).is_none());
     }
 }
