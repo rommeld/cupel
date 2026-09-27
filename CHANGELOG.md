@@ -5,7 +5,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 
 ## [v0.19.0] - 2026-09-27
 
-- version: sync to v0.18.0 from CHANGELOG.md
 - feat: parse model presets from settings.json
 - docs: Reduktion der CHANGELOG.md
 - fix(retry): retry reqwest transport failures and show their cause
