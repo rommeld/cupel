@@ -2,13 +2,10 @@
 //!
 //! Flow: build JSON request -> POST `/v1/messages` with `stream: true` ->
 //! decode the SSE body -> translate Anthropic events into unified
-//! [`AssistantMessageEvent`]s. Port of pi's `anthropic-messages.ts`.
+//! [`AssistantMessageEvent`]s.
 //!
-//! `stream` with raw Anthropic options and `streamSimple` that maps a
-//! unified reasoning level onto them, this
-//! provider folds the `streamSimple` mapping in: callers set
-//! `StreamOptions::reasoning` and the provider derives the right thinkingw
-//! configuration for the model (adaptive effort vs. token budget).
+//! Callers set `StreamOptions::reasoning` and the provider derives the right
+//! thinking configuration for the model (adaptive effort vs. token budget).
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -85,7 +82,7 @@ fn anthropic_compat(model: &Model) -> AnthropicCompat {
 }
 
 /// Claude Code subscription tokens only allow the Claude Code tool names.
-/// pi mimics them: outgoing tool names are canonicalized case-insensitively,
+/// Outgoing tool names are canonicalized case-insensitively,
 /// incoming ones are mapped back to the caller's original names.
 const CLAUDE_CODE_TOOLS: &[&str] = &[
     "Read",
@@ -163,7 +160,7 @@ impl Provider for AnthropicProvider {
         let http = self.http.clone();
 
         // The whole body is wrapped so *any* error becomes an `Error` event on
-        // the stream — the caller-facing contract is "never panic, never
+        // the stream. The caller-facing contract is "never panic, never
         // reject; report failures in-band".
         tokio::spawn(async move {
             if let Err(err) = run(&http, &model, &context, &options, &sink).await {
@@ -671,7 +668,7 @@ fn build_request_body(
 ) -> Value {
     let cache_control = cache_control_value(options, compat);
 
-    // This mirrors pi's streamSimple(): the unified reasoning level decides
+    // The unified reasoning level decides
     // between adaptive effort (new models) and token budgets (older models),
     // and budget-based thinking needs max_tokens head-room.
     let mut thinking: Option<Value> = None;
@@ -714,7 +711,7 @@ fn build_request_body(
                 }
             }
             None => {
-                // Explicitly disable thinking — unless the model's level map
+                // Explicitly disable thinking unless the model's level map
                 // marks "off" as unsupported (entry present but null).
                 let off_unsupported = model
                     .thinking_level_map
@@ -734,7 +731,7 @@ fn build_request_body(
         "stream": true,
     });
 
-    // OAuth tokens MUST lead with the Claude Code identity string.
+    // OAuth tokens must lead with the Claude Code identity string.
     let mut system: Vec<Value> = Vec::new();
     if is_oauth {
         let mut identity = json!({
@@ -955,7 +952,7 @@ fn convert_messages(
             }
 
             Message::ToolResult(_) => {
-                // Collect ALL consecutive tool results into one user message;
+                // Collect all consecutive tool results into one user message;
                 // some Anthropic-compatible endpoints require this.
                 let mut tool_results: Vec<Value> = Vec::new();
                 while let Some(Message::ToolResult(result)) = transformed.get(i) {

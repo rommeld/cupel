@@ -109,7 +109,7 @@ from v0.2.0-beta, minor = features, patch = fixes.
     serde, defaults to None so existing catalogs parse unchanged)
   * calculate_cost picks the highest tier below the total prompt size
     (input + cache_read + cache_write) and reprices the whole request
-    with tier rates, matching pi's cost.tiers/inputTokensAbove semantics
+    with tier rates
   * teach the catalog generator to map models.dev tier.size thresholds
     and regenerate catalog.json (three GPT-5.6 entries gain a 272k tier)
   * derive Default on ModelCost and collapse nine all-zero struct

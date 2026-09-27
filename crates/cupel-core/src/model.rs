@@ -9,15 +9,15 @@ pub(crate) fn calculate_cost(model: &Model, usage: &mut Usage) {
     let long_write = usage.cache_write1h.unwrap_or(0) as f64;
     let short_write = usage.cache_write as f64 - long_write;
 
-    // Long-context tiers (pi: cost.tiers/inputTokensAbove): the highest
-    // tier below the total prompt size reprices the WHOLE request.
+    // Long-context tiers: the highest
+    // tier below the total prompt size reprices the whole request.
     let rates = effective_rates(&model.cost, usage);
 
     usage.cost.input = rates.input / PER_M * usage.input as f64;
     usage.cost.output = rates.output / PER_M * usage.output as f64;
     usage.cost.cache_read = rates.cached_read / PER_M * usage.cache_read as f64;
     // 1h writes cost 2x base input; short writes use the cache-write rate.
-    // The division by tokens-per-million applies to the WHOLE sum.
+    // The division by tokens-per-million applies to the whole sum.
     usage.cost.cache_write =
         (rates.cached_write * short_write + rates.input * 2.0 * long_write) / PER_M;
     usage.cost.total =
@@ -185,7 +185,7 @@ mod tests {
             ..Usage::default()
         };
         calculate_cost(&model, &mut usage);
-        // Tier rates apply to ALL tokens, not just those past the line.
+        // Tier rates apply to all tokens, not just those past the line.
         assert_close(usage.cost.input, 4.0 * 300_000.0 / PER_M);
         assert_close(usage.cost.output, 15.0 * 2_000.0 / PER_M);
         assert_close(usage.cost.total, usage.cost.input + usage.cost.output);

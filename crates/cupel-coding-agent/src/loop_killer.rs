@@ -1,10 +1,10 @@
 //! The loop killer: blocks a tool call that repeats backt-to-back with
-//! IDENTICAL argumetns more often than settings allow, and steers the
+//! identical arguments more often than settings allow, and steers the
 //! model onto a new track va the error text it receives instead of a
 //! result.
 //!
-//! Detection is deliberately CONSECUTIVE-only: `read x, edit x, read x`
-//! is legitimate verify loop and must stay allowed — any different
+//! Detection is deliberately consecutive-only: `read x, edit x, read x`
+//! is a legitimate verification loop and must stay allowed. Any different
 //! call resets the chain. The canoncial key is `name + argumetns JSON`:
 //! this workspace's serde_json is built without preserve_order, so
 //! object keys serialize sorted and two structurally equal argument
@@ -14,7 +14,7 @@
 //! Why a veto (and not the alternatives): injecting a steering message
 //! would be silently dropped (the Agent's RunHooks decorator does not
 //! forward steering_messages, yet), and should_stop_after_turn would
-//! end the run without any event — a silent stop the user cannot
+//! end the run without any event, causing a silent stop the user cannot
 //! distinguish from a finished answer. The before_tool_call veto is
 //! the machnism the bash guard already proves out: the model sees an
 //! error tool result and the run continues, redirected.
@@ -53,7 +53,7 @@ impl LoopKiller {
     ///
     /// With maxRepeats = N the first N identical consecutive calls run;
     /// the N+1th (and every further identical repeat) is blocked.
-    /// Blocked attempts keep counting — hammering the same call after a
+    /// Blocked attempts keep counting. Hammering the same call after a
     /// block stays blocked until the model tries something else.
     pub fn note_call(&self, tool_call: &ToolCall) -> Option<String> {
         // Disabled killer: not even the bookkeeping runs.

@@ -1,8 +1,8 @@
 //! The `grep` tool.
 //!
 //! Split of responsibilities:
-//! — [`crate::search`] finds matching lines (the pluggable backend);
-//! — this module is the model-facing layer: argument schema, context lines,
+//! - [`crate::search`] finds matching lines (the pluggable backend).
+//! - This module is the model-facing layer: argument schema, context lines,
 //!   line/byte truncation, and the output format the model sees
 //!   (`path:line: text` for matches, `path-line- text` for context).
 
@@ -29,7 +29,7 @@ const FILES_PER_FILE_CAP: usize = 20;
 const FILES_RANKING_WINDOW: usize = 500;
 const FILES_PREVIEW_MAX_CHARS: usize = 120;
 
-/// Tool arguments. Deserializing into this struct IS the argument
+/// Tool arguments. Deserializing into this struct is the argument
 /// validation (unknown fields are ignored, wrong types are errors).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -281,7 +281,7 @@ impl AgentTool for GrepTool {
                     .map_or("", String::as_str);
                 let (text, was_truncated) = truncate_line(line_text, GREP_MAX_LINE_LENGTH);
                 lines_truncated |= was_truncated;
-                // Match lines use `:`, context lines use `-` — the classic
+                // Match lines use `:`, context lines use `-`, as in the classic
                 // grep convention, and what the model is trained on.
                 if current == m.line_number {
                     output_lines.push(format!("{relative_path}:{current}: {text}"));

@@ -7,7 +7,7 @@
 # Used by the `homebrew` job in .github/workflows/release.yml after every
 # release, and runnable by hand for a manual bump. POSIX sh + awk only.
 #
-# The awk pass keys each `sha256` line off the ASSET named in the `url`
+# The awk pass keys each `sha256` line off the asset named in the `url`
 # line right above it, so it keeps working if the platform blocks are ever
 # reordered.
 

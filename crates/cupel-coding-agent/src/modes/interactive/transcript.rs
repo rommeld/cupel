@@ -9,7 +9,7 @@
 //! 2. UI-only state (tool results attached to their calls, expansion
 //!    ) has an obvious home that the agent knows nothing about.
 //!
-//! The view is ONE column: cells render top to bottom in the order they
+//! The view is one column: cells render top to bottom in the order they
 //! happened, tool calls inline between the reasoning that triggered them
 //! and the prose that follows. [`Transcript::to_lines`] flattens the cells
 //! into styled lines plus a line->cell map for mouse hit-testing.
@@ -253,7 +253,7 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
         }
         Cell::Assistant { text } => {
             // Assistant prose is markdown; the base style keeps the cell
-            // identity (markdown accents PATCH onto it).
+            // identity (markdown accents patch onto it).
             out.extend(crate::modes::interactive::markdown::render(
                 text,
                 width,

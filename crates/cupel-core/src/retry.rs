@@ -3,25 +3,23 @@
 //! When a turn ends with `stop_reason: Error`, the agent needs to decide:
 //! is this worth retrying (a 529 "overloaded", a dropped connection), or
 //! would a retry just burn money (invalid request, exhausted quota)? The
-//! answer lives in the error TEXT because that's all providers give us —
+//! answer lives in the error text because that's all providers give us.
 //! our unified error path collapses HTTP status, SDK exception names, and
 //! stream-level error events into one message string.
 //!
-//! This module only CLASSIFIES. Retry policy (budget, backoff, restarting
-//! the turn) lives in the agent loop — same split as pi, where this
-//! classifier sits in the ai package and the policy in agent-session.
+//! This module only classifies. Retry policy (budget, backoff, restarting
+//! the turn) lives in the agent loop.
 //!
-//! Implementation note: pi matches with regexes like `rate.?limit` (any
-//! separator between the words). Instead of pulling in the `regex` crate for
-//! that, we *compress* both the message and the patterns — lowercase, keep
-//! only `[a-z0-9]` — so "Rate Limit", "rate-limit", and "RateLimit" all
+//! Implementation note: instead of pulling in the `regex` crate, we
+//! *compress* both the message and the patterns: lowercase, keep
+//! only `[a-z0-9]`. This makes "Rate Limit", "rate-limit", and "RateLimit" all
 //! become "ratelimit". Same effect, one allocation, and the pattern tables
 //! stay readable.
 
 use crate::types::{AssistantMessage, StopReason};
 
 /// Account/billing limits: retrying cannot help and may mask a real
-/// problem from the user. Checked FIRST because some of these arrive
+/// problem from the user. Checked first because some of these arrive
 /// wrapped in otherwise-retryable-looking 429 responses.
 const NON_RETRYABLE_PATTERNS: &[&str] = &[
     // Subscription/account limits (returned as 429s by some gateways).
@@ -66,10 +64,9 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "timedout",
     "timeout",
     "terminated",
-    // The same failures in reqwest's words (the list above is pi's, worded
-    // by Node's fetch). "error sending request" = nothing came back, pi's
-    // "fetch failed"; "error decoding response body" = the stream broke
-    // mid-response, pi's "terminated".
+    // The same failures in reqwest's words: "error sending request" means
+    // nothing came back. "error decoding response body" means the stream
+    // broke mid-response.
     "errorsendingrequest",
     "errordecodingresponsebody",
     // WebSocket transports report close/error text instead of HTTP text.
@@ -97,10 +94,10 @@ fn compress(text: &str) -> String {
         .collect()
 }
 
-/// Does this failed assistant message look like a TRANSIENT provider or
+/// Does this failed assistant message look like a transient provider or
 /// transport error, i.e. should the caller consider restarting the turn?
 ///
-/// Only `stop_reason: Error` qualifies — an `Aborted` message means the
+/// Only `stop_reason: Error` qualifies because an `Aborted` message means the
 /// user cancelled, and retrying against the user's intent would be hostile.
 #[must_use]
 pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
@@ -172,7 +169,7 @@ mod tests {
             "insufficient_quota: check your plan and billing details",
             "Monthly usage limit reached",
             "quota exceeded for this billing period",
-            // A 429 wrapper around a hard account limit must NOT retry.
+            // A 429 wrapper around a hard account limit must not retry.
             "429: FreeUsageLimitError",
         ] {
             assert!(

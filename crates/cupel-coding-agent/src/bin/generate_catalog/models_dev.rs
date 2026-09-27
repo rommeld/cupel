@@ -1,4 +1,4 @@
-//! A minimal serde mirror of the models.dev catalog — only what the
+//! A minimal serde mirror of the models.dev catalog containing only what the
 //! generator reads. models.dev ships ~60 providers in fluctuating
 //! shapes, so parsing happens in two stages: the outer file is read as
 //! generic JSON, and only the providers named in curation.rs are
@@ -11,7 +11,7 @@ use cupel_core::types::ThinkingLevelMap;
 use serde::Deserialize;
 
 /// One provider block. Each model stays raw JSON until it is actually
-/// curated — only curated entries must parse as [`ModelEntry`].
+/// curated. Only curated entries must parse as [`ModelEntry`].
 #[derive(Debug, Deserialize)]
 pub struct ProviderEntry {
     pub models: BTreeMap<String, serde_json::Value>,
@@ -33,7 +33,7 @@ pub struct ModelEntry {
     pub temperature: bool,
 }
 
-/// Hand-written because `temperature` must default to TRUE.
+/// Hand-written because `temperature` must default to true.
 impl Default for ModelEntry {
     fn default() -> Self {
         Self {
@@ -153,11 +153,11 @@ impl ProviderEntry {
 
 /// Derive cupel's thinkingLevelMap from models.dev effort values.
 ///
-/// — an entry 'level -> null` disables that level,
-/// — a SUPPORTED level needs NO entry (the provider's identity fallback
+/// - an entry 'level -> null` disables that level,
+/// - a supported level needs no entry (the provider's identity fallback
 /// sends the level's own name),
 /// xhigh is special-cased by supported_thinking_levels: it is
-/// selectable onyl while its key is ABSENT. Supported xhigh/max
+/// selectable only while its key is absent. Supported xhigh/max
 /// therefore means: omit the key.
 pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<ThinkingLevelMap> {
     let mut effort: Vec<String> = Vec::new();
@@ -172,7 +172,7 @@ pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<Thi
             _ => {}
         }
     }
-    // No effort scale at all (budget/toggle-only models): no map —
+    // No effort scale at all (budget/toggle-only models) means no map because
     // every cupel level stays selectable, the provider maps levels to
     // token budgets.
     if effort.is_empty() {
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn gpt56_shaped_effort_keeps_xhigh_by_omission() {
-        // The trap this derivation exists for: xhigh must NOT appear in
+        // The trap this derivation exists for: xhigh must not appear in
         // the map when it is supported (see model.rs XHigh arm).
         let options = [effort(&["none", "low", "medium", "high", "xhigh", "max"])];
         let map = thinking_level_map_from_effort(&options).expect("map derived");
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn glm53_shaped_effort_keeps_low_and_max_and_disables_the_rest() {
         // GLM 5.3 (OpenRouter and Fireworks): low/high/max, no toggle. The
-        // shape the GLM 5.2 remap must NOT be reused for: low keeps its own
+        // shape the GLM 5.2 remap must not be reused for: low keeps its own
         // name, off cannot be switched, medium/xhigh clamp at request time.
         let options = [effort(&["low", "high", "max"])];
         let map = thinking_level_map_from_effort(&options).expect("map derived");
@@ -369,7 +369,7 @@ mod tests {
     fn inkling_shaped_effort_disables_xhigh_but_keeps_max() {
         // The mirror image of scales_without_max_get_an_explicit_null: a
         // scale that skips xhigh but ends at max pins xhigh -> null and
-        // leaves max ABSENT (a present key would disable it).
+        // leaves max absent (a present key would disable it).
         let options = [effort(&["none", "minimal", "low", "medium", "high", "max"])];
         let map = thinking_level_map_from_effort(&options).expect("map derived");
         assert_eq!(map, map_of(&[("off", Some("none")), ("xhigh", None)]));
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn temperature_defaults_to_supported() {
         // The hand-written Default: a sparse entry (no `temperature` key)
-        // must NOT read as "rejects temperature".
+        // must not read as "rejects temperature".
         let catalog = parse_wanted(FIXTURE, &["anthropic"]).expect("fixture parses");
         let sparse = catalog["anthropic"]
             .model("anthropic", "paint-o-matic")

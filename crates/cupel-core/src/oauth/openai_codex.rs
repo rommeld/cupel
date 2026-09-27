@@ -1,9 +1,9 @@
-//! OpenAI Codex OAuth flow — login with a ChatGPT Plus/Pro
+//! OpenAI Codex OAuth flow for login with a ChatGPT Plus/Pro
 //! subscription instead of an API key.
 //!
 //! The flow is the one the official Codex CLI ships:
 //! an RFC-standard authorization-code flow with PKCE against
-//! `auth.openai.com`, using Codex's PUBLIC client id.
+//! `auth.openai.com`, using Codex's public client id.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,7 +30,7 @@ pub const ORIGINATOR: &str = "cupel";
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthCredential {
-    /// Short-lived bearer token (a JWT); THIS is what requests send.
+    /// Short-lived bearer token (a JWT); this is what requests send.
     pub access: String,
     /// Long-lived token that mints new access tokens.
     pub refresh: String,
@@ -74,7 +74,7 @@ pub enum OAuthError {
 }
 
 /// Everything one browser-login attempt needs to remember: the PKCE
-/// verifier and state stay LOCAL; only the URL leaves the process.
+/// verifier and state stay local; only the URL leaves the process.
 pub struct AuthorizationFlow {
     pub verifier: String,
     pub state: String,
@@ -96,7 +96,7 @@ pub fn authorization_flow() -> AuthorizationFlow {
 }
 
 /// 16 random bytes as hex `state` parameter that redirect back
-/// to THIS login attempt (CSRF protection: `createState`).
+/// to this login attempt (CSRF protection: `createState`).
 fn random_state() -> String {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).expect("OS entropy source unavailable");
@@ -147,7 +147,7 @@ pub async fn exchange_code(
     read_token_response(response, "exchange").await
 }
 
-/// Mint a fresh access token from the refresh token. The response rotates BOTK
+/// Mint a fresh access token from the refresh token. The response rotates both
 /// tokens.
 pub async fn refresh(
     http: &reqwest::Client,
@@ -200,7 +200,7 @@ fn credential_from_json(
 }
 
 /// The ChatGPT account id baked into an access token. Used at login time to fill the credential
-/// AND by the provider on every request to build the `chatgpt-account-id` header.
+/// and by the provider on every request to build the `chatgpt-account-id` header.
 #[must_use]
 pub fn account_id_from_access_token(access: &str) -> Option<String> {
     decode_jwt_payload(access)?
@@ -211,7 +211,7 @@ pub fn account_id_from_access_token(access: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Decode a JWT's payload WITHOUT verifying the signature. Verification
+/// Decode a JWT's payload without verifying the signature. Verification
 /// is the server's job; the client only reads a routing claim out of a
 /// token if just received over TLS.
 fn decode_jwt_payload(token: &str) -> Option<Value> {
@@ -263,7 +263,7 @@ impl CallbackServer {
         self.listener.local_addr()
     }
 
-    /// Serve until a redirect with the RIGHT state and a code arrives;
+    /// Serve until a redirect with the right state and a code arrives;
     /// return that code. Wrong paths (favicon probes), state mismatches,
     /// and codeless callbacks are answered with an error page and the
     /// server keeps waiting. Cancellation is the caller's: select! against
@@ -471,7 +471,7 @@ enum DevicePoll {
     Pending,
     /// RFC 8628 back-pressure.
     SlowDown,
-    /// The code arrived, PLUS the verifier for the exchange.
+    /// The code arrived, plus the verifier for the exchange.
     Complete {
         code: String,
         verifier: String,
@@ -517,7 +517,7 @@ fn classify_device_poll(status: u16, body: &str) -> DevicePoll {
 }
 
 /// Poll untile the user finishes in the browser, then exchange the code.
-/// The DEVICE flow's PKCE verifier comes back FROM the server.
+/// The device flow's PKCE verifier comes back from the server.
 pub async fn poll_device_auth(
     http: &reqwest::Client,
     device: &DeviceAuth,
@@ -556,7 +556,7 @@ pub async fn poll_device_auth(
 mod tests {
     use super::*;
 
-    /// Build an unsigned JWT-shaped token around `payload` — three
+    /// Build an unsigned JWT-shaped token around `payload` with three
     /// base64url segments; the signature is junk because nothing here
     /// verifies it.
     pub(crate) fn fake_jwt(payload: &Value) -> String {
@@ -660,7 +660,7 @@ mod tests {
         );
 
         // A well-formed response whose access token carries no account
-        // claim is ALSO rejected — the header cannot be built without it.
+        // claim is also rejected because the header cannot be built without it.
         let json = serde_json::json!({
             "access_token": fake_jwt(&serde_json::json!({"sub": "x"})),
             "refresh_token": "r",
@@ -694,14 +694,14 @@ mod tests {
             account_id: "acc".to_string(),
         };
         let json = serde_json::to_value(&credential).expect("serializes");
-        // accountId camelCase — the auth.json shape pi writes too.
+        // accountId uses camelCase in auth.json.
         assert_eq!(json["accountId"], "acc");
         let back: OAuthCredential = serde_json::from_value(json).expect("parses");
         assert_eq!(back, credential);
     }
 
     #[test]
-    fn evaluate_callback_routes_like_pi() {
+    fn evaluate_callback_validates_route_state_and_code() {
         // Success: right path, right state, a code.
         let (status, page, code) = evaluate_callback("/auth/callback?code=c-1&state=s-1", "s-1");
         assert_eq!(status, "200 OK");
@@ -728,8 +728,8 @@ mod tests {
 
         let http = reqwest::Client::new();
         let base = format!("http://127.0.0.1:{port}");
-        // Noise first: wrong route, then wrong state — the server answers
-        // both AND keeps waiting.
+        // Noise first: wrong route, then wrong state. The server answers
+        // both and keeps waiting.
         let response = http
             .get(format!("{base}/favicon.ico"))
             .send()
@@ -785,7 +785,7 @@ mod tests {
 
     #[test]
     fn device_poll_classification_covers_openais_quirks() {
-        // 200 with both halves: done (the verifier comes FROM the server).
+        // 200 with both halves: done (the verifier comes from the server).
         assert_eq!(
             classify_device_poll(200, r#"{"authorization_code": "c", "code_verifier": "v"}"#),
             DevicePoll::Complete {

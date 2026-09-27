@@ -5,11 +5,11 @@
 # and the Homebrew tap is bumped (see `homebrew` job).
 #
 # Platform notes:
-# - macOS ships one UNIVERSAL binary (arm64 + x86_64 via lipo), so there is
+# - macOS ships one universal binary (arm64 + x86_64 via lipo), so there is
 #   no "which Mac do I have" question.
-# - Linux builds against MUSL, statically linking libc: one binary runs on
+# - Linux builds against musl, statically linking libc: one binary runs on
 #   any distro regardless of glibc version.
-# - aarch64 Linux builds NATIVELY on GitHub's free arm runners
+# - aarch64 Linux builds natively on GitHub's free arm runners
 #   (ubuntu-24.04-arm) instead of cross-compiling - no cross toolchain to
 #   maintain.
 # - No Windows yet: the bash tool is Unix-only (process groups, `kill`).
@@ -128,7 +128,7 @@ jobs:
   # Bump the Homebrew tap to the release that was just published. Needs a
   # HOMEBREW_TAP_TOKEN repository secret (a fine-grained PAT with contents
   # read/write on the `homebrew-tap` repo) - the default GITHUB_TOKEN is
-  # scoped to THIS repo and cannot push elsewhere. Without the secret this
+  # scoped to this repo and cannot push elsewhere. Without the secret this
   # job skips with a notice instead of failing the release.
   homebrew:
     needs: release

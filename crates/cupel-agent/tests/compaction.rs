@@ -1,5 +1,5 @@
 //! End-to-end tests of context compaction, using a mock provider that
-//! serves BOTH request kinds the loop makes: summarization calls
+//! serves both request kinds the loop makes: summarization calls
 //! (recognized by the summarization system prompt) and normal turn calls.
 
 // Integration-test files are compiled as their own crate in test mode; the
@@ -28,11 +28,11 @@ use cupel_core::{
     },
 };
 
-/// Serves summarization requests with a fixed summary; records every TURN
+/// Serves summarization requests with a fixed summary; records every turn
 /// request's message list. Optionally fails the first N turn requests.
 struct CompactionAwareProvider {
     turn_calls: AtomicU32,
-    /// Summarization requests served — the LLM cost of compaction. The
+    /// Summarization requests served, representing the LLM cost of compaction. The
     /// pruning tier exists to keep this at zero when tool output alone
     /// caused the overflow.
     summarization_calls: AtomicU32,
@@ -252,8 +252,8 @@ async fn threshold_compaction_shrinks_the_request() {
         "5 history messages should have collapsed, got {message_count}"
     );
     assert!(matches!(events.last(), Some(AgentEvent::AgentEnd { .. })));
-    // User-text history has nothing to prune, so this path DID pay one
-    // summarization call — the counterpart of the pruning test below.
+    // User-text history has nothing to prune, so this path did pay one
+    // summarization call. This is the counterpart of the pruning test below.
     assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 1);
     assert!(events.iter().any(|e| matches!(
         e,
@@ -261,7 +261,7 @@ async fn threshold_compaction_shrinks_the_request() {
     )));
 }
 
-/// ~1000 estimated tokens of TOOL RESULT filler per message, prefixed by a
+/// ~1000 estimated tokens of tool result filler per message, prefixed by a
 /// user message so the cut point has a boundary to land on.
 fn tool_heavy_history(count: usize) -> Vec<AgentMessage> {
     let mut messages = vec![AgentMessage::user_text("please read the files")];
@@ -286,7 +286,7 @@ fn tool_heavy_history(count: usize) -> Vec<AgentMessage> {
 async fn tool_heavy_history_compacts_without_a_summarization_call() {
     let provider = Arc::new(CompactionAwareProvider::new(0, ""));
     // Same threshold shape as above (window 3000, reserve 1000), but the
-    // bulk is tool output — the free pruning tier alone must reclaim it.
+    // bulk is tool output, so the free pruning tier alone must reclaim it.
     let config = CompactionConfig {
         enabled: true,
         reserve_tokens: 1000,
@@ -299,11 +299,11 @@ async fn tool_heavy_history_compacts_without_a_summarization_call() {
         compaction_events(&events),
         vec![(CompactionReason::Threshold, true)]
     );
-    // ...with ZERO LLM cost: no summarization request ever hit the provider.
+    // ...with zero LLM cost: no summarization request ever hit the provider.
     assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 0);
 
-    // The turn request kept the full message COUNT (nothing summarized
-    // away — only bodies elided) and no summary message was spliced in.
+    // The turn request kept the full message count. Only bodies were elided,
+    // and no summary message was spliced in.
     let seen = provider.seen_turn_requests.lock().expect("test mutex");
     assert_eq!(seen.len(), 1);
     let (first_text, message_count) = &seen[0];
@@ -317,12 +317,12 @@ async fn tool_heavy_history_compacts_without_a_summarization_call() {
 
 #[tokio::test]
 async fn overflow_error_triggers_reactive_compaction_and_recovery() {
-    // The provider rejects the FIRST turn request the way Anthropic does.
+    // The provider rejects the first turn request the way Anthropic does.
     let provider = Arc::new(CompactionAwareProvider::new(
         1,
         "prompt is too long: 250000 tokens > 200000 maximum",
     ));
-    // Threshold generous enough that proactive compaction does NOT fire
+    // Threshold generous enough that proactive compaction does not fire
     // (window 100k), so only the reactive path runs.
     let config = CompactionConfig {
         enabled: true,

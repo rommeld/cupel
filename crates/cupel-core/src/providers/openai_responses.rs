@@ -90,7 +90,7 @@ impl Provider for OpenAiResponsesProvider {
     }
 }
 
-/// Encode `{"v":1,"id":...}` (pi's `TextSignatureV1`). Versioning the payload
+/// Encode `{"v":1,"id":...}`. Versioning the payload
 /// lets future formats coexist with already-persisted sessions.
 fn encode_text_signature(id: &str, phase: Option<&str>) -> String {
     let mut payload = json!({"v": 1, "id": id});
@@ -119,8 +119,7 @@ fn parse_text_signature(signature: &str) -> (String, Option<String>) {
 }
 
 /// Cheap deterministic hash used to shorten foreign/oversized ids. FNV-1a is
-/// tiny, dependency-free, and collision-resistant enough for id dedup (pi
-/// uses a similar `shortHash`).
+/// tiny, dependency-free, and collision-resistant enough for id dedup.
 pub(crate) fn short_hash(input: &str) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -242,7 +241,7 @@ pub(crate) async fn process_response_stream(
     let mut events: Vec<ServerSentEvent> = Vec::new();
 
     // Creating a slot when `response.output_item.added` arrives; `.done`
-    // events can also create one defensively (getOrCreateSlot in pi).
+    // events can also create one defensively.
     fn create_slot(
         slots: &mut std::collections::HashMap<u64, Slot>,
         output_index: u64,
@@ -415,7 +414,7 @@ pub(crate) async fn process_response_stream(
                 }
 
                 "response.function_call_arguments.done" => {
-                    // The event carries the FULL argument string; emit only
+                    // The event carries the full argument string; emit only
                     // the suffix we haven't already streamed as a delta.
                     let full = data.get("arguments").and_then(Value::as_str).unwrap_or("");
                     if let Some(slot) = output_index.and_then(|i| slots.get_mut(&i))
@@ -467,7 +466,7 @@ pub(crate) async fn process_response_stream(
                                 } else if !content.is_empty() {
                                     block.thinking = content;
                                 }
-                                // Store the ENTIRE reasoning item; replaying it
+                                // Store the entire reasoning item; replaying it
                                 // verbatim is what keeps encrypted reasoning
                                 // valid across turns.
                                 block.thinking_signature = Some(item.to_string());
@@ -622,7 +621,7 @@ fn finalize_response(response: &Value, model: &Model, output: &mut AssistantMess
             .get("input_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        // OpenAI counts cached tokens INSIDE input_tokens; our unified model
+        // OpenAI counts cached tokens inside input_tokens; our unified model
         // keeps them separate, so subtract.
         output.usage.input = input.saturating_sub(cached);
         output.usage.output = usage
@@ -808,7 +807,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &OpenAiCompat) -> 
     Value::Array(items)
 }
 
-/// The transcript as Responses items WITHOUT the system prompt. It is shared with the
+/// The transcript as Responses items without the system prompt. It is shared with the
 /// Codex provider, which carries the system prompt in the `instructions` body field
 /// instead of a leading message item. The tool-call id normalizer is a parameter
 /// because Codex counts the plain `openai` provider as family (ids stay usable
@@ -851,7 +850,7 @@ pub(crate) fn convert_items(
             }
 
             Message::Assistant(assistant) => {
-                // A previous response from THIS model id? Ids stay usable.
+                // A previous response from this model id? Ids stay usable.
                 // Same provider+api but a different model id needs the item
                 // ids dropped so OpenAI's reasoning/function-call pairing
                 // validation doesn't fire.
@@ -1076,7 +1075,7 @@ mod tests {
     #[test]
     fn astra_off_omits_the_reasoning_field() {
         // off -> null in the map: the model cannot be switched off, so the
-        // request carries NO reasoning field (never effort "none", which
+        // request carries no reasoning field (never effort "none", which
         // Astra rejects) and the server applies its default effort.
         let body = build_request_body(&astra_model(), &context(), &with_reasoning(None));
         assert!(body.get("reasoning").is_none(), "{body}");

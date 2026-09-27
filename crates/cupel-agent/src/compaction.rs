@@ -1,9 +1,9 @@
 //! Context compaction: keep long sessions inside the model's context window,
-//! in two tiers — cheapest first:
+//! in two tiers, cheapest first:
 //!
-//! 1. **Pruning (free)**: elide the BODIES of tool results outside the keep
+//! 1. **Pruning (free)**: elide the bodies of tool results outside the keep
 //!    window. In coding sessions tool output (file reads, grep, bash logs)
-//!    dominates the context and is mostly re-derivable — the agent can
+//!    dominates the context and is mostly re-derivable because the agent can
 //!    re-run the tool. When pruning alone brings the estimate back under
 //!    the threshold, no LLM call happens at all.
 //! 2. **Summarization (one LLM call)**: replace the remaining old history
@@ -27,7 +27,7 @@ use crate::types::{AgentContext, AgentMessage};
 /// the previous summary for iterative updates.
 pub const COMPACTION_MARKER: &str = "[Conversation summary - earlier history was compacted]";
 
-/// Thresholds and retention settings (pi's defaults).
+/// Thresholds and retention settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompactionConfig {
     pub enabled: bool,
@@ -136,7 +136,7 @@ pub fn should_compact(context_tokens: u64, context_window: u64, config: &Compact
     context_tokens > context_window.saturating_sub(config.reserve_tokens)
 }
 
-/// Index of the first message KEPT verbatim. Everything before it gets
+/// Index of the first message kept verbatim. Everything before it gets
 /// summarized. Walks back accumulating the keep budget, then snaps to the
 /// next user/custom message boundary (never between a tool call and its
 /// result).
@@ -172,12 +172,12 @@ pub const ELIDED_TOOL_RESULT: &str =
 
 /// Results at or below this many content bytes are left alone: replacing a
 /// small result with the ~80-byte stub gains almost nothing and loses
-/// information. Also makes pruning idempotent for free — an already-elided
+/// information. The floor also makes pruning idempotent because an already-elided
 /// result is itself below the floor.
 const PRUNE_MIN_BYTES: u64 = 256;
 
-/// Elide the bodies of all (large) tool results in `messages` — the caller
-/// passes only the slice OUTSIDE the keep window. Tool CALLS stay intact,
+/// Elide the bodies of all (large) tool results in `messages`. The caller
+/// passes only the slice outside the keep window. Tool calls stay intact,
 /// so the conversation narrative ("the agent read foo.rs, then edited it")
 /// survives; only the bulky, re-derivable payloads go. Returns how many
 /// results were elided.
@@ -202,8 +202,8 @@ fn elide_stale_tool_results(messages: &mut [AgentMessage]) -> usize {
         result.content = vec![ToolResultContent::Text(
             cupel_core::types::TextContent::plain(ELIDED_TOOL_RESULT),
         )];
-        // Details are tool-private metadata riding alongside the content —
-        // same re-derivable nature, same treatment.
+        // Details are tool-private metadata riding alongside the content.
+        // They can be elided for the same reason.
         result.details = None;
         pruned += 1;
     }
@@ -216,7 +216,7 @@ const SUMMARIZATION_PROMPT: &str = "The messages above are a conversation to sum
 
 const UPDATE_SUMMARIZATION_PROMPT: &str = "The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.\n\nUpdate the existing structured summary with new information. RULES:\n- PRESERVE all existing information from the previous summary\n- ADD new progress, decisions, and context from the new messages\n- UPDATE the Progress section: move items from \"In Progress\" to \"Done\" when completed\n- UPDATE \"Next Steps\" based on what was accomplished\n- PRESERVE exact file paths, function names, and error messages\n- If something is no longer relevant, you may remove it\n\nUse the same EXACT format as the previous summary (Goal / Constraints & Preferences / Progress / Key Decisions / Next Steps / Critical Context).\n\nKeep each section concise. Preserve exact file paths, function names, and error messages.";
 
-/// Cap for tool results inside the serialized conversation — full outputs
+/// Cap for tool results inside the serialized conversation. Full outputs
 /// would blow the summarization request itself.
 const SERIALIZED_TOOL_RESULT_CHARS: usize = 2000;
 
@@ -248,7 +248,7 @@ fn serialize_conversation(messages: &[AgentMessage]) -> String {
                     match block {
                         AssistantContent::Text(t) => out.push_str(&t.text),
                         // Thinking is the model's scratch space, not durable
-                        // context — skip it like pi's convertToLlm does.
+                        // context, so skip it when building the summary.
                         AssistantContent::Thinking(_) => continue,
                         AssistantContent::ToolCall(tc) => {
                             out.push_str(&format!("[tool call: {} {}]", tc.name, tc.arguments));
@@ -300,7 +300,7 @@ pub struct CompactionOutcome {
 }
 
 /// Compact `context.messages` in place, cheapest tier first:
-/// 1. elide stale tool-result bodies (free) — and STOP here when that
+/// 1. elide stale tool-result bodies (free) and stop here when that
 ///    alone brings the estimate back under the compaction threshold;
 /// 2. otherwise summarize everything before the cut point via one LLM
 ///    call, then splice `[summary user message] + kept tail`.
@@ -319,7 +319,7 @@ pub async fn compact(
     }
 
     // Tier 1: free pruning
-    // Elide only outside the keep window (the recent tail stays verbatim —
+    // Elide only outside the keep window (the recent tail stays verbatim, so
     // the model may be mid-task on those outputs). When this is enough,
     // return before any LLM call: no summarization cost, no summary at all.
     let pruned_tool_results = elide_stale_tool_results(&mut context.messages[..cut]);
@@ -368,7 +368,7 @@ pub async fn compact(
         SUMMARIZATION_PROMPT
     });
 
-    // The summary must fit in the reserve (that's what it's reserved FOR).
+    // The summary must fit in the reserve (that's what it's reserved for).
     let max_tokens = (config.reserve_tokens * 8 / 10).min(model.max_tokens.max(1));
     let summarization_context = Context {
         system_prompt: Some(SUMMARIZATION_SYSTEM_PROMPT.to_string()),
@@ -493,8 +493,8 @@ mod tests {
         assert_eq!(elide_stale_tool_results(&mut messages), 0);
     }
 
-    /// A model whose api has NO registered provider: any summarization
-    /// attempt errors, so an Ok result PROVES no LLM call happened.
+    /// A model whose api has no registered provider: any summarization
+    /// attempt errors, so an Ok result proves no LLM call happened.
     fn model_with_window(context_window: u64) -> Model {
         Model {
             id: "mock".into(),
@@ -518,8 +518,8 @@ mod tests {
     async fn pruning_alone_can_avoid_the_summarization_call() {
         // ~10k estimated tokens of tool output before a tiny keep window;
         // window 6k with reserve 1k -> threshold 5k. Pruning drops the
-        // estimate to almost nothing, so tier 2 must not run — proven by
-        // the EMPTY registry, where any LLM call would error.
+        // estimate to almost nothing, so tier 2 must not run. This is proven by
+        // the empty registry, where any LLM call would error.
         let mut context = AgentContext {
             system_prompt: String::new(),
             messages: vec![
@@ -555,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn insufficient_pruning_still_reaches_the_summarizer() {
-        // The bulk is USER text, which pruning cannot touch — the estimate
+        // The bulk is user text, which pruning cannot touch. The estimate
         // stays over the threshold, so tier 2 runs and (empty registry)
         // fails with SummarizationFailed: proof the LLM call was attempted.
         let big = "x".repeat(40_000);

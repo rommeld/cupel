@@ -1,25 +1,23 @@
-//! ChatGPT Codex backend provider — the `OpenAI` Responses dialect behind
+//! ChatGPT Codex backend provider for the `OpenAI` Responses dialect behind
 //! a ChatGPT Plus/Pro subscription.
 //!
-//! The STREAM is the plain Responses SSE stream; what differs is
+//! The stream is the plain Responses SSE stream; what differs is
 //! everything around it:
 //!
-//! — **URL**: `{base_url}/codex/responses` on `chatgpt.com/backend-api`,
+//! - **URL**: `{base_url}/codex/responses` on `chatgpt.com/backend-api`,
 //!   not `api.openai.com/v1/responses`.
-//! — **Auth**: the bearer token is a ChatGPT OAuth ACCESS token (see
+//! - **Auth**: the bearer token is a ChatGPT OAuth access token (see
 //!   `crate::oauth::openai_codex`), and the backend additionally demands
-//!   the `chatgpt-account-id` header — extracted from that very token's
+//!   the `chatgpt-account-id` header, extracted from that very token's
 //!   JWT claim on every request.
-//! — **Body**: `store: false` is mandatory (the backend rejects true),
+//! - **Body**: `store: false` is mandatory (the backend rejects true),
 //!   the system prompt travels in the `instructions` field instead of a
-//!   leading message item, and there is no `max_output_tokens` — the
+//!   leading message item, and there is no `max_output_tokens` because the
 //!   backend manages the output budget itself.
 //!
-//! Deliberately NOT mirrored from pi: the WebSocket transport (pi's
-//! default, with SSE as fallback — cupel speaks the fallback, which the
-//! backend fully supports), zstd request compression, service tiers, and
-//! the tool-search machinery. Each is an optimization on top of this
-//! exact SSE path.
+//! This implementation uses SSE (which the backend fully supports), not
+//! WebSocket transport. It also omits zstd request compression, service
+//! tiers, and the tool-search machinery.
 
 use serde_json::{Value, json};
 
@@ -105,7 +103,7 @@ async fn run(
         .api_key
         .clone()
         .ok_or_else(|| InferenceError::MissingApiKey(model.provider.as_str().to_string()))?;
-    // The backend routes by account; the id lives INSIDE the access
+    // The backend routes by account; the id lives inside the access
     // token, so a non-JWT "key" (someone pasted an sk-... API key) is
     // caught here with a pointer at the fix, not with the server 401.
     let account_id = account_id_from_access_token(&api_key).ok_or_else(|| {
@@ -186,7 +184,7 @@ fn clamp_cache_key(session_id: &str) -> String {
     session_id.chars().take(64).collect()
 }
 
-/// The model name the WIRE wants. Catalog ids are namespaced
+/// The model name the wire wants. Catalog ids are namespaced
 /// ("codex/gpt-5.5") because cupel's catalog is one flat id namespace.
 /// The openai provider already owns "gpt-5.6-sol" etc., and merge_models
 /// replaces by id. The compat blob carries the backend's real name.
@@ -204,7 +202,7 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
 
     let mut body = json!({
         "model": wire_model(model),
-        // The backend REJECTS store:true ("Store must be set to false").
+    // The backend rejects store:true ("Store must be set to false").
         // Stateless mode is not a choice.
         "store": false,
         "stream": true,
@@ -216,7 +214,7 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
             .unwrap_or_else(|| "You are a helpful assistant.".to_string()),
         "input": Value::Array(convert_items(model, context, normalize_tool_call_id_codex)),
         "text": {"verbosity": "low"},
-        // Stateless mode ALWAYS replays encrypted reasoning.
+    // Stateless mode always replays encrypted reasoning.
         "include": ["reasoning.encrypted_content"],
         "tool_choice": "auto",
         "parallel_tool_calls": true,
@@ -278,7 +276,7 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
 }
 
 /// Codex's tool-call id normalization is same as openai_responses mechanics,
-/// but ids minted by the plain `openai` provider count as FAMILY, not foreign.
+/// but ids minted by the plain `openai` provider count as family, not foreign.
 fn normalize_tool_call_id_codex(id: &str, _model: &Model, source: &AssistantMessage) -> String {
     let Some((call_id, item_id)) = id.split_once('|') else {
         return normalize_id_part(id);
@@ -362,7 +360,7 @@ mod tests {
         let model = codex_model();
         let body = build_request_body(&model, &context_with_prompt(), &StreamOptions::default());
         assert_eq!(body["instructions"], json!("You are cupel."));
-        // The input carries the user message but NO system/developer item.
+        // The input carries the user message but no system/developer item.
         let input = body["input"].as_array().expect("input array");
         assert!(
             input
@@ -372,8 +370,7 @@ mod tests {
         );
         assert_eq!(input.len(), 1, "just the user message");
 
-        // No system prompt at all: pi still sends the field, with its
-        // fallback text.
+        // No system prompt at all: still send the field with fallback text.
         let body = build_request_body(
             &model,
             &Context {
@@ -402,7 +399,7 @@ mod tests {
         assert_eq!(body["tool_choice"], json!("auto"));
         assert_eq!(body["parallel_tool_calls"], json!(true));
         assert_eq!(body["prompt_cache_key"], json!("session-abc"));
-        // max_tokens was SET in the options — and must not be sent.
+        // max_tokens was set in the options but must not be sent.
         assert!(body.get("max_output_tokens").is_none());
     }
 
@@ -432,7 +429,7 @@ mod tests {
             json!({"effort": "low", "summary": "auto"})
         );
 
-        // Off omits the parameter entirely — never effort "none" here.
+        // Off omits the parameter entirely rather than sending effort "none".
         let body = build_request_body(&model, &context, &StreamOptions::default());
         assert!(body.get("reasoning").is_none());
         // Encrypted reasoning stays included even with thinking off.
@@ -467,7 +464,7 @@ mod tests {
         assert!(body.get("temperature").is_none(), "{body}");
 
         // A GPT-5.5 row (max -> null pinned by the generator) clamps max
-        // down to xhigh — the level below it on the scale.
+        // down to xhigh, the level below it on the scale.
         let mut gpt55 = codex_model();
         gpt55
             .thinking_level_map
@@ -493,7 +490,7 @@ mod tests {
         let tool = &body["tools"][0];
         assert_eq!(tool["type"], json!("function"));
         assert_eq!(tool["name"], json!("read"));
-        // Present AND null — get() distinguishes that from absent.
+        // Present and null: get() distinguishes that from absent.
         assert!(tool.get("strict").is_some_and(Value::is_null));
     }
 

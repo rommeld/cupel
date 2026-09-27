@@ -73,7 +73,7 @@ pub trait CodeSearch: Send + Sync {
 /// through, `~` expands, everything else is joined onto the root.
 #[must_use]
 pub fn resolve_to_root(path: &str, root: &Path) -> PathBuf {
-    // pi's stripAtPrefix: prompts reference files as `@path`, and models
+    // Prompts reference files as `@path`, and models
     // sometimes echo that convention verbatim into tool calls
     // (read("@src/main.rs")). Tolerate exactly one leading `@`.
     let path = path.strip_prefix('@').unwrap_or(path);
@@ -90,8 +90,7 @@ pub fn resolve_to_root(path: &str, root: &Path) -> PathBuf {
     }
 }
 
-/// File-scan search backend using ripgrep's engine. Semantics match pi's
-/// `rg --json --line-number --hidden` invocation: respects `.gitignore`,
+/// File-scan search backend using ripgrep's engine. Respects `.gitignore`,
 /// includes hidden files (but never the `.git` directory itself).
 pub struct GrepSearch {
     root: PathBuf,
@@ -286,9 +285,9 @@ mod tests {
             PathBuf::from("/project/src/main.rs")
         );
         assert_eq!(resolve_to_root("@/abs/x", root), PathBuf::from("/abs/x"));
-        // Plain paths are untouched; only ONE @ is stripped (a literal
+        // Plain paths are untouched; only one @ is stripped (a literal
         // `@@weird` file stays reachable as `@@weird` -> `@weird`... rare
-        // enough that pi accepts the same trade).
+        // enough to accept the trade).
         assert_eq!(
             resolve_to_root("src/main.rs", root),
             PathBuf::from("/project/src/main.rs")

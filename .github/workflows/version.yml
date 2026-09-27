@@ -3,7 +3,7 @@
 # version in the root Cargo.toml (every crate inherits it via
 # `version.workspace = true`), refreshes Cargo.lock, and commits to main.
 #
-# This does NOT release anything by itself - afterwards, tag the bump commit
+# This does not release anything by itself - afterwards, tag the bump commit
 # (`git tag v0.2.0 && git push origin v0.2.0`) to trigger release.yml, which
 # builds the binaries, writes the changelog, and bumps the Homebrew tap.
 #

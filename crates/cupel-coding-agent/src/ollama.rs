@@ -4,12 +4,12 @@
 //! One bounded GET to ollama's native `/api/tags` at startup; the models
 //! themselves are then driven through ollama's OpenAI-compatible
 //! `{host}/v1/chat/completions` endpoint by the existing
-//! `openai-completions` provider — discovery is the only ollama-specific
+//! `openai-completions` provider. Discovery is the only ollama-specific
 //! code in the workspace.
 //!
-//! Fail-soft by design: ollama not running is the NORMAL case for most
+//! Fail-soft by design: ollama not running is the normal case for most
 //! users, so any failure (connection refused, timeout, bad JSON) logs at
-//! debug and yields an empty list — the resources.rs warn-and-continue
+//! debug and yields an empty list. The resources.rs warn-and-continue
 //! idiom, one notch quieter.
 
 use cupel_core::types::{Api, InputModality, Model, ModelCost, Provider};
@@ -19,8 +19,8 @@ use cupel_core::types::{Api, InputModality, Model, ModelCost, Provider};
 /// black-holes packets.
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Discovered models claim a conservative 4096-token window — ollama's own
-/// default context length. Understating merely compacts early; OVERSTATING
+/// Discovered models claim a conservative 4096-token window based on ollama's
+/// default context length. Understating merely compacts early. Overstating
 /// would make the server truncate the prompt silently, which corrupts tool
 /// calls. Users who raise ollama's context pin the model in models.json.
 const DEFAULT_CONTEXT_WINDOW: u64 = 4096;
@@ -88,7 +88,7 @@ pub fn models_from_tags(json: &serde_json::Value, host: &str) -> Vec<Model> {
             reasoning: false,
             thinking_level_map: None,
             input: vec![InputModality::Text],
-            // Local inference is free — keeps /usage honest at $0.
+            // Local inference is free, keeping /usage honest at $0.
             cost: ModelCost::default(),
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_context_window: None,

@@ -102,7 +102,7 @@ impl App {
         }
         // Argument value sets: after `/model ` the popup offers the catalog,
         // after `/thinking ` the levels no more typing ids from memory.
-        // meta.models is the MERGED catalog (builtins + models.json +
+        // meta.models is the merged catalog (builtins + models.json +
         // discovered ollama models), resolved once at startup.
         let model_candidates: Vec<Candidate> = meta
             .models
@@ -324,7 +324,7 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-        // It consumes ONLY the keys it needs; everything else (Ctrl-C
+        // It consumes only the keys it needs; everything else (Ctrl-C
         // included) falls through so session control never changes meaning.
         // Visible but  not merely open: a session with zero matches renders
         // nothing, and an invisible popup swallowing Enter would make a
@@ -390,7 +390,7 @@ impl App {
             (KeyCode::Esc, ..) => self.selected_cell = None,
 
             // Ctrl+Y toggles "selection mode": mouse capture off so the
-            // TERMINAL owns the mouse again (select + copy text natively),
+            // Terminal owns the mouse again (select + copy text natively),
             // then back on for wheel scrolling. Only requested here when the
             // event loop owns the terminal and issues the actual commands.
             (KeyCode::Char('y'), true, _) => self.mouse_toggle_requested = true,
@@ -443,7 +443,7 @@ impl App {
             }
             // History recall closes the popup instead of refreshing: a
             // recalled prompt containing `@src/x` must not surprise-open the
-            // menu. Completion triggers on TYPING (pi behaves the same).
+            // menu. Completion triggers on typing.
             (KeyCode::Up, ..) => {
                 self.input.history_prev();
                 self.autocomplete.close();
@@ -460,14 +460,14 @@ impl App {
         }
     }
 
-    /// Edits (typing, deleting, pasting) re-evaluate the popup and may OPEN
+    /// Edits (typing, deleting, pasting) re-evaluate the popup and may open
     /// a session but  completion is typing-driven.
     fn refresh_autocomplete(&mut self) {
         self.autocomplete
             .refresh(self.input.text(), self.input.cursor());
     }
 
-    /// Cursor motion only keeps an ALREADY-OPEN session accurate (or closes
+    /// Cursor motion only keeps an already-open session accurate (or closes
     /// it when the cursor leaves the token). Moving into an existing
     /// `@token` never surprise-opens the popup.
     fn refresh_autocomplete_if_open(&mut self) {
@@ -478,7 +478,7 @@ impl App {
 
     /// `/hot-reload`: apply `.cupel` changes, consuming the old App and
     /// returning its replacement (the event loop rebinds); on failure the
-    /// OLD app comes back with an error notice, nothing torn down.
+    /// old app comes back with an error notice, nothing torn down.
     ///
     /// What carries over in both modes: the current model, thinking level,
     /// and preset prompt (runtime switches survive a reload), session-entered
@@ -492,10 +492,10 @@ impl App {
         }
     }
 
-    /// Bare `/hot-reload`: the RUNNING session continues same id, same
+    /// Bare `/hot-reload`: the running session continues same id, same
     /// history, same transcript file, and no session-end hook (the session
     /// is not ending). Fresh templates, models, bash-deny rules, and tools
-    /// are swapped in. Context files (AGENTS.md/CLAUDE.md) get DELTA
+    /// are swapped in. Context files (AGENTS.md/CLAUDE.md) get delta
     /// treatment: the system prompt keeps the text embedded at session
     /// start, and only a unified diff of what changed on disk is appended
     /// to the conversation the full file is never sent twice.
@@ -505,7 +505,7 @@ impl App {
         let ingredients = crate::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
 
         // The delta between what the session started with and what is on
-        // disk now, as a user message the NEXT request will carry.
+        // disk now, as a user message the next request will carry.
         let delta_message =
             crate::resources::context_delta(&self.meta.context_files, &ingredients.context_files)
                 .map(AgentMessage::user_text);
@@ -572,10 +572,10 @@ impl App {
 
     /// `/hot-reload <session-id>`: full rebuild with freshly loaded
     /// configuration (incl. a fresh system prompt a resumed session gets
-    /// the CURRENT context files embedded), history seeded from that
+    /// the current context files embedded), history seeded from that
     /// session's transcript.
     async fn reload_resume(mut self, cwd: &std::path::Path, id: &str) -> Self {
-        // Resolve the target session BEFORE tearing anything down.
+        // Resolve the target session before tearing anything down.
         let Some(path) = self
             .recorder
             .sessions_dir()
@@ -615,7 +615,7 @@ impl App {
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
         // Session-entered keys still win, but the settings tier must come
-        // from the FRESH ingredients self.meta.settings is the stale
+        // from the fresh ingredients self.meta.settings is the stale
         // copy this reload replaces (hand edits would be lost otherwise).
         let provider = state.model.provider.as_str();
         options.api_key = self
@@ -659,7 +659,7 @@ impl App {
     }
 
     /// Flip the mouse-capture state and tell the user what changed. Called
-    /// by the event loop AFTER it issued the matching crossterm command;
+    /// by the event loop after it issued the matching crossterm command;
     /// split from the key handler so the state logic is testable without a
     /// terminal. Returns the new state.
     pub fn apply_mouse_toggle(&mut self) -> bool {
@@ -697,7 +697,7 @@ impl App {
 
     /// Ctrl+O: queue a block's raw text for the clipboard. The selected
     /// block wins; without a selection the most recent Answer is the
-    /// target. Only QUEUED here the event loop owns the terminal and
+    /// target. Only queued here the event loop owns the terminal and
     /// emits the actual OSC 52 sequence (same split as the mouse toggle).
     fn copy_selected(&mut self) {
         let index = self.selected_cell.or_else(|| {
@@ -767,7 +767,7 @@ impl App {
     /// Route a prompt to the agent: new run when idle, steering when busy.
     fn send(&mut self, text: &str) {
         // A prompt is headed for the agent the "first interaction" moment
-        // that scaffolds the project .cupel/ directory. Deliberately NOT at
+        // that scaffolds the project .cupel/ directory. Deliberately not at
         // startup (launching + quitting cupel must leave no trace), and not
         // for local built-ins like /help. Idempotent and never fails, so
         // calling it on every send is fine.
@@ -854,7 +854,7 @@ impl App {
             .or_else(|| crate::providers::resolve_api_key(provider, &self.meta.settings))
     }
 
-    /// Point the agent at `model` AND re-resolve the API key for its
+    /// Point the agent at `model` and re-resolve the API key for its
     /// provider. Model and key must travel together: switching providers
     /// while keeping the old key would sign requests with the wrong
     /// credential.
@@ -867,7 +867,7 @@ impl App {
     }
 
     /// `/provider` list providers, or switch to one (optionally handing
-    /// over an API key, which is kept for the session AND saved to
+    /// over an API key, which is kept for the session and saved to
     /// ~/.cupel/settings.json).
     fn handle_provider_command(&mut self, args: &str) {
         let mut parts = args.split_whitespace();
@@ -877,7 +877,7 @@ impl App {
         if name.is_empty() {
             let mut lines = vec!["providers (/provider <name> [api-key]):".to_string()];
             for (provider, model) in crate::providers::catalog_providers(&self.meta.models) {
-                // The order of these arms MIRRORS resolve_key's precedence
+                // The order of these arms mirrors resolve_key's precedence
                 // (session > env > settings) keep the two in sync, or the
                 // listing lies about which key a request would use.
                 let status = if provider == "amazon-bedrock" {
@@ -887,7 +887,7 @@ impl App {
                         "no AWS credentials".to_string()
                     }
                 } else if provider == "openai-codex" {
-                    // Subscription auth: the credential is a stored LOGIN,
+                    // Subscription auth: the credential is a stored login,
                     // never a key mirror auth.json, not the key tiers.
                     if crate::auth::has_credential(self.meta.home.as_deref(), &provider) {
                         "logged in with ChatGPT (/logout openai-codex)".to_string()
@@ -941,7 +941,7 @@ impl App {
             if !crate::providers::takes_api_key(&self.meta.models, &provider) {
                 self.notice(format!("{provider} does not take an API key - key ignored"));
             } else {
-                // Session memory FIRST: the key must work for this session
+                // Session memory first: the key must work for this session
                 // even if the disk save below fails. Deliberately never
                 // echoed back into the transcript.
                 self.session_keys.insert(provider.clone(), key.to_string());
@@ -969,7 +969,7 @@ impl App {
             }
         }
 
-        // Describe where the credential comes from WITHOUT echoing it.
+        // Describe where the credential comes from without echoing it.
         let key_source = if provider == "amazon-bedrock" {
             "AWS credential chain".to_string()
         } else if provider == "openai-codex" {
@@ -1066,7 +1066,7 @@ impl App {
             }
             "session-id" => {
                 // Transcripts carry no stored summary (compaction output is
-                // never persisted), so each session's FIRST PROMPT serves as
+                // never persisted), so each session's first prompt serves as
                 // its human-readable label.
                 let mut lines = vec![format!(
                     "current session: {} (resume later with `cupel --resume {}`)",
@@ -1102,7 +1102,7 @@ impl App {
             }
             "review" => {
                 // Builds the (truncated) code bundle synchronously cheap
-                // local fs/git work then SENDS it like any prompt, so the
+                // local fs/git work then sends it like any prompt, so the
                 // model call rides the normal async run path.
                 let review_args = commands::parse_command_args(args);
                 match crate::review::build_review_prompt(
@@ -1308,7 +1308,7 @@ impl App {
         }
     }
 
-    /// The two background sources, multiplexed behind ONE `&mut self`
+    /// The two background sources, multiplexed behind one `&mut self`
     /// future mod.rs cannot hold two `app.next_...()` branches in its
     /// select! (each would borrow `app` mutably). Inside the method the
     /// borrows split field-by-field, which is exactly what the borrow
@@ -1492,7 +1492,7 @@ fn preset_summary(preset: &Preset) -> String {
 }
 
 /// Session-id completion candidates: transcript file stems, newest first
-/// by modification time. Deliberately does NOT parse the transcripts
+/// by modification time. Deliberately does not parse the transcripts
 /// this runs in `App::new`.
 fn list_session_id_candidates(dir: &std::path::Path) -> Vec<Candidate> {
     let Ok(entries) = std::fs::read_dir(dir) else {

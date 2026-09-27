@@ -1,4 +1,4 @@
-//! The built-in model catalog — GENERATED DATA, do not edit by hand.
+//! The built-in model catalog contains generated data. Do not edit by hand.
 //!
 //! `catalog.json` is produced by the dev-time generator
 //! (`cargo run -p cupel-coding-agent --bin generate-catalog`), which
@@ -11,7 +11,7 @@
 
 use crate::types::Model;
 
-/// Embedded at compile time — the runtime never touches the network or
+/// Embedded at compile time, so the runtime never touches the network or
 /// the filesystem for the built-in catalog.
 const CATALOG_JSON: &str = include_str!("catalog.json");
 
@@ -20,7 +20,7 @@ pub fn builtin_models() -> Vec<Model> {
     // Invariant-backed expect: the file is generated, validated, and
     // round-trip-checked by generate-catalog and committed to git. A
     // failure here means catalog.json types::Model diverged (or the
-    // file was hand-edited) — regenerate instead of editing.
+    // file was hand-edited). Regenerate instead of editing.
     serde_json::from_str(CATALOG_JSON).expect(
         "catalog.json is generated data; regenrate it with \
          `cargo run -p cupel-coding-agent --bin generate-catalog`",
@@ -68,7 +68,7 @@ mod tests {
     fn fireworks_models_ride_the_expected_endpoints() {
         // The invariant the old 10/2 count test was really protecting:
         // Fireworks models pair anthropic-messages with /inference and
-        // openai-completions with /inference/v1 — never mixed up.
+        // openai-completions with /inference/v1, never mixed up.
         let mut seen = 0;
         for model in builtin_models() {
             if model.provider.as_str() != Provider::FIREWORKS {
@@ -96,7 +96,7 @@ mod tests {
     fn referenced_ids_are_present() {
         // cupel-coding-agent tests hardcode these ids (autocomplete,
         // models.json layering); removing them from curation.rs must
-        // fail HERE with a clear message, not somewhere in the TUI tests.
+        // fail here with a clear message, not somewhere in the TUI tests.
         let models = builtin_models();
         for id in [
             "claude-sonnet-5",
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn openai_rows_plan_against_the_price_tier() {
-        // The long-context family: the planning window IS the price-tier
+        // The long-context family: the planning window is the price-tier
         // threshold (requests never drift into 2x pricing unnoticed), the
         // documented max input is the opt-in ceiling above it.
         let mut seen = 0;
@@ -195,7 +195,7 @@ mod tests {
     #[test]
     fn sol_luna_rows_switch_off_where_the_scale_has_none() {
         // GPT-6 Sol and Luna share Astra's shape (no temperature, xhigh
-        // and max selectable) with ONE difference: models.dev lists
+        // and max selectable) with one difference: models.dev lists
         // "none" on their effort scale, so off is sent as effort "none".
         // The Codex backend's scale has no none, so off stays disabled.
         let models = builtin_models();
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn astra_rows_carry_the_documented_limits() {
         // GPT-6 Astra in all three dialects: no temperature, no off, no
-        // minimal, and BOTH top levels selectable (keys absent).
+        // minimal, and both top levels selectable (keys absent).
         let models = builtin_models();
         for id in ["gpt-6-astra", "openai/gpt-6-astra", "codex/gpt-6-astra"] {
             let model = models.iter().find(|m| m.id == id).expect(id);
@@ -257,7 +257,7 @@ mod tests {
             assert_eq!(model.context_window, 272_000, "{id}");
         }
         // minimal: unsupported on the API (clamps up to low), pinned to
-        // "low" on Codex like every other Codex row — same wire result.
+        // "low" on Codex like every other Codex row. The wire result is the same.
         let api = models
             .iter()
             .find(|m| m.id == "gpt-6-astra")
@@ -364,9 +364,9 @@ mod tests {
 
     #[test]
     fn codex_models_ride_the_chatgpt_backend() {
-        // The subscription rows: namespaced ids (cupel's flat id space —
-        // the openai provider owns the bare gpt-5.6 ids), the ChatGPT
-        // backend URL, and a compat requestModel carrying the WIRE name
+        // The subscription rows have namespaced ids because cupel's flat id
+        // space gives the bare gpt-5.6 ids to the openai provider. They use
+        // the ChatGPT backend URL and a compat requestModel carrying the wire name
         // the namespacing hid.
         let mut seen = 0;
         for model in builtin_models() {
@@ -397,7 +397,7 @@ mod tests {
                 "{}: id must be codex/<requestModel>",
                 model.id
             );
-            // pi's minimal -> "low" pin survives; xhigh stays ABSENT so
+            // The minimal -> "low" pin survives. `xhigh` stays absent so
             // cupel's key-absence rule keeps the level available.
             let map = model.thinking_level_map.as_ref().expect("map pinned");
             assert_eq!(

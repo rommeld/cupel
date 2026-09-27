@@ -11,7 +11,7 @@
 # Two behaviors worth knowing:
 # - Idempotent: a section for <tag> already in the file means a re-run
 #   (re-tagged release), so it exits 0 without touching anything.
-# - A hand-maintained "## [Unreleased]" section is REPLACED by the new
+# - A hand-maintained "## [Unreleased]" section is replaced by the new
 #   tagged section: its commits are part of the generated list anyway, so
 #   keeping both would say everything twice.
 
@@ -35,7 +35,7 @@ if grep -q "^## \[$TAG\]" "$CHANGELOG"; then
     exit 0
 fi
 
-# The previous release is the nearest tag reachable from the commit BEFORE
+# The previous release is the nearest tag reachable from the commit before
 # this one (`TAG^` so `describe` cannot answer with TAG itself). The very
 # first tag has no predecessor: log the whole history instead of a range.
 PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"

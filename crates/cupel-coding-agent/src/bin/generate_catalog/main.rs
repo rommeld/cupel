@@ -7,7 +7,7 @@
 //!
 //!     cargo run -p cupel-coding-agent --bin generate-catalog
 //!
-//! It never runs at cupel runtime — the catalog is data checked into git.
+//! It never runs at cupel runtime. The catalog is data checked into git.
 
 mod curation;
 mod models_dev;
@@ -40,8 +40,7 @@ async fn run() -> Result<(), String> {
     let wanted: Vec<&str> = PROVIDERS.iter().map(|p| p.models_dev_id).collect();
     let catalog = models_dev::parse_wanted(&raw, &wanted)?;
     let mut models = build_models(PROVIDERS, &catalog)?;
-    // Codex rides BEHIND the models.dev providers — pi appends its
-    // codexModels after the fetched catalog the same way. Appended here
+    // Codex rides behind the models.dev providers. Appended here
     // (not inside build_models) so the join stays a pure function of the
     // curation table.
     models.extend(openai_codex_models());
@@ -63,7 +62,7 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// One bounded GET — mirrors the ollama probe's spirit: explicit
+/// One bounded GET, like the ollama probe: explicit
 /// timeout, HTTP errors surfaced with the URL in the message.
 async fn fetch(url: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
@@ -102,8 +101,8 @@ fn build_models(
     Ok(models)
 }
 
-/// The pinned Codex rows as cupel Models — no models.dev join, the
-/// curation table IS the data (see curation.rs for why).
+/// The pinned Codex rows as cupel Models. The curation table is the data,
+/// with no models.dev join (see curation.rs for why).
 fn openai_codex_models() -> Vec<Model> {
     OPENAI_CODEX_MODELS
         .iter()
@@ -144,7 +143,7 @@ fn openai_codex_models() -> Vec<Model> {
                     output,
                     cached_read,
                     cached_write,
-                    // pi's withOpenAiLongContextPricing: past 272k prompt
+                    // Past 272k prompt
                     // tokens the whole request reprices at input x2,
                     // output x1.5, cache x2.
                     tiers: row.long_context_tier.then(|| {
@@ -274,7 +273,7 @@ fn with_temperature_knob(
 }
 
 /// models.dev knows text/image/pdf/audio/video; cupel's InputModality
-/// only text/image — the rest is dropped (documentd deviation).
+/// only text/image. The rest is dropped (documented deviation).
 fn input_modalities(raw: &[String]) -> Vec<InputModality> {
     let mut out = Vec::new();
     for modality in raw {
@@ -308,7 +307,7 @@ fn to_pretty_json(models: &[Model]) -> Result<String, String> {
     Ok(json)
 }
 
-/// Resolve crates/cupel-core/src/catalog.json relative to THIS crate's
+/// Resolve crates/cupel-core/src/catalog.json relative to this crate's
 /// manifest, so the generator works from any working directory.
 fn output_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../cupel-core/src/catalog.json")
@@ -427,7 +426,7 @@ mod tests {
         assert_eq!(model.name, "Claude Sonnet 5");
         assert_eq!(model.api.as_str(), Api::ANTHROPIC_MESSAGES);
         assert_eq!(model.provider.as_str(), "anthropic");
-        // pdf is dropped — cupel only models text and image input.
+        // pdf is dropped because cupel only models text and image input.
         assert_eq!(model.input, vec![InputModality::Text, InputModality::Image]);
         assert!((model.cost.cached_write - 2.5).abs() < f64::EPSILON);
         assert_eq!(model.context_window, 1_000_000);
@@ -588,7 +587,7 @@ mod tests {
             models[0].id, "codex/gpt-6-sol",
             "first row = /provider default"
         );
-        // Spot checks against pi's generate-models.ts values.
+        // Spot checks against the pinned catalog values.
         let astra = models
             .iter()
             .find(|m| m.id == "codex/gpt-6-astra")

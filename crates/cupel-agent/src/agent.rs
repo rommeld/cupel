@@ -131,7 +131,7 @@ impl Agent {
             .clone()
     }
 
-    /// Switch the model for FUTURE requests (an in-flight run keeps the
+    /// Switch the model for future requests (an in-flight run keeps the
     /// model it started with; the next run picks this up).
     pub fn set_model(&self, model: Model) {
         self.state.lock().expect("agent state lock poisoned").model = model;
@@ -148,15 +148,15 @@ impl Agent {
             .system_prompt = system_prompt;
     }
 
-    /// Swap the fallback API key used by FUTURE runs (the TUI's /provider
+    /// Swap the fallback API key used by future runs (the TUI's /provider
     /// and cross-provider /model switches). A run already in flight keeps
     /// the key it was started with; hook-provided keys still win.
     pub fn set_api_key(&mut self, api_key: Option<String>) {
         self.api_key = api_key;
     }
 
-    /// The fallback API key FUTURE runs will use — the read half of
-    /// [`AGENT::set_api_key`], so frontends and tests can verify which
+    /// The fallback API key future runs will use. This is the read half of
+    /// [`Agent::set_api_key`], so frontends and tests can verify which
     /// credential a reload or switch resolved without sending a request.
     #[must_use]
     pub fn api_key(&self) -> Option<&str> {
@@ -164,7 +164,7 @@ impl Agent {
     }
 
     /// The provider registry this agent dispatches through. Cheap (Arc
-    /// clone); lets a frontend REBUILD an agent — the TUI's /hot-reload —
+    /// clone), letting a frontend rebuild an agent for the TUI's /hot-reload
     /// without re-plumbing the registry from startup.
     #[must_use]
     pub fn registry(&self) -> Arc<Registry> {
@@ -189,9 +189,9 @@ impl Agent {
             .thinking_level = level;
     }
 
-    /// The thinking level FUTURE runs will use — the read half of
+    /// The thinking level future runs will use. This is the read half of
     /// [`Agent::set_thinking_level`], for status displays. A cheap
-    /// copy read under the lock, deliberately NOT a full state()
+    /// copy read under the lock, deliberately not a full state()
     /// snapshot (which clones the message history).
     #[must_use]
     pub fn thinking_level(&self) -> Option<ThinkingLevel> {
@@ -252,7 +252,7 @@ impl Agent {
 
     /// Start a run with a plain text prompt.
     ///
-    /// Returns the run's event stream. Consume it (or drop it — state still
+    /// Returns the run's event stream. Consume it (or drop it, since state still
     /// updates) and call [`Agent::wait_for_idle`] before the next prompt.
     pub fn prompt_text(&mut self, text: impl Into<String>) -> Result<AgentEventStream, AgentError> {
         self.prompt(vec![AgentMessage::user_text(text)])
@@ -322,8 +322,8 @@ impl Agent {
             .await;
         });
 
-        // Task 2: forwarder — reduces every event into AgentState (pi's
-        // `processEvents`), then re-emits it to the caller.
+        // Task 2: the forwarder reduces every event into AgentState,
+        // then re-emits it to the caller.
         let state = Arc::clone(&self.state);
         let handle = tokio::spawn(async move {
             forward_events(internal_stream, &state, &public_sink).await;
@@ -371,7 +371,6 @@ async fn forward_events(
 }
 
 /// Hook decorator that adds the Agent's queue draining on top of user hooks.
-/// (pi builds the same thing inline in `createLoopConfig`.)
 struct RunHooks {
     inner: Arc<dyn AgentHooks>,
 }

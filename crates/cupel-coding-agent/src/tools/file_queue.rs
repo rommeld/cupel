@@ -1,15 +1,14 @@
 //! Per-file mutation serialization.
 //!
-//! The agent loop runs tool calls in PARALLEL by default. Two edits to the
+//! The agent loop runs tool calls in parallel by default. Two edits to the
 //! same file racing each other means the second one reads stale content and
-//! either fails to match or silently reverts the first — so mutations to the
+//! either fails to match or silently reverts the first. Mutations to the
 //! same file must run one at a time, while different files stay parallel.
 //!
-//! pi builds this from chained promises. In Rust the same guarantee is one
-//! `tokio::Mutex` per file: lock, do the work, drop the guard. Files are
-//! keyed by their *canonical* path so `./src/a.rs` and `src/a.rs` (or a
-//! symlink) share a lock; a file that doesn't exist yet (a patch adding it) falls
-//! back to the absolute path.
+//! One `tokio::Mutex` per file provides this guarantee: lock, do the work,
+//! drop the guard. Files are keyed by their *canonical* path so `./src/a.rs`
+//! and `src/a.rs` (or a symlink) share a lock; a file that doesn't exist yet
+//! (a patch adding it) falls back to the absolute path.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,10 +18,10 @@ use tokio::sync::Mutex as AsyncMutex;
 
 /// Global registry: canonical path -> its mutation lock.
 ///
-/// A `std::sync::Mutex` protects the MAP (held only for microseconds while
+/// A `std::sync::Mutex` protects the map (held only for microseconds while
 /// looking up/inserting); the `tokio::sync::Mutex` inside is the actual
 /// per-file lock (held across await points for the whole mutation). Mixing
-/// the two like this is the standard pattern — never hold a std mutex across
+/// the two like this is the standard pattern. Never hold a std mutex across
 /// an await.
 fn registry() -> &'static StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>> {
     static REGISTRY: OnceLock<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>> = OnceLock::new();
@@ -30,7 +29,7 @@ fn registry() -> &'static StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>> {
 }
 
 fn queue_key(path: &Path) -> PathBuf {
-    // canonicalize resolves symlinks AND relative segments, but requires the
+    // canonicalize resolves symlinks and relative segments, but requires the
     // path to exist; fall back to the plain absolute path for new files.
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
@@ -40,7 +39,7 @@ fn queue_key(path: &Path) -> PathBuf {
 ///
 /// ```ignore
 /// let _guard = lock_file_for_mutation(&absolute_path).await;
-/// // read, edit, write — no other mutation can interleave on this file
+/// // read, edit, write without another mutation interleaving on this file
 /// ```
 pub async fn lock_file_for_mutation(path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
     let lock = {
@@ -48,8 +47,7 @@ pub async fn lock_file_for_mutation(path: &Path) -> tokio::sync::OwnedMutexGuard
         Arc::clone(map.entry(queue_key(path)).or_default())
     };
     // Entries are never removed: a lock is 16 bytes and the set of files an
-    // agent session touches is small. pi cleans up eagerly because its map
-    // holds promise chains; ours holds nothing once unlocked.
+    // agent session touches is small. Locks hold nothing once unlocked.
     lock.lock_owned().await
 }
 

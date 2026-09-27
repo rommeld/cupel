@@ -1,8 +1,8 @@
 //! Fuzzy matching for the file autocomplete.
 //!
 //! The shape is the classic editor-completion matcher: a query matches when
-//! all of its characters appear IN ORDER in the candidate (not necessarily
-//! adjacent), and a score decides ranking. LOWER is better, because the
+//! all of its characters appear in order in the candidate (not necessarily
+//! adjacent), and a score decides ranking. Lower is better, because the
 //! score is mostly penalties:
 //!
 //! consecutive-match streaks earn `-5 * streak` (typing "main" should
@@ -111,8 +111,8 @@ fn swap_letter_digit_halves(query: &[char]) -> Option<Vec<char>> {
     }
 }
 
-/// Filter + rank: the query splits on whitespace AND `/` into tokens
-/// ("src main" or "src/main" both mean two tokens); ALL tokens must match;
+/// Filter + rank: the query splits on whitespace and `/` into tokens
+/// ("src main" or "src/main" both mean two tokens); all tokens must match;
 /// per-token scores sum; ascending stable sort (ties keep input order).
 #[must_use]
 pub fn fuzzy_filter<'a, T>(query: &str, items: &'a [T], key: impl Fn(&T) -> &str) -> Vec<&'a T> {

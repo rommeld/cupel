@@ -1,7 +1,7 @@
 //! PKCE (RFC 7636) for the OAuth authorization-code flow.
 //!
-//! PKCE proves that the app REDEEMING an authorization code is the same
-//! app that STARTED the login: the authorize request carries a hash (the
+//! PKCE proves that the app redeeming an authorization code is the same
+//! app that started the login: the authorize request carries a hash (the
 //! challenge), and the token exchange must present the preimage.
 //! An attacker who intercepts the redirect gets a code they
 //! cannot redeem.
@@ -15,7 +15,7 @@ pub struct Pkce {
     pub challenge: String,
 }
 
-/// base64url WITHOUT padding — RFC 7636 prescribes exactly this alphabet,
+/// base64url without padding because RFC 7636 prescribes exactly this alphabet,
 /// and a trailing `=` would be percent-encoded into URL noise anyway.
 fn base64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn challenge_matches_the_rfc_7636_test_vector() {
-        // RFC 7636 appendix B pins this exact pair — if the hash, the
+        // RFC 7636 appendix B pins this exact pair. If the hash, the
         // encoding, or the padding handling is wrong, this cannot pass.
         assert_eq!(
             challenge_for("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
@@ -72,7 +72,7 @@ mod tests {
         );
         // Two logins must never share a verifier.
         assert_ne!(a.verifier, b.verifier);
-        // The challenge is DERIVED, never equal to its verifier.
+        // The challenge is derived, never equal to its verifier.
         assert_ne!(a.verifier, a.challenge);
         assert_eq!(challenge_for(&a.verifier), a.challenge);
     }

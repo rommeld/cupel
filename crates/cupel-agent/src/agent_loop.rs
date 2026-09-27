@@ -141,7 +141,7 @@ async fn run_loop(
                 sink.emit(AgentEvent::MessageEnd { message });
             }
 
-            // Compact BEFORE the request that would overflow, not after it
+            // Compact before the request that would overflow, not after it
             // fails: cheaper (no wasted request) and invisible to the model.
             let estimate = compaction::estimate_context_tokens(&context);
             if compaction::should_compact(estimate, config.model.context_window, &config.compaction)
@@ -203,7 +203,7 @@ async fn run_loop(
                     // to normal error handling.
                 }
 
-                // The errored message stays in the transcript for honesty —
+                // The errored message stays in the transcript for honesty.
                 // transform_messages already drops errored turns from what
                 // goes over the wire, so the replayed request is clean.
                 if cupel_core::retry::is_retryable_assistant_error(&message)
@@ -312,7 +312,7 @@ async fn run_loop(
 
 /// Run one compaction attempt, emitting start/end events. Returns whether
 /// the transcript actually shrank. Failures are reported on the event
-/// stream but never abort the run — a failed compaction just means the next
+/// stream but never abort the run. A failed compaction just means the next
 /// request goes out as-is (and its error, if any, reaches the user).
 async fn run_compaction(
     context: &mut AgentContext,
@@ -422,7 +422,7 @@ async fn stream_assistant_response(
     let stream = match registry.stream(&config.model, llm_context, options) {
         Ok(stream) => stream,
         Err(err) => {
-            // No provider registered for this API — synthesize the error
+            // No provider registered for this API. Synthesize the error
             // message the provider would have produced.
             let message = error_assistant_message(config, err.to_string());
             emit_final_message(context, sink, message.clone(), false);
@@ -607,7 +607,7 @@ async fn execute_tool_calls_parallel(
     for tool_call in tool_calls {
         match prepare_tool_call(context, assistant, &tool_call, hooks, cancel).await {
             Preparation::Immediate { result, is_error } => {
-                // Preparation failures resolve immediately — emit their end
+                // Preparation failures resolve immediately. Emit their end
                 // event right now, in order.
                 sink.emit(AgentEvent::ToolExecutionEnd {
                     tool_call_id: tool_call.id.clone(),
@@ -633,7 +633,7 @@ async fn execute_tool_calls_parallel(
     }
 
     // Phase 2: run the ready entries concurrently. `ToolExecutionEnd` fires
-    // in COMPLETION order (that's the point of parallel mode)...
+    // in completion order (that's the point of parallel mode)...
     let mut ordered: Vec<Option<FinalizedToolCall>> = Vec::new();
     let mut running = futures_util::stream::FuturesUnordered::new();
 
@@ -667,7 +667,7 @@ async fn execute_tool_calls_parallel(
         ordered[slot] = Some(finalized);
     }
 
-    // ...but tool-result MESSAGES are emitted in assistant source order, so
+    // ...but tool-result messages are emitted in assistant source order, so
     // the transcript stays aligned with the tool_use blocks.
     let finalized_calls: Vec<FinalizedToolCall> = ordered.into_iter().flatten().collect();
     let mut messages: Vec<ToolResultMessage> = Vec::new();
@@ -689,7 +689,7 @@ enum Preparation {
         result: AgentToolResult,
         is_error: bool,
     },
-    /// Validated and allowed — ready to execute.
+    /// Validated, allowed, and ready to execute.
     Ready {
         tool: Arc<dyn AgentTool>,
         args: Value,

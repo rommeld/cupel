@@ -53,7 +53,7 @@ pub fn strip_bom(content: &str) -> (&'static str, &str) {
 
 pub struct DiffString {
     pub diff: String,
-    /// Line number of the first change in the NEW file (editor navigation).
+    /// Line number of the first change in the new file (editor navigation).
     pub first_changed_line: Option<usize>,
 }
 
@@ -63,7 +63,7 @@ pub struct DiffString {
 /// -11 removed line
 /// +11 added line
 /// ```
-/// Built on the `similar` crate's line diff (pi uses the `diff` npm package).
+/// Built on the `similar` crate's line diff.
 #[must_use]
 pub fn generate_diff_string(old: &str, new: &str, context_lines: usize) -> DiffString {
     let diff = similar::TextDiff::from_lines(old, new);
@@ -76,14 +76,14 @@ pub fn generate_diff_string(old: &str, new: &str, context_lines: usize) -> DiffS
 
     let mut output: Vec<String> = Vec::new();
     let mut first_changed_line: Option<usize> = None;
-    // The 1-based NEW-file line where the next line would land. Needed for
+    // The 1-based new-file line where the next line would land. Needed for
     // deletions: a deleted line has no new_index (it doesn't exist in the
     // new file), but "where the change appears in the new file" is exactly
     // this running position.
     let mut next_new_line = 1_usize;
 
     // `grouped_ops` clusters changes and gives `context_lines` of equal lines
-    // around each cluster — exactly the shape pi builds by hand.
+    // around each cluster.
     for group in diff.grouped_ops(context_lines) {
         for (op_index, op) in group.iter().enumerate() {
             for change in diff.iter_changes(op) {

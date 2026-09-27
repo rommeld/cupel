@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 #
-# No Rust toolchain required. Everything lives in ONE home directory
+# No Rust toolchain required. Everything lives in one home directory
 # (cargo-style), so backup and uninstall are a single path:
 #
 #   ~/.cupel/
@@ -18,7 +18,7 @@
 #
 # Nice side effect on macOS: curl downloads don't get the Gatekeeper
 # quarantine attribute, so the unsigned binary runs without any
-# "unidentified developer" ceremony (browser downloads DO get quarantined).
+# "unidentified developer" ceremony (browser downloads do get quarantined).
 
 set -eu
 

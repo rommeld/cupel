@@ -36,7 +36,7 @@ similar.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-# Subscriber only in the BINARY crate - libraries never install one.
+# Subscriber only in the binary crate - libraries never install one.
 tracing-subscriber.workspace = true
 tokio-util.workspace = true
 unicode-normalization.workspace = true

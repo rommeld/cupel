@@ -48,8 +48,8 @@ impl Registry {
         self.providers.get(api).cloned()
     }
 
-    /// Begin streaming. The only failure mode here is "no provider registered" — everything
-    /// else is reported on the returned stream.
+    /// Begin streaming. Only "no provider registered" fails here. All other
+    /// failures are reported on the returned stream.
     pub fn stream(
         &self,
         model: &Model,

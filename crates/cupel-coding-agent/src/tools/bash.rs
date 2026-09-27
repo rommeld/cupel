@@ -2,19 +2,19 @@
 //! stdout+stderr into a bounded accumulator. The design constraints all come
 //! from real agent behavior:
 //!
-//! — **Bounded memory, full fidelity.** A command can print gigabytes. The
-//!   accumulator keeps only a rolling tail in memory (the model gets the
-//!   LAST 2000 lines / 50 KB — errors live at the end), and spills the
-//!   complete output to a temp file the moment limits are exceeded, so the
+//! - **Bounded memory, full fidelity.** A command can print gigabytes. The
+//!   accumulator keeps only a rolling tail in memory. The model gets the
+//!   last 2000 lines or 50 KB, since errors tend to be at the end. It spills
+//!   the complete output to a temp file the moment limits are exceeded, so the
 //!   truncation notice can say "Full output: /tmp/...".
-//! — **Kill the whole tree.** `cargo test` spawns children; killing just the
+//! - **Kill the whole tree.** `cargo test` spawns children. Killing just the
 //!   shell leaves them running. The child gets its own process group, and
 //!   abort/timeout kills the group. Because this workspace forbids `unsafe`
 //!   (no direct `libc::kill`), the group kill shells out to `kill -9 -PGID`
 //!   - one extra process spawn on the rare abort path is a fine trade.
-//! — **Exit codes are errors.** A non-zero exit becomes an error tool result
+//! - **Exit codes are errors.** A non-zero exit becomes an error tool result
 //!   (with the output attached) so the model *sees* failure as failure.
-//! — **The shell's exit ends the call, not the pipes'.** A background
+//! - **The shell's exit ends the call, not the pipes'.** A background
 //!   process (`server &`) inherits stdout/stderr and can hold them open for
 //!   hours. Once the shell exits, reading stops as soon as the pipes stay
 //!   quiet for 500 ms; the background process itself keeps running.
@@ -159,7 +159,7 @@ impl OutputAccumulator {
     }
 
     /// Current display view: tail-truncated text plus truncation metadata
-    /// with TRUE totals (the tail alone under-counts what scrolled past).
+    /// with true totals (the tail alone under-counts what scrolled past).
     fn snapshot(&self) -> (String, TruncationResult, Option<PathBuf>) {
         let mut text = String::from_utf8_lossy(&self.tail).into_owned();
         if !self.tail_at_line_boundary
@@ -221,7 +221,7 @@ fn kill_process_group(pid: u32) {
     let _ = std::process::Command::new("kill")
         // `--` is required: a negative PID (= process group) looks like an
         // option flag otherwise. BSD kill (macOS) tolerates its absence,
-        // Linux's procps kill does NOT — it silently refuses, the group
+        // Linux's procps kill does not. It silently refuses, and the group
         // survives, and "timeout" waits out the full command (caught by CI
         // on the first-ever Linux run).
         .args(["-9", "--", &format!("-{pid}")])
@@ -293,7 +293,7 @@ impl AgentTool for BashTool {
         })
     }
 
-    /// `$ <command>` — the shell prompt says "this ran", the command is
+    /// `$ <command>` indicates that the command ran and is
     /// shown verbatim. The timeout rides along when the model set one.
     fn describe_call(&self, args: &Value) -> String {
         let Some(command) = args.get("command").and_then(Value::as_str) else {
@@ -349,8 +349,7 @@ impl AgentTool for BashTool {
         let pid = child.id();
 
         // stdout and stderr are read on their own tasks feeding one channel,
-        // preserving arrival order well enough for interleaved output (the
-        // same guarantee pi gets from two `data` event listeners).
+        // preserving arrival order well enough for interleaved output.
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
         if let Some(stdout) = child.stdout.take() {
             spawn_reader(stdout, tx.clone());
@@ -363,7 +362,7 @@ impl AgentTool for BashTool {
         }
 
         let mut output = OutputAccumulator::new();
-        // Backdated so the FIRST chunk sends an update immediately; falls
+        // Backdated so the first chunk sends an update immediately; falls
         // back to "now" on platforms where Instant can't go that far back.
         let mut last_update = std::time::Instant::now()
             .checked_sub(UPDATE_THROTTLE)
@@ -390,7 +389,7 @@ impl AgentTool for BashTool {
                     }
                     // Also SIGKILL the direct child via tokio: even if the
                     // external `kill` misbehaves, the shell itself dies (and
-                    // `bash -c` usually execs the command, so the shell IS
+                    // `bash -c` usually execs the command, so the shell is
                     // the command).
                     let _ = child.start_kill();
                     outcome = Some(RunOutcome::Aborted);
@@ -548,7 +547,7 @@ impl AgentTool for BashTool {
 /// Copy one pipe into the chunk channel until EOF, or until the run stops
 /// listening. The second case matters when a background process keeps the
 /// pipe open after the shell exits: returning drops `pipe`, which closes
-/// our end of it (pi calls `stream.destroy()` for the same reason). Its
+/// our end of it. Its
 /// later writes then fail with EPIPE, so a background server should log to
 /// a file (`server > server.log 2>&1 &`).
 fn spawn_reader(

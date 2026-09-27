@@ -45,13 +45,13 @@ pub async fn run(
     // panic hook that restores the terminal without that, a panic would
     // leave the user's shell in raw mode (no echo, no line editing).
     let mut terminal = ratatui::init();
-    // Mouse capture (wheel-scrolling) and bracketed paste are opt-in and NOT
+    // Mouse capture (wheel-scrolling) and bracketed paste are opt-in and not
     // covered by ratatui's init/restore or its panic hook. Both must be
     // released on every exit path: a terminal left in mouse mode swallows
     // normal wheel scrolling and text selection even after cupel exits. The
-    // panic hook is chained so the release runs BEFORE ratatui's restore.
+    // panic hook is chained so the release runs before ratatui's restore.
     //
-    // Bracketed paste makes a terminal paste arrive as ONE Event::Paste
+    // Bracketed paste makes a terminal paste arrive as one Event::Paste
     // instead of a stream of key presses without it, every newline in the
     // pasted text would hit the Enter handler and submit a partial prompt.
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
@@ -127,7 +127,7 @@ async fn event_loop(
 
         // Ctrl+O queued a copy: emit it as OSC 52 the "set clipboard"
         // escape sequence straight to stdout. It paints nothing, so
-        // ratatui's frame diff never notices; the TERMINAL (not cupel)
+        // ratatui's frame diff never notices; the terminal (not cupel)
         // performs the actual clipboard write, which is why this works
         // across SSH sessions too.
         if let Some(text) = app.pending_copy.take() {
@@ -139,7 +139,7 @@ async fn event_loop(
 
         // Ctrl+Y requested a selection-mode toggle: release the mouse so
         // the terminal can select/copy text natively, or recapture it for
-        // wheel scrolling. The command goes to the terminal FIRST; state
+        // wheel scrolling. The command goes to the terminal first; state
         // (and the user-facing notice) only flips when it succeeded.
         if app.mouse_toggle_requested {
             let command = if app.mouse_captured {
@@ -187,7 +187,7 @@ async fn event_loop(
 /// The OSC 52 "set clipboard" sequence for `text`.
 ///
 /// Shape: `ESC ] 52 ; c ; <base64> BEL`. 52 is the clipboard opcode, `c`
-/// selects the system CLIPBOARD (not the X11 primary selection), and the
+/// selects the system clipboard (not the X11 primary selection), and the
 /// payload travels base64-encoded because clipboard text may contain any
 /// byte including the BEL that would otherwise end the sequence early.
 fn osc52(text: &str) -> String {

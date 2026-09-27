@@ -8,7 +8,7 @@ use crate::types::{
 
 /// Rough heuristic used across the industry: ~4 characters per token.
 /// Exact tokenization is model-specific; for clamping purposes a cheap
-/// estimate is enough (and pi uses the same constant).
+/// estimate is enough.
 const CHARS_PER_TOKEN: u64 = 4;
 /// A base64 image is roughly this many "characters" worth of tokens.
 const ESTIMATED_IMAGE_CHARS: u64 = 4800;
@@ -66,9 +66,9 @@ fn estimate_message_tokens(message: &Message) -> u64 {
 
 /// Estimate the total tokens a context will occupy.
 ///
-/// Trick from pi: the most recent successful assistant message carries
+/// The most recent successful assistant message carries
 /// *exact* token usage from the provider. Use that as an anchor and only
-/// estimate the messages that came after it — far more accurate than
+/// estimate the messages that came after it. This is far more accurate than
 /// estimating the entire transcript.
 #[must_use]
 pub fn estimate_context_tokens(context: &Context) -> u64 {

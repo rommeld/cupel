@@ -1,17 +1,14 @@
 //! `/login` background flows.
 //!
-//! A login WAITS on things the key handler must never wait on: a browser
+//! A login waits on things the key handler must never wait on: a browser
 //! redirect hitting port 1455, or a device-code poll loop. So the flow
 //! runs as a spawned task that talks back over a channel the exact
 //! shape of a run's `AgentEventStream`: the `select!` in mod.rs wakes on
 //! [`LoginEvent`]s and the App turns them into transcript notices.
 //!
-//! pi models the same thing as an `AuthInteraction` (notify + prompt);
-//! cupel's translation swaps the modal prompt for commands: the browser
-//! URL arrives as a notice, and the manual fallback is a second
+//! The browser URL arrives as a notice, and the manual fallback is a second
 //! `/login openai-codex <redirect-url>` invocation racing the callback
-//! server the same race pi runs between its server and its paste
-//! prompt (openai-codex.ts, `loginOpenAICodex`).
+//! server.
 
 use std::path::PathBuf;
 
@@ -118,7 +115,7 @@ async fn browser_flow(
 ) -> Result<String, String> {
     let flow = openai_codex::authorization_flow();
 
-    // Bind BEFORE opening the browser, so a fast redirect cannot land on
+    // Bind before opening the browser, so a fast redirect cannot land on
     // a closed port. A taken port (another Codex-family login?) degrades
     // to paste-only instead of failing the login.
     let server = match CallbackServer::bind().await {
@@ -148,8 +145,8 @@ async fn browser_flow(
         ),
     );
 
-    // The race pi runs between its callback server and its manual
-    // prompt: whichever produces a code first settles the login.
+    // The callback server and manual entry race: whichever produces a code
+    // first settles the login.
     let code = {
         let served = async {
             match &server {
@@ -202,21 +199,21 @@ async fn device_flow(
     finish(home, &credential)
 }
 
-/// Parse a pasted redirect/code and hold it against THIS flow's state
+/// Parse a pasted redirect/code and hold it against this flow's state
 /// pure so tests can pin the acceptance rules without a browser.
 fn manual_input_to_code(input: &str, state: &str) -> Result<String, String> {
     let (code, pasted_state) = openai_codex::parse_authorization_input(input);
     if let Some(pasted_state) = pasted_state
         && pasted_state != state
     {
-        // A stale paste from an EARLIER attempt would exchange fine but
+        // A stale paste from an earlier attempt would exchange fine but
         // bind the wrong PKCE verifier reject it up front.
         return Err("state mismatch - paste the redirect of THIS login attempt".to_string());
     }
     code.ok_or_else(|| "no authorization code in the pasted input".to_string())
 }
 
-/// Persist and summarize. Saving is the login's LAST step: a credential
+/// Persist and summarize. Saving is the login's last step: a credential
 /// that never reaches auth.json is a login the next session forgets.
 fn finish(home: Option<PathBuf>, credential: &OAuthCredential) -> Result<String, String> {
     match crate::auth::save_credential(
@@ -233,7 +230,7 @@ fn finish(home: Option<PathBuf>, credential: &OAuthCredential) -> Result<String,
     }
 }
 
-/// Open a URL in the platform browser pi's open-browser.ts, ported:
+/// Open a URL in the platform browser:
 /// never through a shell (cmd.exe re-parses metacharacters, which would
 /// make URLs injectable), always detached, always best-effort (the
 /// notice above shows the URL either way).
@@ -263,7 +260,7 @@ pub(crate) fn stub_flow() -> (
     tokio::sync::oneshot::Receiver<String>,
 ) {
     let (event_tx, events) = tokio::sync::mpsc::unbounded_channel();
-    // The receiver is handed OUT: a dropped receiver would make every
+    // The receiver is handed out: a dropped receiver would make every
     // paste fail as "already used" (oneshot send errors then).
     let (code_tx, code_rx) = tokio::sync::oneshot::channel();
     let cancel = CancellationToken::new();

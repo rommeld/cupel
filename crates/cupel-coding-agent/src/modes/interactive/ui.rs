@@ -1,6 +1,6 @@
 //! The render pass: `App` state in, one frame out.
 //!
-//! ratatui is immediate mode this function redescribes the ENTIRE screen
+//! ratatui is immediate mode this function redescribes the entire screen
 //! every frame, and the library diffs against the previous frame to emit
 //! minimal terminal writes. So there is no "update the widget" anywhere;
 //! there is only state (in `App`) and this projection of it.
@@ -36,8 +36,8 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     render_transcript(frame, app, transcript_area);
     render_input(frame, app, input_area);
     render_footer(frame, app, footer_area);
-    // Drawn LAST so it overdraws the transcript's bottom rows in
-    // immediate-mode rendering, paint order IS the z-order.
+    // Drawn last so it overdraws the transcript's bottom rows in
+    // immediate-mode rendering, paint order is the z-order.
     render_autocomplete(frame, app, transcript_area, input_area);
 }
 
@@ -95,7 +95,7 @@ fn render_autocomplete(frame: &mut Frame<'_>, app: &App, transcript_area: Rect, 
 
 fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     // The block renders first, content after `inner` subtracts the
-    // border AND the padding, so the Paragraph below never touches the
+    // border and the padding, so the Paragraph below never touches the
     // frame.
     let block = pane_block(" conversation ");
     let inner = block.inner(area);
@@ -105,7 +105,7 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     let total = rendered.lines.len();
     let height = inner.height as usize;
 
-    // Keep the reader's place: the offset is measured from the BOTTOM, and
+    // Keep the reader's place: the offset is measured from the bottom, and
     // new output moves the bottom a fixed offset would slide the view.
     // Growing it by exactly the growth pins the visible lines; at 0
     // (follow mode) the view sticks to the tail on purpose.
@@ -180,12 +180,12 @@ fn pane_block(title: &'static str) -> Block<'static> {
 }
 
 /// Cursor position as (visual line, visual column) in the wrapped input
-/// text. Derived from the SAME `wrap_line` output that renders the text: a
+/// text. Derived from the same `wrap_line` output that renders the text: a
 /// second, parallel wrapping computation would inevitably disagree with it
 /// (word wrap vs. plain column wrap) and paint the cursor away from where
 /// the next keystroke actually lands.
 ///
-/// `cursor` is a CHAR index (see `InputState`). `wrap_line` preserves every
+/// `cursor` is a character index (see `InputState`). `wrap_line` preserves every
 /// character of its input across the chunks it returns, so char offsets map
 /// 1:1 onto the wrapped output and locating the cursor is just counting.
 fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
@@ -202,7 +202,7 @@ fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
             for (i, chunk) in chunks.iter().enumerate() {
                 let chunk_chars = chunk.chars().count();
                 // Landing exactly on a chunk boundary means "before the
-                // first char of the NEXT chunk" inserting there joins the
+                // first char of the next chunk" inserting there joins the
                 // next chunk's word, so that is where the char will appear.
                 // Only at the very end of the line does the cursor trail
                 // the last chunk instead.
@@ -298,7 +298,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         window / 1000,
     );
     // The mouse hint tracks selection mode, so it never lies about what
-    // the wheel currently does. It shares the status row's left margin —
+    // the wheel currently does. It shares the status row's left margin because
     // a right-aligned hint row would sit staggered against it.
     let hints = if app.mouse_captured {
         " enter send · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
@@ -564,7 +564,7 @@ mod tests {
         std::fs::create_dir_all(&cwd).unwrap();
         let recorder =
             crate::session::SessionRecorder::new(Some(home), &cwd, "cupel-current", "test-model");
-        // Pre-write an OLDER session the listing must show alongside.
+        // Pre-write an older session the listing must show alongside.
         let dir = recorder.sessions_dir().unwrap().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -621,7 +621,7 @@ mod tests {
         assert!(notice.contains("1970-01-01"), "startedAt 1000ms date");
     }
 
-    /// App with a REAL home + cwd on disk, for reload/resume tests.
+    /// App with a real home + cwd on disk, for reload/resume tests.
     fn test_app_with_home(root: &std::path::Path, session_id: &str) -> App {
         let (home, cwd) = (root.join("home"), root.join("proj"));
         std::fs::create_dir_all(&cwd).unwrap();
@@ -702,7 +702,7 @@ mod tests {
             path: root.join("home/AGENTS.md"),
             content: original.clone(),
         }];
-        // Some history that must SURVIVE the reload.
+        // Some history that must survive the reload.
         app.agent = {
             let model = cupel_core::catalog::builtin_models().remove(0);
             let registry = Arc::new(cupel_core::provider::Registry::new());
@@ -711,20 +711,20 @@ mod tests {
             Agent::new(options)
         };
 
-        // Edit ONE rule mid-session.
+        // Edit one rule mid-session.
         let edited = original.replace("RULE 6", "RULE 6 (amended)");
         std::fs::write(root.join("home/AGENTS.md"), &edited).unwrap();
 
         let app = app.hot_reload(ReloadTarget::Current).await;
 
-        // The session CONTINUES: same id, history intact.
+        // The session continues: same id, history intact.
         assert_eq!(app.recorder.session_id(), "cupel-current");
         let messages = app.agent.state().messages;
         assert_eq!(messages.len(), 2, "history + appended delta");
-        // The system prompt was NOT rebuilt (test agent starts with an
+        // The system prompt was not rebuilt (test agent starts with an
         // empty one re-embedding would have injected the rules).
         assert!(!app.agent.state().system_prompt.contains("RULE"));
-        // The appended message is the DELTA, not the whole file: the
+        // The appended message is the delta, not the whole file: the
         // changed line travels, distant unchanged lines do not.
         let cupel_agent::AgentMessage::Llm(cupel_core::types::Message::User(user)) = &messages[1]
         else {
@@ -748,7 +748,7 @@ mod tests {
             "in-place notice shown"
         );
 
-        // Reload again with NO further edits: nothing new is appended.
+        // Reload again with no further edits: nothing new is appended.
         let app = app.hot_reload(ReloadTarget::Current).await;
         assert_eq!(app.agent.state().messages.len(), 2, "no duplicate delta");
         assert!(app.transcript.cells.iter().any(|c| matches!(
@@ -908,7 +908,7 @@ mod tests {
         }
         let after = draw(&mut app, 40, 12);
 
-        // The window held its place in CONTENT space: same top line, and
+        // The window held its place in content space: same top line, and
         // none of the new tail scrolled into view.
         assert_eq!(app.last_top_line, anchor, "view must stay pinned");
         assert!(
@@ -1456,7 +1456,7 @@ mod tests {
     #[tokio::test]
     async fn a_tool_call_renders_as_its_own_header_line() {
         use cupel_agent::AgentTool;
-        // An agent that HAS the bash tool: the header comes from the tool.
+        // An agent that has the bash tool: the header comes from the tool.
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let mut options = AgentOptions::new(model, registry);
@@ -1558,7 +1558,7 @@ mod tests {
         assert!(screen.contains("ctrl+o copy"), "hint missing:\n{screen}");
         assert!(screen.contains("ctrl+y select"), "hint missing:\n{screen}");
 
-        // Ctrl+Y only REQUESTS the toggle (the event loop owns the
+        // Ctrl+Y only requests the toggle (the event loop owns the
         // terminal); applying flips state and posts a notice.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('y'),
@@ -1581,7 +1581,7 @@ mod tests {
     #[test]
     fn multi_line_paste_inserts_without_submitting() {
         let mut app = test_app();
-        // Bracketed paste delivers the whole clipboard as ONE event; the
+        // Bracketed paste delivers the whole clipboard as one event; the
         // embedded newline must become buffer content, not an Enter press.
         app.on_terminal_event(Event::Paste("line one\nline two".to_string()));
         assert_eq!(app.input.text(), "line one\nline two");
@@ -1778,7 +1778,7 @@ mod tests {
         assert_eq!(app.meta.provider, "anthropic");
         assert!(has_notice(&app, "preset fast activated"));
 
-        // A preset without a prompt REPLACES the old prompt, never stacks.
+        // A preset without a prompt replaces the old prompt, never stacks.
         run_command(&mut app, "/preset deep");
         let state = app.agent.state();
         assert_eq!(state.model.id, "claude-sonnet-5");
@@ -2021,7 +2021,7 @@ mod tests {
         let app = app.hot_reload(ReloadTarget::Current).await;
         assert_eq!(app.agent.state().system_prompt, "\n\nPRESET RULES");
 
-        // Resume: a FRESH base prompt, the preset prompt still at its end.
+        // Resume: a fresh base prompt, the preset prompt still at its end.
         let dir = app.recorder.sessions_dir().unwrap().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -2207,7 +2207,7 @@ mod tests {
         let style = style_of(&mut app, "private reasoning");
         assert_eq!(style.bg, theme::SELECTED.bg);
 
-        // Ctrl+O queues the RAW text and confirms with a notice.
+        // Ctrl+O queues the raw text and confirms with a notice.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('o'),
             KeyModifiers::CONTROL,
@@ -2267,7 +2267,7 @@ mod tests {
         assert!(!screen.contains("**"), "delimiters are consumed: {screen}");
         // The invariant: unmarked text keeps the cell identity...
         assert_eq!(style_of(&mut app, "plain magenta").fg, Some(Color::Magenta));
-        // ...and accents COMBINE with it instead of replacing it.
+        // ...and accents combine with it instead of replacing it.
         let weight = style_of(&mut app, "weight");
         assert_eq!(weight.fg, Some(Color::Magenta));
         assert!(weight.add_modifier.contains(Modifier::BOLD));
@@ -2300,7 +2300,7 @@ mod tests {
 
     #[test]
     fn login_command_validates_before_spawning_anything() {
-        // Every path here must answer WITHOUT starting a flow the
+        // Every path here must answer without starting a flow the
         // real flows bind port 1455 and open a browser.
         let mut app = test_app();
         submit_command(&mut app, "/login");
@@ -2335,7 +2335,7 @@ mod tests {
         assert!(last_notice(&app).contains("login cancelled"));
     }
 
-    /// Type + enter WITHOUT the popup-closing esc: while a login waits,
+    /// Type + enter without the popup-closing esc: while a login waits,
     /// esc (with no popup visible) would cancel exactly the flow this
     /// test needs alive. The paste token matches no candidate, so the
     /// popup never opens and enter submits directly.

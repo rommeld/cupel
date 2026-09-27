@@ -1,17 +1,17 @@
-//! The TUI palette every style the transcript and chrome use, in ONE
+//! The TUI palette every style the transcript and chrome use, in one
 //! place.
 //!
 //! As a module, the visual hierarchy of turn is a single reviewable
 //! unit:
 //!
-//! TASK and ANSWER are the emphasized endpoints of a turn (what was
+//! `TASK` and `ANSWER` are the emphasized endpoints of a turn (what was
 //! asked, what came out).
-//! REASONING and TOOL traffic are the de-emphasized middle,
+//! Reasoning and tool traffic are the de-emphasized middle,
 //! errors/notices keep their conventional terminal colors.
 //!
 //! These are true `const`s: ratatui`s `Style::new()`, `fg`, `bg`, and
 //! `add_modifier` are const fns. Note the chained `add_modifier` calls
-//! where two modifiers combin the `|` operator (BitOr) is NOT a const
+//! where two modifiers combine. The `|` operator (BitOr) is not a const
 //! fn, so `Modifier::DIM | Modifier::ITALIC` would not compile here.
 
 use ratatui::style::{Color, Modifier, Style};
@@ -21,9 +21,9 @@ use ratatui::style::{Color, Modifier, Style};
 pub const TASK: Style = Style::new().fg(Color::LightGreen);
 /// Mid-turn assistant prose (commentary between tool calls): plain.
 pub const ASSISTANT: Style = Style::new();
-/// The turn's final answer: the emphasized couterpart to TASK. Magenta
+/// The turn's final answer: the emphasized counterpart to `TASK`. Magenta
 /// because green (task), cyan (tools), red (errors), and yellow
-/// (notices) are taken and BOLD alone is too subtle next to plain
+/// (notices) are taken and bold alone is too subtle next to plain
 /// prose.
 pub const ANSWER: Style = Style::new().fg(Color::Magenta);
 /// Model reasoning: present but visually receded (M3 tunes this).
@@ -56,7 +56,7 @@ pub const SCROLL_MARKER: Style = Style::new().fg(Color::Black).bg(Color::Yellow)
 /// Border and title of the transcript frame.
 pub const PANE_BORDER: Style = Style::new().fg(Color::DarkGray);
 /// Background of the click-selected conversation block (Ctrl+O copies it).
-/// bg-only on purpose: a Line's own style paints UNDER its spans, so the
+/// bg-only on purpose: a Line's own style paints under its spans, so the
 /// highlight tints the row while every span keeps its foreground color.
 pub const SELECTED: Style = Style::new().bg(Color::Indexed(237));
 /// The scrollbar thumb; the track reuses the pane border color.
@@ -66,9 +66,9 @@ pub const SCROLLBAR_THUMB: Style = Style::new().fg(Color::DarkGray);
 pub const POPUP_SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
 pub const POPUP_ROW: Style = Style::new().fg(Color::Cyan);
 
-// PATCH styles: applied onto a cell's base stayle via Style::patch
+// Patch styles: applied onto a cell's base style via Style::patch
 // set fields win, unset fields keep the base. A heading in an Answer cell
-// is therefore magenta; only styles that DO set a color (code, links)
+// is therefore magenta; only styles that do set a color (code, links)
 // deliberately break out of the cell color, because code is code no matter
 // which cell it is in.
 

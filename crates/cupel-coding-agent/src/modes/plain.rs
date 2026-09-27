@@ -195,7 +195,7 @@ pub async fn run(
                     continue;
                 }
                 // Same builder as the TUI; here the whole path is
-                // synchronous — gather, then fall through to the ordinary
+                // synchronous. Gather, then fall through to the ordinary
                 // (blocking) prompt round-trip below.
                 PlainCommand::Review => {
                     let review_args = crate::commands::parse_command_args(
@@ -231,8 +231,8 @@ pub async fn run(
         }
 
         // First real agent interaction: scaffold the project .cupel/
-        // directory (idempotent, never fails). Deferred to here — not
-        // startup — so `cupel --plain < /dev/null` etc. leave no trace.
+        // directory (idempotent, never fails). Deferred until here rather
+        // than startup so `cupel --plain < /dev/null` etc. leave no trace.
         crate::resources::ensure_project_dot_cupel(std::path::Path::new(&meta.cwd));
         // Transcript + hooks: creates the transcript lazily, settles any
         // pending stop hook, fires session-start (once) and

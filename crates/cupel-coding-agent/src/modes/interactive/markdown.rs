@@ -1,4 +1,4 @@
-//! Markdown rendering for assistant prose a hand-rolled SUBSET on
+//! Markdown rendering for assistant prose, a hand-rolled subset on
 //! ratatui's primitives (Span -> Line), no parser crate.
 //!
 //! ratatui ships no markdown widget its docs model text as Span/
@@ -6,7 +6,7 @@
 //! renderers exist, but LLM output uses small, regular slice of
 //! markdown.
 //!
-//! Styling model: every asccent is a PATCH onto the cell's base style
+//! Styling model: every accent is a patch onto the cell's base style
 //! (Style::patch set fields win, unset fields inherit), so plain text
 //! renders byte-identical to the pre-markdown path and an Answer cell
 //! keeps its magenta identity under bold/italic. Streaming: to_lines
@@ -22,7 +22,7 @@ use crate::modes::interactive::theme;
 use crate::modes::interactive::transcript::wrap_line;
 
 /// Render markdown into wrapped, styled lines for one transcrip cell.
-/// `base` is the cell's identity style (ASSISTANT, ANSWER).
+/// `base` is the cell's identity style (`ASSISTANT`, `ANSWER`).
 #[must_use]
 pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
     let mut out = Vec::new();
@@ -43,7 +43,7 @@ pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
             i += 1;
             continue;
         }
-        // Tables needs lookahead (a pipe row is only a table when the NEXT
+        // Tables need lookahead (a pipe row is only a table when the next
         // line is a separator row), so they are handled here where the
         // slice is available everything else is per-line.
         if trimmed.starts_with('|')
@@ -97,7 +97,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
 
     while i < chars.len() {
         let c = chars[i];
-        // Inside inline code NOTHING is special except the closing tick.
+        // Inside inline code nothing is special except the closing tick.
         if code {
             if c == '`' {
                 flush(&mut segments, &mut current, base.patch(theme::MD_CODE));
@@ -131,7 +131,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
                     bold = !bold;
                     i += 2;
                 } else {
-                    // Underscores never toggle INSIDE a word (CommonMark's
+                    // Underscores never toggle inside a word (CommonMark's
                     // intraword rule) snake_style stays literal
                     let intraword = c == '_'
                         && i > 0
@@ -142,8 +142,8 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
                         i += 1;
                         continue;
                     }
-                    // Simplified flanking rule: a single marker OPENS only
-                    // before a non-space and CLOSES only after one so
+                    // Simplified flanking rule: a single marker opens only
+                    // before a non-space and closes only after one so
                     // "a*b" and snake_case stay literal.
                     let can_open = chars.get(i + 1).is_some_and(|n| !n.is_whitespace());
                     let can_close = i > 0 && !chars[i - 1].is_whitespace();
@@ -351,7 +351,7 @@ fn render_block_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, bas
         return;
     }
 
-    // Horizontal rule: three or more of the SAME marker char, alone.
+    // Horizontal rule: three or more of the same marker char, alone.
     let rule_char = trimmed.chars().next().unwrap_or(' ');
     if matches!(rule_char, '-' | '*' | '_')
         && trimmed.len() >= 3
@@ -412,11 +412,11 @@ fn split_list_marker(text: &str) -> Option<(String, &str)> {
 }
 
 /// One line inside a fenced block: monospace is inherent in a terminal,
-/// so the "code look" is a full-width PANEL every wrapped chunk is
+/// so the "code look" is a full-width panel every wrapped chunk is
 /// padded to the terminal width so the background forms one surface
 /// (a bg colors only the cells under its own characters).
 fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize) {
-    // Deliberately NOT the cell's base style: code is code, in every
+    // Deliberately not the cell's base style: code is code, in every
     // cell. Terminal-default fg on the indexed panel tint.
     let style = Style::new().bg(theme::MD_CODE_BLOCK_BG);
     // Tabs render as untrackable-width glyphs; normalize first.
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn plain_text_renders_exactly_like_before() {
-        // THE invariant: no markdown syntax = one span, base style,
+        // The invariant: no markdown syntax = one span, base style,
         // identical wrapping the renderer is a strict superset.
         let base = Style::new().fg(Color::Magenta);
         let lines = render("hello brave new world", 11, base);
@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn a_word_crossing_a_style_boundary_never_splits() {
-        // "**bo**ld" is ONE word of two styled halves; at width 6 it must
+        // "**bo**ld" is one word of two styled halves; at width 6 it must
         // wrap as a unit, not break between "bo" and "ld".
         let lines = render("xxxx **bo**ld", 6, Style::new());
         let text = flat_text(&lines);

@@ -43,7 +43,7 @@ pub enum InferenceError {
     Aborted,
 
     /// reqwest's own text stops at "error sending request for url (...)";
-    /// the part that says WHY (connection reset, DNS, TLS, timeout) sits in
+    /// the part that says why (connection reset, DNS, TLS, timeout) sits in
     /// its `source()` chain, so the message spells that chain out.
     #[error("HTTP transport error: {}", with_causes(.0))]
     Http(#[from] reqwest::Error),
@@ -59,7 +59,7 @@ pub enum InferenceError {
 /// `err`, then each error in its `source()` chain, joined by `: `.
 ///
 /// `successors` walks the linked list: start at the first cause, and keep
-/// asking each cause for ITS cause until one answers `None`. The closure
+/// asking each cause for its cause until one answers `None`. The closure
 /// gets `&&dyn Error`; the `&cause` pattern copies the inner reference out,
 /// so the next cause borrows from the error itself, not from the closure's
 /// short-lived argument (without it: "lifetime may not live long enough").

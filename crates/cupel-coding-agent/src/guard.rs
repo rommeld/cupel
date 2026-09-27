@@ -1,13 +1,13 @@
 //! The bash denylist guard: cupel's first tool-execution guardrail.
 //!
-//! The agent loop asks [`AgentHooks::before_tool_call`] before EVERY tool
-//! execution — a veto point that has existed in cupel-agent from the start
+//! The agent loop asks [`AgentHooks::before_tool_call`] before every tool
+//! execution. This veto point has existed in cupel-agent from the start
 //! but was unused until now. [`BashGuard`] implements it for the `bash`
 //! tool: a command matching any deny pattern is blocked, and the model
 //! receives an error tool-result naming the pattern (so it can adapt
 //! instead of retrying blindly).
 //!
-//! Patterns are REGEXES (the same engine as the grep tool), one per line:
+//! Patterns are regexes (the same engine as the grep tool), one per line:
 //!
 //! ```text
 //! # ~/.cupel/bash-deny (global) or <project>/.cupel/bash-deny
@@ -15,10 +15,10 @@
 //! DROP\s+TABLE
 //! ```
 //!
-//! The effective list is the UNION of the built-in defaults (`rm -rf` and
-//! friends) and both files — deny rules from different layers never cancel
+//! The effective list is the union of the built-in defaults (`rm -rf` and
+//! friends) and both files. Deny rules from different layers never cancel
 //! each other. Matching is deliberately conservative: every line of the
-//! command is tested, and a match anywhere blocks — even inside a quoted
+//! command is tested, and a match anywhere blocks, even inside a quoted
 //! string (`echo "rm -rf"` is blocked too). A false positive costs one
 //! polite error the model can rephrase around; a false negative costs the
 //! user's files.
@@ -55,7 +55,7 @@ pub struct BashGuard {
 impl BashGuard {
     /// Compile a pattern list. Invalid regexes are reported on stderr and
     /// skipped (warn-and-continue): a typo in one rule must not disable
-    /// the session OR silently drop the rest of the list.
+    /// the session or silently drop the rest of the list.
     #[must_use]
     pub fn new(patterns: &[String]) -> Self {
         let rules = patterns
@@ -133,7 +133,7 @@ impl AgentHooks for BashGuard {
         tracing::warn!(pattern, command, "bash command blocked by denylist");
         Some(BeforeToolCallResult {
             block: true,
-            // Addressed to the MODEL: name the rule and point at a way
+            // Addressed to the model: name the rule and point at a way
             // forward, so it does not retry the same command verbatim.
             reason: Some(format!(
                 "Command blocked by cupel's bash denylist (pattern: {pattern}). \
@@ -196,7 +196,7 @@ mod tests {
         std::fs::write(cwd.join(".cupel/bash-deny"), "DROP\\s+TABLE\n").unwrap();
 
         let guard = BashGuard::from_config(Some(&home), &cwd);
-        // Union: defaults AND both layers are all active.
+        // Union: defaults and both layers are all active.
         assert!(guard.deny_match("rm -rf /").is_some(), "defaults kept");
         assert!(guard.deny_match("git push --force").is_some(), "home rule");
         assert!(guard.deny_match("psql -c 'DROP TABLE x'").is_some());

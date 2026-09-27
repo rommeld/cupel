@@ -1,6 +1,6 @@
 //! The input editor: a small text buffer with a cursor and prompt history.
 //!
-//! Implementation note: the cursor is a CHAR index into the buffer, not a
+//! Implementation note: the cursor is a character index into the buffer, not a
 //! byte index. Rust strings are UTF-8, so byte-indexing at arbitrary
 //! positions panics on multi-byte characters; converting at the edges keeps
 //! all editing logic safely in char space.
@@ -8,7 +8,7 @@
 #[derive(Default)]
 pub struct InputState {
     buffer: String,
-    /// Cursor position in CHARS from the start of the buffer.
+    /// Cursor position in characters from the start of the buffer.
     cursor: usize,
     /// Previously submitted prompts, oldest first.
     history: Vec<String>,
@@ -30,7 +30,7 @@ impl InputState {
         self.buffer.is_empty()
     }
 
-    /// Cursor position as a CHAR index (see module doc for why chars).
+    /// Cursor position as a character index (see module doc for why chars).
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
@@ -68,7 +68,7 @@ impl InputState {
         self.history_index = None;
     }
 
-    /// Backspace: remove the char BEFORE the cursor.
+    /// Backspace: remove the char before the cursor.
     pub fn delete_back(&mut self) {
         if self.cursor == 0 {
             return;
@@ -78,7 +78,7 @@ impl InputState {
         self.buffer.remove(at);
     }
 
-    /// Delete: remove the char AT the cursor.
+    /// Delete: remove the char at the cursor.
     pub fn delete_forward(&mut self) {
         if self.cursor >= self.buffer.chars().count() {
             return;

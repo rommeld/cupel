@@ -3,13 +3,13 @@
 //! Each submodule translates between the unified types in [`crate::types`]
 //! and one vendor wire protocol:
 //!
-//! — [`anthropic`] — Anthropic Messages API (SSE)
-//! — [`openai_responses`] — `OpenAI` Responses API (SSE)
-//! — [`openai_completions`] — `OpenAI` Chat Completions API (SSE) — the
+//! - [`anthropic`]: Anthropic Messages API (SSE)
+//! - [`openai_responses`]: `OpenAI` Responses API (SSE)
+//! - [`openai_completions`]: `OpenAI` Chat Completions API (SSE), the
 //!   protocol most "OpenAI-compatible" vendors (Fireworks, OpenRouter, ...) speak
-//! — [`openai_codex_responses`] — the ChatGPT Codex backend's Responses
+//! - [`openai_codex_responses`]: the ChatGPT Codex backend's Responses
 //!   dialect (SSE), driven by ChatGPT OAuth tokens instead of API keys
-//! — [`bedrock`] — AWS Bedrock `ConverseStream` (binary event stream via the
+//! - [`bedrock`]: AWS Bedrock `ConverseStream` (binary event stream via the
 //!   official AWS SDK)
 //!
 //! All providers follow the same stream functions:
@@ -77,7 +77,7 @@ pub(crate) async fn with_cancel<T>(
     }
 }
 
-/// Log the terminal outcome of one provider request. This is THE
+/// Log the terminal outcome of one provider request. This is the
 /// observability record for cost accounting: one INFO line per request with
 /// exact token counts and dollars. Request duration comes from the enclosing
 /// provider span (emitted on span close when the subscriber enables span
@@ -96,7 +96,7 @@ pub(crate) fn log_completion(message: &AssistantMessage) {
 }
 
 /// Apply model-level then option-level custom headers to a request builder
-/// (option-level wins, matching pi's merge order).
+/// (option-level wins).
 pub(crate) fn apply_custom_headers(
     mut req: reqwest::RequestBuilder,
     model: &Model,

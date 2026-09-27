@@ -229,7 +229,7 @@ fn transform_assistant(
     normalize_tool_call_id: Option<NormalizeToolCallId>,
     tool_call_id_map: &mut HashMap<String, String>,
 ) -> AssistantMessage {
-    // "Same model" means id AND provider AND api all match; only then are
+    // "Same model" means id and provider and api all match; only then are
     // opaque signatures (thinking, tool-call pairing) valid for replay.
     let is_same_model = assistant.provider == model.provider
         && assistant.api == model.api
@@ -383,7 +383,7 @@ mod tests {
         let Message::User(user) = &out[0] else {
             panic!("expected user message");
         };
-        // Two consecutive images collapse into ONE placeholder.
+        // Two consecutive images collapse into one placeholder.
         let UserContentBody::Blocks(blocks) = &user.content else {
             panic!("expected blocks");
         };

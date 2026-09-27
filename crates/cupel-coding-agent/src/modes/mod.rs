@@ -1,7 +1,7 @@
 //! Frontends ("modes") for the coding agent:
 //!
-//! — [`interactive`] — the ratatui TUI (default when stdout is a terminal)
-//! — [`plain`] — a line-based REPL on a TTY, or one prompt from piped stdin
+//! - [`interactive`]: the ratatui TUI (default when stdout is a terminal)
+//! - [`plain`]: a line-based REPL on a TTY, or one prompt from piped stdin
 //!
 //! Both consume the same [`Agent`](cupel_agent::Agent); a mode is purely a
 //! presentation layer over the agent's event stream.
@@ -18,25 +18,25 @@ pub struct SessionMeta {
     /// `/name`-invocable prompt templates (see [`crate::commands`]).
     pub templates: Vec<crate::commands::PromptTemplate>,
     /// The merged model catalog (built-ins + models.json layers + ollama
-    /// discovery), resolved ONCE at startup by `main::run()`. Frontends
-    /// read models from here, never from `cupel_core::catalog` directly —
+    /// discovery), resolved once at startup by `main::run()`. Frontends
+    /// read models from here, never from `cupel_core::catalog` directly.
     /// discovery is async and must not run inside sync key handlers.
     pub models: Vec<cupel_core::types::Model>,
     /// The resolved cupel home (`CUPEL_HOME` or `~/.cupel`). Threaded so
-    /// runtime reloads (/hot-reload) rebuild from the SAME home the
-    /// session started with — env-free and testable.
+    /// runtime reloads (/hot-reload) rebuild from the same home the
+    /// session started with, without environment access and easy to test.
     pub home: Option<std::path::PathBuf>,
     /// `~/.cupel/settings.json` as loaded at startup (or the last
-    /// /hot-reload). The LOWEST key-precedence tier — see App::resolve_key
+    /// /hot-reload). The lowest key-precedence tier. See App::resolve_key
     /// (session-entered > env var > this).
     pub settings: crate::settings::Settings,
     /// A startup condition worth telling the user about (e.g. "no
-    /// credentials found") — the TUI shows it as the first transcript
+    /// credentials found"). The TUI shows it as the first transcript
     /// notice instead of refusing to start.
     pub startup_warning: Option<String>,
     /// The context files as loaded at session start (already embedded in
     /// the agent's system prompt). Bare `/hot-reload` diffs the files on
-    /// disk against THESE and appends only the delta to the conversation.
+    /// disk against these and appends only the delta to the conversation.
     pub context_files: Vec<crate::resources::ContextFile>,
     /// The system prompt without a preset prompt, as bootstrap built it.
     /// `/preset` appends the chosen preset's prompt to this, so switching

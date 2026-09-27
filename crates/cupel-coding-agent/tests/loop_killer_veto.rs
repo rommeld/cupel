@@ -1,7 +1,7 @@
 //! End-to-end proof that the loop killer cuts off a repeating tool call:
-//! a scripted mock provider requests the SAME bash append five times;
+//! a scripted mock provider requests the same bash append five times;
 //! with maxRepeats = 2 the counter file gains exactly two lines, and
-//! attempts three to five come back through the REAL agent loop as
+//! attempts three to five come back through the real agent loop as
 //! blocked error tool-results. Pattern copied from tests/guard_veto.rs.
 
 #![allow(clippy::tests_outside_test_module)]
@@ -25,7 +25,7 @@ use cupel_core::{
     },
 };
 
-/// Five turns of the IDENTICAL append command, then a closing text turn.
+/// Five turns of the identical append command, then a closing text turn.
 struct StuckProvider {
     calls: AtomicU32,
 }
@@ -59,7 +59,7 @@ impl Provider for StuckProvider {
         if call < 5 {
             let message = AssistantMessage {
                 content: vec![AssistantContent::ToolCall(ToolCall {
-                    // Unique id per attempt, IDENTICAL name + arguments —
+                    // Unique id per attempt, identical name + arguments.
                     // the killer must key on the call, never on the id.
                     id: format!("call_{call}"),
                     name: "bash".into(),

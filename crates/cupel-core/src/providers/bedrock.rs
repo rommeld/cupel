@@ -33,7 +33,7 @@ use crate::{
     },
 };
 
-/// Bedrock rejects empty text blocks; pi substitutes this placeholder.
+/// Bedrock rejects empty text blocks, so substitute this placeholder.
 const EMPTY_TEXT_PLACEHOLDER: &str = "<empty>";
 
 pub struct BedrockProvider;
@@ -133,7 +133,7 @@ fn supports_native_xhigh(model: &Model) -> bool {
 }
 
 /// Prompt caching is only available on newer Claude models. Application
-/// inference profiles hide the model name in the ARN — there the model's
+/// inference profiles hide the model name in the ARN. There the model's
 /// display name (user-controlled) is the only signal.
 fn supports_prompt_caching(model: &Model) -> bool {
     let candidates = match_candidates(model);
@@ -440,7 +440,7 @@ async fn run(
     Ok(())
 }
 
-/// Region resolution, in pi's precedence order:
+/// Region resolution, in precedence order:
 /// ARN-embedded region > env override > SDK default chain > `us-east-1`.
 async fn build_client(model: &Model, options: &StreamOptions) -> aws_sdk_bedrockruntime::Client {
     // 1. When the model id is an inference-profile ARN
@@ -454,9 +454,8 @@ async fn build_client(model: &Model, options: &StreamOptions) -> aws_sdk_bedrock
         (service == "bedrock" && !region.is_empty()).then(|| region.to_string())
     });
 
-    // 2. Explicit override via options.env (pi reads AWS_REGION the same way;
-    //    `options.env` exists so embedders can inject config without touching
-    //    process-wide environment variables).
+    // 2. Explicit override via options.env, letting embedders inject config
+    //    without touching process-wide environment variables.
     let env_region = options.env.as_ref().and_then(|env| {
         env.get("AWS_REGION")
             .or_else(|| env.get("AWS_DEFAULT_REGION"))
@@ -819,7 +818,7 @@ fn convert_tool_config(context: &Context) -> Result<Option<bedrock::ToolConfigur
     ))
 }
 
-/// Thinking configuration travels in `additionalModelRequestFields` — a
+/// Thinking configuration travels in `additionalModelRequestFields`, a
 /// free-form JSON escape hatch for model-family-specific parameters that the
 /// Converse schema doesn't cover.
 fn build_additional_model_request_fields(

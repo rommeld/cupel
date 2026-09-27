@@ -6,12 +6,9 @@
 //! the cached walk -> accepting a directory re-walks one level deeper and
 //! keeps completing; accepting a file inserts `@path ` and closes.
 //!
-//! Deviations from pi, both deliberate: the file list comes from the
-//! `ignore` crate instead of shelling out to the `fd` binary (cupel links
-//! its search engines same policy as grep), and instead of re-running the
-//! walk per keystroke we walk once per directory prefix and filter the
-//! cached list live (a subprocess per keystroke is idiomatic Node,
-//! wasteful in-process).
+//! The file list comes from the `ignore` crate (using the same policy as
+//! grep). We walk once per directory prefix and filter the cached list
+//! on subsequent keystrokes.
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +27,7 @@ pub const MAX_VISIBLE: usize = 8;
 /// The `@`-token under construction at the cursor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileToken {
-    /// CHAR index of the `@` in the buffer.
+    /// Character index of the `@` in the buffer.
     pub start: usize,
     /// Text between `@` (or `@"`) and the cursor the fuzzy query.
     pub query: String,
@@ -40,14 +37,14 @@ pub struct FileToken {
 
 /// Find the `@`-token the cursor is currently inside, if any.
 ///
-/// Rules (pi's): the `@` must sit at a token start beginning of text or
+/// Rules: the `@` must sit at a token start beginning of text or
 /// right after whitespace (including newlines, so tokens never span lines).
-/// Only text BEFORE the cursor forms the query; `user@host` never triggers
+/// Only text before the cursor forms the query; `user@host` never triggers
 /// because its `@` follows a non-space character. Quoted tokens (`@"...`)
 /// may contain spaces and stay open until the closing quote.
 ///
 /// A quoted token means a simple stop-at-whitespace backward scan can't
-/// work: in `@"my file`, the space is INSIDE the token, but a backward scan
+/// work: in `@"my file`, the space is inside the token, but a backward scan
 /// from the cursor hits it before ever seeing the opening quote. Instead,
 /// every `@` before the cursor is examined nearest-first, and the segment
 /// between it and the cursor decides validity.
@@ -83,7 +80,7 @@ pub fn file_token_at_cursor(text: &str, cursor: usize) -> Option<FileToken> {
 }
 
 /// The `/command`-name token under construction, if any: the input must
-/// START with `/` and the cursor must still be inside the first
+/// start with `/` and the cursor must still be inside the first
 /// whitespace-free run (once a space is typed, the command name is settled
 /// and the rest is arguments). Returns the fuzzy query after the `/`.
 #[must_use]
@@ -97,11 +94,11 @@ pub fn command_token_at_cursor(text: &str, cursor: usize) -> Option<String> {
     (!segment.iter().any(|c| c.is_whitespace())).then(|| segment.iter().collect())
 }
 
-/// The FIRST-argument token of a settled `/command`, if the cursor is in
+/// The first-argument token of a settled `/command`, if the cursor is in
 /// it: `/model son|` yields `("model", "son", 7)`. Picks up exactly where
 /// [`command_token_at_cursor`] stops (a space settles the name), and stops
 /// itself once the first argument is settled the same way `/model x y`
-/// completes nothing. Returns `(command name, argument query, CHAR index
+/// completes nothing. Returns `(command name, argument query, character index
 /// where the argument starts)`.
 #[must_use]
 pub fn command_arg_token_at_cursor(text: &str, cursor: usize) -> Option<(String, String, usize)> {
@@ -119,7 +116,7 @@ pub fn command_arg_token_at_cursor(text: &str, cursor: usize) -> Option<(String,
     let name: String = chars[1..name_end].iter().collect();
 
     // The argument starts at the first non-space after the name; with only
-    // spaces so far it starts AT the cursor (empty query = show everything).
+    // spaces so far it starts at the cursor (empty query = show everything).
     let arg_start = (name_end..chars.len())
         .find(|i| !chars[*i].is_whitespace())
         .unwrap_or(chars.len())
@@ -147,8 +144,8 @@ pub struct Candidate {
 }
 
 /// Bounded, gitignore-aware walk the same knobs as the grep backend
-/// (hidden files in, `.git` out) plus followed symlinks, matching pi's fd
-/// invocation. `prefix` re-roots the walk for directory drill-down while
+/// (hidden files in, `.git` out) plus followed symlinks.
+/// `prefix` re-roots the walk for directory drill-down while
 /// keeping displays relative to the project root.
 #[must_use]
 pub fn list_candidates(root: &Path, prefix: &str, cap: usize) -> Vec<Candidate> {
@@ -197,7 +194,7 @@ pub fn list_candidates(root: &Path, prefix: &str, cap: usize) -> Vec<Candidate> 
 /// What accepting the selected row does to the input buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Completion {
-    /// CHAR range in the buffer to replace (the whole `@...` token up to
+    /// Character range in the buffer to replace (the whole `@...` token up to
     /// the cursor).
     pub start: usize,
     pub end: usize,
@@ -233,7 +230,7 @@ pub struct Autocomplete {
     /// `/command` candidates (built-ins + prompt templates), set once by
     /// the frontend at startup.
     commands: Vec<Candidate>,
-    /// Per-command FIRST-argument value sets (`model` -> the catalog,
+    /// Per-command first-argument value sets (`model` -> the catalog,
     /// `thinking` -> the levels). Commands without an entry keep their
     /// arguments completion-free.
     command_args: Vec<(String, Vec<Candidate>)>,
@@ -281,7 +278,7 @@ impl Autocomplete {
         (!session.matches.is_empty()).then_some(((&*session.matches), session.selected))
     }
 
-    /// CHAR index of the token's `@` (for anchoring the popup).
+    /// Character index of the token's `@` (for anchoring the popup).
     #[must_use]
     pub fn token_start(&self) -> Option<usize> {
         self.session.as_ref().map(|s| s.token.start)
@@ -310,7 +307,7 @@ impl Autocomplete {
             self.refresh_commands(query);
             return;
         }
-        // A settled command name with a REGISTERED value set completes its
+        // A settled command name with a registered value set completes its
         // first argument. Unregistered commands (prompt templates, /help)
         // fall through, so `@file` references in their arguments keep
         // working.
@@ -467,8 +464,8 @@ impl Autocomplete {
         } else {
             format!("@{}", candidate.value)
         };
-        // A trailing space after a FILE lets typing resume naturally (pi
-        // does the same); directories keep completing instead.
+        // A trailing space after a file lets typing resume naturally.
+        // Directories keep completing instead.
         if !candidate.is_dir {
             insert.push(' ');
         }
@@ -706,7 +703,7 @@ mod tests {
         let (rows, _) = ac.visible().expect("all levels offered");
         assert_eq!(rows.len(), 3);
 
-        // Typing narrows; accepting replaces ONLY the argument.
+        // Typing narrows; accepting replaces only the argument.
         ac.refresh("/thinking of", 12);
         let (rows, selected) = ac.visible().expect("rows");
         assert_eq!(rows[selected].value, "off");
@@ -728,7 +725,7 @@ mod tests {
     fn slash_mid_text_still_file_completes() {
         let root = temp_tree("slashfile");
         let mut ac = Autocomplete::new(&root).with_commands(command_list());
-        // `@src/` contains a slash but is a FILE token, not a command.
+        // `@src/` contains a slash but is a file token, not a command.
         ac.refresh("@src/", 5);
         assert!(ac.is_open());
         let (rows, _) = ac.visible().expect("rows");

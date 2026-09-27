@@ -1,18 +1,18 @@
 //! Project-context loading.
 //!
-//! Context files (`AGENTS.md` / `CLAUDE.md`) are loaded EAGERLY: their full
+//! Context files (`AGENTS.md` / `CLAUDE.md`) are loaded eagerly: their full
 //! contents ride in the system prompt of every request. They hold standing
 //! project instructions ("run clippy after edits", "tests live in tests/")
 //! that must always be visible.
 //!
 //! They come from three source roots, searched in order:
-//! 1. the cupel home (`~/.cupel`, override with `CUPEL_HOME`) — the cargo
-//!    layout: the same directory also holds `bin/cupel` (the installed
+//! 1. the cupel home (`~/.cupel`, override with `CUPEL_HOME`). In the cargo
+//!    layout, the same directory also holds `bin/cupel` (the installed
 //!    binary), `prompts/` (global `/command` templates), `sessions/`
 //!    (JSONL transcripts, see `session.rs`), `hooks/` (lifecycle hook
 //!    scripts, see `hooks.rs`), and the reserved `memory/` for the future
 //!    memory feature,
-//! 2. the project's `.cupel/` directory (`<cwd>/.cupel`) — for keeping
+//! 2. the project's `.cupel/` directory (`<cwd>/.cupel`) for keeping
 //!    cupel-specific files out of the repository root,
 //! 3. the project working directory itself (most specific, wins by coming
 //!    last in the prompt).
@@ -42,8 +42,8 @@ fn resolve_config_home(env_value: Option<String>, home: Option<PathBuf>) -> Opti
     }
 }
 
-/// [`default_roots`] with an EXPLICIT home instead of the env lookup —
-/// for callers that resolved the home once and thread it around (the
+/// [`default_roots`] with an explicit home instead of the env lookup.
+/// For callers that resolved the home once and thread it around (the
 /// bootstrap loader, /hot-reload), and for env-free tests.
 #[must_use]
 pub fn roots_for(home: Option<PathBuf>, cwd: &Path) -> Vec<PathBuf> {
@@ -56,7 +56,7 @@ fn resolve_default_roots(home: Option<PathBuf>, cwd: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     // Each candidate is pushed only if not already present: running cupel
     // from `$HOME` makes `<cwd>/.cupel` equal to the cupel home, and
-    // `CUPEL_HOME=$PWD` makes the home equal to the cwd — without the guard
+    // `CUPEL_HOME=$PWD` makes the home equal to the cwd. Without the guard
     // the same AGENTS.md would ride in the prompt twice. Plain path equality
     // is enough here; the roots are built from the same cwd/home values, so
     // no symlink canonicalization (which would need filesystem access) is
@@ -69,7 +69,7 @@ fn resolve_default_roots(home: Option<PathBuf>, cwd: &Path) -> Vec<PathBuf> {
     if let Some(home) = home {
         push_unique(home);
     }
-    // `.cupel/` is pushed without checking it exists — the loaders already
+    // `.cupel/` is pushed without checking it exists because the loaders already
     // skip missing files and directories, and this keeps the function pure.
     push_unique(cwd.join(".cupel"));
     push_unique(cwd.to_path_buf());
@@ -77,11 +77,11 @@ fn resolve_default_roots(home: Option<PathBuf>, cwd: &Path) -> Vec<PathBuf> {
 }
 
 /// Create the project's `.cupel/` directory if it is missing. Called on the
-/// FIRST agent interaction rather than at startup, so merely launching (and
+/// first agent interaction rather than at startup, so merely launching (and
 /// quitting) cupel in a directory leaves no trace on disk.
 ///
-/// Never fails: `.cupel/` is a convenience scaffold, not a requirement —
-/// the loaders skip a missing directory gracefully. A read-only location is
+/// Never fails: `.cupel/` is a convenience scaffold, not a requirement.
+/// The loaders skip a missing directory gracefully. A read-only location is
 /// an expected environment (mounted volume, CI checkout), so it is skipped
 /// quietly at debug level; any other failure gets a visible warning but
 /// still never blocks the session.
@@ -89,7 +89,7 @@ pub fn ensure_project_dot_cupel(cwd: &Path) {
     let dot_cupel = cwd.join(".cupel");
     // No exists() pre-check: create_dir_all is already idempotent (Ok when
     // the directory exists), and attempting unconditionally both avoids a
-    // check-then-act race and surfaces a `.cupel` FILE squatting on the
+    // check-then-act race and surfaces a `.cupel` file squatting on the
     // name (the create fails instead of silently looking successful).
     match std::fs::create_dir_all(&dot_cupel) {
         Ok(()) => {}
@@ -107,9 +107,9 @@ pub fn ensure_project_dot_cupel(cwd: &Path) {
     }
 }
 
-/// Candidate context-file names, in preference order. Only the FIRST match
+/// Candidate context-file names, in preference order. Only the first match
 /// per root is loaded: `CLAUDE.md` is conventionally a copy of `AGENTS.md`,
-/// and loading both would duplicate every instruction. (Same rule as pi.)
+/// and loading both would duplicate every instruction.
 const CONTEXT_FILE_CANDIDATES: &[&str] = &["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
 /// Eagerly load the context file (if any) from each root.
@@ -141,20 +141,20 @@ const DELTA_MAX_LINES: usize = 300;
 const DELTA_MAX_BYTES: usize = 12 * 1024;
 
 /// A compact delta between the context files loaded at session start and
-/// the ones on disk now — what bare `/hot-reload` appends to the RUNNING
+/// the ones on disk now. This is what bare `/hot-reload` appends to the running
 /// conversation instead of re-embedding whole files. `None` = nothing
 /// changed.
 ///
 /// Unified diffs (two context lines around each change) keep the message
 /// small: only the changed instructions travel; the original full text
-/// stays where it already is — embedded in the system prompt at session
+/// stays where it already is, embedded in the system prompt at session
 /// start.
 #[must_use]
 pub fn context_delta(old: &[ContextFile], new: &[ContextFile]) -> Option<String> {
     let mut sections: Vec<String> = Vec::new();
 
     for file in new {
-        // A file that appeared since session start diffs against empty —
+        // A file that appeared since session start diffs against empty because
         // its lines all arrive as additions, which is exactly the delta.
         let old_content = old
             .iter()
@@ -303,12 +303,12 @@ mod tests {
 
     #[test]
     fn resolve_default_roots_dedups_overlapping_roots() {
-        // Running cupel from `$HOME`: `<cwd>/.cupel` IS the cupel home.
+        // Running cupel from `$HOME`: `<cwd>/.cupel` is the cupel home.
         let roots = resolve_default_roots(Some(PathBuf::from("/u/.cupel")), Path::new("/u"));
         assert_eq!(roots, vec![PathBuf::from("/u/.cupel"), PathBuf::from("/u")]);
 
-        // `CUPEL_HOME=$PWD`: the home IS the cwd. The cwd is claimed by the
-        // home slot, so `.cupel/` ends up last — an accepted quirk of a
+        // `CUPEL_HOME=$PWD`: the home is the cwd. The cwd is claimed by the
+        // home slot, so `.cupel/` ends up last. This is an accepted quirk of a
         // degenerate configuration; the point is nothing loads twice.
         let roots = resolve_default_roots(Some(PathBuf::from("/proj")), Path::new("/proj"));
         assert_eq!(
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn ensure_project_dot_cupel_never_panics_on_conflicts_or_readonly() {
-        // `.cupel` squatted by a FILE: warned about, file left intact.
+        // `.cupel` squatted by a file: warned about, file left intact.
         let cwd = temp_root("ensure-file");
         std::fs::write(cwd.join(".cupel"), "not a directory").unwrap();
         ensure_project_dot_cupel(&cwd);
@@ -347,7 +347,7 @@ mod tests {
             let cwd = temp_root("ensure-readonly");
             std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o555)).unwrap();
             ensure_project_dot_cupel(&cwd);
-            // Restore write permission FIRST so the next run's cleanup works.
+            // Restore write permission first so the next run's cleanup works.
             std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o755)).unwrap();
             assert!(!cwd.join(".cupel").exists());
         }
@@ -374,7 +374,7 @@ mod tests {
         assert!(delta.starts_with(CONTEXT_UPDATE_MARKER));
         assert!(delta.contains("+rule six"));
         assert!(delta.contains("-rule 6"));
-        // Two lines of context around the change — distant lines stay home.
+        // Two lines of context around the change keep distant lines at home.
         assert!(delta.contains("rule 4"), "context line inside the radius");
         assert!(!delta.contains("rule 1\n"), "far lines must not travel");
     }

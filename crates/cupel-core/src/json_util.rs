@@ -1,15 +1,14 @@
 //! Streaming-JSON parsing.
 //!
 //! While a model streams a tool call, the argument JSON arrives in fragments:
-//! `{"pat` ... `{"pattern": "fo` ... `{"pattern": "foo"}`. pi keeps the
-//! *parsed-so-far* object updated on every delta (via the `partial-json` npm
-//! package) so UIs can render arguments live. This module is the Rust
-//! equivalent.
+//! `{"pat` ... `{"pattern": "fo` ... `{"pattern": "foo"}`. This module
+//! keeps the *parsed-so-far* object updated on every delta so UIs can
+//! render arguments live.
 //!
 //! Strategy: try a normal parse first. If the document is incomplete, *repair*
 //! it by closing whatever is still open (strings, objects, arrays), trimming a
 //! trailing comma or dangling key, then parse again. If everything fails,
-//! return an empty object — the contract is "always return a usable value,
+//! return an empty object. The contract is "always return a usable value,
 //! never fail", because the final complete JSON will arrive eventually.
 
 use serde_json::Value;
@@ -39,8 +38,8 @@ pub fn parse_streaming_json(partial: &str) -> Value {
 /// missing closers. Returns `None` when the input can't be a JSON prefix.
 ///
 /// This is a single left-to-right scan that tracks:
-/// — whether we are inside a string (and whether the last char was `\`),
-/// — the stack of open containers (`{` / `[`).
+/// - whether we are inside a string (and whether the last char was `\`),
+/// - the stack of open containers (`{` / `[`).
 fn complete_json(input: &str) -> Option<String> {
     let mut stack: Vec<char> = Vec::new();
     let mut in_string = false;

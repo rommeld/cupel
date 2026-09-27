@@ -123,6 +123,7 @@ A preset names a model, a thinking level, and optionally an additional system pr
     }
   }
 }
+```
 
 `provider`, `model` (an id from `/model`), and `thinkingLevel` (`off` ... `max`) are required. `prompt` is appended to the system prompt while the preset is active. `/preset fast` switches all three at once. The `default` preset also applies at startup.
 

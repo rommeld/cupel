@@ -10,10 +10,10 @@
 //! 2. `~/.cupel/models.json`,
 //! 3. `<cwd>/.cupel/models.json`,
 //! 4. ollama auto-discovery (lowest: an explicit entry always beats a
-//!    discovered one — that is the user's override channel for context
+//!    discovered one. This is the user's override channel for context
 //!    window, reasoning, and compat flags).
 //!
-//! The catalog is resolved ONCE at startup in `main::run()` (discovery is a
+//! The catalog is resolved once at startup in `main::run()` (discovery is a
 //! network call; the TUI's key handlers are synchronous) and threaded to
 //! the frontends via `SessionMeta.models`.
 
@@ -23,8 +23,8 @@ use cupel_core::types::Model;
 
 /// Parse one `models.json`: a JSON array of Model descriptors in the
 /// workspace-wide camelCase serde form (`baseUrl`, `contextWindow`,
-/// `maxTokens`, ...). A missing file is simply an empty layer; a MALFORMED
-/// file is an error the caller must surface — unlike optional context
+/// `maxTokens`, ...). A missing file is simply an empty layer; a malformed
+/// file is an error the caller must surface, unlike optional context
 /// files, a config the user wrote by hand deserves a visible failure.
 pub fn load_models_file(path: &Path) -> Result<Vec<Model>, String> {
     let content = match std::fs::read_to_string(path) {
@@ -37,7 +37,7 @@ pub fn load_models_file(path: &Path) -> Result<Vec<Model>, String> {
 
 /// The user layers in precedence order: cupel home first, project second.
 /// Parse errors are announced on stderr (visible in scrollback before the
-/// TUI takes the screen — the same idiom as the "logging to ..." line) and
+/// TUI takes the screen, like the "logging to ..." line) and
 /// the broken layer is skipped, never aborting startup.
 #[must_use]
 pub fn load_user_models(home: Option<&Path>, cwd: &Path) -> Vec<Vec<Model>> {
@@ -57,9 +57,9 @@ pub fn load_user_models(home: Option<&Path>, cwd: &Path) -> Vec<Vec<Model>> {
     layers
 }
 
-/// Merge catalog layers. An id collision REPLACES the earlier entry in
-/// place (keeping its position, so each provider's first model — its
-/// `/provider` default — stays stable); new ids append. Within one layer
+/// Merge catalog layers. An id collision replaces the earlier entry in
+/// place (keeping its position, so each provider's first model stays the
+/// `/provider` default); new ids append. Within one layer
 /// the same rule applies, so a duplicated id in a single file is
 /// last-wins.
 #[must_use]
@@ -79,7 +79,7 @@ pub fn merge_models(layers: Vec<Vec<Model>>) -> Vec<Model> {
 /// The catalog's context ceiling survives an override (Codex CLI's
 /// with_config_overrides does the same clamp): a replacement row that
 /// names no maxContextWindow inherits the replaced row's, and its
-/// contextWindow is clamped to that ceiling. A row that pins its OWN
+/// contextWindow is clamped to that ceiling. A row that pins its own
 /// ceiling owns it
 fn with_context_ceiling(existing: &Model, mut replacement: Model) -> Model {
     if replacement.max_context_window.is_none() {
@@ -91,7 +91,7 @@ fn with_context_ceiling(existing: &Model, mut replacement: Model) -> Model {
     replacement
 }
 
-/// Drop entries whose `api` has no registered provider implementation —
+/// Drop entries whose `api` has no registered provider implementation.
 /// they would only fail at request time. Guards the same invariant the
 /// built-in catalog tests enforce ("every model has a registered
 /// provider"), extended to user input: warn and skip, never abort.
@@ -133,7 +133,7 @@ pub async fn build_catalog(
     layers.extend(load_user_models(home, cwd));
     let mut merged = merge_models(layers);
 
-    // Discovered models rank BELOW everything explicit: only ids nobody
+    // Discovered models rank below everything explicit: only ids nobody
     // defined get appended.
     let host = crate::ollama::ollama_host();
     for model in crate::ollama::discover(&host).await {
@@ -144,7 +144,7 @@ pub async fn build_catalog(
     filter_registered(merged, registry)
 }
 
-/// The `--help` catalog: built-ins + user layers, NO network probe (help
+/// The `--help` catalog: built-ins + user layers, no network probe (help
 /// must be instant and side-effect-free).
 #[must_use]
 pub fn build_catalog_offline(home: Option<&Path>, cwd: &Path) -> Vec<Model> {
@@ -166,7 +166,7 @@ mod tests {
     }
 
     /// A minimal valid models.json entry (camelCase keys, like the README
-    /// example) — doubles as a schema regression test.
+    /// example) and doubles as a schema regression test.
     fn entry_json(id: &str, context_window: u64) -> serde_json::Value {
         serde_json::json!({
             "id": id,
@@ -292,7 +292,7 @@ mod tests {
         let (home, cwd) = (root.join("home"), root.join("proj"));
         std::fs::create_dir_all(home.join("")).unwrap();
         std::fs::create_dir_all(cwd.join(".cupel")).unwrap();
-        // Home defines a new model; the project overrides a BUILTIN id.
+        // Home defines a new model; the project overrides a built-in id.
         std::fs::write(
             home.join("models.json"),
             serde_json::json!([entry_json("local-model", 8192)]).to_string(),

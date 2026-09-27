@@ -1,10 +1,9 @@
-//! OAuth credential storage — `~/.cupel/auth.json`.
+//! OAuth credential storage in `~/.cupel/auth.json`.
 //!
 //! The subscription-login counterpart to settings.rs: settings.json holds
-//! API keys the user typed, auth.json holds tokens a login FLOW minted
-//! (and rotates on refresh). pi keeps the same split (`~/.pi/agent/auth.json`,
-//! core/auth-storage.ts); the file shape is pi's too — a map of provider
-//! id to a type-tagged credential:
+//! API keys the user typed, auth.json holds tokens a login flow minted
+//! (and rotates on refresh). The file is a map of provider id to a
+//! type-tagged credential:
 //!
 //! ```json
 //! {
@@ -17,10 +16,9 @@
 //! ```
 //!
 //! Writes reuse settings.rs's mechanics verbatim: re-read from disk,
-//! refuse malformed files, 0600 temp file, fsync, atomic rename. What
-//! cupel deliberately does NOT mirror: pi's cross-process file lock
-//! (proper-lockfile). Two concurrent cupel instances refreshing at once
-//! both write a complete valid file and the last rename wins — the same
+//! refuse malformed files, 0600 temp file, fsync, atomic rename. There is
+//! no cross-process file lock. Two instances refreshing at once both write
+//! a complete valid file and the last rename wins. This is the same
 //! accepted caveat settings.rs documents for keys. The refresh endpoint
 //! tolerates that: each grant returns a fresh, complete token pair.
 
@@ -30,16 +28,15 @@ use std::path::{Path, PathBuf};
 use cupel_core::oauth::openai_codex::{self, OAuthCredential};
 use serde::{Deserialize, Serialize};
 
-/// One stored credential. The `type` tag is future room (pi stores
-/// `api_key` entries here too); cupel writes only OAuth today.
+/// One stored credential. The `type` tag leaves room for other credential
+/// types. Cupel writes only OAuth today.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StoredCredential {
     Oauth(OAuthCredential),
 }
 
-/// Refresh when less than five minutes of validity remain — pi's margin
-/// (auth/resolve.ts DEFAULT_OAUTH_MINIMUM_VALIDITY_MS). Generous enough
+/// Refresh when less than five minutes of validity remain. Generous enough
 /// that a token can never expire between resolution and the request.
 const REFRESH_MARGIN_MS: u64 = 5 * 60 * 1000;
 
@@ -50,7 +47,7 @@ pub fn auth_path(home: &Path) -> PathBuf {
 }
 
 /// Parse the auth file. Missing = empty; malformed = an error the caller
-/// surfaces (same tiers as settings::load_settings — a credentials file
+/// surfaces (same tiers as settings::load_settings because a credentials file
 /// that stopped parsing deserves a visible failure, not silent logouts).
 fn load_auth_file(path: &Path) -> Result<BTreeMap<String, StoredCredential>, String> {
     let content = match std::fs::read_to_string(path) {
@@ -62,7 +59,7 @@ fn load_auth_file(path: &Path) -> Result<BTreeMap<String, StoredCredential>, Str
 }
 
 /// All stored credentials; malformed files are warn-and-empty (via
-/// tracing, never stderr — this runs while the TUI owns the screen).
+/// tracing, never stderr, since this runs while the TUI owns the screen).
 #[must_use]
 pub fn load_auth(home: Option<&Path>) -> BTreeMap<String, StoredCredential> {
     let Some(home) = home else {
@@ -86,7 +83,7 @@ pub fn credential(home: Option<&Path>, provider: &str) -> Option<OAuthCredential
         .map(|StoredCredential::Oauth(credential)| credential)
 }
 
-/// Whether a login is stored — drives `/provider` status lines and
+/// Whether a login is stored. Used by `/provider` status lines and
 /// startup model selection (never inspects token validity: an expired
 /// access token still counts, the refresh token is what matters).
 #[must_use]
@@ -94,7 +91,7 @@ pub fn has_credential(home: Option<&Path>, provider: &str) -> bool {
     credential(home, provider).is_some()
 }
 
-/// Read-modify-write one credential into auth.json — settings.rs's
+/// Read-modify-write one credential into auth.json using settings.rs's
 /// save_provider_key with a different payload: fresh read (hand edits
 /// survive, malformed files are refused), 0600 same-directory temp file,
 /// fsync, atomic rename.
@@ -135,7 +132,7 @@ fn modify_auth(
     let home = home.ok_or(SaveError::NoHome)?;
     let path = auth_path(home);
 
-    // Fresh from disk, not from memory — and a file that no longer
+    // Fresh from disk, not from memory. A file that no longer
     // parses is refused, never clobbered.
     let mut auth = load_auth_file(&path).map_err(|reason| SaveError::Malformed {
         path: path.clone(),
@@ -154,7 +151,7 @@ fn modify_auth(
     })?;
     body.push('\n');
 
-    // Same-directory temp file, owner-only BEFORE any token byte lands
+    // Same-directory temp file, owner-only before any token byte lands
     // on disk; rename carries the mode over a pre-existing looser file.
     let tmp = home.join("auth.json.tmp");
     let _ = std::fs::remove_file(&tmp);
@@ -199,9 +196,8 @@ pub fn needs_refresh(credential: &OAuthCredential, now_ms: u64) -> bool {
 
 /// A request-ready Codex access token: the stored one while it is fresh,
 /// or a refreshed (and re-persisted) one. `None` = not logged in or the
-/// refresh failed — the provider then errors and the TUI points at
-/// /login. This is the coding-agent half of pi's resolveStoredOAuth; it
-/// runs on EVERY request via the agent-loop api_key hook, which is what
+/// refresh failed. The provider then errors and the TUI points at
+/// /login. This runs on every request via the agent-loop api_key hook, which
 /// keeps week-long sessions alive across token expiry.
 pub async fn openai_codex_access_token(
     home: Option<&Path>,
@@ -213,7 +209,7 @@ pub async fn openai_codex_access_token(
     }
     match openai_codex::refresh(http, &stored.refresh).await {
         Ok(fresh) => {
-            // Persist the ROTATED pair. A failed save is only a warning:
+            // Persist the rotated pair. A failed save is only a warning:
             // the fresh token still serves this session; the next start
             // refreshes again from the old (still valid) refresh token.
             if let Err(e) = save_credential(home, cupel_core::types::Provider::OPENAI_CODEX, &fresh)
@@ -223,9 +219,7 @@ pub async fn openai_codex_access_token(
             Some(fresh.access)
         }
         Err(e) => {
-            // No silent fallback to a stale token — pi treats a failed
-            // refresh as a hard stop too (resolve.ts: "No silent env
-            // fallback after a failed refresh").
+            // No silent fallback to a stale token after a failed refresh.
             tracing::warn!("codex token refresh failed: {e}");
             None
         }
@@ -273,14 +267,14 @@ mod tests {
     }
 
     #[test]
-    fn the_file_shape_matches_pis_auth_json() {
+    fn auth_json_uses_tagged_camel_case_credentials() {
         let home = temp_home("shape");
         save_credential(Some(&home), "openai-codex", &credential_fixture(7)).unwrap();
         let json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(home.join("auth.json")).unwrap())
                 .unwrap();
         let entry = &json["openai-codex"];
-        // The tagged-enum + camelCase combination pi's readers expect.
+        // The stored credential uses a tagged enum and camelCase fields.
         assert_eq!(entry["type"], "oauth");
         assert_eq!(entry["access"], "access-1");
         assert_eq!(entry["accountId"], "acc-1");

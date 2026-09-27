@@ -3,7 +3,7 @@
 //! Saves normalize formatting (pretty-printed, keys sorted): values and
 //! unknown fields are preserved. Two concurrent cupel instances saving
 //! at once each write a complete valid file; the last rename wins and
-//! one update can be lost — same accepted caveat as concurrent
+//! one update can be lost. This is the same accepted caveat as concurrent
 //! `--resume` in session.rs.
 
 use std::collections::BTreeMap;
@@ -115,7 +115,7 @@ impl ThinkingSetting {
     }
 }
 
-/// Loop-killer configuration: how many times the SAME tool call (same
+/// Loop-killer configuration: how many times the same tool call (same
 /// name, identical arguments) may run back-to-back before the repeat is
 /// blocked and the model is steered onto a new track (see
 /// `crate::loop_killer)`.
@@ -140,13 +140,13 @@ impl Settings {
         let configured = self.loop_killer?.max_repeats;
         (configured > 0).then_some(configured)
     }
-    /// Merge home and project into the runtime view, per FIELD:
-    /// — providers: HOME ONLY. A project settings.json must never supply
+    /// Merge home and project into the runtime view, per field:
+    /// - providers: home only. A project settings.json must never supply
     /// credentials (warn_project_settings already told the user why);
     /// the project's map is deliverately not touched at all.
-    /// — loopKiller: project overrides home when present (the usual
+    /// - loopKiller: project overrides home when present (the usual
     /// later-wins layering, mirroring models.json).
-    /// extra: the home copy rides along — it exists for the SAVE
+    /// extra: the home copy rides along because it exists for the save
     /// round-trip, which only ever writes the home file.
     #[must_use]
     pub fn layered(home: Settings, project: Settings) -> Settings {
@@ -161,7 +161,7 @@ impl Settings {
     }
 }
 
-/// Manuel Debug that prints only, never key values — `{:?}` output
+/// Manual Debug that prints only, never key values. `{:?}` output
 /// reaces logs, panics, and failed-assertion messages, and secrets
 /// must not. (This also makes assert_eq! failures in tests
 /// safe to paste anywhere.)
@@ -189,7 +189,7 @@ pub fn project_settings_path(cwd: &Path) -> PathBuf {
 }
 
 /// Parse the settings file. A missing file is simply empty defaults; a
-/// MALFORMED file is an error the caller must surface — a config the user
+/// malformed file is an error the caller must surface. A config the user
 /// wrote by hand deserves a visible failure (same tiers as
 /// `models::load_models_file`).
 pub fn load_settings(path: &Path) -> Result<Settings, String> {
@@ -219,8 +219,8 @@ pub fn load_home_settings(home: Option<&Path>) -> Settings {
 
 /// The project layer (`<cwd>/.cupel/settings.json`), with the same
 /// warn-and-default policy as the home layer: a malformed hand-written
-/// file is announced and skipped, never fatal. Secrets are NOT filtered
-/// here — `layered`simply never reads this layer`s providers map, so
+/// file is announced and skipped, never fatal. Secrets are not filtered
+/// here. `layered` simply never reads this layer's providers map, so
 /// filtering has nothing to do (security by construction beats secruity
 /// by inspection).
 #[must_use]
@@ -244,20 +244,20 @@ pub enum SaveError {
     Io { path: PathBuf, reason: String },
 }
 
-/// Read-modify-write ONE provider key into `<home>/settings.json`,
+/// Read-modify-write one provider key into `<home>/settings.json`,
 /// creating the home directory if needed. Returns the path written (for
 /// the TUI notice).
 ///
 /// Design points:
-/// — The file is RE-READ here instead of trusting any in-memory copy:
+/// - The file is re-read here instead of trusting any in-memory copy:
 /// hand edits made while `cupel` runs are preserved, and a malformed file
 /// is detected and refused rather than silently overwritten.
-/// — The new content goes to a temp file in the SAME directory, then
+/// - The new content goes to a temp file in the same directory, then
 /// renames over the target. rename is atomic only within one filesystem
 /// (a temp_dir on another mount would fail with EXDEV), and atomicity
 /// means a reader sees either the old or the new complete file, never a
 /// torn one.
-/// — The temp file is created 0600 on Unix BEFORE any secret byte lands
+/// - The temp file is created 0600 on Unix before any secret byte lands
 /// on disk; rename carries that mode to the final path, tightening even
 /// a pre-existing 0644 file.
 pub fn save_provider_key(
@@ -271,7 +271,7 @@ pub fn save_provider_key(
     let path = settings_path(home);
 
     // Fresh from disk, not from memory. NotFound is the one io error
-    // that is NOT an error here: first save ever.
+    // that is not an error here: first save ever.
     let mut settings = match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str::<Settings>(&text).map_err(|e| SaveError::Malformed {
             path: path.clone(),
@@ -317,7 +317,7 @@ pub fn save_provider_key(
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        // Owner-only BEFORE any secret byte lands on disk — the mode
+        // Owner-only before any secret byte lands on disk. The mode
         // applies at creation, which is exactly why a fresh tmp file (and
         // not chmod-after-write on the real file) is the safe order.
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -328,8 +328,8 @@ pub fn save_provider_key(
         reason: e.to_string(),
     })?;
 
-    // fsync BEFORE rename: without it a power loss can publish an empty
-    // tmp file over a good settings.json — rename orders metadata, not
+    // fsync before rename: without it a power loss can publish an empty
+    // tmp file over a good settings.json because rename orders metadata, not
     // data. flush would only empty userspace buffers; sync_all reaches
     // the disk.
     let written = file
@@ -358,8 +358,8 @@ pub fn save_provider_key(
 
 /// True when the file exists, parses, and defines a top-level "providers"
 /// key. A pure predicate so the warning policy is testable separately.
-/// Parsed as a generic Value (not Settings): the QUESTION here is only
-/// "did someone put providers ina project file?", not schema validity —
+/// Parsed as a generic Value (not Settings): the question here is only
+/// "did someone put providers in a project file?", not schema validity.
 /// and a malformed files defines nothing, so it stays silent rather than
 /// training users to think project settings are honored.
 fn project_settings_define_providers(path: &Path) -> bool {
@@ -369,9 +369,9 @@ fn project_settings_define_providers(path: &Path) -> bool {
         .is_some_and(|value| value.get("providers").is_some())
 }
 
-/// Keys in a PROJECT settings file are one `git add` away from a leaked
-/// secret, so they are never honored — only warned about. A project file
-/// WITHOUT a providers key stays silent.
+/// Keys in a project settings file are one `git add` away from a leaked
+/// secret, so they are never honored, only warned about. A project file
+/// without a providers key stays silent.
 pub fn warn_project_settings(cwd: &Path) {
     let path = project_settings_path(cwd);
     if project_settings_define_providers(&path) {
@@ -548,7 +548,7 @@ mod tests {
         let home = temp_root("save-perms");
         let path = home.join("settings.json");
         // Pre-existing file with default (usually 0644) permissions: the
-        // rename must carry the tmp file's 0600 over it — the file holds
+        // rename must carry the tmp file's 0600 over it because the file holds
         // secrets now.
         std::fs::write(&path, "{}").unwrap();
         save_provider_key(Some(&home), "anthropic", "sk-a").unwrap();
@@ -580,7 +580,7 @@ mod tests {
         let parsed: Settings =
             serde_json::from_str(r#"{"loopKiller": {"maxRepeats": 5}}"#).unwrap();
         assert_eq!(parsed.loop_killer_max_repeats(), Some(5));
-        // A known field now — it must NOT fall into the extra map.
+        // A known field now, so it must not fall into the extra map.
         assert!(parsed.extra.is_empty());
 
         // Opt-in: absent section = off, explicit 0 = off.
@@ -620,7 +620,7 @@ mod tests {
         home.providers.insert("anthropic".into(), "sk-home".into());
         home.loop_killer = Some(LoopKillerSettings { max_repeats: 3 });
         let mut project = Settings::default();
-        // A hostile or careless project file: both a key AND a config.
+        // A hostile or careless project file: both a key and a config.
         project
             .providers
             .insert("anthropic".into(), "sk-LEAKED".into());
@@ -684,7 +684,7 @@ mod tests {
         let fast = &parsed.presets["fast"];
         assert_eq!(fast.thinking_level.level(), None);
         assert_eq!(fast.prompt.as_deref(), Some("Answer briefly."));
-        // A known field now - it must NOT fall into the extra map.
+        // A known field now - it must not fall into the extra map.
         assert!(parsed.extra.is_empty());
     }
 

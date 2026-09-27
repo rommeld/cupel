@@ -1,6 +1,6 @@
 //! Lifecycle hooks: user-provided executables that run on session events.
 //!
-//! Discovery is file-based, no config parsing: every EXECUTABLE file in
+//! Discovery is file-based, no config parsing: every executable file in
 //! `<root>/hooks/<event>/` runs when that event fires, where the roots are
 //! the cupel home (`~/.cupel`) and the project's `.cupel/`. Installing a
 //! hook = dropping a script in a directory; uninstalling = deleting it.
@@ -10,7 +10,7 @@
 //! Events: `session-start`, `user-prompt-submit`, `stop`, `session-end`.
 //! Each hook receives one JSON payload on stdin and must exit; stdout and
 //! stderr are captured for debug logging, never shown in the UI. Hooks can
-//! observe but not veto — a failing, missing, or slow hook is at most a
+//! observe but not veto. A failing, missing, or slow hook is at most a
 //! `tracing::warn`, never a broken session.
 
 use std::path::{Path, PathBuf};
@@ -63,7 +63,7 @@ struct HookPayload {
 /// background tasks `fire_background` spawns.
 struct HookConfig {
     /// Directories containing `hooks/` trees, in run order (home first,
-    /// project second — same precedence direction as resource roots).
+    /// project second, the same precedence direction as resource roots).
     roots: Vec<PathBuf>,
     session_id: String,
     session_ref: PathBuf,
@@ -74,10 +74,10 @@ struct HookConfig {
 
 /// Discovers and executes hooks for one session.
 ///
-/// `stop` and steering-time events fire in the BACKGROUND (a TUI must not
+/// `stop` and steering-time events fire in the background (a TUI must not
 /// freeze at run end), but strictly ordered: each background dispatch first
 /// awaits the previous one, and [`HookRunner::settle`] lets the prompt path
-/// wait for the chain to drain — so a `stop` hook is guaranteed to have
+/// wait for the chain to drain so a `stop` hook is guaranteed to have
 /// finished before the next prompt's hooks fire.
 pub struct HookRunner {
     config: Arc<HookConfig>,
@@ -100,7 +100,7 @@ impl HookRunner {
         }
     }
 
-    /// Test hook: shrink the per-hook timeout (private — production always
+    /// Test hook: shrink the per-hook timeout (private, since production always
     /// uses the default).
     #[cfg(test)]
     fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -110,7 +110,7 @@ impl HookRunner {
         self
     }
 
-    /// Run every hook for `event` NOW, returning when all finished or timed
+    /// Run every hook for `event` now, returning when all finished or timed
     /// out. Used for prompt-path events where the caller wants the
     /// guarantee (session-start, user-prompt-submit, session-end).
     pub async fn dispatch(&mut self, event: HookEvent<'_>) {
@@ -128,7 +128,7 @@ impl HookRunner {
     pub fn fire_background(&mut self, event: HookEvent<'_>) {
         let config = Arc::clone(&self.config);
         let name = event.name();
-        // The payload is built NOW (borrowing the event's &str), so the
+        // The payload is built now (borrowing the event's &str), so the
         // spawned task is 'static.
         let payload = payload_json(&self.config, &event);
         let previous = self.pending.take();
@@ -175,7 +175,7 @@ async fn dispatch_event(config: &HookConfig, event_name: &str, payload: String) 
 
 /// All executable files in `<root>/hooks/<event>/` across the roots, each
 /// directory's entries sorted by filename for a predictable run order.
-/// Missing directories are simply empty — hooks are optional.
+/// Missing directories are simply empty because hooks are optional.
 fn hook_scripts(roots: &[PathBuf], event_name: &str) -> Vec<PathBuf> {
     let mut scripts = Vec::new();
     for root in roots {
@@ -239,7 +239,7 @@ async fn run_one(script: &Path, payload: &str, cwd: &Path, timeout: Duration) {
         }
     };
 
-    // Write the payload and CLOSE stdin (drop) so `cat`-style hooks see EOF.
+    // Write the payload and close stdin (drop) so `cat`-style hooks see EOF.
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(payload.as_bytes()).await;
         drop(stdin);

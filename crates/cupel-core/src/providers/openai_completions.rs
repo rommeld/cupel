@@ -1,16 +1,16 @@
 //! `OpenAI` Chat Completions API provider.
 //!
-//! This is the oldest and most widely
-//! cloned LLM wire protocol — Fireworks, Groq, Together, `DeepSeek`, and
-//! dozens of other providers expose "OpenAI-compatible" endpoints that speak
-//! it. That ubiquity is also its curse: every clone deviates a little, so
+//! This is the oldest and most widely cloned LLM wire protocol. Fireworks,
+//! Groq, Together, `DeepSeek`, and dozens of other providers expose
+//! "OpenAI-compatible" endpoints that speak it. That ubiquity is also its
+//! curse: every clone deviates a little, so
 //! this file is half protocol and half compatibility knobs.
 //!
 //! Protocol shape: POST `{base_url}/chat/completions` with `stream: true`;
 //! the SSE body carries `ChatCompletionChunk` JSON. Unlike Anthropic's
-//! block-indexed events, chunks have ONE choice whose `delta` may carry
+//! block-indexed events, chunks have one choice whose `delta` may carry
 //! `content`, a reasoning field, and/or `tool_calls` keyed by their own
-//! index — so we accumulate one text block, one thinking block, and a map
+//! index. We accumulate one text block, one thinking block, and a map
 //! of tool-call blocks.
 
 use serde::Deserialize;
@@ -44,7 +44,7 @@ enum ThinkingFormat {
     Openai,
     /// `thinking: {type: enabled|disabled}` plus optional `reasoning_effort`.
     Deepseek,
-    /// OpenRouter's unified `reasoning: {effort: ...}` object — one scale
+    /// OpenRouter's unified `reasoning: {effort: ...}` object with one scale
     /// the router translates for every vendor behind it.
     Openrouter,
 }
@@ -77,7 +77,7 @@ struct CompletionsCompat {
     send_session_affinity_headers: bool,
     thinking_format: ThinkingFormat,
     /// Endpoint requires a Bearer API key. Local servers (ollama,
-    /// llama-server) accept anonymous requests — `requiresApiKey: false`
+    /// llama-server) accept anonymous requests using `requiresApiKey: false`
     /// lets a keyless request proceed without an Authorization header.
     requires_api_key: bool,
     /// Whether the model accepts `temperature` (GPT-6 Astra rejects it;
@@ -172,9 +172,9 @@ async fn run(
     options: &StreamOptions,
     sink: &EventSink,
 ) -> Result<()> {
-    // Compat is parsed BEFORE key resolution: `requiresApiKey: false`
+    // Compat is parsed before key resolution: `requiresApiKey: false`
     // (local servers) turns a missing key from a hard error into a keyless
-    // request. A key that IS present is always sent — ollama ignores it,
+    // request. A key that is present is always sent. Ollama ignores it,
     // and authenticated proxies keep working.
     let compat = completions_compat(model);
     let api_key = match options.api_key.clone() {
@@ -327,7 +327,7 @@ async fn run(
             }
 
             // Clones disagree on the field name; take the first non-empty one.
-            // The field name is stored as the thinking SIGNATURE so replay can
+            // The field name is stored as the thinking signature so replay can
             // write the text back into the same vendor field.
             let reasoning_field = ["reasoning_content", "reasoning", "reasoning_text"]
                 .iter()
@@ -497,7 +497,7 @@ fn parse_usage(usage: &Value, model: &Model, output: &mut AssistantMessage) {
         .and_then(|d| d.get("cache_write_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    // prompt_tokens INCLUDES cached tokens; our unified model separates them.
+    // prompt_tokens includes cached tokens; our unified model separates them.
     output.usage.input = prompt
         .saturating_sub(cache_read)
         .saturating_sub(cache_write);
@@ -633,7 +633,7 @@ fn build_request_body(
                     body["reasoning"] = json!({"effort": mapped_effort(model, level)});
                 } else {
                     // "off": a map entry `off -> null` means the model cannot stop
-                    // thinking — omit the parameter. Any other state send an explicit
+                    // thinking, so omit the parameter. Any other state sends an explicit
                     // effort: the mapped off value, or OpenRouter's own "none".
                     match model.thinking_level_map.as_ref().and_then(|m| m.get("off")) {
                         Some(None) => {}
@@ -750,7 +750,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                 last_was_tool_result = false;
                 let mut message = json!({"role": "assistant"});
 
-                // Assistant text goes as a plain STRING — the standard format.
+                // Assistant text goes as a plain string in the standard format.
                 // Sending block arrays makes some clones (DeepSeek via NIM)
                 // mirror the structure literally in their next answer.
                 let text: String = assistant
@@ -779,7 +779,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                         message["content"] = json!(text);
                     }
                 } else if compat.requires_thinking_as_text {
-                    // No tags around it — tags teach the model to mimic them.
+                    // No tags around it because tags teach the model to mimic them.
                     let mut combined: Vec<String> =
                         thinking.iter().map(|t| t.thinking.clone()).collect();
                     if !text.is_empty() {
@@ -790,7 +790,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                     if !text.is_empty() {
                         message["content"] = json!(text);
                     }
-                    // The signature IS the vendor field name the reasoning
+                    // The signature is the vendor field name the reasoning
                     // came from (see the streaming side); write it back there.
                     if let Some(field) = thinking
                         .first()
@@ -822,7 +822,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                     message["tool_calls"] = Value::Array(tool_calls);
                 }
 
-                // "Either content or tool_calls" — fully empty messages (e.g.
+                // "Either content or tool_calls" means fully empty messages (e.g.
                 // from aborted turns) get skipped.
                 if message.get("content").is_none() && message.get("tool_calls").is_none() {
                     i += 1;
@@ -941,8 +941,8 @@ mod tests {
 
     #[test]
     fn malformed_compat_falls_back_to_all_defaults() {
-        // A type error fails the WHOLE parse, which `.ok()` turns into the
-        // defaults — so a typo'd requiresApiKey silently demands a key
+        // A type error fails the whole parse, which `.ok()` turns into the
+        // defaults, so a typo'd requiresApiKey silently demands a key
         // again. Pinned here so a future change to per-field tolerance is
         // a conscious decision.
         let compat = completions_compat(&model_with_compat(Some(serde_json::json!({
@@ -980,14 +980,14 @@ mod tests {
             ..StreamOptions::default()
         };
         let body = build_request_body(&model, &empty_context(), &options, &compat);
-        // Nested object, NOT the flat OpenAI reasoning_effort field.
+        // Nested object, not the flat OpenAI reasoning_effort field.
         assert_eq!(body["reasoning"], json!({"effort": "medium"}));
         assert!(body.get("reasoning_effort").is_none());
     }
 
     #[test]
     fn openrouter_off_sends_an_explicit_none() {
-        // pi parity: without an `off -> null` map entry, off is an explicit
+        // Without an `off -> null` map entry, off is an explicit
         // {effort: "none"} so OpenRouter disables reasoning server-side.
         let model = openrouter_model(None);
         let compat = completions_compat(&model);

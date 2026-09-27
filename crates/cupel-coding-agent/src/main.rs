@@ -1,4 +1,4 @@
-//! `cupel` — entry point: parse args, wire the agent, pick a frontend.
+//! `cupel` entry point: parse args, wire the agent, pick a frontend.
 //!
 //! Usage:
 //!  cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max
@@ -41,7 +41,7 @@ enum AppError {
 }
 
 fn main() -> std::process::ExitCode {
-    // Build the runtime explicitly instead of `#[tokio::main]` — same thing,
+    // Build the runtime explicitly instead of `#[tokio::main]`. It does the same thing,
     // but you can see the moving part.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -118,8 +118,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                 let mut help = String::from(
                     "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [id]] [--plain]\n\navailable models:\n",
                 );
-                // Built-ins + models.json layers; deliberately NOT the
-                // ollama probe — help must be instant and never touch the
+                // Built-ins + models.json layers; deliberately not the
+                // ollama probe because help must be instant and never touch the
                 // network. Discovered models appear in the TUI's /model.
                 let home = cupel_coding_agent::resources::config_home();
                 let cwd = std::env::current_dir().unwrap_or_default();
@@ -128,7 +128,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                 {
                     help.push_str(&format!("  {} ({})\n", model.id, model.provider.as_str()));
                 }
-                // `print!` PANICS when stdout is a pipe whose reader closed
+                // `print!` panics when stdout is a pipe whose reader closed
                 // early (`cupel --help | head`). Writing explicitly and
                 // ignoring the error is the unsafe-free version of the usual
                 // "reset SIGPIPE" fix.
@@ -158,7 +158,7 @@ fn thinking_level(args: &CliArgs, model: &Model, preset: Option<&Preset>) -> Opt
     }
 }
 
-/// Pick a model + API key from CLI args and the MERGED catalog (built-ins,
+/// Pick a model + API key from CLI args and the merged catalog (built-ins,
 /// models.json layers, discovered local models). Credential knowledge
 /// lives in `providers.rs`, shared with the TUI's `/provider` command;
 /// keys sources at startup: exported env var, then ~/.cupel/settings.json.
@@ -206,8 +206,8 @@ fn select_model(
         return Ok((model.clone(), None));
     }
 
-    // Otherwise, first provider with CLOUD credentials wins, in
-    // catalog order. Bedrock carries no key through StreamOptions — the
+    // Otherwise, first provider with cloud credentials wins, in
+    // catalog order. Bedrock carries no key through StreamOptions because the
     // AWS chain resolves inside the provider. Keyless local models fall
     // through here (no env var, and normally not settings entry), so a
     // configured cloud key always beats a merely-running ollama.
@@ -224,7 +224,7 @@ fn select_model(
             }
         }
     }
-    // Pass 2: no cloud credentials anywhere — a keyless local model
+    // Pass 2: with no cloud credentials anywhere, a keyless local model
     // (discovered ollama, models.json entry) is the last resort before
     // giving up.
     if let Some(model) = catalog.iter().find(|m| providers::is_keyless(m)) {
@@ -240,7 +240,7 @@ fn select_model(
     )
 }
 
-/// Install the tracing subscriber — the ONE place in the whole workspace
+/// Install the tracing subscriber. This is the one place in the whole workspace
 /// that consumes trace data (libraries only emit).
 ///
 /// Opt-in via `RUST_LOG`; without it no subscriber exists and every
@@ -259,8 +259,8 @@ fn init_tracing(interactive: bool) -> Option<std::path::PathBuf> {
     std::env::var("RUST_LOG").ok()?;
     let filter = tracing_subscriber::EnvFilter::from_default_env();
 
-    // FmtSpan::CLOSE prints a line when each span ends, WITH its measured
-    // duration — that's where provider-request and agent-run timing comes
+    // FmtSpan::CLOSE prints a line when each span ends, with its measured
+    // duration. That's where provider-request and agent-run timing comes
     // from (the events themselves don't carry durations).
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -284,26 +284,26 @@ async fn run() -> Result<(), AppError> {
     let args = parse_args(std::env::args().skip(1)).map_err(AppError::Arguments)?;
     let use_plain = args.plain || !std::io::stdout().is_terminal();
     if let Some(log_path) = init_tracing(!use_plain) {
-        // Announced BEFORE the TUI takes the screen; visible in scrollback.
+        // Announced before the TUI takes the screen; visible in scrollback.
         eprintln!("logging to {}", log_path.display());
     }
     let cwd = std::env::current_dir().map_err(AppError::CurrentDirectory)?;
-    // NOTE: the project .cupel/ directory is NOT scaffolded here — the
+    // Note: the project .cupel/ directory is not scaffolded here because the
     // frontends create it on the first agent interaction (resources::
     // ensure_project_dot_cupel), so just launching cupel leaves no trace.
 
     // bootstrap::load reads everything reloadable (context files, prompt
     // templates, model catalog incl. the bounded ollama probe, bash-deny
-    // rules, tools) in one place — the TUI's /hot-reload runs the SAME
+    // rules, tools) in one place. The TUI's /hot-reload runs the same
     // loader, so a reload can never drift from a fresh start.
     let registry = Arc::new(cupel_core::default_registry());
     let home = cupel_coding_agent::resources::config_home();
     let ingredients = cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry).await;
 
-    // No credentials is FATAL only where it is unrecoverable. The TUI can
+    // No credentials is fatal only where it is unrecoverable. The TUI can
     // fix it at runtime (`/provider <name> <api-key>`, `/model`), so it
     // starts anyway on a fallback model and shows the message as its first
-    // notice. Plain mode has no such commands — it keeps the hard error.
+    // notice. Plain mode has no such commands and keeps the hard error.
     // An explicit `--model` that fails stays fatal in both modes: a typo
     // should not silently start something else. The same goes for the
     // default preset's model.
@@ -334,7 +334,7 @@ async fn run() -> Result<(), AppError> {
         Err(e) => return Err(AppError::ModelSelection(e)),
     };
 
-    // Resume keeps the ORIGINAL session id, so the recorder appends to the
+    // Resume keeps the original session id, so the recorder appends to the
     // same transcript file and external consumers see one continuous
     // session. The seeded messages flow into AgentOptions.messages below.
     let (session_id, seeded_messages) = match &args.resume {
@@ -377,7 +377,7 @@ async fn run() -> Result<(), AppError> {
     options.tool_execution = ToolExecutionMode::Parallel;
     options.session_id = Some(session_id);
     options.messages = seeded_messages;
-    // The bash denylist guard AND loop killer ride the agent loop's before_tool_call
+    // The bash denylist guard and loop killer ride the agent loop's before_tool_call
     // veto point (see guard.rs, loop_killer.rs, ...).
     options.hooks = Arc::new(ingredients.hooks);
     let agent = Agent::new(options);
@@ -429,7 +429,7 @@ mod tests {
             Some(ResumeTarget::Id(id)) => assert_eq!(id, "cupel-123"),
             other => panic!("expected Id, got {:?}", other.is_some()),
         }
-        // Followed by another flag: the flag is NOT eaten as an id.
+        // Followed by another flag: the flag is not eaten as an id.
         let args = parse(&["--resume", "--plain"]).unwrap();
         assert!(matches!(args.resume, Some(ResumeTarget::Latest)));
         assert!(args.plain);
@@ -441,9 +441,9 @@ mod tests {
         assert!(parse(&["--model"]).is_err(), "--model needs a value");
     }
 
-    /// A keyless local model (the ollama-discovery shape). Tests use ONLY
+    /// A keyless local model (the ollama-discovery shape). Tests use only
     /// keyless catalogs so pass 1 of select_model (which reads real env
-    /// vars — process-global, unmockable without unsafe) can never match,
+    /// vars, process-global and unmockable without unsafe) can never match,
     /// keeping the tests environment-independent.
     fn keyless_model(id: &str) -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
@@ -478,15 +478,15 @@ mod tests {
         assert!(err.contains("ollama"), "{err}");
     }
 
-    /// A key-REQUIRING model on a provider id with NO env-var mapping:
+    /// A key-requiring model on a provider id with no env-var mapping:
     /// env_api_key returns None on every machine, so only the settings
-    /// tier can supply a key — the test stays environment-independent
+    /// tier can supply a key. The test stays environment-independent
     /// (same trick as keyless_model above, other direction).
     fn cloud_model(id: &str, provider: &str) -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
         model.id = id.to_string();
         model.provider = cupel_core::types::Provider::from(provider);
-        model.compat = None; // no requiresApiKey:false -> a key IS required
+        model.compat = None; // no requiresApiKey:false -> a key is required
         model
     }
 
@@ -512,7 +512,7 @@ mod tests {
         let (model, _) = select_model(&args, &catalog, &settings, Some(&home)).unwrap();
         assert_eq!(model.id, "cloud-1");
 
-        // Logged in: codex wins, and carries NO startup key — the
+        // Logged in: codex wins, and carries no startup key because the
         // api_key hook mints fresh access tokens per request instead.
         let credential = cupel_core::oauth::openai_codex::OAuthCredential {
             access: "a".into(),
@@ -629,7 +629,7 @@ mod tests {
         let (model, _) = select_model(&args, &catalog, &settings, None).unwrap();
         assert_eq!(model.id, "qwen3:8b");
 
-        // Provider AND id must match: a mismatch is an error that names
+        // Provider and id must match: a mismatch is an error that names
         // the preset, not a silent fallback to the auto-pick.
         let settings = with_default_preset("anthropic", "llama3:8b");
         let err = select_model(&parse(&[]).unwrap(), &catalog, &settings, None).unwrap_err();
