@@ -5,6 +5,8 @@
 //! the `App` currently says. No state lives in the widgets that's the
 //! immediate-mode contract that keeps ratatui apps easy to reason about.
 
+use crate::settings::Preset;
+
 use futures_util::StreamExt as _;
 
 use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
@@ -17,12 +19,12 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 
-use super::autocomplete::{Autocomplete, Candidate};
-use super::input::InputState;
-use super::login;
-use super::transcript::{Cell, ToolOutcome, Transcript};
 use crate::commands;
 use crate::modes::SessionMeta;
+use crate::modes::interactive::autocomplete::{Autocomplete, Candidate};
+use crate::modes::interactive::input::InputState;
+use crate::modes::interactive::login;
+use crate::modes::interactive::transcript::{Cell, ToolOutcome, Transcript};
 use crate::session::SessionRecorder;
 
 /// Cumulative token/cost counters across the whole session.
@@ -142,6 +144,18 @@ impl App {
             value: "openai-codex".to_string(),
             is_dir: false,
         }];
+        // `/preset` offers the preset names from settings.json, sorted
+        // (BTreeMap), each with what it switches to.
+        let preset_candidates: Vec<Candidate> = meta
+            .settings
+            .presets
+            .iter()
+            .map(|(name, preset)| Candidate {
+                display: format!("{name}  - {}", preset_summary(preset)),
+                value: name.clone(),
+                is_dir: false,
+            })
+            .collect();
         let logout_candidates = vec![Candidate {
             display: "openai-codex  - remove the stored ChatGPT login".to_string(),
             value: "openai-codex".to_string(),
@@ -157,6 +171,7 @@ impl App {
             .with_commands(command_candidates)
             .with_command_args("model", model_candidates)
             .with_command_args("thinking", thinking_candidates)
+            .with_command_args("preset", preset_candidates)
             .with_command_args("provider", provider_candidates)
             .with_command_args("login", login_candidates)
             .with_command_args("logout", logout_candidates)
@@ -465,9 +480,10 @@ impl App {
     /// returning its replacement (the event loop rebinds); on failure the
     /// OLD app comes back with an error notice, nothing torn down.
     ///
-    /// What carries over in both modes: the current model + thinking level
-    /// (runtime switches survive a reload), session-entered API keys (settings.json
-    /// is re-read from disk), and the mouse-capture state.
+    /// What carries over in both modes: the current model, thinking level,
+    /// and preset prompt (runtime switches survive a reload), session-entered
+    /// API keys (settings.json is re-read from disk), and the mouse-capture
+    /// state.
     pub async fn hot_reload(self, target: ReloadTarget) -> Self {
         let cwd = std::path::PathBuf::from(&self.meta.cwd);
         match target {
@@ -500,7 +516,7 @@ impl App {
 
         let session_id = self.recorder.session_id().to_string();
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
-        // Deliberately the OLD system prompt: the original context stays
+        // Deliberately the old system prompt: the original context stays
         // embedded once; updates travel as the (small) delta message.
         options.system_prompt = state.system_prompt.clone();
         options.tools = ingredients.tools;
@@ -516,8 +532,8 @@ impl App {
         options.session_id = Some(session_id.clone());
         options.messages = seeded;
 
-        // Same id -> the new recorder APPENDS to the same transcript file.
-        // The old recorder is dropped WITHOUT end_session: no session-end
+        // Same id -> the new recorder appends to the same transcript file.
+        // The old recorder is dropped without end_session: no session-end
         // hook fires, because this session is not ending.
         let recorder = crate::session::SessionRecorder::new(
             self.meta.home.clone(),
@@ -534,9 +550,8 @@ impl App {
             models: ingredients.models,
             home: self.meta.home.clone(),
             startup_warning: None,
-            // The NEW files become the baseline, so the next reload diffs
-            // against what this one already applied.
             context_files: ingredients.context_files,
+            base_system_prompt: self.meta.base_system_prompt.clone(),
         };
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
@@ -589,7 +604,14 @@ impl App {
         let ingredients = crate::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
 
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
-        options.system_prompt = ingredients.system_prompt;
+        // A preset prompt survives like the model and thinking level do: it
+        // is whatever the running prompt carries beyond the old base, and it
+        // lands on the fresh base. Without a preset it is empty.
+        let preset_prompt = state
+            .system_prompt
+            .strip_prefix(self.meta.base_system_prompt.as_str())
+            .unwrap_or_default();
+        options.system_prompt = format!("{}{preset_prompt}", ingredients.system_prompt);
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
         // Session-entered keys still win, but the settings tier must come
@@ -624,6 +646,7 @@ impl App {
             // shown once and does not repeat.
             startup_warning: None,
             context_files: ingredients.context_files,
+            base_system_prompt: ingredients.system_prompt,
         };
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
@@ -976,6 +999,50 @@ impl App {
         ));
     }
 
+    /// `/preset`, list the presets from settings.json, or switched to one:
+    /// model (with its key), thinking level, and system prompt together, each
+    /// taking effect with the next request like /model and /thinking.
+    fn handle_preset_command(&mut self, name: &str) {
+        if name.is_empty() {
+            if self.meta.settings.presets.is_empty() {
+                self.notice(
+                    "no presets defined - add a \"model\" section to ~/.cupel/settings.json",
+                );
+                return;
+            }
+            let mut lines = vec!["presets (/presets <name>):".to_string()];
+            for (name, preset) in &self.meta.settings.presets {
+                lines.push(format!("  {name}  - {}", preset_summary(preset)));
+            }
+            self.notice(lines.join("\n"));
+            return;
+        }
+        // Cloned out of self.meta: switch_model below needs `&mut self`,
+        // which a live reference into self.meta.settings would forbid.
+        let Some(preset) = self.meta.settings.presets.get(name).cloned() else {
+            self.notice(format!("unknown preset: {name} (/preset lists them"));
+            return;
+        };
+        let Some(model) = preset.find_model(&self.meta.models).cloned() else {
+            self.notice(format!(
+                "preset {name}: unknown model {:?}/{} (/model lists them)",
+                preset.provider, preset.model
+            ));
+            return;
+        };
+        self.switch_model(model);
+        self.agent.set_thinking_level(preset.thinking_level.level());
+        self.agent
+            .set_system_prompt(crate::system_prompt::with_preset_prompt(
+                &self.meta.base_system_prompt,
+                preset.prompt.as_deref(),
+            ));
+        self.notice(format!(
+            "preset {name} activated: {} (takes effect next request)",
+            preset_summary(&preset)
+        ));
+    }
+
     /// Handle a built-in `/command`. Returns false when the name isn't a
     /// built-in (the caller then tries prompt templates).
     fn handle_builtin(&mut self, rest: &str) -> bool {
@@ -1081,6 +1148,7 @@ impl App {
                 }
             }
             "provider" => self.handle_provider_command(args),
+            "preset" => self.handle_preset_command(args),
             "login" => self.handle_login_command(args),
             "logout" => self.handle_logout_command(args),
             "hot-reload" => {
@@ -1405,6 +1473,22 @@ impl App {
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
     }
+}
+
+/// One line per preset for the `/preset` popup and listening, e.g.
+/// `anthropic/claude-sonnet-5`, thinking high, + prompt`.
+fn preset_summary(preset: &Preset) -> String {
+    let prompt = if preset.prompt.as_deref().is_some_and(|p| !p.is_empty()) {
+        ", + prompt"
+    } else {
+        ""
+    };
+    format!(
+        "{}/{}, thinking {}{prompt}",
+        preset.provider,
+        preset.model,
+        preset.thinking_level.as_str(),
+    )
 }
 
 /// Session-id completion candidates: transcript file stems, newest first

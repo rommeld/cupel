@@ -380,6 +380,7 @@ mod tests {
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
+                base_system_prompt: String::new(),
             },
             recorder,
         )
@@ -486,6 +487,7 @@ mod tests {
                     "no credentials found - use /provider <name> <api-key>".into(),
                 ),
                 context_files: Vec::new(),
+                base_system_prompt: String::new(),
             },
             recorder,
         );
@@ -589,6 +591,7 @@ mod tests {
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
+                base_system_prompt: String::new(),
             },
             recorder,
         );
@@ -643,6 +646,7 @@ mod tests {
                 home: Some(home),
                 startup_warning: None,
                 context_files: Vec::new(),
+                base_system_prompt: String::new(),
             },
             recorder,
         )
@@ -1162,6 +1166,7 @@ mod tests {
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
+                base_system_prompt: String::new(),
             },
             recorder,
         );
@@ -1398,6 +1403,7 @@ mod tests {
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
+                base_system_prompt: String::new(),
             },
             recorder,
         );
@@ -1474,6 +1480,7 @@ mod tests {
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
+                base_system_prompt: String::new(),
             },
             recorder,
         );
@@ -1705,6 +1712,102 @@ mod tests {
         assert!(unknown);
     }
 
+    /// Type a command, close the popup typing opened, and submit it.
+    fn run_command(app: &mut App, command: &str) {
+        type_text(app, command);
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+    }
+
+    fn has_notice(app: &App, needle: &str) -> bool {
+        app.transcript
+            .cells
+            .iter()
+            .any(|c| matches!(c, Cell::Notice { text } if text.contains(needle)))
+    }
+
+    /// test_app with two presets and a known base prompt. Rebuilt through
+    /// App::new, because App::new turns the presets into completions.
+    fn test_app_with_presets() -> App {
+        let mut app = test_app();
+        app.meta.settings = serde_json::from_str(
+            r#"{"model": {
+                "fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                         "thinkingLevel": "low", "prompt": "Answer in one sentence."},
+                "deep": {"provider": "anthropic", "model": "claude-sonnet-5",
+                         "thinkingLevel": "xhigh"}
+            }}"#,
+        )
+        .unwrap();
+        app.meta.base_system_prompt = "BASE".into();
+        App::new(app.agent, app.meta, app.recorder)
+    }
+
+    #[test]
+    fn preset_command_completes_lists_and_switches_everything_at_once() {
+        use cupel_core::types::ThinkingLevel;
+
+        // `/preset ` offers the preset names from settings.json.
+        let mut app = test_app_with_presets();
+        type_text(&mut app, "/preset ");
+        let (rows, _) = app.autocomplete.visible().expect("preset rows");
+        let values: Vec<&str> = rows.iter().map(|r| r.value.as_str()).collect();
+        assert_eq!(values, ["deep", "fast"]);
+
+        // Bare /preset lists what each preset switches to.
+        let mut app = test_app_with_presets();
+        run_command(&mut app, "/preset");
+        assert!(has_notice(
+            &app,
+            "fast  - anthropic/claude-haiku-4-5, thinking low, + prompt"
+        ));
+        assert!(has_notice(
+            &app,
+            "deep  - anthropic/claude-sonnet-5, thinking xhigh"
+        ));
+
+        // One command switches model, thinking level, and prompt.
+        run_command(&mut app, "/preset fast");
+        let state = app.agent.state();
+        assert_eq!(state.model.id, "claude-haiku-4-5");
+        assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
+        assert_eq!(state.system_prompt, "BASE\n\nAnswer in one sentence.");
+        assert_eq!(app.meta.provider, "anthropic");
+        assert!(has_notice(&app, "preset fast activated"));
+
+        // A preset without a prompt REPLACES the old prompt, never stacks.
+        run_command(&mut app, "/preset deep");
+        let state = app.agent.state();
+        assert_eq!(state.model.id, "claude-sonnet-5");
+        assert_eq!(state.thinking_level, Some(ThinkingLevel::XHigh));
+        assert_eq!(state.system_prompt, "BASE");
+
+        // Unknown names and unknown models change nothing.
+        run_command(&mut app, "/preset nope");
+        assert!(has_notice(&app, "unknown preset: nope"));
+        app.meta.settings.presets.insert(
+            "broken".into(),
+            crate::settings::Preset {
+                provider: "anthropic".into(),
+                model: "claude-nope".into(),
+                thinking_level: crate::settings::ThinkingSetting::Max,
+                prompt: None,
+            },
+        );
+        run_command(&mut app, "/preset broken");
+        let state = app.agent.state();
+        assert_eq!(state.model.id, "claude-sonnet-5", "model unchanged");
+        assert_eq!(state.thinking_level, Some(ThinkingLevel::XHigh));
+
+        // Without presets, /preset says where they belong.
+        let mut app = test_app();
+        run_command(&mut app, "/preset");
+        assert!(has_notice(&app, "no presets defined"));
+    }
+
     #[test]
     fn up_down_with_popup_open_move_selection_not_history() {
         let mut app = test_app_in(&autocomplete_cwd("nav"));
@@ -1894,6 +1997,51 @@ mod tests {
         let app = app.hot_reload(ReloadTarget::Current).await;
         assert_eq!(app.agent.api_key(), Some("from-disk"));
         assert_eq!(app.meta.settings.api_key("acme"), Some("from-disk"));
+    }
+
+    #[tokio::test]
+    async fn a_preset_prompt_survives_both_hot_reloads() {
+        use crate::modes::interactive::app::ReloadTarget;
+        let root = std::env::temp_dir().join("cupel-ui-preset-reload");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-current");
+        std::fs::write(
+            root.join("home/settings.json"),
+            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                                   "thinkingLevel": "low", "prompt": "PRESET RULES"}}}"#,
+        )
+        .unwrap();
+        app.meta.settings =
+            crate::settings::load_settings(&root.join("home/settings.json")).unwrap();
+        run_command(&mut app, "/preset fast");
+        // The test app's base prompt is empty: only the preset part is left.
+        assert_eq!(app.agent.state().system_prompt, "\n\nPRESET RULES");
+
+        // In place: the running system prompt is kept as it is.
+        let app = app.hot_reload(ReloadTarget::Current).await;
+        assert_eq!(app.agent.state().system_prompt, "\n\nPRESET RULES");
+
+        // Resume: a FRESH base prompt, the preset prompt still at its end.
+        let dir = app.recorder.sessions_dir().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cupel-old.jsonl"),
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({"version": 1, "sessionId": "cupel-old", "cwd": "x", "model": "test-model", "startedAt": 1_000}),
+                serde_json::to_string(&cupel_agent::AgentMessage::user_text("old prompt")).unwrap(),
+            ),
+        )
+        .unwrap();
+        let app = app
+            .hot_reload(ReloadTarget::Resume("cupel-old".into()))
+            .await;
+        let prompt = app.agent.state().system_prompt;
+        assert!(prompt.starts_with("You are an expert coding assistant"));
+        assert_eq!(
+            prompt.strip_suffix("\n\nPRESET RULES"),
+            Some(app.meta.base_system_prompt.as_str())
+        );
     }
 
     #[tokio::test]

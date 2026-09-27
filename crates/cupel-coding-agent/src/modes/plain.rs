@@ -486,6 +486,7 @@ mod tests {
             "login",
             "logout",
             "thinking",
+            "preset",
             "session-id",
             "hot-reload",
             "usage",
