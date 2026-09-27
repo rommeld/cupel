@@ -238,6 +238,10 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Switch model: /model <id> (no argument lists them)",
     },
     BuiltinCommand {
+        name: "preset",
+        description: "Switch model, thinking level, and prompt to a settings.json",
+    },
+    BuiltinCommand {
         name: "provider",
         description: "Switch provider: /provider <name> [api-key] (key is saved to ~/.cupel/settings.json; no argument lists them)",
     },

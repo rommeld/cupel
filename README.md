@@ -67,6 +67,7 @@ Supported providers: Anthropic, OpenAI (Responses), OpenAI (Codex), AWS Bedrock,
 | `/login openai-codex [device]` | Log in with a ChatGPT Plus/Pro subscription |
 | `/logout openai-codex` | Remove a stored login |
 | `/thinking <level>` | Set thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `/preset <name>`| Switch model, thinking level, and prompt to a preset (no argument lists them) |
 | `/review [path...]` | Bundle the project, specific paths, or a `--diff` into a code-review prompt |
 | `/usage` | Show session token and cost totals |
 | `/session-id` | Show the current session ID and list this project's sessions |
@@ -87,7 +88,7 @@ Changes to `~/.cupel` or `<project>/.cupel` (`AGENTS.md`, prompt templates, `mod
 
 Bare `/hot-reload` updates the running session in place (same ID, history, and transcript): fresh templates, models, deny rules, and tools are swapped in, and `AGENTS.md` changes are appended as a compact `[context update]` diff instead of re-embedding the whole file — only the changed instructions cost tokens. `/hot-reload <session-id>` resumes another session with a full rebuild (fresh system prompt included); session IDs autocomplete from disk.
 
-Model, thinking level, and session-entered keys carry over in both modes.
+Model, thinking level, preset prompt, and session-entered keys carry over in both modes.
 
 ### Providers
 
@@ -101,6 +102,29 @@ Built-in providers:
 - `openrouter` — OpenRouter completions gateway
 
 `/provider` lists every provider, `/provider <name>` switches to it (model and matching key together), and `/provider <name> <api-key>` supplies a key when nothing is exported. Keys live in session memory and are saved to `~/.cupel/settings.json` (atomic write, owner-only permissions); they are never echoed. Resolution order: session key > environment variable > `~/.cupel/settings.json`. Switching models across providers via `/model` re-resolves the key the same way.
+
+### Presets
+
+A preset names a model, a thinking level, and optionally an additional system prompt. Define presets in the `model` section of `setting.json`:
+
+```json
+{
+  "model": {
+    "default": {
+      "provider": "openai-codex",
+      "model": "codex/gpt-6-sol",
+      "thinkingLevel": "high"
+    },
+    "fast": {
+      "provider": "anthropic",
+      "model": "claude-haiku-5",
+      "thinkingLevel": "medium",
+      "prompt": "Answer in at most three sentences."
+    }
+  }
+}
+
+`provider`, `model` (an id from `/model`), and `thinkingLevel` (`off` ... `max`) are required. `prompt` is appended to the system prompt while the preset is active. `/preset fast` switches all three at once. The `default` preset also applies at startup.
 
 ### Local models
 

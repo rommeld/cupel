@@ -137,6 +137,17 @@ impl Agent {
         self.state.lock().expect("agent state lock poisoned").model = model;
     }
 
+    /// Replace the system prompt for runs (the TUI's /preset
+    /// appends a preset prompt to the base prompt). Like set_model, a run
+    /// in flight keeps the prompt it started with: `prompt` copies it
+    /// into the run's context at the start.
+    pub fn set_system_prompt(&self, system_prompt: String) {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .system_prompt = system_prompt;
+    }
+
     /// Swap the fallback API key used by FUTURE runs (the TUI's /provider
     /// and cross-provider /model switches). A run already in flight keeps
     /// the key it was started with; hook-provided keys still win.

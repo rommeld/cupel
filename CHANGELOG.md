@@ -8,7 +8,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - fix: clean up plain-mode bash commands on termination
 - test(bash): tolerate CI scheduling gaps in background output
 - fix(bash): use bash instead of the user's login shell
-- docs: describe cupel without pi branding
 - fix(plain): fail on terminal model errors
 - fix(plain): submit piped stdin as one prompt
 - fix(plain): reject TUI-only commands and filter help
@@ -18,11 +17,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - fix(catalog): drop unsupported Codex GPT-5.4 rows
 - feat(cli): prefer Codex login and tune Sol thinking default
 - test(tui): verify /exit no longer quits
-- Update README.md
-- Update README.md
-- Update README.md
-- Update README.md
-- Update README.md
 
 ## [v0.17.0] - 2026-09-24
 

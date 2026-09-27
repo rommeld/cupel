@@ -91,6 +91,7 @@ mod tests {
             settings: Settings::default(),
             startup_warning: None,
             context_files: Vec::new(),
+            base_system_prompt: String::new(),
         };
         plain::run(Agent::new(options), &meta, recorder)
             .await
