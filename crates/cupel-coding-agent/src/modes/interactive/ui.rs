@@ -26,14 +26,21 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
         .map(|line| transcript::wrap_line(line, inner_width).len())
         .sum::<usize>()
         .clamp(1, 5) as u16;
-    let [transcript_area, input_area, footer_area] = Layout::vertical([
+    let queued_lines = if app.queued.is_empty() {
+        0
+    } else {
+        app.queued.len() as u16 + 1
+    };
+    let [transcript_area, queued_area, input_area, footer_area] = Layout::vertical([
         Constraint::Min(1),
+        Constraint::Length(queued_lines),
         Constraint::Length(input_lines + 2),
         Constraint::Length(2),
     ])
     .areas(frame.area());
 
     render_transcript(frame, app, transcript_area);
+    render_queued(frame, app, queued_area);
     render_input(frame, app, input_area);
     render_footer(frame, app, footer_area);
     // Drawn last so it overdraws the transcript's bottom rows in
@@ -165,6 +172,22 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             marker_area,
         );
     }
+}
+
+/// The queued prompts, oldest first, as "Follow-up:" rows above the input
+/// box: the first line of each prompt, then the key that takes them back.
+fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if app.queued.is_empty() {
+        return;
+    }
+    let lines: Vec<Line<'_>> = app
+        .queued
+        .iter()
+        .map(|text| format!(" Follow-up: {}", text.lines().next().unwrap_or_default()))
+        .chain([" ↳ alt+up to edit all queued messages".to_string()])
+        .map(|line| Line::from(Span::styled(line, theme::CHROME)))
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -1415,26 +1438,94 @@ mod tests {
         assert!(!screen.contains("> [Conversation summary"), "{screen}");
     }
 
+    /// The User cells in transcript order: which prompts reached a run.
+    fn user_prompts(app: &App) -> Vec<&str> {
+        app.transcript
+            .cells
+            .iter()
+            .filter_map(|cell| match cell {
+                Cell::User { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[tokio::test]
-    async fn enter_while_running_keeps_the_text_and_says_why() {
+    async fn enter_while_running_queues_the_prompt() {
         let mut app = test_app();
         app.start_run("build it");
-        type_text(&mut app, "no, the other file");
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-        assert_eq!(app.input.text(), "no, the other file", "the text survives");
-        assert!(
-            app.transcript
-                .cells
-                .iter()
-                .any(|c| matches!(c, Cell::Notice { text } if text.contains("agent is working"))),
-        );
+        submit_paste(&mut app, "no, the other file");
+        assert!(app.input.is_empty(), "the prompt left the input box");
+        assert_eq!(app.queued, ["no, the other file"]);
+        let screen = draw(&mut app, 80, 20);
+        assert!(screen.contains("Follow-up: no, the other file"), "{screen}");
+        assert!(screen.contains("alt+up to edit all queued messages"));
+
+        // The empty registry fails every run at once. The queued prompt
+        // outlives the failed run and starts the next one.
         while app.is_running() {
             let event = app.next_event().await;
             app.on_event(event).await;
         }
+        assert_eq!(user_prompts(&app), ["build it", "no, the other file"]);
+        assert!(app.queued.is_empty());
+        assert!(!draw(&mut app, 80, 20).contains("Follow-up:"));
+    }
+
+    #[tokio::test]
+    async fn alt_up_and_esc_take_queued_prompts_back() {
+        let mut app = test_app();
+        app.start_run("build it");
+        submit_paste(&mut app, "first");
+
+        // Alt+Up: back into the input box, the run keeps going.
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT)));
+        assert_eq!(app.input.text(), "first");
+        assert!(app.queued.is_empty());
+        assert!(app.agent.cancel_token().is_some_and(|t| !t.is_cancelled()));
+
+        // Queue it again plus one more, start a draft, then Esc: all of it
+        // lands in the input box, oldest first, and the run is aborted.
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        submit_paste(&mut app, "second");
+        type_text(&mut app, "draft");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert_eq!(app.input.text(), "first\n\nsecond\n\ndraft");
+        assert!(app.agent.cancel_token().is_some_and(|t| t.is_cancelled()));
+        // Taken back means never sent: the agent's copy is gone as well.
+        assert!(app.agent.take_follow_up().is_none());
+
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+        assert_eq!(user_prompts(&app), ["build it"]);
+    }
+
+    #[tokio::test]
+    async fn a_delivered_prompt_closes_the_turn_before_it() {
+        let mut app = test_app();
+        app.queued.push("next".to_string());
+        app.on_agent_event(Some(AgentEvent::MessageUpdate {
+            event: cupel_core::types::AssistantMessageEvent::TextDelta {
+                content_index: 0,
+                delta: "first answer".into(),
+            },
+        }))
+        .await;
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: cupel_agent::AgentMessage::user_text("next"),
+        }))
+        .await;
+        assert!(app.queued.is_empty(), "delivered, so no longer waiting");
+        assert!(matches!(
+            app.transcript.cells.as_slice(),
+            [Cell::Answer { text: answer }, Cell::User { text: prompt }]
+                if answer == "first answer" && prompt == "next"
+        ));
     }
 
     #[tokio::test]

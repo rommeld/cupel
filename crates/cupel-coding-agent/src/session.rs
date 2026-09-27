@@ -275,9 +275,9 @@ impl SessionRecorder {
             .await;
     }
 
-    /// A steering prompt was queued mid-run: fire its hook in the
+    /// A prompt was queued mid-run: fire its hook now, at submit time, in the
     /// background (the TUI key handler must not block on hook processes).
-    pub fn on_steer(&mut self, prompt: &str) {
+    pub fn on_queued_prompt(&mut self, prompt: &str) {
         self.hooks
             .fire_background(HookEvent::UserPromptSubmit { prompt });
     }
@@ -595,7 +595,7 @@ mod tests {
         let mut rec = SessionRecorder::new(None, &root, "cupel-42", "mock-model");
         rec.before_prompt("hello").await;
         rec.record(&AgentMessage::user_text("hello"));
-        rec.on_steer("steer");
+        rec.on_queued_prompt("queued");
         rec.on_agent_end();
         rec.end_session().await;
         // Nothing anywhere on disk (the temp root stays empty).

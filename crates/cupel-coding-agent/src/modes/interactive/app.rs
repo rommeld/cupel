@@ -50,6 +50,7 @@ pub struct App {
     pub should_quit: bool,
     pub recorder: SessionRecorder,
     pub pending_prompt: Option<String>,
+    pub queued: Vec<String>,
     pub mouse_captured: bool,
     pub mouse_toggle_requested: bool,
     pub session_keys: std::collections::HashMap<String, String>,
@@ -193,7 +194,8 @@ impl App {
             should_quit: false,
             recorder,
             pending_prompt: None,
-            mouse_captured: true, // mod.rs enables capture at startup
+            queued: Vec::new(),
+            mouse_captured: true,
             mouse_toggle_requested: false,
             session_keys: std::collections::HashMap::new(),
             pending_reload: None,
@@ -370,7 +372,7 @@ impl App {
             (KeyCode::Char('c'), true, _) => {
                 if self.is_running() {
                     // First Ctrl-C aborts the run; when idle it quits.
-                    self.agent.abort();
+                    self.abort_run();
                 } else {
                     self.should_quit = true;
                 }
@@ -384,7 +386,7 @@ impl App {
                 self.login = None; // Drop cancels the background task.
                 self.notice("login cancelled");
             }
-            (KeyCode::Esc, ..) if self.is_running() => self.agent.abort(),
+            (KeyCode::Esc, ..) if self.is_running() => self.abort_run(),
             // Esc while idle drops the click selection (harmless no-op
             // when nothing is selected).
             (KeyCode::Esc, ..) => self.selected_cell = None,
@@ -440,6 +442,11 @@ impl App {
             (KeyCode::End, ..) | (KeyCode::Char('e'), true, _) => {
                 self.input.move_end();
                 self.refresh_autocomplete_if_open();
+            }
+            (KeyCode::Up, _, true) => {
+                if self.restore_queued() == 0 {
+                    self.notice("no queued messages to restore");
+                }
             }
             // History recall closes the popup instead of refreshing: a
             // recalled prompt containing `@src/x` must not surprise-open the
@@ -731,7 +738,7 @@ impl App {
     }
 
     /// Enter: dispatch commands locally, expand templates, or send
-    /// the text as a prompt (steering when a run is active).
+    /// the text as a prompt (queued when a run is active).
     fn submit(&mut self) {
         // Enter is consumed by the popup while open, so this is normally a
         // no-op, so no code path can submit with a live session.
@@ -764,7 +771,41 @@ impl App {
         self.send(&trimmed);
     }
 
-    /// Route a prompt to the agent: new run when idle, steering when busy.
+    /// Esc or Ctrl-C while running. The queued prompts go back into the
+    /// input box first. An aborted run never reaches the point where it
+    /// would take them, so they would sit in the agent's queue until the
+    /// next run ends.
+    fn abort_run(&mut self) {
+        self.restore_queued();
+        self.agent.abort();
+    }
+
+    /// Hand every queued prompt back to the input box, oldest first and
+    /// ahead of whatever is typed. Returns how many came back.
+    fn restore_queued(&mut self) -> usize {
+        // Both copies go: a prompt that is back in the input box must not
+        // also reach the model from the agent's queue.
+        self.agent.clear_follow_ups();
+        // mem::take moves the list out and leaves an empty Vec behind.
+        let queued = core::mem::take(&mut self.queued);
+        let restored = queued.len();
+        if restored > 0 {
+            let typed = self.input.text().to_string();
+            let typed_chars = typed.chars().count();
+            let text = queued
+                .into_iter()
+                .chain([typed])
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            // Replacing the whole buffer (char range 0..len) sets the
+            // text and puts the cursor at its end.
+            self.input.replace_range(0, typed_chars, &text);
+        }
+        restored
+    }
+
+    /// Route a prompt to the agent: new run when idle, queued when busy.
     fn send(&mut self, text: &str) {
         // A prompt is headed for the agent the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately not at
@@ -773,8 +814,9 @@ impl App {
         // calling it on every send is fine.
         crate::resources::ensure_project_dot_cupel(std::path::Path::new(&self.meta.cwd));
         if self.is_running() {
-            self.input.insert_str(text);
-            self.notice("the agent is working. esc aborts it; your text stays in the prompt box");
+            self.agent.follow_up(AgentMessage::user_text(text));
+            self.recorder.on_queued_prompt(text);
+            self.queued.push(text.to_string());
         } else {
             // Not started here: the event loop takes it via
             // `take_pending_prompt`, awaits the prompt-path hooks
@@ -1370,19 +1412,27 @@ impl App {
                 }
                 _ => {}
             },
-
-            // Finalized assistant messages come back as events. User
-            // prompts never arrive this way (the loop emits MessageEnd
-            // only for assistant messages); start_run pushes
-            // and records them directly.
+            // Every finalized message arrives here, user prompts included:
+            // the run's own prompt and each queued prompt at the moment the
+            // model receives it.
             AgentEvent::MessageEnd { message } => {
                 // Every finalized message rides into the transcript file.
                 self.recorder.record(&message);
                 if let AgentMessage::Llm(Message::Assistant(assistant)) = &message {
                     self.account_assistant(assistant);
+                } else if let AgentMessage::Llm(Message::User(user)) = &message
+                    && let UserContentBody::Text(text) = &user.content
+                    && let Some(index) = self.queued.iter().position(|queued| queued == text)
+                {
+                    // A queued prompt reached the model. The turn before it is complete,
+                    // so its last prose becomes its answer.
+                    self.queued.remove(index);
+                    self.transcript.promote_final_answer();
+                    self.transcript
+                        .cells
+                        .push(Cell::User { text: text.clone() });
                 }
             }
-
             AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
                 self.transcript.mark_tool_started(&tool_call_id);
             }
@@ -1406,7 +1456,6 @@ impl App {
                     tool_outcome(&result.content, result.details.as_ref(), is_error),
                 );
             }
-
             AgentEvent::CompactionStart { reason } => {
                 let cause = match reason {
                     cupel_agent::CompactionReason::Threshold => "context filling up",
@@ -1438,7 +1487,6 @@ impl App {
                     self.transcript.cells.push(Cell::Summary { text: summary });
                 }
             }
-
             AgentEvent::AutoRetry {
                 attempt,
                 max_attempts,
@@ -1452,14 +1500,9 @@ impl App {
                     ),
                 });
             }
-
             AgentEvent::AgentEnd { .. } => self.finish_run().await,
             AgentEvent::TurnEnd { .. } => {}
         }
-
-        // While following (offset 0) the view sticks to the newest output;
-        // while scrolled up it stays put. Nothing to do either way the
-        // bottom-anchored render handles both.
     }
 
     async fn finish_run(&mut self) {
@@ -1472,6 +1515,16 @@ impl App {
         self.recorder.on_agent_end();
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
+        // A queued prompt can outlive its run. Submitted after the loop's
+        // last look at the queue, or queued behind a run that failed.
+        if let Some(message) = self.agent.take_follow_up() {
+            match self.agent.prompt(vec![message]) {
+                Ok(events) => self.run_events = Some(events),
+                Err(err) => self.transcript.cells.push(Cell::Error {
+                    text: err.to_string(),
+                }),
+            }
+        }
     }
 }
 
