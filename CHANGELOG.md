@@ -3,6 +3,14 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.20.0] - 2026-09-27
+
+- feat(tui): queue prompts typed while the agent works
+- feat(agent): queue follow-up messages while a run is active
+- docs: fix code comments. reduce overhead. make it easier to read
+- version: sync to v0.19.0 from CHANGELOG.md
+- docs(changelog): removed unnecessary bullet points
+
 ## [v0.19.0] - 2026-09-27
 
 - feat: parse model presets from settings.json
