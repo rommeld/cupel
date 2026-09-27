@@ -6,7 +6,7 @@
 //! hands back an [`AgentEventStream`]. The caller consumes events at its
 //! own pace while the internal forwarder keeps [`AgentState`] up to date.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt as _;
@@ -76,13 +76,16 @@ impl AgentOptions {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    #[error("agent is already processing a prompt; wait for completion")]
+    #[error(
+        "agent is already processing a prompt; use follow_up() to queue a message, or wait for completion"
+    )]
     Busy,
 }
 
 pub struct Agent {
     state: Arc<Mutex<AgentState>>,
     tools: Vec<Arc<dyn AgentTool>>,
+    follow_ups: Arc<Mutex<VecDeque<AgentMessage>>>,
     hooks: Arc<dyn AgentHooks>,
     registry: Arc<Registry>,
     api_key: Option<String>,
@@ -109,6 +112,7 @@ impl Agent {
                 error_message: None,
             })),
             tools: options.tools,
+            follow_ups: Arc::new(Mutex::new(VecDeque::new())),
             hooks: options.hooks,
             registry: options.registry,
             api_key: options.api_key,
@@ -229,6 +233,38 @@ impl Agent {
         }
     }
 
+    /// Queue a message to run once the agent would otherwise stop.
+    /// Meant to be called while a run is active. The loop takes one
+    /// queued message each time the model has finished, so every
+    /// message gets its own complete answer.
+    pub fn follow_up(&self, message: AgentMessage) {
+        self.follow_ups
+            .lock()
+            .expect("follow-up queue lock poisoned")
+            .push_back(message);
+    }
+
+    /// Take the oldest queued follow-up out of the queue. A run can end
+    /// with messages still waiting. Queued after the loop's last look at
+    /// the queue, or behind a run that ended in an error. A frontend then
+    /// starts the next run with this message.
+    #[must_use]
+    pub fn take_follow_up(&self) -> Option<AgentMessage> {
+        self.follow_ups
+            .lock()
+            .expect("follow-up queue lock poisoned")
+            .pop_front()
+    }
+
+    /// Drop every queued follow-up. The user took the queued prompts back
+    /// into the editor.
+    pub fn clear_follow_ups(&self) {
+        self.follow_ups
+            .lock()
+            .expect("follow-up queue lock poisoned")
+            .clear();
+    }
+
     /// Cancellation token of the active run, if any (e.g. for a Ctrl-C
     /// handler).
     #[must_use]
@@ -298,6 +334,7 @@ impl Agent {
         // The run's hooks = user hooks + our queue draining.
         let hooks: Arc<dyn AgentHooks> = Arc::new(RunHooks {
             inner: Arc::clone(&self.hooks),
+            follow_ups: Arc::clone(&self.follow_ups),
         });
         let registry = Arc::clone(&self.registry);
 
@@ -373,6 +410,7 @@ async fn forward_events(
 /// Hook decorator that adds the Agent's queue draining on top of user hooks.
 struct RunHooks {
     inner: Arc<dyn AgentHooks>,
+    follow_ups: Arc<Mutex<VecDeque<AgentMessage>>>,
 }
 
 #[async_trait::async_trait]
@@ -380,12 +418,15 @@ impl AgentHooks for RunHooks {
     async fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<Message> {
         self.inner.convert_to_llm(messages).await
     }
+
     async fn transform_context(&self, messages: Vec<AgentMessage>) -> Vec<AgentMessage> {
         self.inner.transform_context(messages).await
     }
+
     async fn api_key(&self, provider: &str) -> Option<String> {
         self.inner.api_key(provider).await
     }
+
     async fn before_tool_call(
         &self,
         assistant: &cupel_core::types::AssistantMessage,
@@ -393,6 +434,7 @@ impl AgentHooks for RunHooks {
     ) -> Option<crate::types::BeforeToolCallResult> {
         self.inner.before_tool_call(assistant, tool_call).await
     }
+
     async fn should_stop_after_turn(
         &self,
         message: &cupel_core::types::AssistantMessage,
@@ -401,5 +443,16 @@ impl AgentHooks for RunHooks {
         self.inner
             .should_stop_after_turn(message, tool_results)
             .await
+    }
+
+    async fn follow_up_messages(&self) -> Vec<AgentMessage> {
+        let mut messages = self.inner.follow_up_messages().await;
+        messages.extend(
+            self.follow_ups
+                .lock()
+                .expect("follow-up queue lock poisoned")
+                .pop_front(),
+        );
+        messages
     }
 }
