@@ -93,6 +93,19 @@ mod tests {
     }
 
     #[test]
+    fn fireworks_default_is_deepseek_v41_flash() {
+        // `/provider fireworks` switches to the first Fireworks row in
+        // catalog order. Pinned here so that removing rows from curation.rs
+        // cannot quietly promote another model to the default. `find` stops
+        // at the first match: the same first-in-order rule /provider uses.
+        let first = builtin_models()
+            .into_iter()
+            .find(|m| m.provider.as_str() == Provider::FIREWORKS)
+            .expect("fireworks rows in catalog");
+        assert_eq!(first.id, "accounts/fireworks/models/deepseek-v4p1-flash");
+    }
+
+    #[test]
     fn referenced_ids_are_present() {
         // cupel-coding-agent tests hardcode these ids (autocomplete,
         // models.json layering); removing them from curation.rs must
@@ -342,13 +355,14 @@ mod tests {
 
     #[test]
     fn fireworks_glm53_rows_keep_the_native_effort_scale() {
-        // GLM 5.3 and 5.3 Flash ride completions like GLM 5.2, but with the
-        // derived low/high/max map instead of the 5.2 remap: low stays low,
+        // GLM 5.3, its fast router, and 5.3 Flash ride completions with the
+        // map derived from models.dev's low/high/max scale: low stays low,
         // off cannot be switched (no reasoning_effort is sent), medium and
         // xhigh clamp to their neighbours at request time, max stays absent.
         let models = builtin_models();
         for id in [
             "accounts/fireworks/models/glm-5p3",
+            "accounts/fireworks/routers/glm-5p3-fast",
             "accounts/fireworks/models/glm-5p3-flash",
         ] {
             let model = models.iter().find(|m| m.id == id).expect(id);
