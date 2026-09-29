@@ -113,19 +113,18 @@ pub struct Limit {
 pub fn parse_wanted(raw: &str, wanted: &[&str]) -> Result<BTreeMap<String, ProviderEntry>, String> {
     let root: serde_json::Value =
         serde_json::from_str(raw).map_err(|error| format!("models.dev JSON: {error}"))?;
-    let providers = root.as_object().ok_or_else(|| {
-        "models.dev JSON: top level is not an
-            object"
-            .to_string()
-    })?;
+    // Keep each message on one source line: a line break inside a string
+    // literal is part of the string, and so is the next line's indentation.
+    // To wrap a long literal, end the line with `\`: Rust then drops the
+    // line break and the next line's leading whitespace.
+    let providers = root
+        .as_object()
+        .ok_or_else(|| "models.dev JSON: top level is not an object".to_string())?;
     let mut out = BTreeMap::new();
     for &id in wanted {
-        let value = providers.get(id).ok_or_else(|| {
-            format!(
-                "models.dev no longer
-                lists provider {id:?}"
-            )
-        })?;
+        let value = providers
+            .get(id)
+            .ok_or_else(|| format!("models.dev no longer lists provider {id:?}"))?;
         let entry: ProviderEntry = serde_json::from_value(value.clone())
             .map_err(|error| format!("models.dev provider {id:?}: {error}"))?;
         out.insert(id.to_string(), entry);
@@ -137,17 +136,10 @@ impl ProviderEntry {
     /// Typed view of one curated model; failures names the exact entry.
     pub fn model(&self, provider_id: &str, model_id: &str) -> Result<ModelEntry, String> {
         let value = self.models.get(model_id).ok_or_else(|| {
-            format!(
-                "models.dev no longer lists {provider_id}/
-                {model_id} - update curation.rs"
-            )
+            format!("models.dev no longer lists {provider_id}/{model_id} - update curation.rs")
         })?;
-        serde_json::from_value(value.clone()).map_err(|error| {
-            format!(
-                "models.dev entry
-                {provider_id}/{model_id}: {error}"
-            )
-        })
+        serde_json::from_value(value.clone())
+            .map_err(|error| format!("models.dev entry {provider_id}/{model_id}: {error}"))
     }
 }
 
@@ -247,7 +239,7 @@ mod tests {
     fn parse_wanted_fails_loudly_on_missing_or_broken_wanted_providers() {
         let missing = parse_wanted(FIXTURE, &["anthropic", "openai"]).unwrap_err();
         assert!(
-            missing.contains("models.dev no longer\n                lists provider \"openai\""),
+            missing.contains("models.dev no longer lists provider \"openai\""),
             "{missing}"
         );
         let broken = parse_wanted(FIXTURE, &["weird-provider"]).unwrap_err();
