@@ -190,7 +190,7 @@ fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER: [&str; 4] = ["◓", "◑", "◒", "◐"];
 
 /// The transcript frame: dim border, dim title, one column of padding so
 /// text never sticks to the border line.
@@ -253,7 +253,7 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
         theme::INPUT_BORDER_IDLE
     };
     let title = if app.is_running() {
-        format!("  {} working", SPINNER[app.frame % SPINNER.len()])
+        format!(" {} working ", SPINNER[app.frame % SPINNER.len()])
     } else {
         " prompt ".to_string()
     };
@@ -1534,9 +1534,9 @@ mod tests {
         // A run against the empty registry errors in the background; until
         // its events are pumped the app counts as running.
         app.start_run("spin");
-        assert!(draw(&mut app, 80, 20).contains("⠋ working"));
+        assert!(draw(&mut app, 80, 20).contains("◓ working"));
         app.tick();
-        assert!(draw(&mut app, 80, 20).contains("⠙ working"));
+        assert!(draw(&mut app, 80, 20).contains("◑ working"));
         while app.is_running() {
             let event = app.next_event().await;
             app.on_event(event).await;

@@ -5,7 +5,7 @@
   "model": {
     "default": {
       "provider": "openai-codex",
-      "model": "codex/gpt-6-sol",
+      "model": "codex/gpt-6.1-sol",
       "thinkingLevel": "xhigh"
     }
   }
