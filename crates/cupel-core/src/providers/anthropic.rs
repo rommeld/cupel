@@ -1276,6 +1276,46 @@ mod tests {
     }
 
     #[test]
+    fn fable5_and_51_use_adaptive_thinking_without_temperature() {
+        for id in ["claude-fable-5", "claude-fable-5-1"] {
+            let model = catalog_model(id);
+            let off = body_for(
+                &model,
+                &StreamOptions {
+                    temperature: Some(0.2),
+                    ..StreamOptions::default()
+                },
+            );
+            assert!(off.get("thinking").is_none(), "{id}: {off}");
+            assert!(off.get("temperature").is_none(), "{id}: {off}");
+
+            for (level, effort) in [
+                (ThinkingLevel::Minimal, "low"),
+                (ThinkingLevel::XHigh, "xhigh"),
+                (ThinkingLevel::Max, "max"),
+            ] {
+                let body = body_for(
+                    &model,
+                    &StreamOptions {
+                        reasoning: Some(level),
+                        ..StreamOptions::default()
+                    },
+                );
+                assert_eq!(
+                    body["thinking"],
+                    json!({"type": "adaptive", "display": "summarized"}),
+                    "{id}: {level:?}"
+                );
+                assert_eq!(
+                    body["output_config"],
+                    json!({"effort": effort}),
+                    "{id}: {level:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn sonnet55_off_sends_between_tools() {
         // `/thinking off` with a temperature set. Sonnet 5.5 answers
         // `disabled` with a 400; its lowest setting is the thinking type

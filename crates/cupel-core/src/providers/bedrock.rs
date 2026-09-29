@@ -997,4 +997,23 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn fable5_and_51_use_adaptive_effort() {
+        for id in [
+            "us.anthropic.claude-fable-5",
+            "us.anthropic.claude-fable-5-1",
+        ] {
+            let model = catalog_model(id);
+            assert_eq!(fields(&model, None), None, "{id}");
+            assert_eq!(
+                fields(&model, Some(ThinkingLevel::XHigh)),
+                Some(json!({
+                    "thinking": {"type": "adaptive", "display": "summarized"},
+                    "output_config": {"effort": "xhigh"},
+                })),
+                "{id}"
+            );
+        }
+    }
 }

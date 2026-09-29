@@ -127,6 +127,48 @@ mod tests {
     }
 
     #[test]
+    fn fable_51_catalog_rows_match_models_dev() {
+        let models = builtin_models();
+        for (id, provider, api, input, output, cached_read) in [
+            (
+                "claude-fable-5-1",
+                Provider::ANTHROPIC,
+                Api::ANTHROPIC_MESSAGES,
+                10.0,
+                50.0,
+                0.25,
+            ),
+            (
+                "us.anthropic.claude-fable-5-1",
+                Provider::AMAZON_BEDROCK,
+                Api::BEDROCK_CONVERSE_STREAM,
+                11.0,
+                55.0,
+                0.275,
+            ),
+        ] {
+            let model = models.iter().find(|m| m.id == id).expect("Fable 5.1 row");
+            assert_eq!(model.provider.as_str(), provider, "{id}");
+            assert_eq!(model.api.as_str(), api, "{id}");
+            assert!((model.cost.input - input).abs() < f64::EPSILON, "{id}");
+            assert!((model.cost.output - output).abs() < f64::EPSILON, "{id}");
+            assert!(
+                (model.cost.cached_read - cached_read).abs() < f64::EPSILON,
+                "{id}"
+            );
+            assert_eq!(model.context_window, 1_000_000, "{id}");
+            assert_eq!(model.max_tokens, 128_000, "{id}");
+            let levels = model.thinking_level_map.as_ref().expect("effort map");
+            assert_eq!(levels.get("off"), Some(&None), "{id}");
+            assert_eq!(levels.get("minimal"), Some(&None), "{id}");
+            assert!(
+                !levels.contains_key("xhigh") && !levels.contains_key("max"),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
     fn every_catalog_model_has_a_registered_provider() {
         // A model whose `api` has no provider would fail at request time;
         // catch it at test time instead.

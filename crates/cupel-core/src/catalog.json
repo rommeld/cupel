@@ -141,6 +141,34 @@
     }
   },
   {
+    "id": "claude-fable-5-1",
+    "name": "Claude Fable 5.1",
+    "api": "anthropic-messages",
+    "provider": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 10.0,
+      "output": 50.0,
+      "cachedRead": 0.25,
+      "cachedWrite": 12.5
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "claude-haiku-4-5",
     "name": "Claude Haiku 4.5",
     "api": "anthropic-messages",
@@ -508,6 +536,30 @@
       "input": 11.0,
       "output": 55.0,
       "cachedRead": 1.1,
+      "cachedWrite": 13.75
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000
+  },
+  {
+    "id": "us.anthropic.claude-fable-5-1",
+    "name": "Claude Fable 5.1 (Bedrock)",
+    "api": "bedrock-converse-stream",
+    "provider": "amazon-bedrock",
+    "baseUrl": "",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 11.0,
+      "output": 55.0,
+      "cachedRead": 0.275,
       "cachedWrite": 13.75
     },
     "contextWindow": 1000000,

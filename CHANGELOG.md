@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.21.1] - 2026-09-29
+
+- feat(catalog): add Claude Fable 5.1 on Anthropic and Bedrock
+- update model catalog
+
 ## [v0.21.0] - 2026-09-29
 
 - fix(loop-killer): keep the veto message on one line

@@ -143,7 +143,7 @@ const fn anthropic(id: &'static str, rename: Option<&'static str>) -> Curated {
 }
 
 /// Claude models that answer `budget_tokens` with a 400 (Sonnet 5,
-/// Opus 5, Opus 5.5, Fable 5): effort levels replace token budgets, and
+/// Opus 5, Opus 5.5, Fable 5/5.1): effort levels replace token budgets, and
 /// `temperature` is rejected too. The level map comes from models.dev's
 /// effort list: a model listed with a toggle keeps "off" (the provider
 /// sends `thinking: {type: "disabled"}`), one without a toggle gets
@@ -269,6 +269,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             anthropic_preserved("claude-opus-5-5"),
             anthropic_adaptive("claude-opus-5"),
             anthropic_adaptive("claude-fable-5"),
+            anthropic_adaptive("claude-fable-5-1"),
             anthropic("claude-haiku-4-5", Some("Claude Haiku 4.5")),
             anthropic("claude-sonnet-4-6", None),
             anthropic("claude-sonnet-4-5", Some("Claude Sonnet 4.5")),
@@ -310,6 +311,11 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             bedrock(
                 "us.anthropic.claude-fable-5",
                 Some("Claude Fable 5 (Bedrock)"),
+                Thinking::FromEffort,
+            ),
+            bedrock(
+                "us.anthropic.claude-fable-5-1",
+                Some("Claude Fable 5.1 (Bedrock)"),
                 Thinking::FromEffort,
             ),
         ],
