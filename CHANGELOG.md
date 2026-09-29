@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.21.2] - 2026-09-29
+
+- add GPT-6.1 Sol to OpenAI model catalog
+
 ## [v0.21.1] - 2026-09-29
 
 - feat(catalog): add Claude Fable 5.1 on Anthropic and Bedrock
