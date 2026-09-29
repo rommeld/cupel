@@ -354,6 +354,38 @@ mod tests {
     }
 
     #[test]
+    fn sonnet55_row_switches_off_with_between_tools() {
+        // Claude Sonnet 5.5 takes the adaptive path like Opus 5.5 (effort,
+        // no temperature, `budget_tokens` is a 400), but `disabled` is a
+        // 400 too: its off is the thinking type `between_tools`, pinned
+        // in curation.rs. Without that entry the provider would send
+        // `disabled`; with a null entry it would leave `thinking` out and
+        // the model would think at its default effort, high.
+        let models = builtin_models();
+        let model = models
+            .iter()
+            .find(|m| m.id == "claude-sonnet-5-5")
+            .expect("claude-sonnet-5-5 in catalog");
+        assert_eq!(model.provider.as_str(), Provider::ANTHROPIC);
+        assert_eq!(
+            model.compat,
+            Some(serde_json::json!({
+                "forceAdaptiveThinking": true,
+                "supportsTemperature": false,
+            }))
+        );
+        // The whole map, not single keys: an extra xhigh or max key would
+        // DISABLE that level.
+        let map = model.thinking_level_map.as_ref().expect("map");
+        assert_eq!(
+            serde_json::to_value(map).expect("map serializes"),
+            serde_json::json!({"minimal": null, "off": "between_tools"})
+        );
+        assert_eq!(model.context_window, 1_000_000);
+        assert_eq!(model.max_tokens, 128_000);
+    }
+
+    #[test]
     fn fireworks_glm53_rows_keep_the_native_effort_scale() {
         // GLM 5.3, its fast router, and 5.3 Flash ride completions with the
         // map derived from models.dev's low/high/max scale: low stays low,

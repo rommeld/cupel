@@ -109,6 +109,18 @@ pub struct CuratedProvider {
 /// Kimi K2.7 Code on OpenRouter is always-thinking.
 const KIMI_K27_CODE_OPENROUTER_THINKING: &[(&str, Option<&str>)] = &[("off", None)];
 
+/// Claude Sonnet 5.5 answers `thinking: {type: "disabled"}` with a 400.
+/// Its lowest setting is the thinking type `between_tools`: no extended
+/// thinking, only short progress notes between tool calls. models.dev
+/// has no field for that, so the map is pinned here instead of derived
+/// from the effort list (which would give off -> null, i.e. `thinking`
+/// left out and the model thinking adaptively at its default effort,
+/// high). "off" names the thinking type the anthropic provider sends,
+/// "minimal" has no effort upstream (null), and low..max keep their own
+/// names (no entry, see models_dev.rs for why xhigh/max must stay absent).
+const SONNET55_THINKING: &[(&str, Option<&str>)] =
+    &[("off", Some("between_tools")), ("minimal", None)];
+
 // Compact row constructors, one per model family, with the same shape the
 // old catalog.rs used (fireworks_anthropic / fireworks_glm52 helpers).
 const fn anthropic(id: &'static str, rename: Option<&'static str>) -> Curated {
@@ -228,6 +240,12 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         cupel_id: Provider::ANTHROPIC,
         models: &[
             anthropic_adaptive("claude-sonnet-5"),
+            // Struct update syntax: every field comes from the adaptive
+            // template (compat, API, base URL), only `thinking` is replaced.
+            Curated {
+                thinking: Thinking::Explicit(SONNET55_THINKING),
+                ..anthropic_adaptive("claude-sonnet-5-5")
+            },
             anthropic_adaptive("claude-opus-5-5"),
             anthropic_adaptive("claude-opus-5"),
             anthropic_adaptive("claude-fable-5"),

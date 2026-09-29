@@ -711,15 +711,20 @@ fn build_request_body(
                 }
             }
             None => {
-                // Explicitly disable thinking unless the model's level map
-                // marks "off" as unsupported (entry present but null).
-                let off_unsupported = model
-                    .thinking_level_map
-                    .as_ref()
-                    .is_some_and(|m| matches!(m.get("off"), Some(None)));
-                if !off_unsupported {
-                    thinking = Some(json!({"type": "disabled"}));
-                }
+                // "off" reads the model's level map like the OpenAI
+                // providers do: no entry sends the classic `disabled`, a
+                // named entry is the thinking type to send instead
+                // (Sonnet 5.5 rejects `disabled`, its off is
+                // `between_tools`), and null means the model cannot be
+                // switched off, so `thinking` is left out entirely.
+                // The type travels alone: `between_tools` answers any
+                // other field (even `display`) with a 400.
+                let off = model.thinking_level_map.as_ref().and_then(|m| m.get("off"));
+                thinking = match off {
+                    None => Some(json!({"type": "disabled"})),
+                    Some(Some(off_type)) => Some(json!({"type": off_type})),
+                    Some(None) => None,
+                };
             }
         }
     }
@@ -1226,6 +1231,58 @@ mod tests {
                     "{id} {level:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn sonnet55_off_sends_between_tools() {
+        // `/thinking off` with a temperature set. Sonnet 5.5 answers
+        // `disabled` with a 400; its lowest setting is the thinking type
+        // `between_tools`, taken from the "off" entry of its level map.
+        // Three more 400s this body must avoid: any field next to the
+        // type (`display` too), an effort above high (no output_config
+        // means the API default, high), and a non-default temperature.
+        let options = StreamOptions {
+            temperature: Some(0.2),
+            ..StreamOptions::default()
+        };
+        let sonnet = catalog_model("claude-sonnet-5-5");
+        let body = body_for(&sonnet, &options);
+        assert_eq!(body["thinking"], json!({"type": "between_tools"}));
+        assert!(body.get("output_config").is_none(), "{body}");
+        assert!(body.get("temperature").is_none(), "{body}");
+    }
+
+    #[test]
+    fn sonnet55_levels_map_to_adaptive_effort() {
+        // Every other level is plain adaptive thinking: Sonnet 5.5 answers
+        // `budget_tokens` with a 400, like Sonnet 5 and Opus 5.5.
+        let sonnet = catalog_model("claude-sonnet-5-5");
+        for (level, effort) in [
+            // No "minimal" effort upstream: the map's null entry falls
+            // back to the provider default, which is "low".
+            (ThinkingLevel::Minimal, "low"),
+            (ThinkingLevel::Low, "low"),
+            (ThinkingLevel::Medium, "medium"),
+            (ThinkingLevel::High, "high"),
+            (ThinkingLevel::XHigh, "xhigh"),
+            (ThinkingLevel::Max, "max"),
+        ] {
+            let options = StreamOptions {
+                reasoning: Some(level),
+                ..StreamOptions::default()
+            };
+            let body = body_for(&sonnet, &options);
+            assert_eq!(
+                body["thinking"],
+                json!({"type": "adaptive", "display": "summarized"}),
+                "{level:?}"
+            );
+            assert_eq!(
+                body["output_config"],
+                json!({"effort": effort}),
+                "{level:?}"
+            );
         }
     }
 }

@@ -27,6 +27,34 @@
     }
   },
   {
+    "id": "claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5",
+    "api": "anthropic-messages",
+    "provider": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "between_tools"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "claude-opus-5-5",
     "name": "Claude Opus 5.5",
     "api": "anthropic-messages",
