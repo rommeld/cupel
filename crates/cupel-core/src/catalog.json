@@ -51,6 +51,7 @@
     "maxTokens": 128000,
     "compat": {
       "forceAdaptiveThinking": true,
+      "prefixMismatchBehavior": "drop_block",
       "supportsTemperature": false
     }
   },
@@ -79,6 +80,7 @@
     "maxTokens": 128000,
     "compat": {
       "forceAdaptiveThinking": true,
+      "prefixMismatchBehavior": "drop_block",
       "supportsTemperature": false
     }
   },

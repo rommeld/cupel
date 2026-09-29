@@ -117,6 +117,8 @@ async fn run_loop(
     // Guard for reactive overflow compaction: at most once per failure
     // episode, or a provider that keeps rejecting would loop forever.
     let mut overflow_compacted = false;
+    // Same guard for stripping stale thinking blocks (see below).
+    let mut thinking_stripped = false;
     // The user may have queued steering input while the previous run wound
     // down; check before the first request.
     let mut pending_messages = hooks.steering_messages().await;
@@ -203,6 +205,28 @@ async fn run_loop(
                     // to normal error handling.
                 }
 
+                // Preserved thinking: a thinking block is only valid in the
+                // conversation that produced it. After cupel edited that
+                // conversation (compaction, a resumed session's new date
+                // line), the provider rejects every replayed block, and
+                // resending the same request fails the same way. Drop the
+                // thinking blocks (text and tool calls stay) and re-request
+                // immediately, once per failure episode. The anthropic
+                // provider avoids this 400 where it can (`drop_block`); this
+                // covers the rest (Sonnet 5.5's `between_tools`, Bedrock).
+                if cupel_core::retry::is_thinking_binding_mismatch(&message)
+                    && !thinking_stripped
+                    && !cancel.is_cancelled()
+                    && strip_thinking_blocks(&mut context)
+                {
+                    tracing::warn!(
+                        "thinking blocks bound to an edited history; retrying without them"
+                    );
+                    thinking_stripped = true;
+                    has_more_tool_calls = true;
+                    continue;
+                }
+
                 // The errored message stays in the transcript for honesty.
                 // transform_messages already drops errored turns from what
                 // goes over the wire, so the replayed request is clean.
@@ -256,6 +280,7 @@ async fn run_loop(
             // A successful response closes the retry/overflow episode.
             retry_attempt = 0;
             overflow_compacted = false;
+            thinking_stripped = false;
 
             let tool_calls: Vec<ToolCall> = message
                 .content
@@ -368,6 +393,27 @@ async fn run_compaction(
             false
         }
     }
+}
+
+/// Remove every thinking block from the assistant turns in `context`;
+/// returns whether there was anything to remove. Only this run's context
+/// changes: the session keeps the blocks, and a later run that trips over
+/// them strips them again.
+fn strip_thinking_blocks(context: &mut AgentContext) -> bool {
+    context
+        .messages
+        .iter_mut()
+        .filter_map(|message| match message {
+            AgentMessage::Llm(Message::Assistant(assistant)) => Some(assistant),
+            _ => None,
+        })
+        .fold(false, |stripped, assistant| {
+            let before = assistant.content.len();
+            assistant
+                .content
+                .retain(|block| !matches!(block, AssistantContent::Thinking(_)));
+            stripped || assistant.content.len() != before
+        })
 }
 
 /// Stream one assistant response. This is the only place `AgentMessage`s are

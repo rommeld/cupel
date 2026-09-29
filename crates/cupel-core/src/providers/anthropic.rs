@@ -32,6 +32,7 @@ use crate::{
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
 const FINE_GRAINED_TOOL_STREAMING_BETA: &str = "fine-grained-tool-streaming-2025-05-14";
+const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
 /// API-specific compatibility knobs, deserialized from `model.compat`.
 /// `#[serde(default)]` on the struct means absent fields use `Default`.
@@ -57,6 +58,14 @@ struct AnthropicCompat {
     /// a session's requests to the same cache shard. Without it requests
     /// still succeed, but prompt-cache hit rates suffer.
     send_session_affinity_headers: bool,
+    /// Preserved thinking (Opus 5.5, Sonnet 5.5): every thinking block is
+    /// bound to the conversation that produced it (system prompt, tools,
+    /// earlier messages). After an edit there (a resumed session's new date
+    /// line, a compaction), the API rejects the replayed block with a 400.
+    /// `"drop_block"` asks it to drop such blocks instead. Sent as
+    /// `thinking.block_binding.prefix_mismatch_behavior`, which only adaptive
+    /// and budget thinking accept, together with the thinking-binding beta.
+    prefix_mismatch_behavior: Option<String>,
 }
 
 impl Default for AnthropicCompat {
@@ -69,6 +78,7 @@ impl Default for AnthropicCompat {
             supports_long_cache_retention: true,
             allow_empty_signature: false,
             send_session_affinity_headers: false,
+            prefix_mismatch_behavior: None,
         }
     }
 }
@@ -208,16 +218,7 @@ async fn run(
         .header("anthropic-version", ANTHROPIC_VERSION)
         .header("accept", "application/json");
 
-    let has_tools = context.tools.as_ref().is_some_and(|t| !t.is_empty());
-    let mut betas: Vec<&str> = Vec::new();
-    // Adaptive-thinking models have interleaved thinking built in -> skip beta.
-    if !compat.force_adaptive_thinking {
-        betas.push(INTERLEAVED_THINKING_BETA);
-    }
-    // Only needed when the endpoint can't stream tool input eagerly.
-    if has_tools && !compat.supports_eager_tool_input_streaming {
-        betas.push(FINE_GRAINED_TOOL_STREAMING_BETA);
-    }
+    let betas = request_betas(&compat, context, &body);
 
     if is_oauth {
         // OAuth: Bearer auth + Claude Code identity headers.
@@ -606,6 +607,27 @@ async fn run(
     Ok(())
 }
 
+/// The `anthropic-beta` values this request needs; OAuth adds its own on
+/// top. A free function (not inline in `run`) so tests can check it.
+fn request_betas(compat: &AnthropicCompat, context: &Context, body: &Value) -> Vec<&'static str> {
+    let has_tools = context.tools.as_ref().is_some_and(|t| !t.is_empty());
+    let mut betas = Vec::new();
+    // Adaptive-thinking models have interleaved thinking built in -> skip beta.
+    if !compat.force_adaptive_thinking {
+        betas.push(INTERLEAVED_THINKING_BETA);
+    }
+    // Only needed when the endpoint can't stream tool input eagerly.
+    if has_tools && !compat.supports_eager_tool_input_streaming {
+        betas.push(FINE_GRAINED_TOOL_STREAMING_BETA);
+    }
+    // `block_binding` without this header is a 400, so the header follows
+    // the finished body instead of the compat flag.
+    if body.pointer("/thinking/block_binding").is_some() {
+        betas.push(THINKING_BINDING_BETA);
+    }
+    betas
+}
+
 /// Anthropic doesn't send `total_tokens`; compute it from the components,
 /// then derive cost from the model's pricing.
 fn finalize_usage(model: &Model, output: &mut AssistantMessage) {
@@ -727,6 +749,17 @@ fn build_request_body(
                 };
             }
         }
+    }
+
+    // Preserved thinking (see compat): only adaptive and budget thinking
+    // take `block_binding`. `between_tools` answers it with a 400, and an
+    // omitted `thinking` has nothing to attach it to; for those requests
+    // the agent loop strips the stale blocks and retries instead.
+    if let Some(behavior) = &compat.prefix_mismatch_behavior
+        && let Some(config) = &mut thinking
+        && matches!(config["type"].as_str(), Some("adaptive" | "enabled"))
+    {
+        config["block_binding"] = json!({"prefix_mismatch_behavior": behavior});
     }
 
     let mut body = json!({
@@ -1088,7 +1121,9 @@ fn convert_tools(
 mod tests {
     use serde_json::{Value, json};
 
-    use crate::providers::anthropic::{anthropic_compat, build_request_body};
+    use crate::providers::anthropic::{
+        THINKING_BINDING_BETA, anthropic_compat, build_request_body, request_betas,
+    };
     use crate::types::{
         Context, Message, Model, StreamOptions, ThinkingLevel, UserContentBody, UserMessage, now_ms,
     };
@@ -1161,10 +1196,16 @@ mod tests {
                 ..StreamOptions::default()
             };
             let body = body_for(&opus, &options);
-            // Adaptive, never `enabled` with a `budget_tokens`.
+            // Adaptive, never `enabled` with a `budget_tokens`. The
+            // block_binding comes from preserved thinking (see
+            // preserved_thinking_binds_adaptive_requests_only).
             assert_eq!(
                 body["thinking"],
-                json!({"type": "adaptive", "display": "summarized"}),
+                json!({
+                    "type": "adaptive",
+                    "display": "summarized",
+                    "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+                }),
                 "{level:?}"
             );
             assert_eq!(
@@ -1275,7 +1316,11 @@ mod tests {
             let body = body_for(&sonnet, &options);
             assert_eq!(
                 body["thinking"],
-                json!({"type": "adaptive", "display": "summarized"}),
+                json!({
+                    "type": "adaptive",
+                    "display": "summarized",
+                    "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+                }),
                 "{level:?}"
             );
             assert_eq!(
@@ -1284,5 +1329,44 @@ mod tests {
                 "{level:?}"
             );
         }
+    }
+
+    #[test]
+    fn preserved_thinking_binds_adaptive_requests_only() {
+        // Opus 5.5 and Sonnet 5.5 run the preserved-thinking check, so
+        // their adaptive requests ask the API to drop blocks that a history
+        // edit invalidated, plus the beta header that field needs (the
+        // field without the header is a 400 of its own).
+        let medium = StreamOptions {
+            reasoning: Some(ThinkingLevel::Medium),
+            ..StreamOptions::default()
+        };
+        for id in ["claude-opus-5-5", "claude-sonnet-5-5"] {
+            let model = catalog_model(id);
+            let body = body_for(&model, &medium);
+            assert_eq!(
+                body["thinking"]["block_binding"],
+                json!({"prefix_mismatch_behavior": "drop_block"}),
+                "{id}"
+            );
+            let betas = request_betas(&anthropic_compat(&model), &hello(), &body);
+            assert!(betas.contains(&THINKING_BINDING_BETA), "{id}: {betas:?}");
+        }
+
+        // Off never carries it: `between_tools` rejects the field (Sonnet
+        // 5.5), and an omitted `thinking` has no object to put it in (Opus
+        // 5.5). No field, no header; the agent loop covers these requests.
+        for id in ["claude-opus-5-5", "claude-sonnet-5-5"] {
+            let model = catalog_model(id);
+            let body = body_for(&model, &StreamOptions::default());
+            assert!(body.pointer("/thinking/block_binding").is_none(), "{id}");
+            let betas = request_betas(&anthropic_compat(&model), &hello(), &body);
+            assert!(!betas.contains(&THINKING_BINDING_BETA), "{id}: {betas:?}");
+        }
+
+        // Models without the check keep their plain adaptive request.
+        let sonnet5 = catalog_model("claude-sonnet-5");
+        let body = body_for(&sonnet5, &medium);
+        assert!(body.pointer("/thinking/block_binding").is_none(), "{body}");
     }
 }

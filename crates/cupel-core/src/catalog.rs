@@ -301,6 +301,7 @@ mod tests {
         // `budget_tokens` with a 400 at every effort level. The row must
         // take the adaptive path (effort, no temperature) and pin "off"
         // to null, so the provider omits `thinking` instead of disabling it.
+        // It also runs the preserved-thinking check: drop, don't reject.
         let models = builtin_models();
         let model = models
             .iter()
@@ -312,6 +313,7 @@ mod tests {
             Some(serde_json::json!({
                 "forceAdaptiveThinking": true,
                 "supportsTemperature": false,
+                "prefixMismatchBehavior": "drop_block",
             }))
         );
         let map = model.thinking_level_map.as_ref().expect("map");
@@ -360,7 +362,8 @@ mod tests {
         // 400 too: its off is the thinking type `between_tools`, pinned
         // in curation.rs. Without that entry the provider would send
         // `disabled`; with a null entry it would leave `thinking` out and
-        // the model would think at its default effort, high.
+        // the model would think at its default effort, high. Like Opus 5.5
+        // it runs the preserved-thinking check: drop, don't reject.
         let models = builtin_models();
         let model = models
             .iter()
@@ -372,6 +375,7 @@ mod tests {
             Some(serde_json::json!({
                 "forceAdaptiveThinking": true,
                 "supportsTemperature": false,
+                "prefixMismatchBehavior": "drop_block",
             }))
         );
         // The whole map, not single keys: an extra xhigh or max key would
