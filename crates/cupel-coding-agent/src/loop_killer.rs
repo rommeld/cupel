@@ -71,13 +71,15 @@ impl LoopKiller {
             state.seen
         };
         (seen > limit).then(|| {
+            // Every wrapped line ends in ` \`. A bare line break inside a
+            // string literal stays in the text, plus the next line's
+            // indentation; a `\` directly before the break drops both. The
+            // space before `\` is what keeps two words apart.
             format!(
-                "Loop killer: this exact call ({} with identical arguments) has now
-                been \
+                "Loop killer: this exact call ({} with identical arguments) has now been \
                 requested {seen} times in a row; settings allow {limit} repeats \
                 (loopKiller.maxRepeats). Repeating it will keep producing the same \
-                result. Take a DIFFERENT approach: change the arguments, use another
-                \
+                result. Take a DIFFERENT approach: change the arguments, use another \
                 tool, work with what you already learned, or ask user how to \
                 proceed.",
                 tool_call.name
@@ -106,6 +108,9 @@ mod tests {
         assert!(killer.note_call(&c).is_none());
         let reason = killer.note_call(&c).expect("third identical call blocks");
         assert!(reason.contains("Loop killer"), "{reason}");
+        // One paragraph, no line breaks. `{reason:?}` (Debug) prints the
+        // string escaped, so a stray line break shows up as `\n`.
+        assert!(!reason.contains('\n'), "{reason:?}");
         assert!(
             killer.note_call(&c).is_some(),
             "stays blocked while hammering"
