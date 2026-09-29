@@ -93,6 +93,19 @@ mod tests {
     }
 
     #[test]
+    fn fireworks_default_is_deepseek_v41_flash() {
+        // `/provider fireworks` switches to the first Fireworks row in
+        // catalog order. Pinned here so that removing rows from curation.rs
+        // cannot quietly promote another model to the default. `find` stops
+        // at the first match: the same first-in-order rule /provider uses.
+        let first = builtin_models()
+            .into_iter()
+            .find(|m| m.provider.as_str() == Provider::FIREWORKS)
+            .expect("fireworks rows in catalog");
+        assert_eq!(first.id, "accounts/fireworks/models/deepseek-v4p1-flash");
+    }
+
+    #[test]
     fn referenced_ids_are_present() {
         // cupel-coding-agent tests hardcode these ids (autocomplete,
         // models.json layering); removing them from curation.rs must
@@ -288,6 +301,7 @@ mod tests {
         // `budget_tokens` with a 400 at every effort level. The row must
         // take the adaptive path (effort, no temperature) and pin "off"
         // to null, so the provider omits `thinking` instead of disabling it.
+        // It also runs the preserved-thinking check: drop, don't reject.
         let models = builtin_models();
         let model = models
             .iter()
@@ -299,6 +313,7 @@ mod tests {
             Some(serde_json::json!({
                 "forceAdaptiveThinking": true,
                 "supportsTemperature": false,
+                "prefixMismatchBehavior": "drop_block",
             }))
         );
         let map = model.thinking_level_map.as_ref().expect("map");
@@ -341,14 +356,49 @@ mod tests {
     }
 
     #[test]
+    fn sonnet55_row_switches_off_with_between_tools() {
+        // Claude Sonnet 5.5 takes the adaptive path like Opus 5.5 (effort,
+        // no temperature, `budget_tokens` is a 400), but `disabled` is a
+        // 400 too: its off is the thinking type `between_tools`, pinned
+        // in curation.rs. Without that entry the provider would send
+        // `disabled`; with a null entry it would leave `thinking` out and
+        // the model would think at its default effort, high. Like Opus 5.5
+        // it runs the preserved-thinking check: drop, don't reject.
+        let models = builtin_models();
+        let model = models
+            .iter()
+            .find(|m| m.id == "claude-sonnet-5-5")
+            .expect("claude-sonnet-5-5 in catalog");
+        assert_eq!(model.provider.as_str(), Provider::ANTHROPIC);
+        assert_eq!(
+            model.compat,
+            Some(serde_json::json!({
+                "forceAdaptiveThinking": true,
+                "supportsTemperature": false,
+                "prefixMismatchBehavior": "drop_block",
+            }))
+        );
+        // The whole map, not single keys: an extra xhigh or max key would
+        // DISABLE that level.
+        let map = model.thinking_level_map.as_ref().expect("map");
+        assert_eq!(
+            serde_json::to_value(map).expect("map serializes"),
+            serde_json::json!({"minimal": null, "off": "between_tools"})
+        );
+        assert_eq!(model.context_window, 1_000_000);
+        assert_eq!(model.max_tokens, 128_000);
+    }
+
+    #[test]
     fn fireworks_glm53_rows_keep_the_native_effort_scale() {
-        // GLM 5.3 and 5.3 Flash ride completions like GLM 5.2, but with the
-        // derived low/high/max map instead of the 5.2 remap: low stays low,
+        // GLM 5.3, its fast router, and 5.3 Flash ride completions with the
+        // map derived from models.dev's low/high/max scale: low stays low,
         // off cannot be switched (no reasoning_effort is sent), medium and
         // xhigh clamp to their neighbours at request time, max stays absent.
         let models = builtin_models();
         for id in [
             "accounts/fireworks/models/glm-5p3",
+            "accounts/fireworks/routers/glm-5p3-fast",
             "accounts/fireworks/models/glm-5p3-flash",
         ] {
             let model = models.iter().find(|m| m.id == id).expect(id);

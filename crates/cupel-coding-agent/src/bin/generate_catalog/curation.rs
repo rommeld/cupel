@@ -35,7 +35,8 @@ pub enum Thinking {
     Budget,
     /// Derive from models.dev effort values (models_dev.rs).
     FromEffort,
-    /// Pin an explicit map for scales cupel must remap (GLM 5.2).
+    /// Pin an explicit map where deriving one from models.dev would be
+    /// wrong (e.g. Kimi K2.7 Code on OpenRouter cannot switch thinking off).
     Explicit(&'static [(&'static str, Option<&'static str>)]),
 }
 
@@ -56,6 +57,7 @@ pub enum Compat {
     FireworksAnthropic,
     FireworksCompletions,
     AdaptiveAnthropic,
+    PreservedThinkingAnthropic,
     OpenrouterCompletions,
 }
 
@@ -76,6 +78,11 @@ impl Compat {
             Self::AdaptiveAnthropic => Some(serde_json::json!({
                 "forceAdaptiveThinking": true,
                 "supportsTemperature": false,
+            })),
+            Self::PreservedThinkingAnthropic => Some(serde_json::json!({
+                "forceAdaptiveThinking": true,
+                "supportsTemperature": false,
+                "prefixMismatchBehavior": "drop_block",
             })),
             Self::OpenrouterCompletions => Some(serde_json::json!({
                 "thinkingFormat": "openrouter",
@@ -105,20 +112,21 @@ pub struct CuratedProvider {
     pub models: &'static [Curated],
 }
 
-/// GLM 5.2 on Fireworks: cupel levels remapped onto Fireworks' effort
-/// scale: off maps to none, minimal is unsupported, low /medium collapse
-/// to high. The xhigh entry is dead under cupel's key-absence rule
-/// (model.rs) but kept verbatim from the old catalog.
-const GLM52_THINKING: &[(&str, Option<&str>)] = &[
-    ("off", Some("none")),
-    ("minimal", None),
-    ("low", Some("high")),
-    ("medium", Some("high")),
-    ("xhigh", Some("max")),
-];
-
 /// Kimi K2.7 Code on OpenRouter is always-thinking.
 const KIMI_K27_CODE_OPENROUTER_THINKING: &[(&str, Option<&str>)] = &[("off", None)];
+
+/// Claude Sonnet 5.5 answers `thinking: {type: "disabled"}` with a 400.
+/// Its lowest setting is the thinking type `between_tools`: no extended
+/// thinking, only short progress notes between tool calls. models.dev
+/// has no field for that, so the map is pinned here instead of derived
+/// from the effort list (which would give off -> null, i.e. `thinking`
+/// left out and the model thinking adaptively at its default effort,
+/// high). "off" names the thinking type the provider sends (anthropic and
+/// bedrock), "minimal" has no effort upstream (null), and low..max keep
+/// their own names (no entry, see models_dev.rs for why xhigh/max must
+/// stay absent).
+const SONNET55_THINKING: &[(&str, Option<&str>)] =
+    &[("off", Some("between_tools")), ("minimal", None)];
 
 // Compact row constructors, one per model family, with the same shape the
 // old catalog.rs used (fireworks_anthropic / fireworks_glm52 helpers).
@@ -149,6 +157,19 @@ const fn anthropic_adaptive(id: &'static str) -> Curated {
         thinking: Thinking::FromEffort,
         compat: Compat::AdaptiveAnthropic,
         window: Window::ModelsDev,
+    }
+}
+
+/// Adaptive Claude models that run the preserved-thinking check (Opus 5.5,
+/// Sonnet 5.5): a thinking block is only valid in the unchanged
+/// conversation that produced it. Accounts created on or after 2026-08-31
+/// get a 400 for a replayed block after an edit, and cupel edits history
+/// (compaction, the date line of a resumed session). "drop_block" makes
+/// the API drop such blocks instead; see the anthropic provider.
+const fn anthropic_preserved(id: &'static str) -> Curated {
+    Curated {
+        compat: Compat::PreservedThinkingAnthropic,
+        ..anthropic_adaptive(id)
     }
 }
 
@@ -239,7 +260,13 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         cupel_id: Provider::ANTHROPIC,
         models: &[
             anthropic_adaptive("claude-sonnet-5"),
-            anthropic_adaptive("claude-opus-5-5"),
+            // Struct update syntax: every field comes from the preserved
+            // template (compat, API, base URL), only `thinking` is replaced.
+            Curated {
+                thinking: Thinking::Explicit(SONNET55_THINKING),
+                ..anthropic_preserved("claude-sonnet-5-5")
+            },
+            anthropic_preserved("claude-opus-5-5"),
             anthropic_adaptive("claude-opus-5"),
             anthropic_adaptive("claude-fable-5"),
             anthropic("claude-haiku-4-5", Some("Claude Haiku 4.5")),
@@ -273,6 +300,13 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 Some("Claude Sonnet 5 (Bedrock)"),
                 Thinking::FromEffort,
             ),
+            // models.dev lists Sonnet 5.5 only as the global cross-region
+            // profile so far; its off switch is the same as on the API.
+            bedrock(
+                "global.anthropic.claude-sonnet-5-5",
+                Some("Claude Sonnet 5.5 (Bedrock)"),
+                Thinking::Explicit(SONNET55_THINKING),
+            ),
             bedrock(
                 "us.anthropic.claude-fable-5",
                 Some("Claude Fable 5 (Bedrock)"),
@@ -284,23 +318,18 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models_dev_id: "fireworks-ai",
         cupel_id: Provider::FIREWORKS,
         models: &[
-            fireworks_anthropic("accounts/fireworks/models/kimi-k2p7-code"),
-            fireworks_anthropic("accounts/fireworks/models/deepseek-v4-flash-0731"),
-            fireworks_anthropic("accounts/fireworks/models/deepseek-v4-pro-0813"),
-            fireworks_anthropic("accounts/fireworks/models/kimi-k2p6"),
+            // First row = the `/provider fireworks` default.
+            fireworks_anthropic("accounts/fireworks/models/deepseek-v4p1-flash"),
             fireworks_anthropic("accounts/fireworks/models/minimax-m3"),
-            fireworks_anthropic("accounts/fireworks/models/qwen3p7-plus"),
+            fireworks_anthropic("accounts/fireworks/models/qwen3p8-max"),
             fireworks_anthropic("accounts/fireworks/models/kimi-k3"),
             fireworks_anthropic("accounts/fireworks/routers/kimi-k3-fast"),
-            fireworks_completions(
-                "accounts/fireworks/models/glm-5p2",
-                Thinking::Explicit(GLM52_THINKING),
-            ),
-            fireworks_completions(
-                "accounts/fireworks/routers/glm-5p2-fast",
-                Thinking::Explicit(GLM52_THINKING),
-            ),
             fireworks_completions("accounts/fireworks/models/glm-5p3", Thinking::FromEffort),
+            // The fast router serves GLM 5.3 and lists the same effort scale.
+            fireworks_completions(
+                "accounts/fireworks/routers/glm-5p3-fast",
+                Thinking::FromEffort,
+            ),
             fireworks_completions(
                 "accounts/fireworks/models/glm-5p3-flash",
                 Thinking::FromEffort,

@@ -341,9 +341,9 @@ mod tests {
 
     #[test]
     fn glm53_shaped_effort_keeps_low_and_max_and_disables_the_rest() {
-        // GLM 5.3 (OpenRouter and Fireworks): low/high/max, no toggle. The
-        // shape the GLM 5.2 remap must not be reused for: low keeps its own
-        // name, off cannot be switched, medium/xhigh clamp at request time.
+        // GLM 5.3 (OpenRouter and Fireworks): low/high/max, no toggle. Low
+        // keeps its own name, off cannot be switched, medium/xhigh clamp at
+        // request time.
         let options = [effort(&["low", "high", "max"])];
         let map = thinking_level_map_from_effort(&options).expect("map derived");
         assert_eq!(

@@ -27,6 +27,35 @@
     }
   },
   {
+    "id": "claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5",
+    "api": "anthropic-messages",
+    "provider": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "between_tools"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "prefixMismatchBehavior": "drop_block",
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "claude-opus-5-5",
     "name": "Claude Opus 5.5",
     "api": "anthropic-messages",
@@ -51,6 +80,7 @@
     "maxTokens": 128000,
     "compat": {
       "forceAdaptiveThinking": true,
+      "prefixMismatchBehavior": "drop_block",
       "supportsTemperature": false
     }
   },
@@ -436,6 +466,30 @@
     "maxTokens": 128000
   },
   {
+    "id": "global.anthropic.claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5 (Bedrock)",
+    "api": "bedrock-converse-stream",
+    "provider": "amazon-bedrock",
+    "baseUrl": "",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "between_tools"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000
+  },
+  {
     "id": "us.anthropic.claude-fable-5",
     "name": "Claude Fable 5 (Bedrock)",
     "api": "bedrock-converse-stream",
@@ -460,8 +514,8 @@
     "maxTokens": 128000
   },
   {
-    "id": "accounts/fireworks/models/kimi-k2p7-code",
-    "name": "Kimi K2.7 Code",
+    "id": "accounts/fireworks/models/deepseek-v4p1-flash",
+    "name": "DeepSeek V4.1 Flash",
     "api": "anthropic-messages",
     "provider": "fireworks",
     "baseUrl": "https://api.fireworks.ai/inference",
@@ -469,31 +523,6 @@
     "input": [
       "text",
       "image"
-    ],
-    "cost": {
-      "input": 0.95,
-      "output": 4.0,
-      "cachedRead": 0.19,
-      "cachedWrite": 0.0
-    },
-    "contextWindow": 262000,
-    "maxTokens": 262000,
-    "compat": {
-      "sendSessionAffinityHeaders": true,
-      "supportsCacheControlOnTools": false,
-      "supportsEagerToolInputStreaming": false,
-      "supportsLongCacheRetention": false
-    }
-  },
-  {
-    "id": "accounts/fireworks/models/deepseek-v4-flash-0731",
-    "name": "DeepSeek V4 Flash 0731",
-    "api": "anthropic-messages",
-    "provider": "fireworks",
-    "baseUrl": "https://api.fireworks.ai/inference",
-    "reasoning": true,
-    "input": [
-      "text"
     ],
     "cost": {
       "input": 0.22,
@@ -503,57 +532,6 @@
     },
     "contextWindow": 1000000,
     "maxTokens": 384000,
-    "compat": {
-      "sendSessionAffinityHeaders": true,
-      "supportsCacheControlOnTools": false,
-      "supportsEagerToolInputStreaming": false,
-      "supportsLongCacheRetention": false
-    }
-  },
-  {
-    "id": "accounts/fireworks/models/deepseek-v4-pro-0813",
-    "name": "DeepSeek V4 Pro 0813",
-    "api": "anthropic-messages",
-    "provider": "fireworks",
-    "baseUrl": "https://api.fireworks.ai/inference",
-    "reasoning": true,
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 1.32,
-      "output": 3.96,
-      "cachedRead": 0.044,
-      "cachedWrite": 0.0
-    },
-    "contextWindow": 1000000,
-    "maxTokens": 384000,
-    "compat": {
-      "sendSessionAffinityHeaders": true,
-      "supportsCacheControlOnTools": false,
-      "supportsEagerToolInputStreaming": false,
-      "supportsLongCacheRetention": false
-    }
-  },
-  {
-    "id": "accounts/fireworks/models/kimi-k2p6",
-    "name": "Kimi K2.6",
-    "api": "anthropic-messages",
-    "provider": "fireworks",
-    "baseUrl": "https://api.fireworks.ai/inference",
-    "reasoning": true,
-    "input": [
-      "text",
-      "image"
-    ],
-    "cost": {
-      "input": 0.95,
-      "output": 4.0,
-      "cachedRead": 0.16,
-      "cachedWrite": 0.0
-    },
-    "contextWindow": 262000,
-    "maxTokens": 262000,
     "compat": {
       "sendSessionAffinityHeaders": true,
       "supportsCacheControlOnTools": false,
@@ -587,8 +565,8 @@
     }
   },
   {
-    "id": "accounts/fireworks/models/qwen3p7-plus",
-    "name": "Qwen 3.7 Plus",
+    "id": "accounts/fireworks/models/qwen3p8-max",
+    "name": "Qwen3.8 Max",
     "api": "anthropic-messages",
     "provider": "fireworks",
     "baseUrl": "https://api.fireworks.ai/inference",
@@ -598,13 +576,13 @@
       "image"
     ],
     "cost": {
-      "input": 0.4,
-      "output": 1.6,
-      "cachedRead": 0.08,
+      "input": 2.0,
+      "output": 6.0,
+      "cachedRead": 0.25,
       "cachedWrite": 0.0
     },
     "contextWindow": 262144,
-    "maxTokens": 65536,
+    "maxTokens": 131072,
     "compat": {
       "sendSessionAffinityHeaders": true,
       "supportsCacheControlOnTools": false,
@@ -665,66 +643,6 @@
     }
   },
   {
-    "id": "accounts/fireworks/models/glm-5p2",
-    "name": "GLM 5.2",
-    "api": "openai-completions",
-    "provider": "fireworks",
-    "baseUrl": "https://api.fireworks.ai/inference/v1",
-    "reasoning": true,
-    "thinkingLevelMap": {
-      "low": "high",
-      "medium": "high",
-      "minimal": null,
-      "off": "none",
-      "xhigh": "max"
-    },
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 1.4,
-      "output": 4.4,
-      "cachedRead": 0.14,
-      "cachedWrite": 0.0
-    },
-    "contextWindow": 1048575,
-    "maxTokens": 131072,
-    "compat": {
-      "supportsDeveloperRole": false,
-      "supportsStore": false
-    }
-  },
-  {
-    "id": "accounts/fireworks/routers/glm-5p2-fast",
-    "name": "GLM 5.2 Fast",
-    "api": "openai-completions",
-    "provider": "fireworks",
-    "baseUrl": "https://api.fireworks.ai/inference/v1",
-    "reasoning": true,
-    "thinkingLevelMap": {
-      "low": "high",
-      "medium": "high",
-      "minimal": null,
-      "off": "none",
-      "xhigh": "max"
-    },
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 2.1,
-      "output": 6.6,
-      "cachedRead": 0.21,
-      "cachedWrite": 0.0
-    },
-    "contextWindow": 1048575,
-    "maxTokens": 131072,
-    "compat": {
-      "supportsDeveloperRole": false,
-      "supportsStore": false
-    }
-  },
-  {
     "id": "accounts/fireworks/models/glm-5p3",
     "name": "GLM 5.3",
     "api": "openai-completions",
@@ -747,6 +665,35 @@
       "cachedWrite": 0.0
     },
     "contextWindow": 1048573,
+    "maxTokens": 262144,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false
+    }
+  },
+  {
+    "id": "accounts/fireworks/routers/glm-5p3-fast",
+    "name": "GLM 5.3 Fast",
+    "api": "openai-completions",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 2.1,
+      "output": 6.6,
+      "cachedRead": 0.39,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048572,
     "maxTokens": 262144,
     "compat": {
       "supportsDeveloperRole": false,
@@ -916,11 +863,11 @@
     "cost": {
       "input": 0.15,
       "output": 0.5,
-      "cachedRead": 0.05,
+      "cachedRead": 0.03,
       "cachedWrite": 0.0
     },
     "contextWindow": 1310720,
-    "maxTokens": 943718,
+    "maxTokens": 943717,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -943,9 +890,9 @@
       "text"
     ],
     "cost": {
-      "input": 0.892272,
-      "output": 1.784544,
-      "cachedRead": 0.074356,
+      "input": 0.953172,
+      "output": 1.906344,
+      "cachedRead": 0.079431,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -971,13 +918,13 @@
       "text"
     ],
     "cost": {
-      "input": 0.462,
-      "output": 1.386,
-      "cachedRead": 0.0154,
+      "input": 0.48,
+      "output": 4.2,
+      "cachedRead": 0.384,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 384000,
+    "maxTokens": 943718,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -999,9 +946,9 @@
       "text"
     ],
     "cost": {
-      "input": 0.03,
+      "input": 0.018,
       "output": 0.32,
-      "cachedRead": 0.016,
+      "cachedRead": 0.018,
       "cachedWrite": 0.0
     },
     "contextWindow": 1310720,
@@ -1028,13 +975,13 @@
       "image"
     ],
     "cost": {
-      "input": 0.15,
-      "output": 0.6,
-      "cachedRead": 0.003,
+      "input": 0.3,
+      "output": 1.2,
+      "cachedRead": 0.006,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 393216,
+    "maxTokens": 943718,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -1273,7 +1220,7 @@
       "cachedRead": 0.17,
       "cachedWrite": 0.0
     },
-    "contextWindow": 1048576,
+    "contextWindow": 524288,
     "maxTokens": 471859,
     "compat": {
       "supportsDeveloperRole": false,
