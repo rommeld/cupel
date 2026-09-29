@@ -324,6 +324,10 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             fireworks_anthropic("accounts/fireworks/models/qwen3p8-max"),
             fireworks_anthropic("accounts/fireworks/models/kimi-k3"),
             fireworks_anthropic("accounts/fireworks/routers/kimi-k3-fast"),
+            // Fireworks' own model, built on Kimi K3 and trained to reason in
+            // fewer tokens, so it uses the same template as Kimi K3. Fireworks
+            // serves it as a Research Preview.
+            fireworks_anthropic("accounts/fireworks/models/ember-1"),
             fireworks_completions("accounts/fireworks/models/glm-5p3", Thinking::FromEffort),
             // The fast router serves GLM 5.3 and lists the same effort scale.
             fireworks_completions(
@@ -353,7 +357,9 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("deepseek/deepseek-v4-flash-0731", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4.1-flash", Thinking::FromEffort),
             openrouter("x-ai/grok-4.6", Thinking::FromEffort),
+            openrouter("x-ai/grok-4.7", Thinking::FromEffort),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
+            openrouter("google/gemini-3.8-flash", Thinking::FromEffort),
             openrouter_openai("openai/gpt-6-astra"),
             openrouter_openai("openai/gpt-6-sol"),
             openrouter_openai("openai/gpt-6-luna"),
