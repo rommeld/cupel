@@ -126,10 +126,15 @@ fn supports_adaptive_thinking(model: &Model) -> bool {
     })
 }
 
+/// The xhigh effort arrived with Opus 4.7; the 4.6 models stop at high.
+/// "sonnet-5" also matches Sonnet 5.5.
 fn supports_native_xhigh(model: &Model) -> bool {
-    match_candidates(model)
-        .iter()
-        .any(|s| s.contains("opus-4-7") || s.contains("opus-4-8") || s.contains("fable-5"))
+    match_candidates(model).iter().any(|s| {
+        s.contains("opus-4-7")
+            || s.contains("opus-4-8")
+            || s.contains("fable-5")
+            || s.contains("sonnet-5")
+    })
 }
 
 /// Prompt caching is only available on newer Claude models. Application
@@ -826,10 +831,21 @@ fn build_additional_model_request_fields(
     options: &StreamOptions,
     thinking_budget_override: Option<u64>,
 ) -> Option<Value> {
-    let level = options.reasoning?;
     if !model.reasoning || !is_claude_model(model) {
         return None;
     }
+    let Some(level) = options.reasoning else {
+        // "off": a named entry in the level map is the thinking type that
+        // switches the model off (Sonnet 5.5: `between_tools`, sent alone,
+        // because `disabled` is a 400 there). Without one, `thinking` stays
+        // out of the request as before.
+        return model
+            .thinking_level_map
+            .as_ref()
+            .and_then(|m| m.get("off"))
+            .and_then(Option::as_ref)
+            .map(|off_type| json!({"thinking": {"type": off_type}}));
+    };
 
     if supports_adaptive_thinking(model) {
         return Some(json!({
@@ -886,7 +902,10 @@ fn map_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> String {
     match level {
         ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
         ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => "high",
+        // Only reached without native xhigh (see supports_native_xhigh).
+        ThinkingLevel::High | ThinkingLevel::XHigh => "high",
+        // Every adaptive model has max, the 4.6 ones included.
+        ThinkingLevel::Max => "max",
     }
     .to_string()
 }
@@ -913,5 +932,69 @@ fn json_to_document(value: &Value) -> Document {
                 .map(|(k, v)| (k.clone(), json_to_document(v)))
                 .collect(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use crate::providers::bedrock::build_additional_model_request_fields;
+    use crate::types::{Model, StreamOptions, ThinkingLevel};
+
+    /// A row from the shipped catalog, not a hand-built fixture: these
+    /// tests break if catalog.json and this provider drift apart.
+    fn catalog_model(id: &str) -> Model {
+        crate::catalog::builtin_models()
+            .into_iter()
+            .find(|m| m.id == id)
+            .expect("model in catalog")
+    }
+
+    /// The `additionalModelRequestFields` for one thinking level.
+    fn fields(model: &Model, reasoning: Option<ThinkingLevel>) -> Option<Value> {
+        let options = StreamOptions {
+            reasoning,
+            ..StreamOptions::default()
+        };
+        build_additional_model_request_fields(model, &options, None)
+    }
+
+    #[test]
+    fn sonnet55_off_sends_between_tools() {
+        // Same rule as on the Anthropic API: `disabled` is a 400, the "off"
+        // entry names the thinking type, and the type travels alone.
+        let sonnet = catalog_model("global.anthropic.claude-sonnet-5-5");
+        assert_eq!(
+            fields(&sonnet, None),
+            Some(json!({"thinking": {"type": "between_tools"}}))
+        );
+        // A model without an "off" entry still sends no thinking at all.
+        let sonnet45 = catalog_model("us.anthropic.claude-sonnet-4-5-20250929-v1:0");
+        assert_eq!(fields(&sonnet45, None), None);
+    }
+
+    #[test]
+    fn sonnet55_levels_reach_xhigh_and_max() {
+        // Before, "sonnet-5" had no native xhigh and max fell back to high,
+        // so both top levels quietly became high on Bedrock.
+        let sonnet = catalog_model("global.anthropic.claude-sonnet-5-5");
+        for (level, effort) in [
+            (ThinkingLevel::Minimal, "low"),
+            (ThinkingLevel::Low, "low"),
+            (ThinkingLevel::Medium, "medium"),
+            (ThinkingLevel::High, "high"),
+            (ThinkingLevel::XHigh, "xhigh"),
+            (ThinkingLevel::Max, "max"),
+        ] {
+            assert_eq!(
+                fields(&sonnet, Some(level)),
+                Some(json!({
+                    "thinking": {"type": "adaptive", "display": "summarized"},
+                    "output_config": {"effort": effort},
+                })),
+                "{level:?}"
+            );
+        }
     }
 }

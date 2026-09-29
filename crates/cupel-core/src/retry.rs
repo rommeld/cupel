@@ -119,6 +119,26 @@ pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
         .any(|pattern| compressed.contains(pattern))
 }
 
+/// Preserved thinking: Anthropic binds every thinking block to the
+/// conversation that produced it and answers a replayed block with a 400
+/// once that conversation changed ("... The block is bound to a different
+/// conversation. ..."). A tampered signature fails with the same first
+/// sentence but not this one, and stripping would not be the fix there.
+const THINKING_BINDING_PATTERN: &str = "boundtoadifferentconversation";
+
+/// Did the provider reject a replayed thinking block because the history
+/// changed since the block was produced? Unlike the transient errors above,
+/// resending the same request fails the same way; it succeeds once the
+/// stale thinking blocks are gone (the agent loop strips them).
+#[must_use]
+pub fn is_thinking_binding_mismatch(message: &AssistantMessage) -> bool {
+    message.stop_reason == StopReason::Error
+        && message
+            .error_message
+            .as_deref()
+            .is_some_and(|error| compress(error).contains(THINKING_BINDING_PATTERN))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +217,27 @@ mod tests {
         assert!(!is_retryable_assistant_error(&message(
             StopReason::Error,
             Some("invalid_request: max_tokens must be positive")
+        )));
+    }
+
+    #[test]
+    fn thinking_binding_mismatch_is_recognized() {
+        // Anthropic's wording for a block replayed after a history edit.
+        let stale = "provider returned HTTP 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.5.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation. Remove the block, or set `thinking.block_binding.prefix_mismatch_behavior` to \\\"drop_block\\\".\"}}";
+        assert!(is_thinking_binding_mismatch(&message(
+            StopReason::Error,
+            Some(stale)
+        )));
+        // A tampered signature has only the first sentence: not ours.
+        let tampered = "provider returned HTTP 400: messages.5.content.0: Invalid `signature` in `thinking` block";
+        assert!(!is_thinking_binding_mismatch(&message(
+            StopReason::Error,
+            Some(tampered)
+        )));
+        // Cancelled by the user: never recovered behind their back.
+        assert!(!is_thinking_binding_mismatch(&message(
+            StopReason::Aborted,
+            Some(stale)
         )));
     }
 }

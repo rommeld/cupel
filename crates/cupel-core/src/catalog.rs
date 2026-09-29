@@ -301,6 +301,7 @@ mod tests {
         // `budget_tokens` with a 400 at every effort level. The row must
         // take the adaptive path (effort, no temperature) and pin "off"
         // to null, so the provider omits `thinking` instead of disabling it.
+        // It also runs the preserved-thinking check: drop, don't reject.
         let models = builtin_models();
         let model = models
             .iter()
@@ -312,6 +313,7 @@ mod tests {
             Some(serde_json::json!({
                 "forceAdaptiveThinking": true,
                 "supportsTemperature": false,
+                "prefixMismatchBehavior": "drop_block",
             }))
         );
         let map = model.thinking_level_map.as_ref().expect("map");
@@ -351,6 +353,40 @@ mod tests {
             );
             assert!(!map.contains_key("max"), "{id}: max key would DISABLE it");
         }
+    }
+
+    #[test]
+    fn sonnet55_row_switches_off_with_between_tools() {
+        // Claude Sonnet 5.5 takes the adaptive path like Opus 5.5 (effort,
+        // no temperature, `budget_tokens` is a 400), but `disabled` is a
+        // 400 too: its off is the thinking type `between_tools`, pinned
+        // in curation.rs. Without that entry the provider would send
+        // `disabled`; with a null entry it would leave `thinking` out and
+        // the model would think at its default effort, high. Like Opus 5.5
+        // it runs the preserved-thinking check: drop, don't reject.
+        let models = builtin_models();
+        let model = models
+            .iter()
+            .find(|m| m.id == "claude-sonnet-5-5")
+            .expect("claude-sonnet-5-5 in catalog");
+        assert_eq!(model.provider.as_str(), Provider::ANTHROPIC);
+        assert_eq!(
+            model.compat,
+            Some(serde_json::json!({
+                "forceAdaptiveThinking": true,
+                "supportsTemperature": false,
+                "prefixMismatchBehavior": "drop_block",
+            }))
+        );
+        // The whole map, not single keys: an extra xhigh or max key would
+        // DISABLE that level.
+        let map = model.thinking_level_map.as_ref().expect("map");
+        assert_eq!(
+            serde_json::to_value(map).expect("map serializes"),
+            serde_json::json!({"minimal": null, "off": "between_tools"})
+        );
+        assert_eq!(model.context_window, 1_000_000);
+        assert_eq!(model.max_tokens, 128_000);
     }
 
     #[test]
