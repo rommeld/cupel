@@ -288,6 +288,51 @@ mod tests {
     }
 
     #[test]
+    fn gpt_61_sol_rows_match_the_model_card_and_sol_shape() {
+        let models = builtin_models();
+        for (id, api, ceiling, off) in [
+            ("gpt-6.1-sol", Api::OPENAI_RESPONSES, 922_000, Some("none")),
+            (
+                "codex/gpt-6.1-sol",
+                Api::OPENAI_CODEX_RESPONSES,
+                872_000,
+                None,
+            ),
+        ] {
+            let model = models.iter().find(|m| m.id == id).expect(id);
+            assert_eq!(model.name, "GPT-6.1 Sol");
+            assert_eq!(model.api.as_str(), api);
+            assert_eq!(model.context_window, 272_000);
+            assert_eq!(model.max_context_window, Some(ceiling));
+            assert_eq!(model.max_tokens, 128_000);
+            assert!((model.cost.input - 2.0).abs() < f64::EPSILON);
+            assert!((model.cost.output - 10.0).abs() < f64::EPSILON);
+            assert!((model.cost.cached_read - 0.1).abs() < f64::EPSILON);
+            let tier = &model.cost.tiers.as_ref().expect("long-context tier")[0];
+            assert_eq!(tier.context_over, 272_000);
+            assert!((tier.cached_read - 0.2).abs() < f64::EPSILON);
+            let map = model.thinking_level_map.as_ref().expect("effort map");
+            assert_eq!(map.get("off"), Some(&off.map(str::to_string)));
+            assert!(!map.contains_key("max"));
+            assert_eq!(
+                model
+                    .compat
+                    .as_ref()
+                    .and_then(|c| c.get("supportsTemperature")),
+                Some(&serde_json::json!(false))
+            );
+        }
+        let codex = models
+            .iter()
+            .find(|m| m.id == "codex/gpt-6.1-sol")
+            .expect("codex row");
+        assert_eq!(
+            codex.compat.as_ref().and_then(|c| c.get("requestModel")),
+            Some(&serde_json::json!("gpt-6.1-sol"))
+        );
+    }
+
+    #[test]
     fn astra_rows_carry_the_documented_limits() {
         // GPT-6 Astra in all three dialects: no temperature, no off, no
         // minimal, and both top levels selectable (keys absent).
@@ -504,6 +549,6 @@ mod tests {
                 model.id
             );
         }
-        assert_eq!(seen, 7, "only supported Codex models belong in the catalog");
+        assert_eq!(seen, 8, "only supported Codex models belong in the catalog");
     }
 }

@@ -428,6 +428,21 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         levels: CODEX_LEVELS_TO_MAX,
         temperature: false,
     },
+    // The model card lists the same standard input/output prices as Sol
+    // but $0.10/M cached input. Codex limits and effort scale inherit Sol's
+    // pinned settings until the backend publishes separate metadata.
+    // https://openai.com/de-DE/index/introducing-gpt-6-1-sol/
+    PinnedCodex {
+        id: "gpt-6.1-sol",
+        name: "GPT-6.1 Sol",
+        vision: true,
+        cost: (2.0, 10.0, 0.1, 2.5),
+        long_context_tier: true,
+        context_window: 272_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
     PinnedCodex {
         id: "gpt-6-astra",
         name: "GPT-6 Astra",

@@ -95,10 +95,36 @@ fn build_models(
         })?;
         for row in provider.models {
             let source = entry.model(provider.models_dev_id, row.id)?;
-            models.push(to_model(provider, row, &source)?);
+            let model = to_model(provider, row, &source)?;
+            // GPT-6.1 Sol is available on the API but not yet on models.dev.
+            // Keep it next to Sol until it has its own upstream entry.
+            let upgrade = (provider.cupel_id == Provider::OPENAI && row.id == "gpt-6-sol")
+                .then(|| gpt_61_sol_from(&model));
+            models.push(model);
+            models.extend(upgrade);
         }
     }
     Ok(models)
+}
+
+/// The model card confirms Sol's standard input/output prices and gives a
+/// new cached-input price ($0.10/M). Other limits, effort settings, and the
+/// long-context tier follow GPT-6 Sol until models.dev lists GPT-6.1 Sol.
+/// https://openai.com/de-DE/index/introducing-gpt-6-1-sol/
+fn gpt_61_sol_from(sol: &Model) -> Model {
+    let mut model = sol.clone();
+    model.id = "gpt-6.1-sol".to_string();
+    model.name = "GPT-6.1 Sol".to_string();
+    model.cost.input = 2.0;
+    model.cost.output = 10.0;
+    model.cost.cached_read = 0.1;
+    if let Some(tiers) = &mut model.cost.tiers {
+        for tier in tiers {
+            // Sol's long-context tier doubles the cached-input price.
+            tier.cached_read = 0.2;
+        }
+    }
+    model
 }
 
 /// The pinned Codex rows as cupel Models. The curation table is the data,
@@ -534,6 +560,58 @@ mod tests {
     }
 
     #[test]
+    fn gpt_61_sol_uses_sol_limits_and_model_card_pricing() {
+        const SOL_ROW: Curated = Curated {
+            id: "gpt-6-sol",
+            rename: None,
+            api: Api::OPENAI_RESPONSES,
+            base_url: curation::OPENAI_BASE_URL,
+            thinking: Thinking::FromEffort,
+            compat: Compat::None,
+            window: Window::PriceTier,
+        };
+        const SOL_PROVIDER: CuratedProvider = CuratedProvider {
+            models_dev_id: "openai",
+            cupel_id: Provider::OPENAI,
+            models: &[SOL_ROW],
+        };
+        let raw = serde_json::json!({
+            "openai": {"models": {"gpt-6-sol": {
+                "name": "GPT-6 Sol",
+                "reasoning": true,
+                "reasoning_options": [{"type": "effort", "values": ["none", "low", "medium", "high", "xhigh", "max"]}],
+                "temperature": false,
+                "modalities": {"input": ["text", "image"]},
+                "cost": {"input": 2, "output": 10, "cache_read": 0.2, "cache_write": 2.5,
+                         "tiers": [{"input": 4, "output": 15, "cache_read": 0.4, "cache_write": 5,
+                                    "tier": {"size": 272_000}}]},
+                "limit": {"context": 1_050_000, "input": 922_000, "output": 128_000}
+            }}}
+        }).to_string();
+        let catalog = models_dev::parse_wanted(&raw, &["openai"]).expect("parses");
+        let models = build_models(&[SOL_PROVIDER], &catalog).expect("builds");
+        assert_eq!(models.len(), 2);
+        let sol = &models[0];
+        let upgrade = &models[1];
+        assert_eq!(upgrade.id, "gpt-6.1-sol");
+        assert_eq!(upgrade.name, "GPT-6.1 Sol");
+        assert_eq!(upgrade.api, sol.api);
+        assert_eq!(upgrade.thinking_level_map, sol.thinking_level_map);
+        assert_eq!(upgrade.context_window, 272_000);
+        assert_eq!(upgrade.max_context_window, sol.max_context_window);
+        assert!((upgrade.cost.input - 2.0).abs() < f64::EPSILON);
+        assert!((upgrade.cost.output - 10.0).abs() < f64::EPSILON);
+        assert!((upgrade.cost.cached_read - 0.1).abs() < f64::EPSILON);
+        assert!(
+            (upgrade.cost.tiers.as_ref().expect("tier")[0].cached_read - 0.2).abs() < f64::EPSILON
+        );
+        assert!(
+            (sol.cost.cached_read - 0.2).abs() < f64::EPSILON,
+            "original Sol stays unchanged"
+        );
+    }
+
+    #[test]
     fn validate_collects_every_violation() {
         let good = to_model(&TEST_PROVIDER, &TEST_ROW, &sonnet_entry()).expect("maps");
 
@@ -563,6 +641,7 @@ mod tests {
             models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
             [
                 "codex/gpt-6-sol",
+                "codex/gpt-6.1-sol",
                 "codex/gpt-6-astra",
                 "codex/gpt-6-luna",
                 "codex/gpt-5.6-sol",
