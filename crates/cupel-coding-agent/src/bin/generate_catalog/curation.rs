@@ -35,7 +35,8 @@ pub enum Thinking {
     Budget,
     /// Derive from models.dev effort values (models_dev.rs).
     FromEffort,
-    /// Pin an explicit map for scales cupel must remap (GLM 5.2).
+    /// Pin an explicit map where deriving one from models.dev would be
+    /// wrong (e.g. Kimi K2.7 Code on OpenRouter cannot switch thinking off).
     Explicit(&'static [(&'static str, Option<&'static str>)]),
 }
 
@@ -104,18 +105,6 @@ pub struct CuratedProvider {
     pub cupel_id: &'static str,
     pub models: &'static [Curated],
 }
-
-/// GLM 5.2 on Fireworks: cupel levels remapped onto Fireworks' effort
-/// scale: off maps to none, minimal is unsupported, low /medium collapse
-/// to high. The xhigh entry is dead under cupel's key-absence rule
-/// (model.rs) but kept verbatim from the old catalog.
-const GLM52_THINKING: &[(&str, Option<&str>)] = &[
-    ("off", Some("none")),
-    ("minimal", None),
-    ("low", Some("high")),
-    ("medium", Some("high")),
-    ("xhigh", Some("max")),
-];
 
 /// Kimi K2.7 Code on OpenRouter is always-thinking.
 const KIMI_K27_CODE_OPENROUTER_THINKING: &[(&str, Option<&str>)] = &[("off", None)];
@@ -284,23 +273,18 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models_dev_id: "fireworks-ai",
         cupel_id: Provider::FIREWORKS,
         models: &[
-            fireworks_anthropic("accounts/fireworks/models/kimi-k2p7-code"),
-            fireworks_anthropic("accounts/fireworks/models/deepseek-v4-flash-0731"),
-            fireworks_anthropic("accounts/fireworks/models/deepseek-v4-pro-0813"),
-            fireworks_anthropic("accounts/fireworks/models/kimi-k2p6"),
+            // First row = the `/provider fireworks` default.
+            fireworks_anthropic("accounts/fireworks/models/deepseek-v4p1-flash"),
             fireworks_anthropic("accounts/fireworks/models/minimax-m3"),
-            fireworks_anthropic("accounts/fireworks/models/qwen3p7-plus"),
+            fireworks_anthropic("accounts/fireworks/models/qwen3p8-max"),
             fireworks_anthropic("accounts/fireworks/models/kimi-k3"),
             fireworks_anthropic("accounts/fireworks/routers/kimi-k3-fast"),
-            fireworks_completions(
-                "accounts/fireworks/models/glm-5p2",
-                Thinking::Explicit(GLM52_THINKING),
-            ),
-            fireworks_completions(
-                "accounts/fireworks/routers/glm-5p2-fast",
-                Thinking::Explicit(GLM52_THINKING),
-            ),
             fireworks_completions("accounts/fireworks/models/glm-5p3", Thinking::FromEffort),
+            // The fast router serves GLM 5.3 and lists the same effort scale.
+            fireworks_completions(
+                "accounts/fireworks/routers/glm-5p3-fast",
+                Thinking::FromEffort,
+            ),
             fireworks_completions(
                 "accounts/fireworks/models/glm-5p3-flash",
                 Thinking::FromEffort,
