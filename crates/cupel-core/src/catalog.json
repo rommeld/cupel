@@ -466,6 +466,30 @@
     "maxTokens": 128000
   },
   {
+    "id": "global.anthropic.claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5 (Bedrock)",
+    "api": "bedrock-converse-stream",
+    "provider": "amazon-bedrock",
+    "baseUrl": "",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "between_tools"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000
+  },
+  {
     "id": "us.anthropic.claude-fable-5",
     "name": "Claude Fable 5 (Bedrock)",
     "api": "bedrock-converse-stream",

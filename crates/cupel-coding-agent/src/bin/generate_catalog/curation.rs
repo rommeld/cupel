@@ -121,9 +121,10 @@ const KIMI_K27_CODE_OPENROUTER_THINKING: &[(&str, Option<&str>)] = &[("off", Non
 /// has no field for that, so the map is pinned here instead of derived
 /// from the effort list (which would give off -> null, i.e. `thinking`
 /// left out and the model thinking adaptively at its default effort,
-/// high). "off" names the thinking type the anthropic provider sends,
-/// "minimal" has no effort upstream (null), and low..max keep their own
-/// names (no entry, see models_dev.rs for why xhigh/max must stay absent).
+/// high). "off" names the thinking type the provider sends (anthropic and
+/// bedrock), "minimal" has no effort upstream (null), and low..max keep
+/// their own names (no entry, see models_dev.rs for why xhigh/max must
+/// stay absent).
 const SONNET55_THINKING: &[(&str, Option<&str>)] =
     &[("off", Some("between_tools")), ("minimal", None)];
 
@@ -298,6 +299,13 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 "us.anthropic.claude-sonnet-5",
                 Some("Claude Sonnet 5 (Bedrock)"),
                 Thinking::FromEffort,
+            ),
+            // models.dev lists Sonnet 5.5 only as the global cross-region
+            // profile so far; its off switch is the same as on the API.
+            bedrock(
+                "global.anthropic.claude-sonnet-5-5",
+                Some("Claude Sonnet 5.5 (Bedrock)"),
+                Thinking::Explicit(SONNET55_THINKING),
             ),
             bedrock(
                 "us.anthropic.claude-fable-5",
