@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.21.3] - 2026-09-29
+
+- change spinner in flux
+
 ## [v0.21.2] - 2026-09-29
 
 - add GPT-6.1 Sol to OpenAI model catalog
