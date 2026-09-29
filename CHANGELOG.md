@@ -3,6 +3,17 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.21.0] - 2026-09-29
+
+- fix(loop-killer): keep the veto message on one line
+- version: sync to v0.20.0 from CHANGELOG.md
+- docs: adjust CHANGELOG bullets
+- feat(bedrock): add Claude Sonnet 5.5 and stop capping xhigh/max
+- fix(thinking): drop thinking blocks invalidated by history edits
+- fix(catalog): keep generator error messages on one line
+- feat(catalog): add Claude Sonnet 5.5 with between_tools as its off switch
+- fix(catalog): replace retired Fireworks models
+
 ## [v0.20.0] - 2026-09-27
 
 - feat(tui): queue prompts typed while the agent works
