@@ -890,9 +890,9 @@
       "text"
     ],
     "cost": {
-      "input": 0.953172,
-      "output": 1.906344,
-      "cachedRead": 0.079431,
+      "input": 0.936294,
+      "output": 1.872588,
+      "cachedRead": 0.078025,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -918,9 +918,9 @@
       "text"
     ],
     "cost": {
-      "input": 0.48,
+      "input": 0.4721,
       "output": 4.2,
-      "cachedRead": 0.384,
+      "cachedRead": 0.3776,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
