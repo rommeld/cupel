@@ -52,8 +52,8 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          cargo build --release -p cupel-coding-agent --target aarch64-apple-darwin
-          cargo build --release -p cupel-coding-agent --target x86_64-apple-darwin
+          cargo build --release -p cupel-tui --target aarch64-apple-darwin
+          cargo build --release -p cupel-tui --target x86_64-apple-darwin
           lipo -create \
             target/aarch64-apple-darwin/release/cupel \
             target/x86_64-apple-darwin/release/cupel \
@@ -63,7 +63,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           rustup target add ${{ matrix.target }}
-          cargo build --release -p cupel-coding-agent --target ${{ matrix.target }}
+          cargo build --release -p cupel-tui --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/cupel cupel
 
       - name: Package
