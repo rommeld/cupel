@@ -1,0 +1,33 @@
+[package]
+name = "cupel-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Without this table Cargo would name the executable after the package
+# (`cupel-tui`). The binary keeps the name users type: `cupel`.
+[[bin]]
+name = "cupel"
+path = "src/main.rs"
+
+[dependencies]
+base64.workspace = true
+cupel-agent.workspace = true
+cupel-coding-agent.workspace = true
+cupel-core.workspace = true
+futures-util.workspace = true
+ignore.workspace = true
+ratatui.workspace = true
+# The /login flow hands its HTTP client to cupel-core's OAuth code.
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+# Subscriber only in the binary crate - libraries never install one.
+tracing-subscriber.workspace = true
+unicode-width.workspace = true
+
+[lints]
+workspace = true

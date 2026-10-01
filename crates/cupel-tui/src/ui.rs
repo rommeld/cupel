@@ -12,7 +12,7 @@ use ratatui::widgets::{
     Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::modes::interactive::{app::App, theme, transcript};
+use crate::{app::App, theme, transcript};
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     // Input grows with its content (explicit newlines + wrapped lines),
@@ -362,9 +362,9 @@ mod tests {
     //! terminal (or an API key the Agent is constructed but never run).
 
     use super::*;
-    use crate::modes::SessionMeta;
-    use crate::modes::interactive::transcript::{Cell, ToolOutcome};
+    use crate::transcript::{Cell, ToolOutcome};
     use cupel_agent::{Agent, AgentEvent, AgentOptions};
+    use cupel_coding_agent::modes::SessionMeta;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -383,7 +383,7 @@ mod tests {
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let agent = Agent::new(AgentOptions::new(model, registry));
         // home: None disables persistence + hooks tests touch no disk.
-        let recorder = crate::session::SessionRecorder::new(
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
             None,
             std::path::Path::new(cwd),
             "cupel-test",
@@ -399,7 +399,7 @@ mod tests {
                 // Real builtin catalog so /model and /provider tests exercise
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
-                settings: crate::settings::Settings::default(),
+                settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -490,7 +490,7 @@ mod tests {
     fn startup_warning_leads_the_transcript_as_a_notice() {
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
-        let recorder = crate::session::SessionRecorder::new(
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
             None,
             std::path::Path::new("/tmp"),
             "cupel-test",
@@ -504,7 +504,7 @@ mod tests {
                 cwd: "/tmp".into(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
-                settings: crate::settings::Settings::default(),
+                settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: Some(
                     "no credentials found - use /provider <name> <api-key>".into(),
@@ -585,8 +585,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let (home, cwd) = (root.join("home"), root.join("proj"));
         std::fs::create_dir_all(&cwd).unwrap();
-        let recorder =
-            crate::session::SessionRecorder::new(Some(home), &cwd, "cupel-current", "test-model");
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
+            Some(home),
+            &cwd,
+            "cupel-current",
+            "test-model",
+        );
         // Pre-write an older session the listing must show alongside.
         let dir = recorder.sessions_dir().unwrap().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
@@ -610,7 +614,7 @@ mod tests {
                 cwd: cwd.display().to_string(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
-                settings: crate::settings::Settings::default(),
+                settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -649,7 +653,7 @@ mod tests {
         let (home, cwd) = (root.join("home"), root.join("proj"));
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&home).unwrap();
-        let recorder = crate::session::SessionRecorder::new(
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
             Some(home.clone()),
             &cwd,
             session_id,
@@ -665,7 +669,7 @@ mod tests {
                 cwd: cwd.display().to_string(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
-                settings: crate::settings::Settings::default(),
+                settings: cupel_coding_agent::settings::Settings::default(),
                 home: Some(home),
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -684,10 +688,7 @@ mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        assert_eq!(
-            app.pending_reload,
-            Some(crate::modes::interactive::app::ReloadTarget::Current)
-        );
+        assert_eq!(app.pending_reload, Some(crate::app::ReloadTarget::Current));
 
         let mut app = test_app();
         type_text(&mut app, "/hot-reload cupel-42");
@@ -698,16 +699,14 @@ mod tests {
         )));
         assert_eq!(
             app.pending_reload,
-            Some(crate::modes::interactive::app::ReloadTarget::Resume(
-                "cupel-42".into()
-            ))
+            Some(crate::app::ReloadTarget::Resume("cupel-42".into()))
         );
     }
 
     #[tokio::test]
     async fn hot_reload_current_appends_only_the_agents_delta() {
-        use crate::modes::interactive::app::ReloadTarget;
-        use crate::resources::{CONTEXT_UPDATE_MARKER, ContextFile};
+        use crate::app::ReloadTarget;
+        use cupel_coding_agent::resources::{CONTEXT_UPDATE_MARKER, ContextFile};
 
         let root = std::env::temp_dir().join("cupel-ui-hotreload-delta");
         let _ = std::fs::remove_dir_all(&root);
@@ -782,7 +781,7 @@ mod tests {
 
     #[tokio::test]
     async fn hot_reload_resumes_a_session_by_id_and_rejects_unknown_ids() {
-        use crate::modes::interactive::app::ReloadTarget;
+        use crate::app::ReloadTarget;
 
         let root = std::env::temp_dir().join("cupel-ui-hotreload-resume");
         let _ = std::fs::remove_dir_all(&root);
@@ -1169,7 +1168,7 @@ mod tests {
             AgentMessage::Llm(Message::ToolResult(patch_main)),
         ];
         let agent = Agent::new(options);
-        let recorder = crate::session::SessionRecorder::new(
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
             None,
             std::path::Path::new("/tmp"),
             "cupel-resumed",
@@ -1185,7 +1184,7 @@ mod tests {
                 // Real builtin catalog so /model and /provider tests exercise
                 // the same data the app ships with.
                 models: cupel_core::catalog::builtin_models(),
-                settings: crate::settings::Settings::default(),
+                settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -1408,7 +1407,7 @@ mod tests {
             "{}\n\n## Goal\nship it",
             cupel_agent::compaction::COMPACTION_MARKER
         ))];
-        let recorder = crate::session::SessionRecorder::new(
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
             None,
             std::path::Path::new("/tmp"),
             "cupel-resumed",
@@ -1422,7 +1421,7 @@ mod tests {
                 cwd: "/tmp".into(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
-                settings: crate::settings::Settings::default(),
+                settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -1551,9 +1550,10 @@ mod tests {
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let mut options = AgentOptions::new(model, registry);
-        options.tools =
-            vec![Arc::new(crate::tools::bash::BashTool::new("/tmp")) as Arc<dyn AgentTool>];
-        let recorder = crate::session::SessionRecorder::new(
+        options.tools = vec![
+            Arc::new(cupel_coding_agent::tools::bash::BashTool::new("/tmp")) as Arc<dyn AgentTool>,
+        ];
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
             None,
             std::path::Path::new("/tmp"),
             "cupel-test",
@@ -1567,7 +1567,7 @@ mod tests {
                 cwd: "/tmp".into(),
                 templates: Vec::new(),
                 models: cupel_core::catalog::builtin_models(),
-                settings: crate::settings::Settings::default(),
+                settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
                 context_files: Vec::new(),
@@ -1881,10 +1881,10 @@ mod tests {
         assert!(has_notice(&app, "unknown preset: nope"));
         app.meta.settings.presets.insert(
             "broken".into(),
-            crate::settings::Preset {
+            cupel_coding_agent::settings::Preset {
                 provider: "anthropic".into(),
                 model: "claude-nope".into(),
-                thinking_level: crate::settings::ThinkingSetting::Max,
+                thinking_level: cupel_coding_agent::settings::ThinkingSetting::Max,
                 prompt: None,
             },
         );
@@ -1930,7 +1930,7 @@ mod tests {
 
         // On disk, parsed, and holding the key.
         let path = root.join("home/settings.json");
-        let saved = crate::settings::load_settings(&path).unwrap();
+        let saved = cupel_coding_agent::settings::load_settings(&path).unwrap();
         assert_eq!(saved.api_key("fireworks"), Some("fw-secret-123"));
         // The in-memory mirror agrees (the listing reads this, not disk).
         assert_eq!(
@@ -2068,7 +2068,7 @@ mod tests {
 
     #[tokio::test]
     async fn hot_reload_picks_up_hand_edited_settings() {
-        use crate::modes::interactive::app::ReloadTarget;
+        use crate::app::ReloadTarget;
         let root = std::env::temp_dir().join("cupel-ui-reload-settings");
         let _ = std::fs::remove_dir_all(&root);
         let mut app = test_app_with_home(&root, "cupel-reload-settings");
@@ -2092,7 +2092,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_preset_prompt_survives_both_hot_reloads() {
-        use crate::modes::interactive::app::ReloadTarget;
+        use crate::app::ReloadTarget;
         let root = std::env::temp_dir().join("cupel-ui-preset-reload");
         let _ = std::fs::remove_dir_all(&root);
         let mut app = test_app_with_home(&root, "cupel-current");
@@ -2103,7 +2103,7 @@ mod tests {
         )
         .unwrap();
         app.meta.settings =
-            crate::settings::load_settings(&root.join("home/settings.json")).unwrap();
+            cupel_coding_agent::settings::load_settings(&root.join("home/settings.json")).unwrap();
         run_command(&mut app, "/preset fast");
         // The test app's base prompt is empty: only the preset part is left.
         assert_eq!(app.agent.state().system_prompt, "\n\nPRESET RULES");
@@ -2158,7 +2158,7 @@ mod tests {
             .sessions_dir()
             .expect("home is set")
             .join("cupel-task.jsonl");
-        let (_, messages) = crate::session::load_transcript(&path).unwrap();
+        let (_, messages) = cupel_coding_agent::session::load_transcript(&path).unwrap();
         let recorded = matches!(
             messages.first(),
             Some(cupel_agent::AgentMessage::Llm(cupel_core::types::Message::User(user)))
@@ -2417,7 +2417,7 @@ mod tests {
     #[test]
     fn esc_cancels_a_waiting_login_before_touching_the_run() {
         let mut app = test_app();
-        let (flow, _events, cancel, _code_rx) = crate::modes::interactive::login::stub_flow();
+        let (flow, _events, cancel, _code_rx) = crate::login::stub_flow();
         app.login = Some(flow);
 
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
@@ -2441,7 +2441,7 @@ mod tests {
     #[test]
     fn a_pasted_code_reaches_the_waiting_flow_once() {
         let mut app = test_app();
-        let (flow, _events, _cancel, mut code_rx) = crate::modes::interactive::login::stub_flow();
+        let (flow, _events, _cancel, mut code_rx) = crate::login::stub_flow();
         app.login = Some(flow);
 
         submit_paste(&mut app, "/login openai-codex code-from-browser");
@@ -2459,11 +2459,11 @@ mod tests {
     #[tokio::test]
     async fn login_events_flow_into_notices_and_done_clears_the_flow() {
         let mut app = test_app();
-        let (flow, events, _cancel, _code_rx) = crate::modes::interactive::login::stub_flow();
+        let (flow, events, _cancel, _code_rx) = crate::login::stub_flow();
         app.login = Some(flow);
 
         events
-            .send(crate::modes::interactive::login::LoginEvent::Notice(
+            .send(crate::login::LoginEvent::Notice(
                 "open the browser".to_string(),
             ))
             .unwrap();
@@ -2473,7 +2473,7 @@ mod tests {
         assert!(app.login.is_some(), "notices keep the flow alive");
 
         events
-            .send(crate::modes::interactive::login::LoginEvent::Done(Ok(
+            .send(crate::login::LoginEvent::Done(Ok(
                 "logged in with ChatGPT (account acc-1)".to_string(),
             )))
             .unwrap();
@@ -2502,13 +2502,17 @@ mod tests {
             expires: 1,
             account_id: "acc".into(),
         };
-        crate::auth::save_credential(Some(&home), "openai-codex", &credential).unwrap();
+        cupel_coding_agent::auth::save_credential(Some(&home), "openai-codex", &credential)
+            .unwrap();
 
         submit_command(&mut app, "/logout");
         assert!(last_notice(&app).contains("openai-codex"));
         submit_command(&mut app, "/logout openai-codex");
         assert!(last_notice(&app).contains("logged out"));
-        assert!(!crate::auth::has_credential(Some(&home), "openai-codex"));
+        assert!(!cupel_coding_agent::auth::has_credential(
+            Some(&home),
+            "openai-codex"
+        ));
         // A second logout reports the absence instead of erroring.
         submit_command(&mut app, "/logout openai-codex");
         assert!(last_notice(&app).contains("no stored login for openai-codex"));

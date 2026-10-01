@@ -18,8 +18,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-use crate::modes::interactive::theme;
-use crate::modes::interactive::transcript::wrap_line;
+use crate::theme;
+use crate::transcript::wrap_line;
 
 /// Render markdown into wrapped, styled lines for one transcrip cell.
 /// `base` is the cell's identity style (`ASSISTANT`, `ANSWER`).

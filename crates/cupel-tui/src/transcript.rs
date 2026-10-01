@@ -18,7 +18,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-use crate::modes::interactive::theme;
+use crate::theme;
 
 use std::time::{Duration, Instant};
 
@@ -254,18 +254,10 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
         Cell::Assistant { text } => {
             // Assistant prose is markdown; the base style keeps the cell
             // identity (markdown accents patch onto it).
-            out.extend(crate::modes::interactive::markdown::render(
-                text,
-                width,
-                theme::ASSISTANT,
-            ));
+            out.extend(crate::markdown::render(text, width, theme::ASSISTANT));
         }
         Cell::Answer { text } => {
-            out.extend(crate::modes::interactive::markdown::render(
-                text,
-                width,
-                theme::ANSWER,
-            ));
+            out.extend(crate::markdown::render(text, width, theme::ANSWER));
         }
         Cell::Thinking { text } => {
             push_wrapped(&mut out, text, width, theme::REASONING);
@@ -281,11 +273,7 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
         }
         Cell::Summary { text } => {
             push_wrapped(&mut out, "[context summary]", width, theme::NOTICE);
-            out.extend(crate::modes::interactive::markdown::render(
-                text,
-                width,
-                theme::REASONING,
-            ));
+            out.extend(crate::markdown::render(text, width, theme::REASONING));
         }
         Cell::Tool { .. } => out.extend(tool_lines(cell, width)),
     }

@@ -4,6 +4,7 @@ members = [
     "crates/cupel-core",
     "crates/cupel-agent",
     "crates/cupel-coding-agent",
+    "crates/cupel-tui",
 ]
 
 [workspace.package]
@@ -15,6 +16,7 @@ version = "0.21.1"
 [workspace.dependencies]
 cupel-core = { path = "crates/cupel-core" }
 cupel-agent = { path = "crates/cupel-agent" }
+cupel-coding-agent = { path = "crates/cupel-coding-agent" }
 
 async-trait = "0.1"
 aws-config = "1"

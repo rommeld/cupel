@@ -402,7 +402,7 @@ async fn run() -> Result<(), AppError> {
             .await
             .map_err(AppError::PlainMode)
     } else {
-        modes::interactive::run(agent, meta, recorder)
+        cupel_tui::run(agent, meta, recorder)
             .await
             .map_err(AppError::InteractiveMode)
     }
