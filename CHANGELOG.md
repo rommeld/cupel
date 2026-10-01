@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.22.0] - 2026-10-01
+
+- fix(tui): keep a bare cargo run launching cupel
+- docs: build and install cupel from the cupel-tui package
+- refactor(workspace): move the TUI and the cupel binary into cupel-tui
+
 ## [v0.21.3] - 2026-09-29
 
 - change spinner in flux
