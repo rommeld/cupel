@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+# A bare `cargo run` in the workspace root sees two binaries (this one
+# and generate-catalog); this key makes it launch cupel.
+default-run = "cupel"
 
 # Without this table Cargo would name the executable after the package
 # (`cupel-tui`). The binary keeps the name users type: `cupel`.
