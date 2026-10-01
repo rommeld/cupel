@@ -4,14 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-# With two bin targets, a bare `cargo run -p cupel-coding-agent` would
-# be ambiguous - this keeps it launching cupel.
-default-run = "cupel"
 
-[[bin]]
-name = "cupel"
-path = "src/main.rs"
-
+# The only bin left in this package, so `cargo run -p cupel-coding-agent`
+# starts it (it rewrites catalog.json). cupel itself: `cargo run --bin cupel`.
 [[bin]]
 name = "generate-catalog"
 path = "src/bin/generate_catalog/main.rs"
@@ -26,7 +21,6 @@ grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
 ignore.workspace = true
-ratatui.workspace = true
 # For the bounded ollama /api/tags discovery probe at startup and
 # the dev-time generate-catalog bin (models.dev fetch).
 reqwest.workspace = true
@@ -36,11 +30,8 @@ similar.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-# Subscriber only in the binary crate - libraries never install one.
-tracing-subscriber.workspace = true
 tokio-util.workspace = true
 unicode-normalization.workspace = true
-unicode-width.workspace = true
 
 [lints]
 workspace = true

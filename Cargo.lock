@@ -804,7 +804,6 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
- "ratatui",
  "reqwest",
  "serde",
  "serde_json",
@@ -813,9 +812,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
  "unicode-normalization",
- "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -837,6 +834,26 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "cupel-tui"
+version = "0.21.1"
+dependencies = [
+ "base64",
+ "cupel-agent",
+ "cupel-coding-agent",
+ "cupel-core",
+ "futures-util",
+ "ignore",
+ "ratatui",
+ "reqwest",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing-subscriber",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

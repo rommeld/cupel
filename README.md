@@ -26,7 +26,8 @@ A cupel is a small vessel for refining precious metals. This project borrows tha
 
 - **`cupel-core`** — provider-neutral chat-completion abstraction with a built-in model catalog, token/cost tracking, request/response tracing, and retry/backoff. The foundation for all LLM calls.
 - **`cupel-agent`** — the agent loop: wires system prompt, message history, and tool definitions into repeated inference calls, executes tool calls, and feeds the results back. Includes context-compaction hooks and the `AgentHooks` extension point.
-- **`cupel-coding-agent`** — the coding-agent experience: a `ratatui` TUI, `@file-path` fuzzy referencing, slash commands, prompt templates from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, and the built-in tools `read`, `grep` (backed by the `grep` crate family), `apply_patch`, and `bash`. Ships the `cupel` CLI.
+- **`cupel-coding-agent`** — the coding-agent library: slash commands, prompt templates from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, sessions, the line-based plain mode, and the built-in tools `read`, `grep` (backed by the `grep` crate family), `apply_patch`, and `bash`. It has no UI dependency, so other programs can embed it.
+- **`cupel-tui`** — the `ratatui` TUI with `@file-path` fuzzy referencing, built on `cupel-coding-agent`. Ships the `cupel` CLI.
 
 ## Install
 
@@ -45,7 +46,7 @@ Requires a recent stable Rust toolchain:
 ```sh
 git clone https://github.com/rommeld/cupel.git
 cd cupel
-cargo install --path crates/cupel-coding-agent
+cargo install --path crates/cupel-tui
 ```
 
 ## Usage

@@ -74,9 +74,9 @@ stored in repository secrets.
 ## crates.io (for users who DO have Rust)
 
 `cargo publish -p cupel-core`, then `-p cupel-agent`, then
-`-p cupel-coding-agent` (dependency order matters; path dependencies need
-`version =` fields added first). After that, Rust users can
-`cargo install cupel-coding-agent`. Optional - the binary channels above
+`-p cupel-coding-agent`, then `-p cupel-tui` (dependency order matters;
+path dependencies need `version =` fields added first). After that, Rust
+users can `cargo install cupel-tui`. Optional - the binary channels above
 serve everyone else.
 
 ## cargo-dist migration

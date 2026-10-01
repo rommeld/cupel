@@ -1,4 +1,6 @@
-//! Interactive mode: the ratatui frontend.
+//! Interactive mode: the ratatui frontend. [`run`] is the entry point; the
+//! `cupel` binary (`main.rs`) calls it after building the agent with
+//! `cupel_coding_agent`.
 //!
 //! ## Event architecture
 //!
@@ -26,12 +28,11 @@ pub mod transcript;
 pub mod ui;
 
 use cupel_agent::Agent;
+use cupel_coding_agent::modes::SessionMeta;
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
 };
 use ratatui::crossterm::execute;
-
-use crate::modes::SessionMeta;
 
 /// Run the interactive session until the user quits.
 ///
@@ -39,7 +40,7 @@ use crate::modes::SessionMeta;
 pub async fn run(
     agent: Agent,
     meta: SessionMeta,
-    recorder: crate::session::SessionRecorder,
+    recorder: cupel_coding_agent::session::SessionRecorder,
 ) -> std::io::Result<()> {
     // `ratatui::init` enters raw mode + the alternate screen and installs a
     // panic hook that restores the terminal without that, a panic would
@@ -97,7 +98,7 @@ async fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     agent: Agent,
     meta: SessionMeta,
-    recorder: crate::session::SessionRecorder,
+    recorder: cupel_coding_agent::session::SessionRecorder,
 ) -> std::io::Result<()> {
     let mut app = app::App::new(agent, meta, recorder);
     let mut terminal_events = spawn_input_thread();

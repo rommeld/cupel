@@ -5,11 +5,13 @@
 //! the `App` currently says. No state lives in the widgets that's the
 //! immediate-mode contract that keeps ratatui apps easy to reason about.
 
-use crate::settings::Preset;
-
 use futures_util::StreamExt as _;
 
 use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
+use cupel_coding_agent::commands;
+use cupel_coding_agent::modes::SessionMeta;
+use cupel_coding_agent::session::SessionRecorder;
+use cupel_coding_agent::settings::Preset;
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
     UserContentBody,
@@ -19,13 +21,10 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 
-use crate::commands;
-use crate::modes::SessionMeta;
-use crate::modes::interactive::autocomplete::{Autocomplete, Candidate};
-use crate::modes::interactive::input::InputState;
-use crate::modes::interactive::login;
-use crate::modes::interactive::transcript::{Cell, ToolOutcome, Transcript};
-use crate::session::SessionRecorder;
+use crate::autocomplete::{Autocomplete, Candidate};
+use crate::input::InputState;
+use crate::login;
+use crate::transcript::{Cell, ToolOutcome, Transcript};
 
 /// Cumulative token/cost counters across the whole session.
 #[derive(Default)]
@@ -130,14 +129,15 @@ impl App {
             is_dir: false,
         })
         .collect();
-        let provider_candidates: Vec<Candidate> = crate::providers::catalog_providers(&meta.models)
-            .into_iter()
-            .map(|(provider, model)| Candidate {
-                display: format!("{provider}  (default {})", model.id),
-                value: provider,
-                is_dir: false,
-            })
-            .collect();
+        let provider_candidates: Vec<Candidate> =
+            cupel_coding_agent::providers::catalog_providers(&meta.models)
+                .into_iter()
+                .map(|(provider, model)| Candidate {
+                    display: format!("{provider}  (default {})", model.id),
+                    value: provider,
+                    is_dir: false,
+                })
+                .collect();
         let login_candidates = vec![Candidate {
             display:
                 "openai-codex  - ChatGPT Plus/Pro browser login (append 'device' for headless)"
@@ -509,13 +509,16 @@ impl App {
     async fn reload_in_place(self, cwd: &std::path::Path) -> Self {
         let state = self.agent.state();
         let registry = self.agent.registry();
-        let ingredients = crate::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
+        let ingredients =
+            cupel_coding_agent::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
 
         // The delta between what the session started with and what is on
         // disk now, as a user message the next request will carry.
-        let delta_message =
-            crate::resources::context_delta(&self.meta.context_files, &ingredients.context_files)
-                .map(AgentMessage::user_text);
+        let delta_message = cupel_coding_agent::resources::context_delta(
+            &self.meta.context_files,
+            &ingredients.context_files,
+        )
+        .map(AgentMessage::user_text);
         let mut seeded = state.messages.clone();
         if let Some(message) = &delta_message {
             seeded.push(message.clone());
@@ -529,11 +532,9 @@ impl App {
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
         let provider = state.model.provider.as_str();
-        options.api_key = self
-            .session_keys
-            .get(provider)
-            .cloned()
-            .or_else(|| crate::providers::resolve_api_key(provider, &ingredients.settings));
+        options.api_key = self.session_keys.get(provider).cloned().or_else(|| {
+            cupel_coding_agent::providers::resolve_api_key(provider, &ingredients.settings)
+        });
         options.thinking_level = state.thinking_level;
         options.tool_execution = cupel_agent::ToolExecutionMode::Parallel;
         options.session_id = Some(session_id.clone());
@@ -542,13 +543,13 @@ impl App {
         // Same id -> the new recorder appends to the same transcript file.
         // The old recorder is dropped without end_session: no session-end
         // hook fires, because this session is not ending.
-        let recorder = crate::session::SessionRecorder::new(
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
             self.meta.home.clone(),
             cwd,
             &session_id,
             &state.model.id,
         );
-        let meta = crate::modes::SessionMeta {
+        let meta = cupel_coding_agent::modes::SessionMeta {
             model_name: state.model.name.clone(),
             provider: state.model.provider.as_str().to_string(),
             cwd: self.meta.cwd.clone(),
@@ -594,7 +595,7 @@ impl App {
             ));
             return self;
         };
-        let (session_id, seeded) = match crate::session::load_transcript(&path) {
+        let (session_id, seeded) = match cupel_coding_agent::session::load_transcript(&path) {
             Ok((header, messages)) => (header.session_id, messages),
             Err(e) => {
                 self.notice(format!("cannot resume {id}: {e}"));
@@ -608,7 +609,8 @@ impl App {
 
         let state = self.agent.state();
         let registry = self.agent.registry();
-        let ingredients = crate::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
+        let ingredients =
+            cupel_coding_agent::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
 
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
         // A preset prompt survives like the model and thinking level do: it
@@ -625,23 +627,21 @@ impl App {
         // from the fresh ingredients self.meta.settings is the stale
         // copy this reload replaces (hand edits would be lost otherwise).
         let provider = state.model.provider.as_str();
-        options.api_key = self
-            .session_keys
-            .get(provider)
-            .cloned()
-            .or_else(|| crate::providers::resolve_api_key(provider, &ingredients.settings));
+        options.api_key = self.session_keys.get(provider).cloned().or_else(|| {
+            cupel_coding_agent::providers::resolve_api_key(provider, &ingredients.settings)
+        });
         options.thinking_level = state.thinking_level;
         options.tool_execution = cupel_agent::ToolExecutionMode::Parallel;
         options.session_id = Some(session_id.clone());
         options.messages = seeded;
 
-        let recorder = crate::session::SessionRecorder::new(
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
             self.meta.home.clone(),
             cwd,
             &session_id,
             &state.model.id,
         );
-        let meta = crate::modes::SessionMeta {
+        let meta = cupel_coding_agent::modes::SessionMeta {
             model_name: state.model.name.clone(),
             provider: state.model.provider.as_str().to_string(),
             cwd: self.meta.cwd.clone(),
@@ -812,7 +812,9 @@ impl App {
         // startup (launching + quitting cupel must leave no trace), and not
         // for local built-ins like /help. Idempotent and never fails, so
         // calling it on every send is fine.
-        crate::resources::ensure_project_dot_cupel(std::path::Path::new(&self.meta.cwd));
+        cupel_coding_agent::resources::ensure_project_dot_cupel(std::path::Path::new(
+            &self.meta.cwd,
+        ));
         if self.is_running() {
             self.agent.follow_up(AgentMessage::user_text(text));
             self.recorder.on_queued_prompt(text);
@@ -890,10 +892,9 @@ impl App {
     /// the exported env var. Bedrock returns `None`. Its AWS credential
     /// chain resolves inside the provider itself.
     fn resolve_key(&self, provider: &str) -> Option<String> {
-        self.session_keys
-            .get(provider)
-            .cloned()
-            .or_else(|| crate::providers::resolve_api_key(provider, &self.meta.settings))
+        self.session_keys.get(provider).cloned().or_else(|| {
+            cupel_coding_agent::providers::resolve_api_key(provider, &self.meta.settings)
+        })
     }
 
     /// Point the agent at `model` and re-resolve the API key for its
@@ -918,12 +919,14 @@ impl App {
 
         if name.is_empty() {
             let mut lines = vec!["providers (/provider <name> [api-key]):".to_string()];
-            for (provider, model) in crate::providers::catalog_providers(&self.meta.models) {
+            for (provider, model) in
+                cupel_coding_agent::providers::catalog_providers(&self.meta.models)
+            {
                 // The order of these arms mirrors resolve_key's precedence
                 // (session > env > settings) keep the two in sync, or the
                 // listing lies about which key a request would use.
                 let status = if provider == "amazon-bedrock" {
-                    if crate::providers::has_aws_credentials() {
+                    if cupel_coding_agent::providers::has_aws_credentials() {
                         "AWS credentials found".to_string()
                     } else {
                         "no AWS credentials".to_string()
@@ -931,12 +934,18 @@ impl App {
                 } else if provider == "openai-codex" {
                     // Subscription auth: the credential is a stored login,
                     // never a key mirror auth.json, not the key tiers.
-                    if crate::auth::has_credential(self.meta.home.as_deref(), &provider) {
+                    if cupel_coding_agent::auth::has_credential(
+                        self.meta.home.as_deref(),
+                        &provider,
+                    ) {
                         "logged in with ChatGPT (/logout openai-codex)".to_string()
                     } else {
                         "not logged in - /login openai-codex".to_string()
                     }
-                } else if crate::providers::provider_is_keyless(&self.meta.models, &provider) {
+                } else if cupel_coding_agent::providers::provider_is_keyless(
+                    &self.meta.models,
+                    &provider,
+                ) {
                     // Local endpoints (ollama, llama-server): requests go
                     // out anonymously, nothing to configure.
                     "local endpoint - no key required".to_string()
@@ -946,8 +955,9 @@ impl App {
                     } else {
                         "key entered this session".to_string()
                     }
-                } else if crate::providers::env_api_key(&provider).is_some() {
-                    let var = crate::providers::env_var_name(&provider).unwrap_or("env");
+                } else if cupel_coding_agent::providers::env_api_key(&provider).is_some() {
+                    let var =
+                        cupel_coding_agent::providers::env_var_name(&provider).unwrap_or("env");
                     if self.meta.settings.api_key(&provider).is_some() {
                         format!("{var} exported (overrides settings.json)")
                     } else {
@@ -955,7 +965,7 @@ impl App {
                     }
                 } else if self.meta.settings.api_key(&provider).is_some() {
                     "key in settings.json".to_string()
-                } else if let Some(var) = crate::providers::env_var_name(&provider) {
+                } else if let Some(var) = cupel_coding_agent::providers::env_var_name(&provider) {
                     format!("no key ({var} unset)")
                 } else {
                     // Custom providers have no env var at all pointing at
@@ -968,9 +978,10 @@ impl App {
             return;
         }
 
-        let Some((provider, model)) = crate::providers::catalog_providers(&self.meta.models)
-            .into_iter()
-            .find(|(p, _)| p == name)
+        let Some((provider, model)) =
+            cupel_coding_agent::providers::catalog_providers(&self.meta.models)
+                .into_iter()
+                .find(|(p, _)| p == name)
         else {
             self.notice(format!("unknown provider: {name} (/provider lists them)"));
             return;
@@ -980,7 +991,7 @@ impl App {
         if let Some(key) = entered_key {
             // Neither Bedrock (AWS chain) nor keyless local endpoints have
             // anywhere to put a key.
-            if !crate::providers::takes_api_key(&self.meta.models, &provider) {
+            if !cupel_coding_agent::providers::takes_api_key(&self.meta.models, &provider) {
                 self.notice(format!("{provider} does not take an API key - key ignored"));
             } else {
                 // Session memory first: the key must work for this session
@@ -990,8 +1001,11 @@ impl App {
                 // Persist. save_provider_key re-reads the file itself and
                 // refuses to clobber a malformed one; the in-memory mirror
                 // is updated only on sucess
-                let saved =
-                    crate::settings::save_provider_key(self.meta.home.as_deref(), &provider, key);
+                let saved = cupel_coding_agent::settings::save_provider_key(
+                    self.meta.home.as_deref(),
+                    &provider,
+                    key,
+                );
                 match saved {
                     Ok(path) => {
                         // Mirror the write so the /provider listing (which
@@ -1015,19 +1029,19 @@ impl App {
         let key_source = if provider == "amazon-bedrock" {
             "AWS credential chain".to_string()
         } else if provider == "openai-codex" {
-            if crate::auth::has_credential(self.meta.home.as_deref(), &provider) {
+            if cupel_coding_agent::auth::has_credential(self.meta.home.as_deref(), &provider) {
                 "using the stored ChatGPT login (tokens auto-refresh)".to_string()
             } else {
                 "NOT logged in - requests will fail; run /login openai-codex".to_string()
             }
-        } else if crate::providers::provider_is_keyless(&self.meta.models, &provider) {
+        } else if cupel_coding_agent::providers::provider_is_keyless(&self.meta.models, &provider) {
             "local endpoint - no key required".to_string()
         } else if self.session_keys.contains_key(&provider) {
             "using the key entered this session".to_string()
-        } else if crate::providers::env_api_key(&provider).is_some() {
+        } else if cupel_coding_agent::providers::env_api_key(&provider).is_some() {
             format!(
                 "using exported {}",
-                crate::providers::env_var_name(&provider).unwrap_or("env")
+                cupel_coding_agent::providers::env_var_name(&provider).unwrap_or("env")
             )
         } else if self.meta.settings.api_key(&provider).is_some() {
             "using the key from settings.json".to_string()
@@ -1075,7 +1089,7 @@ impl App {
         self.switch_model(model);
         self.agent.set_thinking_level(preset.thinking_level.level());
         self.agent
-            .set_system_prompt(crate::system_prompt::with_preset_prompt(
+            .set_system_prompt(cupel_coding_agent::system_prompt::with_preset_prompt(
                 &self.meta.base_system_prompt,
                 preset.prompt.as_deref(),
             ));
@@ -1121,7 +1135,7 @@ impl App {
                             .to_string(),
                     ),
                     Some(dir) => {
-                        let sessions = crate::session::list_sessions_in(dir);
+                        let sessions = cupel_coding_agent::session::list_sessions_in(dir);
                         lines.push(format!("sessions for this project ({}):", sessions.len()));
                         for s in &sessions {
                             let marker = if s.id == self.recorder.session_id() {
@@ -1132,7 +1146,7 @@ impl App {
                             lines.push(format!(
                                 "{marker} {}  {}  {} msgs  {}  {}",
                                 s.id,
-                                crate::session::date_ymd(s.started_at),
+                                cupel_coding_agent::session::date_ymd(s.started_at),
                                 s.message_count,
                                 s.model,
                                 s.label,
@@ -1147,7 +1161,7 @@ impl App {
                 // local fs/git work then sends it like any prompt, so the
                 // model call rides the normal async run path.
                 let review_args = commands::parse_command_args(args);
-                match crate::review::build_review_prompt(
+                match cupel_coding_agent::review::build_review_prompt(
                     std::path::Path::new(&self.meta.cwd),
                     &review_args,
                 ) {
@@ -1300,7 +1314,7 @@ impl App {
     fn handle_logout_command(&mut self, args: &str) {
         let name = args.trim();
         if name.is_empty() {
-            let stored = crate::auth::load_auth(self.meta.home.as_deref());
+            let stored = cupel_coding_agent::auth::load_auth(self.meta.home.as_deref());
             if stored.is_empty() {
                 self.notice("no stored logins (auth.json is empty; /login adds one)");
             } else {
@@ -1312,7 +1326,7 @@ impl App {
             }
             return;
         }
-        match crate::auth::delete_credential(self.meta.home.as_deref(), name) {
+        match cupel_coding_agent::auth::delete_credential(self.meta.home.as_deref(), name) {
             Ok(true) => self.notice(format!("{name} logged out - credential removed")),
             Ok(false) => self.notice(format!("no stored login for {name} (/logout lists them)")),
             // SaveError never carries token values safe to show.

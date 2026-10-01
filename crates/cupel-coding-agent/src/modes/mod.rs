@@ -1,12 +1,11 @@
 //! Frontends ("modes") for the coding agent:
 //!
-//! - [`interactive`]: the ratatui TUI (default when stdout is a terminal)
 //! - [`plain`]: a line-based REPL on a TTY, or one prompt from piped stdin
 //!
-//! Both consume the same [`Agent`](cupel_agent::Agent); a mode is purely a
-//! presentation layer over the agent's event stream.
+//! The ratatui TUI lives in the `cupel-tui` crate, which builds on this
+//! one. Both consume the same [`Agent`](cupel_agent::Agent); a mode is
+//! purely a presentation layer over the agent's event stream.
 
-pub mod interactive;
 pub mod plain;
 
 /// Static session info the frontends display (header/footer), plus the

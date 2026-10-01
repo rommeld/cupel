@@ -216,7 +216,7 @@ fn manual_input_to_code(input: &str, state: &str) -> Result<String, String> {
 /// Persist and summarize. Saving is the login's last step: a credential
 /// that never reaches auth.json is a login the next session forgets.
 fn finish(home: Option<PathBuf>, credential: &OAuthCredential) -> Result<String, String> {
-    match crate::auth::save_credential(
+    match cupel_coding_agent::auth::save_credential(
         home.as_deref(),
         cupel_core::types::Provider::OPENAI_CODEX,
         credential,
