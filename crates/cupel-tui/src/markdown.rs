@@ -166,7 +166,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
                     i += consumed;
                 }
                 None => {
-                    current.push(']');
+                    current.push(c);
                     i += 1;
                 }
             },
@@ -630,6 +630,21 @@ mod tests {
         assert!(text.contains("2 * 3 = 6"), "{text}");
         assert!(text.contains("snake_case_name"), "{text}");
         assert!(text.contains("*literal*"), "{text}");
+    }
+
+    #[test]
+    fn brackets_remain_literal_when_link_parsing_fails() {
+        for input in [
+            "a[0] - [ ] todo",
+            "a[0] - [\u{a0}]\u{a0}todo",
+            "[unfinished",
+            "[label](unfinished",
+        ] {
+            let text = flat_text(&render(input, 80, Style::new())).concat();
+            assert_eq!(text, input);
+        }
+        let lines = render("- [ ] todo\n- [x] done", 80, Style::new());
+        assert_eq!(flat_text(&lines), ["• [ ] todo", "• [x] done"]);
     }
 
     #[test]
