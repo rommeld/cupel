@@ -835,16 +835,15 @@ fn build_additional_model_request_fields(
         return None;
     }
     let Some(level) = options.reasoning else {
-        // "off": a named entry in the level map is the thinking type that
-        // switches the model off (Sonnet 5.5: `between_tools`, sent alone,
-        // because `disabled` is a 400 there). Without one, `thinking` stays
-        // out of the request as before.
-        return model
-            .thinking_level_map
-            .as_ref()
-            .and_then(|m| m.get("off"))
-            .and_then(Option::as_ref)
-            .map(|off_type| json!({"thinking": {"type": off_type}}));
+        // Match Anthropic's off convention: no entry explicitly disables
+        // thinking, a named entry sends that type alone (Sonnet 5.5:
+        // `between_tools`), and null means thinking cannot be switched off.
+        let off = model.thinking_level_map.as_ref().and_then(|m| m.get("off"));
+        return match off {
+            None => Some(json!({"thinking": {"type": "disabled"}})),
+            Some(Some(off_type)) => Some(json!({"thinking": {"type": off_type}})),
+            Some(None) => None,
+        };
     };
 
     if supports_adaptive_thinking(model) {
@@ -961,6 +960,28 @@ mod tests {
     }
 
     #[test]
+    fn off_without_a_map_entry_explicitly_disables_thinking() {
+        for id in [
+            "us.anthropic.claude-sonnet-5",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        ] {
+            let model = catalog_model(id);
+            assert!(
+                model
+                    .thinking_level_map
+                    .as_ref()
+                    .and_then(|map| map.get("off"))
+                    .is_none()
+            );
+            assert_eq!(
+                fields(&model, None),
+                Some(json!({"thinking": {"type": "disabled"}})),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
     fn sonnet55_off_sends_between_tools() {
         // Same rule as on the Anthropic API: `disabled` is a 400, the "off"
         // entry names the thinking type, and the type travels alone.
@@ -969,9 +990,6 @@ mod tests {
             fields(&sonnet, None),
             Some(json!({"thinking": {"type": "between_tools"}}))
         );
-        // A model without an "off" entry still sends no thinking at all.
-        let sonnet45 = catalog_model("us.anthropic.claude-sonnet-4-5-20250929-v1:0");
-        assert_eq!(fields(&sonnet45, None), None);
     }
 
     #[test]
