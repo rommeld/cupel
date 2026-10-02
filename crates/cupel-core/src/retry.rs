@@ -18,10 +18,12 @@
 
 use crate::types::{AssistantMessage, StopReason};
 
-/// Account/billing limits: retrying cannot help and may mask a real
+/// Hard request/account failures: retrying cannot help and may mask a real
 /// problem from the user. Checked first because some of these arrive
 /// wrapped in otherwise-retryable-looking 429 responses.
 const NON_RETRYABLE_PATTERNS: &[&str] = &[
+    // Safety refusals can carry a generic "Provider returned error" wrapper.
+    "contentfilter",
     // Subscription/account limits (returned as 429s by some gateways).
     "gousagelimiterror",
     "freeusagelimiterror",
@@ -107,6 +109,16 @@ pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
     let Some(error_message) = &message.error_message else {
         return false;
     };
+    // An explicit stream-level client error outweighs generic gateway text
+    // such as "Provider returned error". Rate limiting remains retryable.
+    if error_message
+        .strip_prefix("Error Code ")
+        .and_then(|rest| rest.split_once(':'))
+        .and_then(|(code, _)| code.trim().parse::<u16>().ok())
+        .is_some_and(|code| (400..500).contains(&code) && code != 429)
+    {
+        return false;
+    }
     let compressed = compress(error_message);
     if NON_RETRYABLE_PATTERNS
         .iter()
@@ -197,6 +209,28 @@ mod tests {
                 "expected non-retryable: {error}"
             );
         }
+    }
+
+    #[test]
+    fn explicit_stream_client_errors_override_transient_wrapper_text() {
+        for code in [400, 401, 402, 403, 404, 408, 409, 422] {
+            let error = format!("Error Code {code}: Provider returned error");
+            assert!(
+                !is_retryable_assistant_error(&message(StopReason::Error, Some(&error))),
+                "expected non-retryable: {error}"
+            );
+        }
+        for code in [429, 500, 502, 503, 504] {
+            let error = format!("Error Code {code}: Provider returned error");
+            assert!(is_retryable_assistant_error(&message(
+                StopReason::Error,
+                Some(&error)
+            )));
+        }
+        assert!(!is_retryable_assistant_error(&message(
+            StopReason::Error,
+            Some("Error Code content_filter: Provider returned error")
+        )));
     }
 
     #[test]

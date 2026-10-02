@@ -280,6 +280,24 @@ async fn run(
                 parse_usage(usage, model, &mut output);
             }
 
+            // Gateways can fail inside an otherwise successful HTTP stream,
+            // with or without choices. Preserve details before finish_reason
+            // handling can replace them with a generic error.
+            if let Some(error) = data.get("error").filter(|error| !error.is_null()) {
+                let code = match error.get("code") {
+                    Some(Value::String(code)) => code.clone(),
+                    Some(Value::Number(code)) => code.to_string(),
+                    _ => "unknown".to_string(),
+                };
+                let message = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no message");
+                return Err(InferenceError::Other(format!(
+                    "Error Code {code}: {message}"
+                )));
+            }
+
             let Some(choice) = data
                 .get("choices")
                 .and_then(Value::as_array)
@@ -969,6 +987,124 @@ mod tests {
             messages: Vec::new(),
             tools: None,
         }
+    }
+
+    /// Serve a real SSE response with some text followed by the supplied chunk.
+    async fn stream_chunk(
+        chunk: Value,
+    ) -> core::result::Result<AssistantMessage, crate::error::MessageStreamError> {
+        use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = format!(
+            "data: {}\n\ndata: {chunk}\n\ndata: [DONE]\n\n",
+            json!({"choices": [{"delta": {"content": "partial output"}}]})
+        );
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = socket.into_split();
+            let mut reader = tokio::io::BufReader::new(reader);
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).await.unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            reader
+                .read_exact(&mut vec![0; content_length])
+                .await
+                .unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            writer.write_all(response.as_bytes()).await.unwrap();
+        });
+        let mut model = model_with_compat(Some(json!({"requiresApiKey": false})));
+        model.base_url = format!("http://{address}/v1");
+        let options = StreamOptions {
+            timeout_ms: Some(5_000),
+            ..StreamOptions::default()
+        };
+        let result = OpenAiCompletionsProvider::new()
+            .stream(&model, empty_context(), options)
+            .result()
+            .await;
+        server.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn gateway_stream_errors_preserve_code_and_message_for_retry() {
+        for (code, message, expected_code, retryable) in [
+            (json!(502), "Bad gateway", "502", true),
+            (json!("503"), "Service unavailable", "503", true),
+            (json!(429), "Too many requests", "429", true),
+            (json!(400), "Provider returned error", "400", false),
+            (json!(403), "Content filter triggered", "403", false),
+            (
+                json!("content_filter"),
+                "Provider returned error",
+                "content_filter",
+                false,
+            ),
+            (
+                json!("insufficient_quota"),
+                "Quota exceeded",
+                "insufficient_quota",
+                false,
+            ),
+            (Value::Null, "Invalid request", "unknown", false),
+        ] {
+            for with_choices in [false, true] {
+                let mut chunk = json!({"error": {"code": code, "message": message}});
+                if with_choices {
+                    chunk["choices"] = json!([{"delta": {}, "finish_reason": "error"}]);
+                }
+                let error = stream_chunk(chunk).await.unwrap_err();
+                let crate::error::MessageStreamError::ProviderError {
+                    reason,
+                    message: output,
+                } = error
+                else {
+                    panic!("expected a provider error");
+                };
+                assert_eq!(reason, StopReason::Error);
+                assert_eq!(output.stop_reason, StopReason::Error);
+                assert_eq!(
+                    output.error_message.as_deref(),
+                    Some(format!("Error Code {expected_code}: {message}").as_str())
+                );
+                assert_eq!(
+                    crate::retry::is_retryable_assistant_error(&output),
+                    retryable
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn null_stream_error_does_not_override_a_successful_choice() {
+        let output = stream_chunk(json!({
+            "error": null,
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+        }))
+        .await
+        .unwrap();
+        assert_eq!(output.stop_reason, StopReason::Stop);
+        assert!(output.error_message.is_none());
+        assert_eq!(
+            output.content,
+            vec![AssistantContent::Text(TextContent::plain("partial output"))]
+        );
     }
 
     #[test]
