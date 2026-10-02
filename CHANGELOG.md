@@ -3,6 +3,18 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.23.0] - 2026-10-02
+
+- fix(tui): sanatize transcript text before rendering
+- fix(trust): define project trustworthiness and enable hooks
+- fix(bedrock thinking): disable thinking for selection off for Bedrock API
+- fix(retry): fetch and handle 4xx correctly to not retry failing requests indefinitely
+- fix(markdown): fallback renders exhaustive symbol with current.push(c) instead of square brackets
+- fix(new): end current session and create new session based on reload_resume
+- fix(apply_patch): inplace update file when renaming by using apply_patch
+- fix(compaction): compaction now waits for next assistant message to include tool result
+- version: sync to v0.21.3 from CHANGELOG.md
+
 ## [v0.22.0] - 2026-10-01
 
 - fix(tui): keep a bare cargo run launching cupel
