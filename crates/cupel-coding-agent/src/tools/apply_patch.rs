@@ -89,7 +89,6 @@ impl ApplyPatchTool {
     /// operate on the first one's result, which the patch did not say.
     fn lock_keys(&self, hunks: &[Hunk]) -> Result<Vec<PathBuf>, ToolError> {
         let mut targets: Vec<PathBuf> = Vec::new();
-        let mut keys: Vec<PathBuf> = Vec::new();
         for hunk in hunks {
             let source = match hunk {
                 Hunk::AddFile { path, .. }
@@ -101,18 +100,22 @@ impl ApplyPatchTool {
                 return Err(format!("multiple operations target {source}").into());
             }
             targets.push(target.clone());
-            keys.push(target);
             if let Hunk::UpdateFile {
                 move_path: Some(destination),
                 ..
             } = hunk
             {
-                keys.push(queue_key(&resolve_to_root(destination, &self.cwd)));
+                let destination_key = queue_key(&resolve_to_root(destination, &self.cwd));
+                if destination_key != target {
+                    if targets.contains(&destination_key) {
+                        return Err(format!("multiple operations target {destination}").into());
+                    }
+                    targets.push(destination_key);
+                }
             }
         }
-        keys.sort();
-        keys.dedup();
-        Ok(keys)
+        targets.sort();
+        Ok(targets)
     }
 
     /// Read and match, never write. Errors here mean the patch does not fit
@@ -381,10 +384,14 @@ async fn apply(change: &Change) -> Result<(), ToolError> {
             content,
             ..
         } => {
-            // A rename is "write the new content there, remove the original
-            // here": no `rename(2)`, so the destination gets the patched
-            // content even across filesystems, and an existing destination
-            // is overwritten.
+            if queue_key(path) == queue_key(destination) {
+                tokio::fs::write(path, content)
+                    .await
+                    .map_err(|e| format!("Failed to write file {display}: {e}"))?;
+                return tokio::fs::rename(path, destination).await.map_err(|e| {
+                    format!("Failed to rename {display} to {destination_display}: {e}").into()
+                });
+            }
             write_creating_parents(destination, destination_display, content).await?;
             tokio::fs::remove_file(path)
                 .await
@@ -539,6 +546,98 @@ mod tests {
             "Success. Updated the following files:\nM renamed/dir/name.txt"
         );
         assert!(diff_of(&result).starts_with("M old/name.txt -> renamed/dir/name.txt\n"));
+    }
+
+    #[tokio::test]
+    async fn move_to_the_same_file_preserves_the_updated_content() {
+        for (name, destination) in [("same-path", "name.txt"), ("same-key", "./name.txt")] {
+            let root = temp_root(name);
+            write(&root, "name.txt", "old\n");
+            assert_eq!(
+                queue_key(&root.join("name.txt")),
+                queue_key(&root.join(destination))
+            );
+            let result = run(
+                &root,
+                &format!("*** Begin Patch\n*** Update File: name.txt\n*** Move to: {destination}\n@@\n-old\n+new\n*** End Patch"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(read(&root, "name.txt"), "new\n");
+            assert_eq!(read(&root, destination), "new\n");
+            assert_eq!(
+                text_of(&result),
+                format!("Success. Updated the following files:\nM {destination}")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn move_can_change_only_the_filename_case() {
+        let root = temp_root("case-only");
+        write(&root, "Name.txt", "old\n");
+        run(
+            &root,
+            "*** Begin Patch\n*** Update File: Name.txt\n*** Move to: name.txt\n@@\n-old\n+new\n*** End Patch",
+        )
+        .await
+        .unwrap();
+        assert_eq!(read(&root, "name.txt"), "new\n");
+        // exists() cannot distinguish the two spellings on case-insensitive
+        // filesystems; inspect the directory entry to verify the rename.
+        let names: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("name.txt")]);
+    }
+
+    #[tokio::test]
+    async fn move_destinations_refuse_other_operations_before_any_write() {
+        let move_section =
+            "*** Update File: source.txt\n*** Move to: destination.txt\n@@\n-source\n+moved\n";
+        let other_sections = [
+            "*** Add File: destination.txt\n+replacement\n",
+            "*** Delete File: destination.txt\n",
+            "*** Update File: destination.txt\n@@\n-existing\n+replacement\n",
+            "*** Update File: other.txt\n*** Move to: destination.txt\n@@\n-other\n+replacement\n",
+        ];
+        for (name, existing) in [
+            ("move-conflicts-new", false),
+            ("move-conflicts-existing", true),
+        ] {
+            let root = temp_root(name);
+            write(&root, "source.txt", "source\n");
+            write(&root, "other.txt", "other\n");
+            if existing {
+                write(&root, "destination.txt", "existing\n");
+            }
+            for other in other_sections {
+                for sections in [
+                    format!("{move_section}{other}"),
+                    format!("{other}{move_section}"),
+                ] {
+                    let err = run(
+                        &root,
+                        &format!("*** Begin Patch\n*** Add File: created.txt\n+created\n{sections}*** End Patch"),
+                    )
+                    .await
+                    .unwrap_err();
+                    assert_eq!(
+                        err.to_string(),
+                        "multiple operations target destination.txt"
+                    );
+                    assert_eq!(read(&root, "source.txt"), "source\n");
+                    assert_eq!(read(&root, "other.txt"), "other\n");
+                    if existing {
+                        assert_eq!(read(&root, "destination.txt"), "existing\n");
+                    } else {
+                        assert!(!root.join("destination.txt").exists());
+                    }
+                    assert!(!root.join("created.txt").exists());
+                }
+            }
+        }
     }
 
     #[tokio::test]
