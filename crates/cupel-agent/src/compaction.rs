@@ -138,8 +138,8 @@ pub fn should_compact(context_tokens: u64, context_window: u64, config: &Compact
 
 /// Index of the first message kept verbatim. Everything before it gets
 /// summarized. Walks back accumulating the keep budget, then snaps to the
-/// next user/custom message boundary (never between a tool call and its
-/// result).
+/// next user/custom message boundary, falling back to the next assistant
+/// message (never between a tool call and its result).
 fn find_cut_index(messages: &[AgentMessage], keep_recent_tokens: u64) -> usize {
     let mut accumulated: u64 = 0;
     let mut budget_start = messages.len();
@@ -159,10 +159,17 @@ fn find_cut_index(messages: &[AgentMessage], keep_recent_tokens: u64) -> usize {
             return i;
         }
     }
-    // No boundary in the tail (one giant turn): keep only the tail from the
-    // budget start. transform_messages synthesizes tool results for any
-    // orphaned calls, so even this cut is wire-safe.
-    budget_start
+    // No user/custom boundary in the tail (one giant turn): snap forward
+    // to an assistant so retained results never lose their tool calls.
+    // If none remains, summarize everything rather than keep orphaned results.
+    messages
+        .iter()
+        .enumerate()
+        .skip(budget_start)
+        .find_map(|(i, message)| {
+            matches!(message, AgentMessage::Llm(Message::Assistant(_))).then_some(i)
+        })
+        .unwrap_or(messages.len())
 }
 
 /// Replacement body for an elided tool result. Tells the model exactly how
@@ -457,6 +464,65 @@ mod tests {
     fn cut_index_zero_when_everything_fits_budget() {
         let messages = vec![user("short"), user("also short")];
         assert_eq!(find_cut_index(&messages, 20_000), 0);
+    }
+
+    #[test]
+    fn cut_index_preserves_tool_pairs_without_a_user_boundary() {
+        let model = model_with_window(0);
+        let mut messages = vec![user("read the files")];
+        messages.extend((0..4).flat_map(|i| {
+            let id = format!("call_{i}");
+            [
+                AgentMessage::Llm(Message::Assistant(cupel_core::types::AssistantMessage {
+                    content: vec![AssistantContent::ToolCall(cupel_core::types::ToolCall {
+                        id: id.clone(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({}),
+                    })],
+                    api: model.api.clone(),
+                    provider: model.provider.clone(),
+                    model: model.id.clone(),
+                    response_model: None,
+                    response_id: None,
+                    usage: cupel_core::types::Usage::default(),
+                    stop_reason: cupel_core::types::StopReason::ToolUse,
+                    error_message: None,
+                    timestamp: 0,
+                })),
+                AgentMessage::Llm(Message::ToolResult(cupel_core::types::ToolResultMessage {
+                    tool_call_id: id,
+                    tool_name: "read".into(),
+                    content: vec![ToolResultContent::Text(
+                        cupel_core::types::TextContent::plain("y".repeat(4000)),
+                    )],
+                    details: None,
+                    is_error: false,
+                    timestamp: 0,
+                })),
+            ]
+        }));
+
+        for budget_start in 1..messages.len() {
+            // This budget lands exactly on the selected message, with no
+            // user/custom boundary remaining in the keep window.
+            let keep_recent_tokens = messages[budget_start..]
+                .iter()
+                .map(estimate_message_tokens)
+                .sum();
+            let cut = find_cut_index(&messages, keep_recent_tokens);
+            // Assistant boundaries stay put; result boundaries advance to
+            // the next assistant (or the end when no assistant remains).
+            let expected_cut = if budget_start % 2 == 0 {
+                budget_start + 1
+            } else {
+                budget_start
+            };
+            assert_eq!(cut, expected_cut, "budget starts at {budget_start}");
+            assert!(
+                cut == messages.len()
+                    || matches!(messages[cut], AgentMessage::Llm(Message::Assistant(_)))
+            );
+        }
     }
 
     fn tool_result(bytes: usize) -> AgentMessage {
