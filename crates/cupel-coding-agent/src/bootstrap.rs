@@ -208,6 +208,10 @@ mod tests {
         .unwrap();
 
         let registry = cupel_core::default_registry();
+        let restricted = load(&cwd, Some(home.clone()), &registry).await;
+        assert!(!restricted.models.iter().any(|m| m.id == "local-test"));
+        crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Trusted)
+            .unwrap();
         let ingredients = load(&cwd, Some(home), &registry).await;
 
         assert!(ingredients.system_prompt.contains("ALWAYS SAY PING"));

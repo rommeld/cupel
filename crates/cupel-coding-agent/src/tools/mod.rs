@@ -14,8 +14,9 @@
 //! `find` and `ls` are not separate tools because `bash` can do both.
 //!
 //! Note on permissions: tools execute without per-call user
-//! approval. The trust boundary is launching cupel in a directory at all.
-//! A permission hook can veto calls via
+//! approval. Project trust gates lifecycle hooks and sensitive model
+//! configuration, not model-directed tool execution; it is not a sandbox.
+//! An agent permission hook can veto calls via
 //! [`AgentHooks::before_tool_call`](cupel_agent::AgentHooks::before_tool_call)
 //! when a stricter policy is needed.
 

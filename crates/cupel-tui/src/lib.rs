@@ -23,6 +23,7 @@ pub mod fuzzy;
 pub mod input;
 pub mod login;
 pub mod markdown;
+pub mod project_trust;
 pub mod theme;
 pub mod transcript;
 pub mod ui;

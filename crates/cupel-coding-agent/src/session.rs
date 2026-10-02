@@ -1,6 +1,6 @@
 //! Session persistence: every conversation is recorded as a JSONL
-//! transcript so it can be resumed (`cupel --resume`) and consumed by
-//! external tools (e.g. the `entire` CLI's agent protocol).
+//! transcript so it can be resumed (`cupel --resume`).
+//! Project lifecycle hooks require an explicit, home-stored trust grant.
 //!
 //! Layout: `<cupel home>/sessions/<project-slug>/<session-id>.jsonl`, where
 //! the slug is the cwd with every non-alphanumeric character mapped to `-`
@@ -224,13 +224,15 @@ impl SessionRecorder {
     pub fn new(home: Option<PathBuf>, cwd: &Path, session_id: &str, model_id: &str) -> Self {
         let path =
             sessions_dir(home.as_deref(), cwd).map(|d| d.join(format!("{session_id}.jsonl")));
-        // Hook roots mirror the resource roots (home, then project .cupel),
-        // minus the raw cwd because hooks/ at the repo root would be clutter.
+        // Home hooks are user-installed. Repository executables are never
+        // loaded merely because cupel was launched inside a checkout.
         let mut hook_roots = Vec::new();
         if let Some(home) = &home {
             hook_roots.push(home.clone());
         }
-        hook_roots.push(cwd.join(".cupel"));
+        if crate::project_trust::is_trusted(home.as_deref(), cwd) {
+            hook_roots.push(cwd.join(".cupel"));
+        }
         let session_ref = path.clone().unwrap_or_default();
         Self {
             header: TranscriptHeader {
@@ -600,5 +602,69 @@ mod tests {
         rec.end_session().await;
         // Nothing anywhere on disk (the temp root stays empty).
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn project_hooks_require_explicit_trust_for_every_event() {
+        use crate::project_trust::{ProjectTrust, save};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = temp_root("hook-trust");
+        let (home, cwd) = (root.join("home"), root.join("proj"));
+        let events = ["session-start", "user-prompt-submit", "stop", "session-end"];
+        for (hook_root, log) in [
+            (home.clone(), root.join("home.log")),
+            (cwd.join(".cupel"), root.join("project.log")),
+        ] {
+            for event in events {
+                let dir = hook_root.join("hooks").join(event);
+                std::fs::create_dir_all(&dir).unwrap();
+                let script = dir.join("capture");
+                std::fs::write(
+                    &script,
+                    format!("#!/bin/sh\necho {event} >> '{}'\n", log.display()),
+                )
+                .unwrap();
+                std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+
+        for trust in [None, Some(ProjectTrust::Restricted)] {
+            if let Some(trust) = trust {
+                save(&home, &cwd, trust).unwrap();
+            }
+            let mut rec = recorder(&home, &cwd);
+            rec.before_prompt("first prompt").await;
+            rec.on_queued_prompt("queued prompt");
+            rec.on_agent_end();
+            rec.end_session().await;
+            assert!(
+                root.join("home.log").exists(),
+                "user-installed hooks still run"
+            );
+            assert!(
+                !root.join("project.log").exists(),
+                "no project code may run without trust"
+            );
+        }
+
+        save(&home, &cwd, ProjectTrust::Trusted).unwrap();
+        let mut rec = recorder(&home, &cwd);
+        rec.before_prompt("first prompt").await;
+        rec.on_queued_prompt("queued prompt");
+        rec.on_agent_end();
+        rec.end_session().await;
+        assert_eq!(
+            std::fs::read_to_string(root.join("project.log")).unwrap(),
+            "session-start\nuser-prompt-submit\nuser-prompt-submit\nstop\nsession-end\n"
+        );
+
+        // No home means no possible trust grant, not implicit permission.
+        std::fs::remove_file(root.join("project.log")).unwrap();
+        let mut rec = SessionRecorder::new(None, &cwd, "no-home", "mock-model");
+        rec.before_prompt("prompt").await;
+        rec.end_session().await;
+        assert!(!root.join("project.log").exists());
     }
 }

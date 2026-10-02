@@ -12,6 +12,7 @@ pub mod loop_killer;
 pub mod models;
 pub mod modes;
 pub mod ollama;
+pub mod project_trust;
 pub mod providers;
 pub mod resources;
 pub mod review;

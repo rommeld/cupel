@@ -2,10 +2,12 @@
 //!
 //! Discovery is file-based, no config parsing: every executable file in
 //! `<root>/hooks/<event>/` runs when that event fires, where the roots are
-//! the cupel home (`~/.cupel`) and the project's `.cupel/`. Installing a
-//! hook = dropping a script in a directory; uninstalling = deleting it.
-//! That trivially machine-editable contract is what external integrations
-//! (e.g. the `entire` CLI's agent protocol) build on.
+//! the cupel home (`~/.cupel`) and, only with explicit project trust, the
+//! project's `.cupel/`. Installing a hook = dropping a script in a
+//! directory; uninstalling = deleting it. SessionRecorder gates the roots.
+//! Hooks run with a cleared environment and a fixed system PATH, not the
+//! agent's API keys, AWS variables, SSH socket, or shell startup settings.
+//! This is not a sandbox: trusted scripts still have filesystem access.
 //!
 //! Events: `session-start`, `user-prompt-submit`, `stop`, `session-end`.
 //! Each hook receives one JSON payload on stdin and must exit; stdout and
@@ -214,14 +216,12 @@ fn is_executable_file(path: &Path) -> bool {
     }
 }
 
-/// Execute one hook: JSON on stdin, output captured, bounded by `timeout`.
-/// Every failure mode (unspawnable, non-zero exit, timeout) is warn-only.
-async fn run_one(script: &Path, payload: &str, cwd: &Path, timeout: Duration) {
-    use tokio::io::AsyncWriteExt as _;
-
+fn hook_command(script: &Path, cwd: &Path) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(script);
     command
         .current_dir(cwd)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .stdin(std::process::Stdio::piped())
         // Captured, not inherited: a hook writing to the terminal would
         // corrupt the ratatui screen.
@@ -230,8 +230,15 @@ async fn run_one(script: &Path, payload: &str, cwd: &Path, timeout: Duration) {
         // If the timeout drops the child future, the process dies with it
         // instead of leaking.
         .kill_on_drop(true);
+    command
+}
 
-    let mut child = match command.spawn() {
+/// Execute one hook: JSON on stdin, output captured, bounded by `timeout`.
+/// Every failure mode (unspawnable, non-zero exit, timeout) is warn-only.
+async fn run_one(script: &Path, payload: &str, cwd: &Path, timeout: Duration) {
+    use tokio::io::AsyncWriteExt as _;
+
+    let mut child = match hook_command(script, cwd).spawn() {
         Ok(child) => child,
         Err(e) => {
             tracing::warn!(hook = %script.display(), "hook failed to start: {e}");
@@ -291,6 +298,22 @@ mod tests {
 
     fn runner(roots: Vec<PathBuf>, cwd: &Path) -> HookRunner {
         HookRunner::new(roots, "cupel-test", &cwd.join("t.jsonl"), cwd)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hooks_receive_only_a_fixed_system_path() {
+        let root = temp_root("environment");
+        let output = hook_command(Path::new("/usr/bin/env"), &root)
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "PATH=/usr/bin:/bin:/usr/sbin:/sbin\n",
+            "no inherited API keys, AWS configuration, SSH socket, HOME, or shell startup variables"
+        );
     }
 
     #[cfg(unix)]

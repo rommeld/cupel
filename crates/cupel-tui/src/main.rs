@@ -36,7 +36,7 @@ enum AppError {
     Session(String),
     #[error("plain-mode error: {0}")]
     PlainMode(String),
-    #[error("interactive-mode error")]
+    #[error("interactive-mode error: {0}")]
     InteractiveMode(#[source] std::io::Error),
 }
 
@@ -298,6 +298,17 @@ async fn run() -> Result<(), AppError> {
     // loader, so a reload can never drift from a fresh start.
     let registry = Arc::new(cupel_core::default_registry());
     let home = cupel_coding_agent::resources::config_home();
+    // Confirm before any project model reaches credential resolution or
+    // any lifecycle hook can run. Piped stdin must never answer a popup.
+    if !use_plain && std::io::stdin().is_terminal() {
+        cupel_tui::project_trust::confirm(home.as_deref(), &cwd)
+            .map_err(AppError::InteractiveMode)?;
+    } else if !cupel_coding_agent::project_trust::is_trusted(home.as_deref(), &cwd) {
+        eprintln!(
+            "project is not trusted: project hooks and sensitive model rows are disabled; \
+             start cupel interactively to confirm project trust"
+        );
+    }
     let ingredients = cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry).await;
 
     // No credentials is fatal only where it is unrecoverable. The TUI can

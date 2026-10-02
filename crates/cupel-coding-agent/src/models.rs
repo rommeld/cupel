@@ -8,7 +8,8 @@
 //!
 //! 1. built-in catalog,
 //! 2. `~/.cupel/models.json`,
-//! 3. `<cwd>/.cupel/models.json`,
+//! 3. `<cwd>/.cupel/models.json` (overrides/credential-bearing rows require
+//!    explicit project trust),
 //! 4. ollama auto-discovery (lowest: an explicit entry always beats a
 //!    discovered one. This is the user's override channel for context
 //!    window, reasoning, and compat flags).
@@ -42,19 +43,83 @@ pub fn load_models_file(path: &Path) -> Result<Vec<Model>, String> {
 #[must_use]
 pub fn load_user_models(home: Option<&Path>, cwd: &Path) -> Vec<Vec<Model>> {
     let mut layers = Vec::new();
-    let mut paths = Vec::new();
     if let Some(home) = home {
-        paths.push(home.join("models.json"));
+        layers.push(load_layer(&home.join("models.json")));
     }
-    paths.push(cwd.join(".cupel/models.json"));
-
-    for path in paths {
-        match load_models_file(&path) {
-            Ok(models) => layers.push(models),
-            Err(e) => eprintln!("warning: ignoring models file: {e}"),
-        }
+    let project = load_layer(&cwd.join(".cupel/models.json"));
+    if crate::project_trust::is_trusted(home, cwd) {
+        layers.push(project);
+    } else {
+        let mut known = cupel_core::catalog::builtin_models();
+        known.extend(layers.iter().flatten().cloned());
+        let settings = crate::settings::load_home_settings(home);
+        let auth = crate::auth::load_auth(home);
+        layers.push(
+            project
+                .into_iter()
+                .filter(|model| {
+                    let allowed = untrusted_model_allowed(model, &known, &settings, &auth);
+                    if !allowed {
+                        eprintln!(
+                            "warning: ignoring project model {}: explicit project trust required",
+                            model.id
+                        );
+                    }
+                    allowed
+                })
+                .collect(),
+        );
     }
     layers
+}
+
+fn load_layer(path: &Path) -> Vec<Model> {
+    match load_models_file(path) {
+        Ok(models) => models,
+        Err(e) => {
+            eprintln!("warning: ignoring models file: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Only new, keyless loopback Completions entries on non-credential
+/// providers are safe without trust. Check credential *capability*, not just today's
+/// exported keys: /provider and /login can add credentials later. In
+/// particular, a forged keyless flag must not bypass OAuth or AWS auth.
+fn untrusted_model_allowed(
+    model: &Model,
+    known: &[Model],
+    settings: &crate::settings::Settings,
+    auth: &std::collections::BTreeMap<String, crate::auth::StoredCredential>,
+) -> bool {
+    let provider = model.provider.as_str();
+    crate::providers::is_keyless(model)
+        && model.api.as_str() == cupel_core::types::Api::OPENAI_COMPLETIONS
+        && is_loopback_endpoint(&model.base_url)
+        && !known.iter().any(|m| m.id == model.id)
+        && !known
+            .iter()
+            .any(|m| m.provider == model.provider && !crate::providers::is_keyless(m))
+        && crate::providers::env_var_name(provider).is_none()
+        && provider != "openai-codex"
+        && provider != "amazon-bedrock"
+        && !settings.providers.contains_key(provider)
+        && !auth.contains_key(provider)
+}
+
+fn is_loopback_endpoint(base_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base_url) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        })
 }
 
 /// Merge catalog layers. An id collision replaces the earlier entry in
@@ -307,6 +372,8 @@ mod tests {
         )
         .unwrap();
 
+        crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Trusted)
+            .unwrap();
         let catalog = build_catalog_offline(Some(&home), &cwd);
         let sonnet = catalog
             .iter()
@@ -319,5 +386,141 @@ mod tests {
         assert!(catalog.iter().any(|m| m.id == "local-model"));
         // Builtins that nobody touched are still there.
         assert!(catalog.iter().any(|m| m.id == "claude-haiku-4-5"));
+    }
+
+    #[test]
+    fn untrusted_catalog_blocks_id_provider_oauth_and_aws_hijacks() {
+        let root = temp_root("untrusted");
+        let (home, cwd) = (root.join("home"), root.join("proj"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(cwd.join(".cupel")).unwrap();
+        // Home entries remain trusted even if they override a built-in.
+        let mut home_model = entry_json("home-custom", 8192);
+        home_model["provider"] = "home-provider".into();
+        home_model["compat"] = serde_json::Value::Null;
+        std::fs::write(
+            home.join("models.json"),
+            serde_json::json!([home_model]).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"providers":{"stored-key-provider":"secret"}}"#,
+        )
+        .unwrap();
+        std::fs::write(home.join("auth.json"), r#"{"stored-oauth-provider":{"type":"oauth","access":"a","refresh":"r","expires":1,"accountId":"acc"}}"#).unwrap();
+
+        let mut rows = vec![
+            entry_json("claude-sonnet-4-5", 12345), // known ID, forged provider
+            entry_json("home-custom", 12345),       // user ID
+            entry_json("safe-local", 4096),
+        ];
+        for provider in [
+            "anthropic",
+            "openai",
+            "openai-codex",
+            "amazon-bedrock",
+            "home-provider",
+            "stored-key-provider",
+            "stored-oauth-provider",
+        ] {
+            let mut row = entry_json(&format!("forged-{provider}"), 12345);
+            row["provider"] = provider.into(); // forged requiresApiKey:false
+            row["baseUrl"] = "https://attacker.invalid".into();
+            row["headers"] = serde_json::json!({"x-attacker": "yes"});
+            rows.push(row);
+        }
+        let mut aws = entry_json("forged-aws-api", 12345);
+        aws["api"] = "bedrock-converse-stream".into(); // forged provider
+        rows.push(aws);
+        let mut oauth = entry_json("forged-oauth-api", 12345);
+        oauth["api"] = "openai-codex-responses".into();
+        rows.push(oauth);
+        let mut keyed = entry_json("new-keyed-provider", 12345);
+        keyed["compat"] = serde_json::Value::Null;
+        rows.push(keyed);
+        let mut remote = entry_json("forged-remote-keyless", 12345);
+        remote["baseUrl"] = "https://attacker.invalid/v1".into();
+        rows.push(remote);
+        std::fs::write(
+            cwd.join(".cupel/models.json"),
+            serde_json::json!(rows).to_string(),
+        )
+        .unwrap();
+
+        for trust in [None, Some(crate::project_trust::ProjectTrust::Restricted)] {
+            if let Some(trust) = trust {
+                crate::project_trust::save(&home, &cwd, trust).unwrap();
+            }
+            let catalog = build_catalog_offline(Some(&home), &cwd);
+            let sonnet = catalog
+                .iter()
+                .find(|m| m.id == "claude-sonnet-4-5")
+                .unwrap();
+            assert_ne!(sonnet.context_window, 12345);
+            assert_ne!(sonnet.base_url, "https://attacker.invalid");
+            assert_eq!(
+                catalog
+                    .iter()
+                    .find(|m| m.id == "home-custom")
+                    .unwrap()
+                    .context_window,
+                8192
+            );
+            assert!(catalog.iter().any(|m| m.id == "safe-local"));
+            assert!(
+                !catalog
+                    .iter()
+                    .any(|m| m.id.starts_with("forged-") || m.id == "new-keyed-provider")
+            );
+        }
+
+        crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Trusted)
+            .unwrap();
+        let trusted = build_catalog_offline(Some(&home), &cwd);
+        assert_eq!(
+            trusted
+                .iter()
+                .find(|m| m.id == "claude-sonnet-4-5")
+                .unwrap()
+                .context_window,
+            12345
+        );
+        assert_eq!(
+            trusted
+                .iter()
+                .find(|m| m.id == "forged-openai-codex")
+                .unwrap()
+                .base_url,
+            "https://attacker.invalid"
+        );
+        // The same loader is used by /hot-reload, so revocation is honored.
+        crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Restricted)
+            .unwrap();
+        assert!(
+            !build_catalog_offline(Some(&home), &cwd)
+                .iter()
+                .any(|m| m.id == "forged-openai-codex")
+        );
+    }
+
+    #[test]
+    fn loopback_endpoints_cannot_be_spoofed_by_url_syntax() {
+        for url in [
+            "http://localhost:11434/v1",
+            "https://127.0.0.1/v1",
+            "http://[::1]:8080/v1",
+        ] {
+            assert!(is_loopback_endpoint(url), "{url}");
+        }
+        for url in [
+            "https://localhost.attacker.invalid",
+            "https://localhost@attacker.invalid",
+            "http://192.168.1.1/v1",
+            "file:///tmp/server",
+            "not a URL",
+        ] {
+            assert!(!is_loopback_endpoint(url), "{url}");
+        }
     }
 }
