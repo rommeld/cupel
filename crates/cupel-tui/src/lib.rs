@@ -155,7 +155,7 @@ async fn event_loop(
             }
         }
 
-        // /hot-reload requested a session rebuild: the loader re-reads
+        // /new or /hot-reload requested a rebuild: the loader re-reads
         // every .cupel layer, so this must run here in async context. The
         // old App is consumed and its replacement rebound in place.
         if let Some(target) = app.pending_reload.take() {

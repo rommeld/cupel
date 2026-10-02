@@ -703,6 +703,188 @@ mod tests {
         );
     }
 
+    #[test]
+    fn new_command_requests_a_rebuild_only_when_idle() {
+        let mut app = test_app();
+        run_command(&mut app, "/new");
+        assert_eq!(app.pending_reload, Some(crate::app::ReloadTarget::New));
+        assert_eq!(app.recorder.session_id(), "cupel-test", "rebuild is async");
+
+        app.pending_reload = None;
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        app.run_events = Some(events);
+        run_command(&mut app, "/new");
+        assert!(app.pending_reload.is_none());
+        assert_eq!(app.recorder.session_id(), "cupel-test");
+        assert!(app.transcript.cells.iter().any(|cell| matches!(
+            cell,
+            Cell::Notice { text } if text.contains("cannot clear while the agent is working")
+        )));
+    }
+
+    #[tokio::test]
+    async fn new_session_rotates_transcripts_without_restoring_old_history() {
+        use cupel_coding_agent::session::{find_latest, load_transcript};
+
+        let root = std::env::temp_dir().join("cupel-ui-new-session");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-old");
+        let old_message = cupel_agent::AgentMessage::user_text("old conversation");
+        let mut options = AgentOptions::new(app.agent.state().model, app.agent.registry());
+        options.session_id = Some("cupel-old".into());
+        options.messages = vec![old_message.clone()];
+        app.agent = Agent::new(options);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            for event in ["session-start", "stop", "session-end"] {
+                let dir = root.join("home/hooks").join(event);
+                std::fs::create_dir_all(&dir).unwrap();
+                let script = dir.join("record");
+                std::fs::write(
+                    &script,
+                    "#!/bin/sh\ncat >> lifecycle.jsonl\nprintf '\\n' >> lifecycle.jsonl\n",
+                )
+                .unwrap();
+                std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+
+        app.recorder.before_prompt("old conversation").await;
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: old_message.clone(),
+        }))
+        .await;
+        app.recorder.on_agent_end();
+        app.agent
+            .follow_up(cupel_agent::AgentMessage::user_text("old queued prompt"));
+        app.queued.push("old queued prompt".into());
+        app.selected_cell = Some(0);
+        app.totals.input = 100;
+        app.context_tokens = 100;
+        app.scroll_from_bottom = 10;
+        let dir = app.recorder.sessions_dir().unwrap().to_path_buf();
+        let old_path = dir.join("cupel-old.jsonl");
+        let old_contents = std::fs::read_to_string(&old_path).unwrap();
+
+        run_command(&mut app, "/new");
+        // Mirror the event loop's async handling of a requested rebuild.
+        if let Some(target) = app.pending_reload.take() {
+            app = app.hot_reload(target).await;
+        }
+        let new_id = app.recorder.session_id().to_string();
+        assert_ne!(new_id, "cupel-old");
+        assert!(app.agent.state().messages.is_empty());
+        assert!(app.agent.take_follow_up().is_none());
+        assert!(app.queued.is_empty());
+        assert!(app.selected_cell.is_none());
+        assert_eq!(app.totals.input, 0);
+        assert_eq!(app.context_tokens, 0);
+        assert_eq!(app.scroll_from_bottom, 0);
+        assert!(
+            !app.transcript
+                .cells
+                .iter()
+                .any(|cell| matches!(cell, Cell::User { .. }))
+        );
+        let new_path = dir.join(format!("{new_id}.jsonl"));
+        assert!(
+            !new_path.exists(),
+            "new transcript stays lazy until a prompt"
+        );
+
+        // Further work belongs only to the fresh session. Ensure its mtime
+        // differs even on filesystems with millisecond timestamp resolution.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let new_message = cupel_agent::AgentMessage::user_text("new conversation");
+        app.recorder.before_prompt("new conversation").await;
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: new_message.clone(),
+        }))
+        .await;
+        app.recorder.end_session().await;
+        drop(app);
+
+        assert_eq!(std::fs::read_to_string(&old_path).unwrap(), old_contents);
+        assert_eq!(load_transcript(&old_path).unwrap().1, vec![old_message]);
+        let latest = find_latest(Some(&root.join("home")), &root.join("proj")).unwrap();
+        assert_eq!(latest, new_path, "bare --resume selects the new session");
+        let (header, messages) = load_transcript(&latest).unwrap();
+        assert_eq!(header.session_id, new_id);
+        assert_eq!(messages, vec![new_message]);
+
+        #[cfg(unix)]
+        {
+            let events: Vec<serde_json::Value> =
+                std::fs::read_to_string(root.join("proj/lifecycle.jsonl"))
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+            let expected = [
+                ("session-start", "cupel-old"),
+                ("stop", "cupel-old"),
+                ("session-end", "cupel-old"),
+                ("session-start", new_id.as_str()),
+                ("session-end", new_id.as_str()),
+            ];
+            assert_eq!(events.len(), expected.len());
+            for (event, (name, id)) in events.iter().zip(expected) {
+                assert_eq!(event["event"], name);
+                assert_eq!(event["sessionId"], id);
+                assert_eq!(
+                    event["sessionRef"],
+                    dir.join(format!("{id}.jsonl")).display().to_string()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn new_session_preserves_runtime_configuration() {
+        let root = std::env::temp_dir().join("cupel-ui-new-runtime");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-current");
+        let model = acme_model();
+        app.agent.set_model(model.clone());
+        app.agent
+            .set_thinking_level(Some(cupel_core::types::ThinkingLevel::High));
+        app.meta.base_system_prompt = "old base".into();
+        app.agent
+            .set_system_prompt("old base\n\nPRESET RULES".into());
+        app.session_keys.insert("acme".into(), "entered-key".into());
+        app.mouse_captured = false;
+        std::fs::write(
+            root.join("home/settings.json"),
+            r#"{"providers": {"acme": "from-disk"}}"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("home/AGENTS.md"), "FRESH CONTEXT").unwrap();
+
+        run_command(&mut app, "/new");
+        let target = app.pending_reload.take().expect("new session requested");
+        let app = app.hot_reload(target).await;
+        let state = app.agent.state();
+        assert_eq!(state.model, model);
+        assert_eq!(
+            state.thinking_level,
+            Some(cupel_core::types::ThinkingLevel::High)
+        );
+        assert_eq!(
+            state.system_prompt,
+            format!("{}\n\nPRESET RULES", app.meta.base_system_prompt)
+        );
+        assert!(state.system_prompt.contains("FRESH CONTEXT"));
+        assert_eq!(app.agent.api_key(), Some("entered-key"));
+        assert_eq!(
+            app.session_keys.get("acme").map(String::as_str),
+            Some("entered-key")
+        );
+        assert_eq!(app.meta.settings.api_key("acme"), Some("from-disk"));
+        assert!(!app.mouse_captured);
+    }
+
     #[tokio::test]
     async fn hot_reload_current_appends_only_the_agents_delta() {
         use crate::app::ReloadTarget;

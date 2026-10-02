@@ -75,9 +75,10 @@ pub enum AppEvent {
     Login(Option<login::LoginEvent>),
 }
 
-/// What `/hot-reload` asked for.
+/// What `/new` or `/hot-reload` asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReloadTarget {
+    New,
     Current,
     Resume(String),
 }
@@ -483,20 +484,42 @@ impl App {
         }
     }
 
-    /// `/hot-reload`: apply `.cupel` changes, consuming the old App and
-    /// returning its replacement (the event loop rebinds); on failure the
-    /// old app comes back with an error notice, nothing torn down.
+    /// `/new` or `/hot-reload`: rebuild from `.cupel` configuration, consuming
+    /// the old App and returning its replacement (the event loop rebinds).
+    /// A failed resume returns the old app with an error notice, nothing torn down.
     ///
-    /// What carries over in both modes: the current model, thinking level,
+    /// What carries over in all modes: the current model, thinking level,
     /// and preset prompt (runtime switches survive a reload), session-entered
     /// API keys (settings.json is re-read from disk), and the mouse-capture
     /// state.
     pub async fn hot_reload(self, target: ReloadTarget) -> Self {
         let cwd = std::path::PathBuf::from(&self.meta.cwd);
         match target {
+            ReloadTarget::New => self.reload_new(&cwd).await,
             ReloadTarget::Current => self.reload_in_place(&cwd).await,
             ReloadTarget::Resume(id) => self.reload_resume(&cwd, &id).await,
         }
+    }
+
+    /// `/new`: end the old session and rebuild with an unused id and no history.
+    async fn reload_new(self, cwd: &std::path::Path) -> Self {
+        let mut timestamp = cupel_core::types::now_ms();
+        let session_id = loop {
+            let id = format!("cupel-{timestamp}");
+            // Rapid resets or a resumed session must never reuse a transcript.
+            if id != self.recorder.session_id()
+                && !self
+                    .recorder
+                    .sessions_dir()
+                    .is_some_and(|dir| dir.join(format!("{id}.jsonl")).exists())
+            {
+                break id;
+            }
+            timestamp += 1;
+        };
+        let mut app = self.reload_session(cwd, session_id, Vec::new()).await;
+        app.notice(format!("new session {}", app.recorder.session_id()));
+        app
     }
 
     /// Bare `/hot-reload`: the running session continues same id, same
@@ -603,6 +626,21 @@ impl App {
             }
         };
 
+        let mut app = self.reload_session(cwd, session_id, seeded).await;
+        app.notice(format!(
+            ".cupel configuration reloaded - resumed session {}",
+            app.recorder.session_id()
+        ));
+        app
+    }
+
+    /// Full session rebuild shared by `/new` and `/hot-reload <session-id>`.
+    async fn reload_session(
+        mut self,
+        cwd: &std::path::Path,
+        session_id: String,
+        seeded: Vec<AgentMessage>,
+    ) -> Self {
         // Close the old session cleanly: settles pending hooks and fires
         // session-end, so external consumers see a real boundary.
         self.recorder.end_session().await;
@@ -659,9 +697,6 @@ impl App {
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
-        app.notice(format!(
-            ".cupel configuration reloaded - resumed session {session_id}"
-        ));
         app
     }
 
@@ -1179,11 +1214,9 @@ impl App {
                 if self.is_running() {
                     self.notice("cannot clear while the agent is working (esc to abort first)");
                 } else {
-                    self.agent.reset();
-                    self.transcript.cells.clear();
-                    self.selected_cell = None;
-                    self.totals = Totals::default();
-                    self.context_tokens = 0;
+                    // Ending hooks and rebuilding the recorder require async
+                    // work; the event loop handles this like /hot-reload.
+                    self.pending_reload = Some(ReloadTarget::New);
                 }
             }
             "model" => {
