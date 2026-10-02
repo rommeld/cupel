@@ -24,6 +24,7 @@ pub mod input;
 pub mod login;
 pub mod markdown;
 pub mod project_trust;
+mod terminal_text;
 pub mod theme;
 pub mod transcript;
 pub mod ui;

@@ -18,6 +18,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
+use crate::terminal_text::sanitize;
 use crate::theme;
 
 use std::time::{Duration, Instant};
@@ -192,6 +193,8 @@ impl Transcript {
     /// Ctrl+O would copy. Called once per frame; cheap enough at
     /// chat-transcript sizes that we don't cache (ratatui diffs the actual
     /// terminal writes anyway).
+    /// All text is sanitized before layout; raw cells remain unchanged for
+    /// streaming, session history, and explicit clipboard copying.
     #[must_use]
     pub fn to_lines(&self, width: u16, selected: Option<usize>) -> Rendered {
         let width = width.max(10) as usize;
@@ -301,6 +304,7 @@ fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
     match result {
         None => {
             if let Some(live) = live {
+                let live = sanitize(live);
                 let lines: Vec<&str> = live.lines().collect();
                 let hidden = lines.len().saturating_sub(TOOL_PREVIEW_LINES);
                 for line in &lines[hidden..] {
@@ -322,7 +326,10 @@ fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
             } else {
                 theme::DETAIL
             };
-            let lines: Vec<&str> = outcome.text.lines().collect();
+            // Strip whole sequences before previewing: an OSC payload can
+            // span lines, including lines hidden by the preview window.
+            let text = sanitize(&outcome.text);
+            let lines: Vec<&str> = text.lines().collect();
             let hidden = lines.len().saturating_sub(TOOL_PREVIEW_LINES);
             if *expanded || hidden == 0 {
                 for line in &lines {
@@ -378,6 +385,7 @@ fn previews_the_tail(tool_name: &str) -> bool {
 /// (text_diff.rs) puts the marker first.
 /// `-12 old`, `+12 new`, `12 context`, and a `   ...` row between hunks.
 fn push_diff(out: &mut Vec<Line<'static>>, diff: &str, width: usize) {
+    let diff = sanitize(diff);
     for line in diff.lines() {
         let style = match line.as_bytes().first() {
             Some(b'+') => theme::DIFF_ADD,
@@ -391,6 +399,7 @@ fn push_diff(out: &mut Vec<Line<'static>>, diff: &str, width: usize) {
 /// Wrap `text` to `width` display columns and append the resulting lines,
 /// all sharing one style.
 fn push_wrapped(out: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
+    let text = sanitize(text);
     for logical in text.split('\n') {
         for chunk in wrap_line(logical, width) {
             out.push(Line::from(Span::styled(chunk, style)));
@@ -805,5 +814,216 @@ mod tests {
         assert_eq!(t.copy_text(0), Some("the task"));
         assert_eq!(t.copy_text(1), None, "tool cells stay out of copy");
         assert_eq!(t.copy_text(9), None, "out of range is a soft None");
+    }
+
+    fn assert_safe(lines: &[Line<'_>]) {
+        for span in lines.iter().flat_map(|line| &line.spans) {
+            assert!(
+                span.content.chars().all(|c| !c.is_control()),
+                "terminal control survived in {:?}",
+                span.content
+            );
+        }
+    }
+
+    #[test]
+    fn read_and_bash_expand_tabs_and_strip_terminal_commands() {
+        let raw = "\tgo build ./...\n\x1b[31mred\x1b[0m\x1b]52;c;clipboard-payload\x07\u{009b}2J\0\x08\r\u{0085}";
+        for name in ["read", "bash"] {
+            for expanded in [false, true] {
+                let cell = Cell::Tool {
+                    id: "1".into(),
+                    name: name.into(),
+                    call: "\x1b]0;evil-title\x07read\tMakefile".into(),
+                    expanded,
+                    started_at: None,
+                    live: None,
+                    result: Some(ToolOutcome {
+                        text: raw.into(),
+                        is_error: false,
+                        diff: None,
+                        took: None,
+                    }),
+                };
+                let lines = tool_lines(&cell, 80);
+                assert_safe(&lines);
+                let texts: Vec<String> = lines.iter().map(line_text).collect();
+                assert_eq!(texts[0], "read    Makefile");
+                assert_eq!(texts[1], "     go build ./... ");
+                assert_eq!(texts[2], " red ");
+                assert!(
+                    matches!(&cell, Cell::Tool { result: Some(outcome), .. } if outcome.text == raw)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_conversation_cell_is_sanitized_before_wrapping() {
+        let raw =
+            "before\x1b]52;c;clipboard-payload\nsecond payload line\x1b\\\tafter\u{009b}31m\x7f";
+        let t = Transcript {
+            cells: vec![
+                Cell::User { text: raw.into() },
+                Cell::Assistant { text: raw.into() },
+                Cell::Answer { text: raw.into() },
+                Cell::Thinking { text: raw.into() },
+                Cell::Error { text: raw.into() },
+                Cell::Notice { text: raw.into() },
+                Cell::Usage { text: raw.into() },
+                Cell::Summary { text: raw.into() },
+            ],
+        };
+        for width in [10, 80] {
+            let rendered = t.to_lines(width, Some(0));
+            assert_safe(&rendered.lines);
+            let text: String = rendered.lines.iter().map(line_text).collect();
+            assert!(!text.contains("payload"), "{text}");
+            assert_eq!(rendered.lines.len(), rendered.cell_at.len());
+        }
+        assert_eq!(
+            t.copy_text(0),
+            Some(raw),
+            "rendering must not change the source"
+        );
+    }
+
+    #[test]
+    fn tool_progress_previews_and_diffs_strip_whole_multiline_sequences() {
+        let raw =
+            "\x1b]52;c;hidden\npayload\npayload\npayload\npayload\npayload\npayload\x07\tvisible";
+        let mut t = Transcript::default();
+        let mut cell = bash_cell(false);
+        if let Cell::Tool { result, .. } = &mut cell {
+            *result = None;
+        }
+        t.cells.push(cell);
+        t.attach_tool_progress("1", raw.into());
+        let lines = tool_lines(&t.cells[0], 80);
+        assert_safe(&lines);
+        assert_eq!(line_text(&lines[1]), "      visible");
+        assert!(
+            !lines
+                .iter()
+                .map(line_text)
+                .collect::<String>()
+                .contains("payload")
+        );
+
+        t.attach_tool_result(
+            "1",
+            ToolOutcome {
+                text: raw.into(),
+                is_error: true,
+                diff: None,
+                took: None,
+            },
+        );
+        let lines = tool_lines(&t.cells[0], 80);
+        assert_safe(&lines);
+        assert_eq!(line_text(&lines[1]), "     visible ");
+
+        let mut lines = Vec::new();
+        push_diff(
+            &mut lines,
+            "\x1b[31m+1\tnew\x1b[0m\n-2 old\x1b]52;c;payload\nmore\x07",
+            80,
+        );
+        assert_safe(&lines);
+        assert_eq!(line_text(&lines[0]), "  +1  new");
+        assert_eq!(lines[0].spans[0].style, theme::DIFF_ADD);
+        assert_eq!(line_text(&lines[1]), "  -2 old");
+        assert_eq!(lines[1].spans[0].style, theme::DIFF_DEL);
+    }
+
+    #[test]
+    fn streaming_sequences_are_stripped_across_deltas_without_changing_raw_text() {
+        let mut t = Transcript::default();
+        t.append_assistant("before\x1b]52;c;");
+        assert_eq!(
+            t.to_lines(80, None)
+                .lines
+                .iter()
+                .map(line_text)
+                .collect::<String>(),
+            "before"
+        );
+        t.append_assistant("payload\nmore\x1b");
+        assert_eq!(
+            t.to_lines(80, None)
+                .lines
+                .iter()
+                .map(line_text)
+                .collect::<String>(),
+            "before"
+        );
+        t.append_assistant("\\after");
+        assert_eq!(
+            t.to_lines(80, None)
+                .lines
+                .iter()
+                .map(line_text)
+                .collect::<String>(),
+            "beforeafter"
+        );
+        assert_eq!(
+            t.copy_text(0),
+            Some("before\x1b]52;c;payload\nmore\x1b\\after")
+        );
+
+        t.append_thinking("\u{009b}3");
+        t.append_thinking("1mvisible\u{009b}0m");
+        let rendered = t.to_lines(80, None);
+        assert_safe(&rendered.lines);
+        assert_eq!(line_text(rendered.lines.last().unwrap()), "visible");
+    }
+
+    #[test]
+    fn crossterm_byte_output_never_contains_injected_osc_or_sgr() {
+        use ratatui::backend::CrosstermBackend;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Paragraph;
+        use ratatui::{Terminal, TerminalOptions, Viewport};
+
+        let mut t = Transcript::default();
+        t.cells.push(tool("1"));
+        t.attach_tool_result("1", ToolOutcome {
+            text: "\tgo build ./...\n\x1b[31mred\x1b[0m\x1b]52;c;c3RvbGVu\x07\u{009d}52;c;c3RvbGVu\u{009c}".into(),
+            is_error: false,
+            diff: None,
+            took: None,
+        });
+        let mut bytes = Vec::new();
+        {
+            let backend = CrosstermBackend::new(&mut bytes);
+            let mut terminal = Terminal::with_options(
+                backend,
+                TerminalOptions {
+                    viewport: Viewport::Fixed(Rect::new(0, 0, 80, 12)),
+                },
+            )
+            .unwrap();
+            terminal
+                .draw(|frame| {
+                    let rendered = t.to_lines(frame.area().width, None);
+                    frame.render_widget(Paragraph::new(rendered.lines), frame.area());
+                })
+                .unwrap();
+        }
+        let output = String::from_utf8(bytes).unwrap();
+        // Buffer diffing may skip blank cells with cursor moves, so words
+        // need not be adjacent in the backend's byte stream.
+        for word in ["go", "build", "./...", "red"] {
+            assert!(output.contains(word), "{output:?}");
+        }
+        assert!(!output.contains('\t'), "{output:?}");
+        assert!(!output.contains("\x1b]52;"), "{output:?}");
+        assert!(!output.contains("\x1b[31m"), "{output:?}");
+        assert!(!output.contains("c3RvbGVu"), "{output:?}");
+        assert!(
+            !output
+                .chars()
+                .any(|c| ('\u{007f}'..='\u{009f}').contains(&c))
+        );
     }
 }

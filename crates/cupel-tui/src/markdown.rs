@@ -18,6 +18,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
+use crate::terminal_text::sanitize;
 use crate::theme;
 use crate::transcript::wrap_line;
 
@@ -26,6 +27,7 @@ use crate::transcript::wrap_line;
 #[must_use]
 pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
     let mut out = Vec::new();
+    let text = sanitize(text);
     let lines: Vec<&str> = text.split('\n').collect();
     let mut in_code = false;
     let mut i = 0;
@@ -419,8 +421,6 @@ fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize) {
     // Deliberately not the cell's base style: code is code, in every
     // cell. Terminal-default fg on the indexed panel tint.
     let style = Style::new().bg(theme::MD_CODE_BLOCK_BG);
-    // Tabs render as untrackable-width glyphs; normalize first.
-    let line = line.replace('\t', "    ");
     for chunk in wrap_line(&format!(" {line}"), width.saturating_sub(1)) {
         let pad = width.saturating_sub(display_width(&chunk));
         out.push(Line::from(Span::styled(
@@ -800,5 +800,23 @@ mod tests {
         // Without a separator row it is just a paragraph containing pipes.
         let text = flat_text(&render("| not | a table", 80, Style::new())).concat();
         assert!(text.contains("| not | a table"), "{text}");
+    }
+
+    #[test]
+    fn terminal_controls_are_removed_from_prose_code_links_and_tables() {
+        for input in [
+            "\x1b[31mvisible\x1b[0m\x1b]52;c;payload\x07",
+            "```make\n\tgo build ./...\x1b]52;c;payload\x1b\\\n```",
+            "[\u{009b}31mvisible](https://example.test/\u{009d}52;c;payload\u{009c})",
+            "| col | value |\n|---|---|\n| \tvisible | \x1b]52;c;payload\x07text |",
+        ] {
+            let lines = render(input, 80, Style::new());
+            for span in lines.iter().flat_map(|line| &line.spans) {
+                assert!(span.content.chars().all(|c| !c.is_control()));
+            }
+            assert!(!flat_text(&lines).concat().contains("payload"));
+        }
+        let code = flat_text(&render("```\n\tgo build ./...\n```", 24, Style::new()));
+        assert_eq!(code[0], "     go build ./...     ");
     }
 }
