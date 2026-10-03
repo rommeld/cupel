@@ -23,7 +23,11 @@ pub mod openai_codex_responses;
 pub mod openai_completions;
 pub mod openai_responses;
 
+use crate::event_stream::EventSink;
 use crate::types::{AssistantMessage, Model, StopReason, StreamOptions, Usage, now_ms};
+
+pub(crate) const CONTENT_FILTER_MESSAGE: &str =
+    "The provider's content filter stopped the response. Partial output may be incomplete.";
 
 /// Build the skeleton assistant message a provider accumulates into while
 /// streaming. Every provider starts from this same shape.
@@ -52,6 +56,23 @@ pub(crate) fn error_message(model: &Model, reason: StopReason, text: String) -> 
         error_message: Some(text),
         ..new_output_message(model)
     }
+}
+
+/// Finish a protocol-complete response without discarding its content or usage.
+/// Mapped error stops are terminal Error events, not worker failures that the
+/// outer wrapper would replace with an empty error message.
+pub(crate) fn finish_output(mut output: AssistantMessage, sink: &EventSink) {
+    let reason = output.stop_reason;
+    if matches!(reason, StopReason::Error | StopReason::Aborted) {
+        output
+            .error_message
+            .get_or_insert_with(|| "The provider stopped generation with an error".to_string());
+    }
+    log_completion(&output);
+    let _ = match reason {
+        StopReason::Error | StopReason::Aborted => sink.error(reason, output),
+        _ => sink.done(reason, output),
+    };
 }
 
 /// Await a future, racing it against the caller's cancellation token.
@@ -113,4 +134,59 @@ pub(crate) fn apply_custom_headers(
         }
     }
     req
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::MessageStreamError;
+    use crate::event_stream::assistant_message_channel;
+    use crate::providers::{finish_output, new_output_message};
+    use crate::types::{AssistantContent, StopReason, TextContent};
+
+    #[tokio::test]
+    async fn terminal_stops_preserve_the_accumulated_message() {
+        let model = crate::catalog::builtin_models().into_iter().next().unwrap();
+        for reason in [
+            StopReason::Stop,
+            StopReason::Length,
+            StopReason::ToolUse,
+            StopReason::Error,
+            StopReason::Aborted,
+        ] {
+            let mut output = new_output_message(&model);
+            output.stop_reason = reason;
+            output.content = vec![AssistantContent::Text(TextContent::plain("partial output"))];
+            output.response_id = Some("response-id".into());
+            output.response_model = Some("served-model".into());
+            output.usage.input = 100;
+            output.usage.output = 12;
+            output.usage.cache_read = 30;
+            output.usage.total_tokens = 142;
+            output.usage.cost.total = 0.25;
+            let failed = matches!(reason, StopReason::Error | StopReason::Aborted);
+            if failed {
+                output.error_message = Some("provider stop explanation".into());
+            }
+
+            let (stream, sink) = assistant_message_channel();
+            finish_output(output.clone(), &sink);
+            drop(sink);
+            let actual = match stream.result().await {
+                Ok(message) => {
+                    assert!(!failed, "error stops must not be emitted as Done");
+                    message
+                }
+                Err(MessageStreamError::ProviderError {
+                    reason: reported,
+                    message,
+                }) => {
+                    assert!(failed);
+                    assert_eq!(reported, reason);
+                    *message
+                }
+                Err(error) => panic!("unexpected stream error: {error}"),
+            };
+            assert_eq!(actual, output);
+        }
+    }
 }

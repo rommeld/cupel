@@ -24,7 +24,8 @@ use crate::{
     options_util::clamp_max_tokens_to_context,
     provider::Provider,
     providers::{
-        apply_custom_headers, error_message, log_completion, new_output_message, with_cancel,
+        CONTENT_FILTER_MESSAGE, apply_custom_headers, error_message, finish_output,
+        new_output_message, with_cancel,
     },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
@@ -477,23 +478,13 @@ async fn run(
         }
     }
 
-    if matches!(output.stop_reason, StopReason::Error | StopReason::Aborted) {
-        return Err(InferenceError::Other(
-            output
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "Provider returned an error stop reason".to_string()),
-        ));
-    }
     if !saw_finish_reason {
         return Err(InferenceError::Other(
             "Stream ended without finish_reason".to_string(),
         ));
     }
 
-    let reason = output.stop_reason;
-    log_completion(&output);
-    let _ = sink.done(reason, output);
+    finish_output(output, sink);
     Ok(())
 }
 
@@ -538,6 +529,7 @@ fn map_stop_reason(reason: &str) -> (StopReason, Option<String>) {
         "stop" | "end" => (StopReason::Stop, None),
         "length" => (StopReason::Length, None),
         "tool_calls" | "function_call" => (StopReason::ToolUse, None),
+        "content_filter" => (StopReason::Error, Some(CONTENT_FILTER_MESSAGE.to_string())),
         other => (
             StopReason::Error,
             Some(format!("Provider finish_reason: {other}")),
@@ -989,16 +981,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn documented_finish_reasons_keep_their_terminal_states() {
+        for (finish, expected) in [
+            ("stop", StopReason::Stop),
+            ("end", StopReason::Stop),
+            ("length", StopReason::Length),
+            ("tool_calls", StopReason::ToolUse),
+            ("function_call", StopReason::ToolUse),
+        ] {
+            assert_eq!(map_stop_reason(finish), (expected, None));
+        }
+    }
+
     /// Serve a real SSE response with some text followed by the supplied chunk.
     async fn stream_chunk(
         chunk: Value,
     ) -> core::result::Result<AssistantMessage, crate::error::MessageStreamError> {
+        stream_chunks(vec![chunk]).await
+    }
+
+    async fn stream_chunks(
+        chunks: Vec<Value>,
+    ) -> core::result::Result<AssistantMessage, crate::error::MessageStreamError> {
+        use core::fmt::Write as _;
         use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let tail = chunks.iter().fold(String::new(), |mut tail, chunk| {
+            writeln!(tail, "data: {chunk}\n").unwrap();
+            tail
+        });
         let body = format!(
-            "data: {}\n\ndata: {chunk}\n\ndata: [DONE]\n\n",
+            "data: {}\n\n{tail}data: [DONE]\n\n",
             json!({"choices": [{"delta": {"content": "partial output"}}]})
         );
         let server = tokio::spawn(async move {
@@ -1040,6 +1056,60 @@ mod tests {
             .await;
         server.await.unwrap();
         result
+    }
+
+    #[tokio::test]
+    async fn content_filter_preserves_partial_output_and_usage() {
+        let error = stream_chunks(vec![
+            json!({
+                "id": "filtered-completion",
+                "model": "gemini-served",
+                "choices": [{
+                    "delta": {"content": " (incomplete)", "reasoning_content": "partial reasoning"},
+                    "finish_reason": "content_filter",
+                }],
+            }),
+            // Usage may arrive in a separate chunk after the finish reason.
+            json!({
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 12,
+                    "prompt_tokens_details": {"cached_tokens": 30},
+                },
+            }),
+        ])
+        .await
+        .unwrap_err();
+        let crate::error::MessageStreamError::ProviderError { reason, message } = error else {
+            panic!("expected a provider error");
+        };
+        assert_eq!(reason, StopReason::Error);
+        assert_eq!(message.stop_reason, StopReason::Error);
+        assert_eq!(
+            message.error_message.as_deref(),
+            Some(
+                "The provider's content filter stopped the response. Partial output may be incomplete."
+            )
+        );
+        assert!(!crate::retry::is_retryable_assistant_error(&message));
+        assert_eq!(message.response_id.as_deref(), Some("filtered-completion"));
+        assert_eq!(message.response_model.as_deref(), Some("gemini-served"));
+        assert_eq!(message.usage.input, 70);
+        assert_eq!(message.usage.output, 12);
+        assert_eq!(message.usage.cache_read, 30);
+        assert_eq!(message.usage.total_tokens, 112);
+        assert_eq!(
+            message.content,
+            vec![
+                AssistantContent::Text(TextContent::plain("partial output (incomplete)")),
+                AssistantContent::Thinking(ThinkingContent {
+                    thinking: "partial reasoning".into(),
+                    thinking_signature: Some("reasoning_content".into()),
+                    redacted: None,
+                }),
+            ]
+        );
     }
 
     #[tokio::test]

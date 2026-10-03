@@ -18,7 +18,8 @@ use crate::{
     options_util::{adjust_max_tokens_for_thinking, clamp_max_tokens_to_context},
     provider::Provider,
     providers::{
-        apply_custom_headers, error_message, log_completion, new_output_message, with_cancel,
+        CONTENT_FILTER_MESSAGE, apply_custom_headers, error_message, finish_output,
+        new_output_message, with_cancel,
     },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
@@ -190,7 +191,8 @@ impl Provider for AnthropicProvider {
 }
 
 /// The streaming worker. Returns `Err` only for failures *before* a terminal
-/// event was emitted; on success it emits `Done` itself and returns `Ok`.
+/// event was emitted; protocol-complete stops emit their terminal event
+/// themselves (including mapped error stops) and return `Ok`.
 #[tracing::instrument(name = "anthropic_request", skip_all, fields(model = %model.id, provider = %model.provider.as_str()))]
 async fn run(
     http: &reqwest::Client,
@@ -599,18 +601,8 @@ async fn run(
             "Anthropic stream ended before message_stop".to_string(),
         ));
     }
-    if matches!(output.stop_reason, StopReason::Error | StopReason::Aborted) {
-        return Err(InferenceError::Other(
-            output
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "An unknown error occurred".to_string()),
-        ));
-    }
 
-    let reason = output.stop_reason;
-    log_completion(&output);
-    let _ = sink.done(reason, output);
+    finish_output(output, sink);
     Ok(())
 }
 
@@ -666,7 +658,7 @@ fn map_stop_reason(reason: &str, stop_details: Option<&Value>) -> (StopReason, O
             (StopReason::Error, Some(explanation))
         }
         // Content flagged by safety filters.
-        "sensitive" => (StopReason::Error, None),
+        "sensitive" => (StopReason::Error, Some(CONTENT_FILTER_MESSAGE.to_string())),
         other => (
             StopReason::Error,
             Some(format!("Unhandled stop reason: {other}")),
@@ -1265,6 +1257,54 @@ mod tests {
         assert_eq!(message.stop_reason, StopReason::Stop);
         assert_eq!(message.response_id.as_deref(), Some("msg_test"));
         assert!(message.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn refusal_and_sensitive_stops_preserve_partial_output_and_usage() {
+        use core::fmt::Write as _;
+
+        for reason in ["refusal", "sensitive"] {
+            let body: String = [
+                json!({"type": "message_start", "message": {"id": "msg_test", "usage": {"input_tokens": 10}}}),
+                json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial output"}}),
+                json!({"type": "content_block_stop", "index": 0}),
+                json!({"type": "message_delta", "delta": {"stop_reason": reason}, "usage": {"output_tokens": 2}}),
+                json!({"type": "message_stop"}),
+            ]
+            .iter()
+            .fold(String::new(), |mut body, event| {
+                writeln!(body, "data: {event}\n").unwrap();
+                body
+            });
+            let error = stream_body(&body, "text/event-stream").await.unwrap_err();
+            let MessageStreamError::ProviderError {
+                reason: stop,
+                message,
+            } = error
+            else {
+                panic!("expected a provider error");
+            };
+            assert_eq!(stop, StopReason::Error);
+            assert!(!is_retryable_assistant_error(&message));
+            assert!(message.error_message.as_deref().is_some_and(|text| {
+                text.contains(if reason == "refusal" {
+                    "refused"
+                } else {
+                    "content filter"
+                })
+            }));
+            assert_eq!(message.response_id.as_deref(), Some("msg_test"));
+            assert_eq!(message.usage.input, 10);
+            assert_eq!(message.usage.output, 2);
+            assert_eq!(message.usage.total_tokens, 12);
+            assert_eq!(
+                message.content,
+                vec![crate::types::AssistantContent::Text(
+                    crate::types::TextContent::plain("partial output")
+                )]
+            );
+        }
     }
 
     #[test]

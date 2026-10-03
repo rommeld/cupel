@@ -28,7 +28,8 @@ use crate::{
     options_util::clamp_max_tokens_to_context,
     provider::Provider,
     providers::{
-        apply_custom_headers, error_message, log_completion, new_output_message, with_cancel,
+        CONTENT_FILTER_MESSAGE, apply_custom_headers, error_message, finish_output,
+        new_output_message, with_cancel,
     },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
@@ -578,18 +579,8 @@ pub(crate) async fn process_response_stream(
             "OpenAI Responses stream ended before a terminal response event".to_string(),
         ));
     }
-    if matches!(output.stop_reason, StopReason::Error | StopReason::Aborted) {
-        return Err(InferenceError::Other(
-            output
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "An unknown error occurred".to_string()),
-        ));
-    }
 
-    let reason = output.stop_reason;
-    log_completion(&output);
-    let _ = sink.done(reason, output);
+    finish_output(output, sink);
     Ok(())
 }
 
@@ -641,6 +632,15 @@ fn finalize_response(response: &Value, model: &Model, output: &mut AssistantMess
         calculate_cost(model, &mut output.usage);
     }
     output.stop_reason = match response.get("status").and_then(Value::as_str) {
+        Some("incomplete")
+            if response
+                .pointer("/incomplete_details/reason")
+                .and_then(Value::as_str)
+                == Some("content_filter") =>
+        {
+            output.error_message = Some(CONTENT_FILTER_MESSAGE.to_string());
+            StopReason::Error
+        }
         Some("incomplete") => StopReason::Length,
         Some("failed" | "cancelled") => StopReason::Error,
         // completed / in_progress / queued (the last two are wonky but
@@ -1032,6 +1032,54 @@ mod tests {
             reasoning: level,
             temperature: Some(0.2),
             ..StreamOptions::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn incomplete_content_filter_preserves_partial_output_and_usage() {
+        let model = astra_model();
+        for (incomplete_reason, expected) in [
+            ("content_filter", StopReason::Error),
+            ("max_output_tokens", StopReason::Length),
+        ] {
+            let mut output = new_output_message(&model);
+            output.content = vec![AssistantContent::Text(TextContent::plain("partial output"))];
+            finalize_response(
+                &json!({
+                    "id": "response-id",
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": incomplete_reason},
+                    "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+                }),
+                &model,
+                &mut output,
+            );
+            assert_eq!(output.stop_reason, expected);
+            let (stream, sink) = assistant_message_channel();
+            finish_output(output, &sink);
+            drop(sink);
+            let message = match stream.result().await {
+                Ok(message) => {
+                    assert_eq!(expected, StopReason::Length);
+                    message
+                }
+                Err(crate::error::MessageStreamError::ProviderError { reason, message }) => {
+                    assert_eq!(reason, StopReason::Error);
+                    assert!(!crate::retry::is_retryable_assistant_error(&message));
+                    assert_eq!(
+                        message.error_message.as_deref(),
+                        Some(CONTENT_FILTER_MESSAGE)
+                    );
+                    *message
+                }
+                Err(error) => panic!("unexpected stream error: {error}"),
+            };
+            assert_eq!(message.response_id.as_deref(), Some("response-id"));
+            assert_eq!(message.usage.total_tokens, 12);
+            assert_eq!(
+                message.content,
+                vec![AssistantContent::Text(TextContent::plain("partial output"))]
+            );
         }
     }
 

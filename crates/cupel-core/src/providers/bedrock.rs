@@ -24,7 +24,9 @@ use crate::{
     model::calculate_cost,
     options_util::{adjust_max_tokens_for_thinking, clamp_max_tokens_to_context},
     provider::Provider,
-    providers::{error_message, log_completion, new_output_message, with_cancel},
+    providers::{
+        CONTENT_FILTER_MESSAGE, error_message, finish_output, new_output_message, with_cancel,
+    },
     transform::transform_messages,
     types::{
         Api, AssistantContent, AssistantMessage, CacheRetention, Context, Message, Model,
@@ -424,7 +426,9 @@ async fn consume_stream(
 
             bedrock::ConverseStreamOutput::MessageStop(stop) => {
                 saw_message_stop = true;
-                output.stop_reason = map_stop_reason(&stop.stop_reason);
+                let (reason, error) = map_stop_reason(&stop.stop_reason);
+                output.stop_reason = reason;
+                output.error_message = error;
             }
 
             bedrock::ConverseStreamOutput::Metadata(metadata) => {
@@ -454,18 +458,8 @@ async fn consume_stream(
             "Bedrock stream ended before MessageStop".to_string(),
         ));
     }
-    if matches!(output.stop_reason, StopReason::Error | StopReason::Aborted) {
-        return Err(InferenceError::Other(
-            output
-                .error_message
-                .clone()
-                .unwrap_or_else(|| "An unknown error occurred".to_string()),
-        ));
-    }
 
-    let reason = output.stop_reason;
-    log_completion(&output);
-    let _ = sink.done(reason, output);
+    finish_output(output, sink);
     Ok(())
 }
 
@@ -540,14 +534,25 @@ where
     }
 }
 
-fn map_stop_reason(reason: &bedrock::StopReason) -> StopReason {
+fn map_stop_reason(reason: &bedrock::StopReason) -> (StopReason, Option<String>) {
     // Matching on the string form keeps us forward-compatible: the enum is
     // non-exhaustive and AWS adds variants (e.g. model_context_window_exceeded).
     match reason.as_str() {
-        "end_turn" | "stop_sequence" => StopReason::Stop,
-        "max_tokens" | "model_context_window_exceeded" => StopReason::Length,
-        "tool_use" => StopReason::ToolUse,
-        _ => StopReason::Error,
+        "end_turn" | "stop_sequence" => (StopReason::Stop, None),
+        "max_tokens" | "model_context_window_exceeded" => (StopReason::Length, None),
+        "tool_use" => (StopReason::ToolUse, None),
+        "content_filtered" => (StopReason::Error, Some(CONTENT_FILTER_MESSAGE.to_string())),
+        "guardrail_intervened" => (
+            StopReason::Error,
+            Some(
+                "The provider's guardrail stopped the response. Partial output may be incomplete."
+                    .to_string(),
+            ),
+        ),
+        other => (
+            StopReason::Error,
+            Some(format!("Provider stop_reason: {other}")),
+        ),
     }
 }
 
@@ -1046,13 +1051,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn complete_stream_keeps_metadata_after_message_stop() {
-        let stop = bedrock::ConverseStreamOutput::MessageStop(
-            bedrock::MessageStopEvent::builder()
-                .stop_reason(bedrock::StopReason::EndTurn)
-                .build()
-                .unwrap(),
-        );
+    async fn terminal_stops_keep_output_and_metadata_after_message_stop() {
         let metadata = bedrock::ConverseStreamOutput::Metadata(
             bedrock::ConverseStreamMetadataEvent::builder()
                 .usage(
@@ -1071,20 +1070,58 @@ mod tests {
                 )
                 .build(),
         );
-        let (result, emitted) =
-            collect_stream(vec![message_start(), text_delta(), stop, metadata]).await;
-        result.expect("complete stream succeeds");
-        let Some(AssistantMessageEvent::Done { reason, message }) = emitted.last() else {
-            panic!("expected a terminal Done event");
-        };
-        assert_eq!(*reason, StopReason::Stop);
-        assert_eq!(message.usage.total_tokens, 12);
-        assert_eq!(
-            message.content,
-            vec![crate::types::AssistantContent::Text(
-                crate::types::TextContent::plain("partial output")
-            )]
-        );
+        for (vendor_reason, expected, explanation) in [
+            (bedrock::StopReason::EndTurn, StopReason::Stop, None),
+            (
+                bedrock::StopReason::ContentFiltered,
+                StopReason::Error,
+                Some("content filter"),
+            ),
+            (
+                bedrock::StopReason::GuardrailIntervened,
+                StopReason::Error,
+                Some("guardrail"),
+            ),
+        ] {
+            let stop = bedrock::ConverseStreamOutput::MessageStop(
+                bedrock::MessageStopEvent::builder()
+                    .stop_reason(vendor_reason)
+                    .build()
+                    .unwrap(),
+            );
+            let (result, emitted) =
+                collect_stream(vec![message_start(), text_delta(), stop, metadata.clone()]).await;
+            result.expect("a mapped stop must not fail the worker and discard output");
+            let (reason, message) = match emitted.last() {
+                Some(AssistantMessageEvent::Done { reason, message }) => {
+                    assert!(explanation.is_none());
+                    (reason, message)
+                }
+                Some(AssistantMessageEvent::Error { reason, error }) => {
+                    assert!(explanation.is_some());
+                    assert!(!is_retryable_assistant_error(error));
+                    (reason, error)
+                }
+                _ => panic!("expected a terminal event"),
+            };
+            assert_eq!(*reason, expected);
+            assert_eq!(message.stop_reason, expected);
+            if let Some(explanation) = explanation {
+                assert!(
+                    message
+                        .error_message
+                        .as_deref()
+                        .is_some_and(|text| text.contains(explanation))
+                );
+            }
+            assert_eq!(message.usage.total_tokens, 12);
+            assert_eq!(
+                message.content,
+                vec![crate::types::AssistantContent::Text(
+                    crate::types::TextContent::plain("partial output")
+                )]
+            );
+        }
     }
 
     #[test]
