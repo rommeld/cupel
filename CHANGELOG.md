@@ -3,6 +3,15 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.24.0] - 2026-10-03
+
+- fix(tui): keep the spinner turning while a reply streams
+- fix: explain content-filter stops and preserve partial output and usage across providers
+- version: sync to v0.23.0 from CHANGELOG.md
+- fix: report missing Anthropic message_start and Bedrock MessageStop as retryable stream errors
+- fix(compaction): reset usage limits after pruning and compaction
+- fix(ollama): adjust compaction threshold for context tail based on real model context window
+
 ## [v0.23.0] - 2026-10-02
 
 - fix(tui): sanatize transcript text before rendering
