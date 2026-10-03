@@ -36,6 +36,7 @@ struct CompactionAwareProvider {
     /// pruning tier exists to keep this at zero when tool output alone
     /// caused the overflow.
     summarization_calls: AtomicU32,
+    summarization_max_tokens: Mutex<Vec<Option<u64>>>,
     fail_first_turns: u32,
     turn_error: &'static str,
     /// First-message text + message count of each turn request, for asserts.
@@ -47,6 +48,7 @@ impl CompactionAwareProvider {
         Self {
             turn_calls: AtomicU32::new(0),
             summarization_calls: AtomicU32::new(0),
+            summarization_max_tokens: Mutex::new(Vec::new()),
             fail_first_turns,
             turn_error,
             seen_turn_requests: Mutex::new(Vec::new()),
@@ -78,7 +80,7 @@ impl Provider for CompactionAwareProvider {
         &self,
         model: &Model,
         context: Context,
-        _options: StreamOptions,
+        options: StreamOptions,
     ) -> AssistantMessageStream {
         let (stream, sink) = assistant_message_channel();
         let _ = sink.start();
@@ -86,6 +88,10 @@ impl Provider for CompactionAwareProvider {
         // Summarization requests are recognizable by their system prompt.
         if context.system_prompt.as_deref() == Some(SUMMARIZATION_SYSTEM_PROMPT) {
             self.summarization_calls.fetch_add(1, Ordering::SeqCst);
+            self.summarization_max_tokens
+                .lock()
+                .expect("test mutex")
+                .push(options.max_tokens);
             let message = assistant(
                 model,
                 vec![AssistantContent::Text(TextContent::plain(
@@ -225,7 +231,7 @@ fn big_history(count: usize) -> Vec<AgentMessage> {
 #[tokio::test]
 async fn threshold_compaction_shrinks_the_request() {
     let provider = Arc::new(CompactionAwareProvider::new(0, ""));
-    // Window 3000, reserve 1000 -> compaction at ~2000 estimated tokens.
+    // Window 3000, reserve capped at 750 -> threshold 2250 estimated tokens.
     // Five ~1000-token messages of history is well past that.
     let config = CompactionConfig {
         enabled: true,
@@ -261,6 +267,99 @@ async fn threshold_compaction_shrinks_the_request() {
     )));
 }
 
+#[tokio::test]
+async fn default_compaction_fits_a_small_context_window() {
+    let provider = Arc::new(CompactionAwareProvider::new(0, ""));
+    let events = run_with(
+        Arc::clone(&provider),
+        4096,
+        CompactionConfig::default(),
+        big_history(4),
+    )
+    .await;
+
+    assert_eq!(
+        compaction_events(&events),
+        vec![(CompactionReason::Threshold, true)]
+    );
+    assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *provider
+            .summarization_max_tokens
+            .lock()
+            .expect("test mutex"),
+        vec![Some(819)],
+        "summary output is limited to 80% of the 1024-token reserve"
+    );
+    let seen = provider.seen_turn_requests.lock().expect("test mutex");
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].0.starts_with(COMPACTION_MARKER));
+    assert_eq!(
+        seen[0].1, 4,
+        "summary + two recent messages + current question"
+    );
+}
+
+#[tokio::test]
+async fn threshold_without_a_cut_point_emits_no_compaction_events() {
+    let provider = Arc::new(CompactionAwareProvider::new(0, ""));
+    // Exact usage can exceed the threshold even when all message bodies
+    // fit inside the keep window (e.g. a large system prompt/tool schemas).
+    let mut previous = assistant(
+        &mock_model(4096),
+        vec![AssistantContent::Text(TextContent::plain(
+            "previous answer",
+        ))],
+    );
+    previous.usage.input = 3900;
+    let events = run_with(
+        Arc::clone(&provider),
+        4096,
+        CompactionConfig::default(),
+        vec![
+            AgentMessage::user_text("previous question"),
+            AgentMessage::Llm(Message::Assistant(previous)),
+        ],
+    )
+    .await;
+
+    assert!(events.iter().all(|e| !matches!(
+        e,
+        AgentEvent::CompactionStart { .. } | AgentEvent::CompactionEnd { .. }
+    )));
+    assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(provider.turn_calls.load(Ordering::SeqCst), 1);
+    let seen = provider.seen_turn_requests.lock().expect("test mutex");
+    assert_eq!(seen[0].1, 3, "history stays intact");
+}
+
+#[tokio::test]
+async fn overflow_without_a_cut_point_emits_no_compaction_events() {
+    let provider = Arc::new(CompactionAwareProvider::new(
+        1,
+        "prompt is too long: 5000 tokens > 4096 maximum",
+    ));
+    let events = run_with(
+        Arc::clone(&provider),
+        4096,
+        CompactionConfig::default(),
+        Vec::new(),
+    )
+    .await;
+
+    assert!(events.iter().all(|e| !matches!(
+        e,
+        AgentEvent::CompactionStart { .. } | AgentEvent::CompactionEnd { .. }
+    )));
+    assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(provider.turn_calls.load(Ordering::SeqCst), 1);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        AgentEvent::MessageEnd { message: AgentMessage::Llm(Message::Assistant(a)) }
+            if a.error_message.as_deref() == Some(provider.turn_error)
+    )));
+}
+
 /// ~1000 estimated tokens of tool result filler per message, prefixed by a
 /// user message so the cut point has a boundary to land on.
 fn tool_heavy_history(count: usize) -> Vec<AgentMessage> {
@@ -285,7 +384,7 @@ fn tool_heavy_history(count: usize) -> Vec<AgentMessage> {
 #[tokio::test]
 async fn tool_heavy_history_compacts_without_a_summarization_call() {
     let provider = Arc::new(CompactionAwareProvider::new(0, ""));
-    // Same threshold shape as above (window 3000, reserve 1000), but the
+    // Same threshold as above (window 3000, reserve capped at 750), but the
     // bulk is tool output, so the free pruning tier alone must reclaim it.
     let config = CompactionConfig {
         enabled: true,

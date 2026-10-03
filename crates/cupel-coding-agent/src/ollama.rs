@@ -92,7 +92,9 @@ pub fn models_from_tags(json: &serde_json::Value, host: &str) -> Vec<Model> {
             cost: ModelCost::default(),
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_context_window: None,
-            max_tokens: DEFAULT_CONTEXT_WINDOW,
+            // Leave room for the prompt instead of reserving the whole window
+            // for generation; match the model-sized compaction reserve.
+            max_tokens: 16_384.min(DEFAULT_CONTEXT_WINDOW / 4),
             headers: None,
             // Safe-side flags for local servers: no key, and none of the
             // OpenAI-proprietary body fields that stricter clones
@@ -136,6 +138,7 @@ mod tests {
         assert_eq!(models[0].api.as_str(), "openai-completions");
         assert_eq!(models[0].provider.as_str(), "ollama");
         assert_eq!(models[0].context_window, DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(models[0].max_tokens, 1024);
         assert!(models[0].cost.input.abs() < f64::EPSILON, "local is free");
         assert_eq!(
             models[0].compat.as_ref().unwrap()["requiresApiKey"],

@@ -13,7 +13,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - fix(new): end current session and create new session based on reload_resume
 - fix(apply_patch): inplace update file when renaming by using apply_patch
 - fix(compaction): compaction now waits for next assistant message to include tool result
-- version: sync to v0.21.3 from CHANGELOG.md
 
 ## [v0.22.0] - 2026-10-01
 

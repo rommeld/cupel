@@ -339,6 +339,7 @@ async fn run_loop(
 /// the transcript actually shrank. Failures are reported on the event
 /// stream but never abort the run. A failed compaction just means the next
 /// request goes out as-is (and its error, if any, reaches the user).
+/// Nothing to cut is a silent no-op, not a failed attempt.
 async fn run_compaction(
     context: &mut AgentContext,
     config: &AgentLoopConfig,
@@ -348,6 +349,10 @@ async fn run_compaction(
     sink: &AgentEventSink,
     reason: CompactionReason,
 ) -> bool {
+    if compaction::cut_index(context, config.model.context_window, &config.compaction).is_none() {
+        return false;
+    }
+
     sink.emit(AgentEvent::CompactionStart { reason });
     let api_key = hooks
         .api_key(config.model.provider.as_str())

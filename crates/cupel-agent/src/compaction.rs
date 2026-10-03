@@ -31,7 +31,9 @@ pub const COMPACTION_MARKER: &str = "[Conversation summary - earlier history was
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompactionConfig {
     pub enabled: bool,
+    /// Upper limit, capped at min(16_384, context_window / 4) for each model.
     pub reserve_tokens: u64,
+    /// Upper limit, capped at min(16_384, context_window / 4) for each model.
     pub keep_recent_tokens: u64,
 }
 
@@ -40,7 +42,18 @@ impl Default for CompactionConfig {
         Self {
             enabled: true,
             reserve_tokens: 16_384,
-            keep_recent_tokens: 20_000,
+            keep_recent_tokens: 16_384,
+        }
+    }
+}
+
+impl CompactionConfig {
+    fn for_context_window(self, context_window: u64) -> Self {
+        let budget = 16_384.min(context_window / 4);
+        Self {
+            reserve_tokens: self.reserve_tokens.min(budget),
+            keep_recent_tokens: self.keep_recent_tokens.min(budget),
+            ..self
         }
     }
 }
@@ -133,7 +146,19 @@ pub fn should_compact(context_tokens: u64, context_window: u64, config: &Compact
     if !config.enabled || context_window == 0 {
         return false;
     }
+    let config = config.for_context_window(context_window);
     context_tokens > context_window.saturating_sub(config.reserve_tokens)
+}
+
+/// A model-sized cut point, or none when the entire history must be kept.
+pub(crate) fn cut_index(
+    context: &AgentContext,
+    context_window: u64,
+    config: &CompactionConfig,
+) -> Option<usize> {
+    let config = config.for_context_window(context_window);
+    let cut = find_cut_index(&context.messages, config.keep_recent_tokens);
+    (cut > 0).then_some(cut)
 }
 
 /// Index of the first message kept verbatim. Everything before it gets
@@ -320,10 +345,9 @@ pub async fn compact(
     cancel: &CancellationToken,
 ) -> Result<CompactionOutcome, CompactionError> {
     let tokens_before = estimate_context_tokens(context);
-    let cut = find_cut_index(&context.messages, config.keep_recent_tokens);
-    if cut == 0 {
-        return Err(CompactionError::NothingToCompact);
-    }
+    let cut = cut_index(context, model.context_window, config)
+        .ok_or(CompactionError::NothingToCompact)?;
+    let config = config.for_context_window(model.context_window);
 
     // Tier 1: free pruning
     // Elide only outside the keep window (the recent tail stays verbatim, so
@@ -332,7 +356,7 @@ pub async fn compact(
     let pruned_tool_results = elide_stale_tool_results(&mut context.messages[..cut]);
     if pruned_tool_results > 0 {
         let tokens_after = estimate_context_tokens(context);
-        if !should_compact(tokens_after, model.context_window, config) {
+        if !should_compact(tokens_after, model.context_window, &config) {
             return Ok(CompactionOutcome {
                 tokens_before,
                 tokens_after,
@@ -437,6 +461,45 @@ mod tests {
     }
 
     #[test]
+    fn budgets_scale_with_context_window() {
+        let config = CompactionConfig::default();
+        for (window, budget) in [
+            (0, 0),
+            (4096, 1024),
+            (8192, 2048),
+            (16_384, 4096),
+            (65_536, 16_384),
+            (100_000, 16_384),
+        ] {
+            let effective = config.for_context_window(window);
+            assert_eq!(effective.reserve_tokens, budget, "window {window}");
+            assert_eq!(effective.keep_recent_tokens, budget, "window {window}");
+        }
+    }
+
+    #[test]
+    fn smaller_explicit_budgets_are_preserved() {
+        let config = CompactionConfig {
+            enabled: true,
+            reserve_tokens: 512,
+            keep_recent_tokens: 256,
+        };
+        assert_eq!(config.for_context_window(4096), config);
+    }
+
+    #[test]
+    fn threshold_scales_with_small_context_windows() {
+        let config = CompactionConfig::default();
+        for window in [4096, 8192, 16_384] {
+            let threshold = window - window / 4;
+            assert!(!should_compact(0, window, &config));
+            assert!(!should_compact(threshold, window, &config));
+            assert!(should_compact(threshold + 1, window, &config));
+        }
+        assert!(!should_compact(1000, 0, &config));
+    }
+
+    #[test]
     fn threshold_respects_reserve() {
         let config = CompactionConfig::default();
         // Window 100k, reserve ~16k: 80k is fine, 90k must compact.
@@ -464,6 +527,21 @@ mod tests {
     fn cut_index_zero_when_everything_fits_budget() {
         let messages = vec![user("short"), user("also short")];
         assert_eq!(find_cut_index(&messages, 20_000), 0);
+    }
+
+    #[test]
+    fn cut_index_uses_model_sized_keep_window() {
+        let big = "x".repeat(4000);
+        let mut context = AgentContext {
+            system_prompt: String::new(),
+            messages: vec![user(&big), user(&big), user(&big), user(&big)],
+            tools: Vec::new(),
+        };
+        let config = CompactionConfig::default();
+        assert_eq!(cut_index(&context, 4096, &config), Some(2));
+        assert_eq!(cut_index(&context, 100_000, &config), None);
+        context.messages.clear();
+        assert_eq!(cut_index(&context, 4096, &config), None);
     }
 
     #[test]
