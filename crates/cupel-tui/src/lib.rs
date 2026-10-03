@@ -104,6 +104,9 @@ async fn event_loop(
 ) -> std::io::Result<()> {
     let mut app = app::App::new(agent, meta, recorder);
     let mut terminal_events = spawn_input_thread();
+    // The spinner's clock lives outside the loop.
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
@@ -123,7 +126,7 @@ async fn event_loop(
             event = app.next_event() => {
                 app.on_event(event).await;
             }
-            () = tokio::time::sleep(std::time::Duration::from_millis(100)), if app.is_running() => {
+            _ = ticker.tick(), if app.is_running() => {
                 app.tick();
             }
         }
