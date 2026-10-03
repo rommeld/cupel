@@ -219,8 +219,27 @@ async fn run(
         .await?
         .map_err(|e| InferenceError::Other(format_sdk_error(&e)))?;
 
+    let stream = futures_util::stream::try_unfold(response.stream, |mut stream| async move {
+        let item = stream
+            .recv()
+            .await
+            .map_err(|e| InferenceError::Other(format!("Bedrock stream error: {e}")))?;
+        Ok(item.map(|item| (item, stream)))
+    });
+    consume_stream(model, options, sink, stream).await
+}
+
+/// Translate SDK events independently of the network and credential chain.
+async fn consume_stream(
+    model: &Model,
+    options: &StreamOptions,
+    sink: &EventSink,
+    stream: impl futures_core::Stream<Item = Result<bedrock::ConverseStreamOutput>>,
+) -> Result<()> {
+    use futures_util::{StreamExt as _, pin_mut};
+
+    pin_mut!(stream);
     let mut output = new_output_message(model);
-    let mut stream = response.stream;
 
     // Bedrock indexes content blocks like Anthropic does; track the mapping
     // to our positions plus tool-call JSON scratch buffers.
@@ -235,14 +254,13 @@ async fn run(
     }
     let mut blocks: Vec<BlockState> = Vec::new();
     let find = |blocks: &[BlockState], idx: i32| blocks.iter().position(|b| b.bedrock_index == idx);
+    let mut saw_message_stop = false;
 
     loop {
-        let item = with_cancel(options, stream.recv())
-            .await?
-            .map_err(|e| InferenceError::Other(format!("Bedrock stream error: {e}")))?;
+        let item = with_cancel(options, stream.next()).await?;
         let Some(item) = item else { break };
 
-        match item {
+        match item? {
             bedrock::ConverseStreamOutput::MessageStart(start) => {
                 if start.role != bedrock::ConversationRole::Assistant {
                     return Err(InferenceError::Other(
@@ -405,6 +423,7 @@ async fn run(
             }
 
             bedrock::ConverseStreamOutput::MessageStop(stop) => {
+                saw_message_stop = true;
                 output.stop_reason = map_stop_reason(&stop.stop_reason);
             }
 
@@ -430,6 +449,11 @@ async fn run(
         }
     }
 
+    if !saw_message_stop {
+        return Err(InferenceError::Other(
+            "Bedrock stream ended before MessageStop".to_string(),
+        ));
+    }
     if matches!(output.stop_reason, StopReason::Error | StopReason::Aborted) {
         return Err(InferenceError::Other(
             output
@@ -936,10 +960,16 @@ fn json_to_document(value: &Value) -> Document {
 
 #[cfg(test)]
 mod tests {
+    use aws_sdk_bedrockruntime::types as bedrock;
+    use futures_util::StreamExt as _;
     use serde_json::{Value, json};
 
-    use crate::providers::bedrock::build_additional_model_request_fields;
-    use crate::types::{Model, StreamOptions, ThinkingLevel};
+    use crate::error::Result;
+    use crate::event_stream::assistant_message_channel;
+    use crate::providers::bedrock::{build_additional_model_request_fields, consume_stream};
+    use crate::providers::error_message;
+    use crate::retry::is_retryable_assistant_error;
+    use crate::types::{AssistantMessageEvent, Model, StopReason, StreamOptions, ThinkingLevel};
 
     /// A row from the shipped catalog, not a hand-built fixture: these
     /// tests break if catalog.json and this provider drift apart.
@@ -957,6 +987,104 @@ mod tests {
             ..StreamOptions::default()
         };
         build_additional_model_request_fields(model, &options, None)
+    }
+
+    fn message_start() -> bedrock::ConverseStreamOutput {
+        bedrock::ConverseStreamOutput::MessageStart(
+            bedrock::MessageStartEvent::builder()
+                .role(bedrock::ConversationRole::Assistant)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn text_delta() -> bedrock::ConverseStreamOutput {
+        bedrock::ConverseStreamOutput::ContentBlockDelta(
+            bedrock::ContentBlockDeltaEvent::builder()
+                .content_block_index(0)
+                .delta(bedrock::ContentBlockDelta::Text("partial output".into()))
+                .build()
+                .unwrap(),
+        )
+    }
+
+    async fn collect_stream(
+        events: Vec<bedrock::ConverseStreamOutput>,
+    ) -> (Result<()>, Vec<AssistantMessageEvent>) {
+        let model = catalog_model("global.anthropic.claude-sonnet-5-5");
+        let (stream, sink) = assistant_message_channel();
+        let result = consume_stream(
+            &model,
+            &StreamOptions::default(),
+            &sink,
+            futures_util::stream::iter(events.into_iter().map(Ok)),
+        )
+        .await;
+        drop(sink);
+        (result, stream.collect().await)
+    }
+
+    #[tokio::test]
+    async fn streams_without_message_stop_are_retryable_errors() {
+        for events in [
+            Vec::new(),
+            vec![message_start()],
+            vec![message_start(), text_delta()],
+        ] {
+            let (result, emitted) = collect_stream(events).await;
+            let error = result.expect_err("a stream without MessageStop must not succeed");
+            assert_eq!(error.to_string(), "Bedrock stream ended before MessageStop");
+            assert!(
+                !emitted
+                    .iter()
+                    .any(|e| matches!(e, AssistantMessageEvent::Done { .. }))
+            );
+            let model = catalog_model("global.anthropic.claude-sonnet-5-5");
+            let message = error_message(&model, StopReason::Error, error.to_string());
+            assert!(is_retryable_assistant_error(&message));
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_stream_keeps_metadata_after_message_stop() {
+        let stop = bedrock::ConverseStreamOutput::MessageStop(
+            bedrock::MessageStopEvent::builder()
+                .stop_reason(bedrock::StopReason::EndTurn)
+                .build()
+                .unwrap(),
+        );
+        let metadata = bedrock::ConverseStreamOutput::Metadata(
+            bedrock::ConverseStreamMetadataEvent::builder()
+                .usage(
+                    bedrock::TokenUsage::builder()
+                        .input_tokens(10)
+                        .output_tokens(2)
+                        .total_tokens(12)
+                        .build()
+                        .unwrap(),
+                )
+                .metrics(
+                    bedrock::ConverseStreamMetrics::builder()
+                        .latency_ms(1)
+                        .build()
+                        .unwrap(),
+                )
+                .build(),
+        );
+        let (result, emitted) =
+            collect_stream(vec![message_start(), text_delta(), stop, metadata]).await;
+        result.expect("complete stream succeeds");
+        let Some(AssistantMessageEvent::Done { reason, message }) = emitted.last() else {
+            panic!("expected a terminal Done event");
+        };
+        assert_eq!(*reason, StopReason::Stop);
+        assert_eq!(message.usage.total_tokens, 12);
+        assert_eq!(
+            message.content,
+            vec![crate::types::AssistantContent::Text(
+                crate::types::TextContent::plain("partial output")
+            )]
+        );
     }
 
     #[test]

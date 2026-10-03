@@ -587,7 +587,14 @@ async fn run(
         }
     }
 
-    if saw_message_start && !saw_message_stop {
+    // A 200 response may still be a non-streaming JSON body or gateway HTML.
+    // Neither is a completed assistant turn, even when the body closes cleanly.
+    if !saw_message_start {
+        return Err(InferenceError::Other(
+            "Anthropic stream ended without message_start".to_string(),
+        ));
+    }
+    if !saw_message_stop {
         return Err(InferenceError::Other(
             "Anthropic stream ended before message_stop".to_string(),
         ));
@@ -1121,11 +1128,16 @@ fn convert_tools(
 mod tests {
     use serde_json::{Value, json};
 
+    use crate::error::MessageStreamError;
+    use crate::provider::Provider as _;
     use crate::providers::anthropic::{
-        THINKING_BINDING_BETA, anthropic_compat, build_request_body, request_betas,
+        AnthropicProvider, THINKING_BINDING_BETA, anthropic_compat, build_request_body,
+        request_betas,
     };
+    use crate::retry::is_retryable_assistant_error;
     use crate::types::{
-        Context, Message, Model, StreamOptions, ThinkingLevel, UserContentBody, UserMessage, now_ms,
+        AssistantMessage, Context, Message, Model, StopReason, StreamOptions, ThinkingLevel,
+        UserContentBody, UserMessage, now_ms,
     };
 
     /// A row from the shipped catalog, not a hand-built fixture: these
@@ -1152,6 +1164,107 @@ mod tests {
     fn body_for(model: &Model, options: &StreamOptions) -> Value {
         let compat = anthropic_compat(model);
         build_request_body(model, &hello(), options, &compat, false)
+    }
+
+    /// Exercise the actual HTTP/SSE adapter against a bounded local response.
+    async fn stream_body(
+        body: &str,
+        content_type: &str,
+    ) -> Result<AssistantMessage, MessageStreamError> {
+        use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = socket.into_split();
+            let mut reader = tokio::io::BufReader::new(reader);
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).await.unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            reader
+                .read_exact(&mut vec![0; content_length])
+                .await
+                .unwrap();
+            writer.write_all(response.as_bytes()).await.unwrap();
+        });
+        let mut model = catalog_model("claude-haiku-4-5");
+        model.base_url = format!("http://{address}");
+        let options = StreamOptions {
+            api_key: Some("test".into()),
+            timeout_ms: Some(5_000),
+            ..StreamOptions::default()
+        };
+        let result = AnthropicProvider::new()
+            .stream(&model, hello(), options)
+            .result()
+            .await;
+        server.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn streams_without_message_start_are_retryable_errors() {
+        for (body, content_type) in [
+            ("", "text/event-stream"),
+            ("<html>Scheduled maintenance</html>", "text/html"),
+            (
+                r#"{"type":"message","content":[],"stop_reason":"end_turn"}"#,
+                "application/json",
+            ),
+            ("data: {\"type\":\"ping\"}\n\n", "text/event-stream"),
+            ("data: {\"type\":\"message_stop\"}\n\n", "text/event-stream"),
+        ] {
+            let error = stream_body(body, content_type).await.unwrap_err();
+            let MessageStreamError::ProviderError { reason, message } = error else {
+                panic!("expected an in-band provider error");
+            };
+            assert_eq!(reason, StopReason::Error);
+            assert_eq!(
+                message.error_message.as_deref(),
+                Some("Anthropic stream ended without message_start")
+            );
+            assert!(is_retryable_assistant_error(&message));
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_without_message_stop_is_a_retryable_error() {
+        let body = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\"}}\n\n";
+        let error = stream_body(body, "text/event-stream").await.unwrap_err();
+        let MessageStreamError::ProviderError { reason, message } = error else {
+            panic!("expected an in-band provider error");
+        };
+        assert_eq!(reason, StopReason::Error);
+        assert_eq!(
+            message.error_message.as_deref(),
+            Some("Anthropic stream ended before message_stop")
+        );
+        assert!(is_retryable_assistant_error(&message));
+    }
+
+    #[tokio::test]
+    async fn complete_empty_stream_is_successful() {
+        // Empty content is legitimate when both protocol markers arrived.
+        let body = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n";
+        let message = stream_body(body, "text/event-stream").await.unwrap();
+        assert_eq!(message.stop_reason, StopReason::Stop);
+        assert_eq!(message.response_id.as_deref(), Some("msg_test"));
+        assert!(message.content.is_empty());
     }
 
     #[test]
