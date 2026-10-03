@@ -32,7 +32,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             artifact: cupel-macos-universal
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
