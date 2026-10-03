@@ -13,14 +13,18 @@ use futures_util::StreamExt as _;
 use tokio_util::sync::CancellationToken;
 
 use cupel_agent::{
-    AgentEvent, AgentLoopConfig, AgentMessage, CompactionConfig, CompactionReason, NoHooks,
-    RetryConfig, ToolExecutionMode,
+    AgentEvent, AgentHooks, AgentLoopConfig, AgentMessage, CompactionConfig, CompactionReason,
+    NoHooks, RetryConfig, ToolExecutionMode,
     agent_loop::{agent_event_channel, agent_loop},
-    compaction::{COMPACTION_MARKER, SUMMARIZATION_SYSTEM_PROMPT},
+    compaction::{
+        COMPACTION_MARKER, SUMMARIZATION_SYSTEM_PROMPT, compact, estimate_context_tokens,
+        should_compact,
+    },
     types::AgentContext,
 };
 use cupel_core::{
     event_stream::{AssistantMessageStream, assistant_message_channel},
+    options_util,
     provider::{Provider, Registry},
     types::{
         Api, AssistantContent, AssistantMessage, Context, Message, Model, ModelCost, StopReason,
@@ -412,6 +416,143 @@ async fn tool_heavy_history_compacts_without_a_summarization_call() {
     );
     assert_eq!(*message_count, 7, "1 user + 5 results + new prompt");
     assert!(matches!(events.last(), Some(AgentEvent::AgentEnd { .. })));
+}
+
+#[tokio::test]
+async fn pruning_invalidates_usage_anchors_in_the_kept_tail() {
+    let model = mock_model(16_000);
+    let usage = Usage {
+        input: 12_000,
+        output: 1000,
+        cache_read: 1000,
+        cache_write: 1000,
+        total_tokens: 15_000,
+        ..Usage::default()
+    };
+    let mut old = assistant(&model, Vec::new());
+    old.usage = Usage {
+        total_tokens: 0,
+        ..usage.clone()
+    };
+    let mut recent = assistant(
+        &model,
+        vec![AssistantContent::Text(TextContent::plain("recent answer"))],
+    );
+    recent.usage = usage;
+    let mut messages = tool_heavy_history(13);
+    messages.insert(1, AgentMessage::Llm(Message::Assistant(old)));
+    messages.push(AgentMessage::user_text("recent question"));
+    messages.push(AgentMessage::Llm(Message::Assistant(recent)));
+    let mut context = AgentContext {
+        system_prompt: "s".repeat(4000),
+        messages,
+        tools: Vec::new(),
+    };
+    let config = CompactionConfig::default();
+    assert_eq!(estimate_context_tokens(&context), 15_000);
+    assert!(should_compact(15_000, model.context_window, &config));
+
+    // An empty registry makes any unnecessary summarization call fail.
+    let outcome = compact(
+        &mut context,
+        &Arc::new(Registry::new()),
+        &model,
+        None,
+        &config,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("pruning alone suffices despite the retained usage anchor");
+
+    assert_eq!(outcome.pruned_tool_results, 13);
+    assert_eq!(outcome.summarized_messages, 0);
+    assert!(outcome.summary.is_none());
+    assert_eq!(outcome.tokens_before, 15_000);
+    assert!(outcome.tokens_after < outcome.tokens_before);
+    assert!(!should_compact(
+        outcome.tokens_after,
+        model.context_window,
+        &config
+    ));
+    assert_eq!(context.messages.len(), 17, "pruning preserves all messages");
+    for message in &context.messages {
+        if let AgentMessage::Llm(Message::Assistant(a)) = message {
+            assert_eq!(a.usage, Usage::default(), "no older anchor may take over");
+        }
+    }
+
+    // The first provider request after pruning must use the new estimate
+    // too, leaving the full output budget rather than clamping it to 1.
+    let request = Context {
+        system_prompt: Some(context.system_prompt.clone()),
+        messages: NoHooks.convert_to_llm(&context.messages).await,
+        tools: None,
+    };
+    assert_eq!(
+        options_util::estimate_context_tokens(&request),
+        outcome.tokens_after
+    );
+    assert_eq!(
+        options_util::clamp_max_tokens_to_context(&model, &request, model.max_tokens),
+        model.max_tokens
+    );
+}
+
+#[tokio::test]
+async fn summarization_invalidates_usage_anchor_in_the_kept_tail() {
+    let model = mock_model(16_000);
+    let provider = Arc::new(CompactionAwareProvider::new(0, ""));
+    let mut registry = Registry::new();
+    registry.register(Arc::<CompactionAwareProvider>::clone(&provider));
+    let mut recent = assistant(
+        &model,
+        vec![AssistantContent::Text(TextContent::plain("recent answer"))],
+    );
+    recent.usage = Usage {
+        input: 14_000,
+        output: 1000,
+        total_tokens: 15_000,
+        ..Usage::default()
+    };
+    let mut messages = big_history(16);
+    messages.push(AgentMessage::user_text("recent question"));
+    messages.push(AgentMessage::Llm(Message::Assistant(recent)));
+    let mut context = AgentContext {
+        system_prompt: String::new(),
+        messages,
+        tools: Vec::new(),
+    };
+    let config = CompactionConfig::default();
+    let outcome = compact(
+        &mut context,
+        &Arc::new(registry),
+        &model,
+        None,
+        &config,
+        &CancellationToken::new(),
+    )
+    .await
+    .expect("summarization succeeds");
+
+    assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(outcome.pruned_tool_results, 0);
+    assert!(outcome.summarized_messages > 0);
+    assert!(outcome.summary.is_some());
+    assert_eq!(outcome.tokens_before, 15_000);
+    assert!(outcome.tokens_after < outcome.tokens_before);
+    assert!(!should_compact(
+        outcome.tokens_after,
+        model.context_window,
+        &config
+    ));
+    let Some(AgentMessage::Llm(Message::Assistant(retained))) = context.messages.last() else {
+        panic!("recent assistant message must be retained");
+    };
+    assert_eq!(retained.usage, Usage::default());
+    assert_eq!(
+        retained.content,
+        vec![AssistantContent::Text(TextContent::plain("recent answer"))]
+    );
 }
 
 #[tokio::test]

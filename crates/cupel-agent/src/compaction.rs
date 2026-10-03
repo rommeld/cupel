@@ -140,6 +140,17 @@ pub fn estimate_context_tokens(context: &AgentContext) -> u64 {
     tokens
 }
 
+/// Provider usage describes the original transcript. After editing history,
+/// invalidate every anchor so both agent estimation and provider output
+/// clamping fall back to message lengths until the next fresh response.
+fn invalidate_usage_anchors(messages: &mut [AgentMessage]) {
+    for message in messages {
+        if let AgentMessage::Llm(Message::Assistant(assistant)) = message {
+            assistant.usage = cupel_core::types::Usage::default();
+        }
+    }
+}
+
 /// Should this context be compacted before the next request?
 #[must_use]
 pub fn should_compact(context_tokens: u64, context_window: u64, config: &CompactionConfig) -> bool {
@@ -355,6 +366,7 @@ pub async fn compact(
     // return before any LLM call: no summarization cost, no summary at all.
     let pruned_tool_results = elide_stale_tool_results(&mut context.messages[..cut]);
     if pruned_tool_results > 0 {
+        invalidate_usage_anchors(&mut context.messages);
         let tokens_after = estimate_context_tokens(context);
         if !should_compact(tokens_after, model.context_window, &config) {
             return Ok(CompactionOutcome {
@@ -442,6 +454,7 @@ pub async fn compact(
     ))];
     new_messages.extend(kept.iter().cloned());
     context.messages = new_messages;
+    invalidate_usage_anchors(&mut context.messages);
 
     Ok(CompactionOutcome {
         tokens_before,
