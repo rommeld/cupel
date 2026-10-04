@@ -7,7 +7,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 
 - fix(tui): keep the spinner turning while a reply streams
 - fix: explain content-filter stops and preserve partial output and usage across providers
-- version: sync to v0.23.0 from CHANGELOG.md
 - fix: report missing Anthropic message_start and Bedrock MessageStop as retryable stream errors
 - fix(compaction): reset usage limits after pruning and compaction
 - fix(ollama): adjust compaction threshold for context tail based on real model context window
