@@ -852,6 +852,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tracing",
  "tracing-subscriber",
  "unicode-width 0.2.0",
 ]

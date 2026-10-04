@@ -387,6 +387,58 @@ fn parse_conflicts(stdout: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// One side of a conflict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Side {
+    Origin,
+    Spinoff(String),
+}
+
+/// Two checkouts whose current changes conflict, and the files they conflict in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conflict {
+    pub sides: (Side, Side),
+    pub files: Vec<String>,
+}
+
+impl Conflict {
+    /// The other side when `side` is one of the two, else `None`.
+    #[must_use]
+    pub fn other(&self, side: &Side) -> Option<&Side> {
+        if self.sides.0 == *side {
+            Some(&self.sides.1)
+        } else if self.sides.1 == *side {
+            Some(&self.sides.0)
+        } else {
+            None
+        }
+    }
+}
+
+/// Every pair of checkouts in `group` whose current changes conflict. Each checkout is
+/// snapshotted once; then every pair is merged in the object store, so nothing in any
+/// checkout changes.
+pub fn check(group: &Group) -> Result<Vec<Conflict>, SpinoffError> {
+    let mut members = vec![(Side::Origin, snapshot(&group.origin.path)?)];
+    for spinoff in &group.spinoffs {
+        let side = Side::Spinoff(spinoff.name.clone());
+        members.push((side, snapshot(&spinoff.path)?));
+    }
+    let mut found = Vec::new();
+    for (index, (side, snap)) in members.iter().enumerate() {
+        for (other, other_snap) in &members[index + 1..] {
+            let files = conflicts(&group.origin.path, snap, other_snap)?;
+            if !files.is_empty() {
+                found.push(Conflict {
+                    sides: (side.clone(), other.clone()),
+                    files,
+                });
+            }
+        }
+    }
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,5 +688,45 @@ mod tests {
         let ours = snapshot(&origin).unwrap();
         let theirs = snapshot(&auth.path).unwrap();
         assert_eq!(conflicts(&origin, &ours, &theirs).unwrap(), ["a.txt"]);
+    }
+
+    #[test]
+    fn check_reports_each_conflicting_pair_once() {
+        let origin = repo("check");
+        let group = Group::discover(&origin).unwrap();
+        let auth = create(&group, &"auth".parse().unwrap()).unwrap();
+        let group = Group::discover(&origin).unwrap();
+        let docs = create(&group, &"docs".parse().unwrap()).unwrap();
+        let group = Group::discover(&origin).unwrap();
+        assert!(check(&group).unwrap().is_empty(), "nothing changed yet");
+
+        // The origin and auth both change line 5; docs only changes line 2,
+        // which merges with both.
+        edit(&origin, 5, "5 origin");
+        edit(&auth.path, 5, "5 auth");
+        edit(&docs.path, 2, "2 docs");
+        let found = check(&group).unwrap();
+        let auth_side = Side::Spinoff("auth".to_string());
+        let docs_side = Side::Spinoff("docs".to_string());
+        let expected = Conflict {
+            sides: (Side::Origin, auth_side.clone()),
+            files: vec!["a.txt".to_string()],
+        };
+        assert_eq!(found, vec![expected]);
+        assert_eq!(found[0].other(&Side::Origin), Some(&auth_side));
+        assert_eq!(found[0].other(&docs_side), None);
+
+        // Two spinoffs conflict with each other too.
+        edit(&docs.path, 5, "5 docs");
+        let found = check(&group).unwrap();
+        let pairs: Vec<_> = found.iter().map(|conflict| &conflict.sides).collect();
+        assert_eq!(
+            pairs,
+            [
+                &(Side::Origin, auth_side.clone()),
+                &(Side::Origin, docs_side.clone()),
+                &(auth_side, docs_side),
+            ]
+        );
     }
 }

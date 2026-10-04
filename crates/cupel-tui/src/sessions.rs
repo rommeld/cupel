@@ -3,7 +3,7 @@
 //! input there, while every session's agent keeps working, on screen or not.
 
 use cupel_coding_agent::commands::SpinoffCommand;
-use cupel_coding_agent::spinoff::{self, Group, SpinoffError, SpinoffName};
+use cupel_coding_agent::spinoff::{self, Conflict, Group, Side, SpinoffError, SpinoffName};
 use futures_util::future::select_all;
 use ratatui::crossterm::event::{
     Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
@@ -23,6 +23,7 @@ pub struct Sessions {
     pub active: usize,
     pub rows: Vec<(Rect, usize)>,
     pub quit_armed: bool,
+    pub conflicts: Vec<Conflict>,
 }
 
 impl Sessions {
@@ -36,6 +37,7 @@ impl Sessions {
             active: 0,
             rows: Vec::new(),
             quit_armed: false,
+            conflicts: Vec::new(),
         }
     }
 
@@ -264,6 +266,100 @@ impl Sessions {
         self.switch_to(self.list.len() - 1);
         Ok(())
     }
+
+    /// Whether a run ended in any session since the last call. It clears the flags, so
+    /// every end counts once.
+    pub fn take_finished_runs(&mut self) -> bool {
+        let mut any = false;
+        for session in &mut self.list {
+            any |= core::mem::take(&mut session.app.run_finished);
+        }
+        any
+    }
+
+    /// Check all checkouts of the group for conflicts. The sidebar shows the result,
+    /// and every open session whose conflicts changed gets a notice. Withput a spinoff
+    /// session there is nothing to compare. A failing check is only logged.
+    pub async fn check_conflicts(&mut self) {
+        if self.list.len() < 2 {
+            return;
+        }
+        let origin_dir = PathBuf::from(&self.list[0].app.meta.cwd);
+        let result = tokio::task::spawn_blocking(move || {
+            let group = Group::discover(&origin_dir)?;
+            spinoff::check(&group)
+        })
+        .await;
+        let found = match result {
+            Ok(Ok(found)) => found,
+            Ok(Err(error)) => {
+                tracing::warn!("conflict check failed: {error}");
+                return;
+            }
+            Err(error) => {
+                tracing::warn!("conflict check did not finish: {error}");
+                return;
+            }
+        };
+        let before = core::mem::replace(&mut self.conflicts, found);
+        for index in 0..self.list.len() {
+            for notice in self.changes(index, &before) {
+                self.list[index].app.notice(notice);
+            }
+        }
+    }
+
+    /// The notices for session `index`.
+    fn changes(&self, index: usize, before: &[Conflict]) -> Vec<String> {
+        let side = self.side(index);
+        let old = conflicts_of(before, &side);
+        let new = conflicts_of(&self.conflicts, &side);
+        let mut notices = Vec::new();
+        for pair in &new {
+            if !old.contains(pair) {
+                let (other, files) = pair;
+                let label = self.label(other);
+                notices.push(format!("conflict with {label}: {}", files.join(", ")));
+            }
+        }
+        for (other, _) in &old {
+            if !new.iter().any(|(side, _)| side == other) {
+                notices.push(format!("no more conflicts with {}", self.label(other)));
+            }
+        }
+        notices
+    }
+
+    /// Which side of a conflict session `index` is.
+    fn side(&self, index: usize) -> Side {
+        if index == 0 {
+            Side::Origin
+        } else {
+            Side::Spinoff(self.list[index].label.clone())
+        }
+    }
+
+    /// The name to show for `side`.
+    fn label(&self, side: &Side) -> String {
+        match side {
+            Side::Origin => self.list[0].label.clone(),
+            Side::Spinoff(name) => name.clone(),
+        }
+    }
+
+    /// How many files of session ìndex`conflicts with any other checkout, for the
+    /// sidebar's `!n`.
+    #[must_use]
+    pub fn conflict_count(&self, index: usize) -> usize {
+        let side = self.side(index);
+        let mut files: Vec<&String> = conflicts_of(&self.conflicts, &side)
+            .into_iter()
+            .flat_map(|(_, files)| files)
+            .collect();
+        files.sort();
+        files.dedup();
+        files.len()
+    }
 }
 
 /// Gice `worktree` the trust decision made for the origin's directory, so the spinoff
@@ -276,4 +372,11 @@ fn copy_trust(home: Option<&Path>, origin: &Path, worktree: &Path) -> Option<Str
     cupel_coding_agent::project_trust::save(home, worktree, decision)
         .err()
         .map(|error| format!("warning: the spinoff runs without project trust ({error})"))
+}
+
+fn conflicts_of<'a>(conflicts: &'a [Conflict], side: &Side) -> Vec<(&'a Side, &'a [String])> {
+    conflicts
+        .iter()
+        .filter_map(|conflict| Some((conflict.other(side)?, conflict.files.as_slice())))
+        .collect()
 }

@@ -65,6 +65,7 @@ pub struct App {
     pub last_top_line: usize,
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
+    pub run_finished: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,6 +233,7 @@ impl App {
             last_top_line: 0,
             last_answer: Status::New,
             pending_spinoff: None,
+            run_finished: false,
         };
         app.replay_history(&history);
         // A startup condition (e.g. keyless start) leads the transcript, so
@@ -1632,6 +1634,7 @@ impl App {
         self.recorder.on_agent_end();
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
+        self.run_finished = true;
         // A queued prompt can outlive its run. Submitted after the loop's
         // last look at the queue, or queued behind a run that failed.
         if let Some(message) = self.agent.take_follow_up() {

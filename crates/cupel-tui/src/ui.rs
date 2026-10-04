@@ -43,7 +43,6 @@ fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect) {
         pane_block(" sessions ").title_bottom(Span::styled(" ctrl+n/p · click ", theme::CHROME));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let room = usize::from(inner.width).saturating_sub(2);
     let mut lines = Vec::new();
     for (index, session) in sessions.list.iter().enumerate() {
         let mark = match session.app.status() {
@@ -52,13 +51,23 @@ fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect) {
             Status::Failed => "✗",
             Status::New => "○",
         };
+        let count = sessions.conflict_count(index);
+        let badge = if count == 0 {
+            String::new()
+        } else {
+            format!(" !{count}")
+        };
+        let room = usize::from(inner.width).saturating_sub(2 + badge.len());
         let text = format!("{mark} {:<room$}", fit(&session.label, room));
         let style = if index == sessions.active {
             theme::POPUP_SELECTED
         } else {
             ratatui::style::Style::default()
         };
-        lines.push(Line::from(Span::styled(text, style)));
+        lines.push(Line::from(vec![
+            Span::styled(text, style),
+            Span::styled(badge, style.patch(theme::ERROR)),
+        ]));
         let y = inner.y + index as u16;
         if y < inner.bottom() {
             let row = Rect {
@@ -3108,6 +3117,8 @@ mod tests {
         assert_eq!(fit("abcdefghijklmnopqrstuvwx", 18), "abcdefghijklmnopq…");
     }
 
+    const TEN_LINES: &str = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+
     /// A git repository with one empty commit on `main`, for the `/spinoff`
     /// tests. The path is canonical, like the paths git prints.
     fn git_repo(name: &str) -> std::path::PathBuf {
@@ -3115,10 +3126,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let root = root.canonicalize().unwrap();
+        std::fs::write(root.join("a.txt"), TEN_LINES).unwrap();
         let identity = ["-c", "user.name=test", "-c", "user.email=test@localhost"];
         for args in [
             &["init", "--quiet", "--initial-branch", "main"][..],
-            &["commit", "--quiet", "--allow-empty", "--message", "init"][..],
+            &["add", "--all"][..],
+            &["commit", "--quiet", "--message", "init"][..],
         ] {
             let status = std::process::Command::new("git")
                 .arg("-C")
@@ -3214,5 +3227,124 @@ mod tests {
         sessions.spinoff(create).await;
         assert!(has_notice(sessions.active(), "git repository"));
         assert_eq!(sessions.list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_end_of_a_run_is_flagged_for_the_conflict_check() {
+        let mut app = test_app();
+        assert!(!app.run_finished);
+        // A run against the empty registry ends quickly, with an error.
+        app.start_run("hello");
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+        assert!(app.run_finished);
+    }
+
+    #[test]
+    fn finished_runs_are_taken_once() {
+        use crate::sessions::{Session, Sessions};
+        let mut sessions = Sessions::new(test_app());
+        let app = test_app();
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+        assert!(!sessions.take_finished_runs());
+        sessions.list[0].app.run_finished = true;
+        sessions.list[1].app.run_finished = true;
+        assert!(sessions.take_finished_runs());
+        assert!(!sessions.take_finished_runs(), "every end counts once");
+    }
+
+    #[tokio::test]
+    async fn conflicts_between_sessions_become_notices_and_go_away() {
+        use crate::sessions::Sessions;
+        use cupel_coding_agent::commands::SpinoffCommand;
+        let repo = git_repo("conflicts");
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        let create = SpinoffCommand::Create {
+            name: "auth".parse().unwrap(),
+            preset: None,
+        };
+        sessions.spinoff(create).await;
+        let worktree = repo.join(".cupel/worktrees/auth");
+        let set_line_5 = |dir: &std::path::Path, text: &str| {
+            let changed = TEN_LINES.replace("5\n", &format!("{text}\n"));
+            std::fs::write(dir.join("a.txt"), changed).unwrap();
+        };
+
+        // Both sides change line 5 of a.txt.
+        set_line_5(&repo, "5 origin");
+        set_line_5(&worktree, "5 auth");
+        sessions.check_conflicts().await;
+        assert!(has_notice(
+            &sessions.list[0].app,
+            "conflict with auth: a.txt"
+        ));
+        assert!(has_notice(
+            &sessions.list[1].app,
+            "conflict with main: a.txt"
+        ));
+        assert_eq!(sessions.conflict_count(0), 1);
+        assert_eq!(sessions.conflict_count(1), 1);
+
+        // The same result again: no new notice.
+        let cells = sessions.list[0].app.transcript.cells.len();
+        sessions.check_conflicts().await;
+        assert_eq!(sessions.list[0].app.transcript.cells.len(), cells);
+
+        // The spinoff takes its change back: the conflict is gone.
+        std::fs::write(worktree.join("a.txt"), TEN_LINES).unwrap();
+        sessions.check_conflicts().await;
+        assert!(has_notice(
+            &sessions.list[0].app,
+            "no more conflicts with auth"
+        ));
+        assert!(has_notice(
+            &sessions.list[1].app,
+            "no more conflicts with main"
+        ));
+        assert_eq!(sessions.conflict_count(0), 0);
+    }
+
+    #[test]
+    fn the_sidebar_counts_conflicting_files() {
+        use crate::sessions::{Session, Sessions};
+        use cupel_coding_agent::spinoff::{Conflict, Side};
+        let mut sessions = Sessions::new(test_app());
+        let app = test_app();
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+        let row = |screen: &str, label: &str| {
+            let needle = format!("○ {label}");
+            screen
+                .lines()
+                .find(|line| line.contains(&needle))
+                .unwrap()
+                .to_string()
+        };
+        let screen = draw_sessions(&mut sessions, 100, 20);
+        assert!(!row(&screen, "auth").contains('!'), "{screen}");
+
+        let auth = Side::Spinoff("auth".to_string());
+        sessions.conflicts = vec![
+            Conflict {
+                sides: (Side::Origin, auth.clone()),
+                files: vec!["a.txt".to_string(), "b.rs".to_string()],
+            },
+            // A spinoff without a session here still counts for auth, but
+            // a.txt is already counted.
+            Conflict {
+                sides: (auth, Side::Spinoff("docs".to_string())),
+                files: vec!["a.txt".to_string()],
+            },
+        ];
+        let screen = draw_sessions(&mut sessions, 100, 20);
+        assert!(row(&screen, "origin").contains(" !2"), "{screen}");
+        assert!(row(&screen, "auth").contains(" !2"), "{screen}");
     }
 }

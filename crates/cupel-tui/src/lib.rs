@@ -132,6 +132,11 @@ async fn event_loop(
             }
         }
 
+        // A run ended somewhere. Check for conflicts between the checkouts.
+        if sessions.take_finished_runs() {
+            sessions.check_conflicts().await;
+        }
+
         // Keys only reach the session on screen, so the requests below always come
         // from there.
         let app = sessions.active_mut();

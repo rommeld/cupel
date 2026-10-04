@@ -22,13 +22,12 @@ cupel-core.workspace = true
 futures-util.workspace = true
 ignore.workspace = true
 ratatui.workspace = true
-# The /login flow hands its HTTP client to cupel-core's OAuth code.
 reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-# Subscriber only in the binary crate - libraries never install one.
+tracing.workspace = true
 tracing-subscriber.workspace = true
 unicode-width.workspace = true
 
