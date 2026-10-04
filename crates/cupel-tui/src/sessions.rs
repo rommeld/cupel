@@ -235,14 +235,14 @@ impl Sessions {
         let group = Group::discover(&origin_dir)?;
         let spinoff = spinoff::create(&group, name)?;
         let trust_warning = copy_trust(home.as_deref(), &origin_dir, &spinoff.path);
-        let session_id = format!("cupel{}", cupel_core::types::now_ms());
+        let session_id = format!("cupel-{}", cupel_core::types::now_ms());
         let mut app = App::open(&spinoff.path, home, registry, carry, session_id, Vec::new()).await;
 
         // `create` refuses a detached HEAD, so the origin has a branch.
         let base = group.origin.branch.unwrap_or_default();
         let commit = spinoff.head.get(..7).unwrap_or(&spinoff.head);
         app.notice(format!(
-            "spinoff {}: worktree {}, branch {}{} from {base} at {commit} (uncommited \
+            "spinoff {}: worktree {}, branch {}{} from {base} at {commit} (uncommitted \
             changes of the origin are not in it)",
             spinoff.name,
             spinoff.path.display(),
@@ -253,7 +253,7 @@ impl Sessions {
             app.notice(warning);
         }
         self.active_mut().notice(format!(
-            "spinoff {} started - ctrl+n/ctrl+p or a click in the sidebar switches session",
+            "spinoff {} started - ctrl+n/ctrl+p or a click in the sidebar switches sessions",
             spinoff.name
         ));
         self.list[0].label = base;

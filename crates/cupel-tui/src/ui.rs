@@ -147,7 +147,7 @@ fn render_autocomplete(
         .map(|r| r.display.len() as u16 + 2)
         .max()
         .unwrap_or(10)
-        .min(frame.area().width);
+        .min(area.width);
     let x = (input_area.x + 1 + anchor_col).min(area.right().saturating_sub(width));
 
     let popup = Rect {

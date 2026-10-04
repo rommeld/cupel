@@ -56,7 +56,7 @@ impl Group {
         let listing =
             git(cwd, &["worktree", "list", "--porcelain"]).map_err(|error| match error {
                 SpinoffError::Git { stderr, .. } => {
-                    SpinoffError::Unsupported(format!("/spinoff need a git repository: {stderr}"))
+                    SpinoffError::Unsupported(format!("/spinoff needs a git repository: {stderr}"))
                 }
                 other => other,
             })?;
@@ -136,7 +136,7 @@ fn run(
     }
     command
         .output()
-        .map_err(|error| SpinoffError::Unsupported(format!("cannot run git {error}")))
+        .map_err(|error| SpinoffError::Unsupported(format!("cannot run git: {error}")))
 }
 
 /// [`run`] for commands that must succeed: their stdout, or [`SpinoffError::Git`] with
@@ -213,7 +213,7 @@ pub fn create(group: &Group, name: &SpinoffName) -> Result<Spinoff, SpinoffError
     }
     if origin.head.bytes().all(|byte| byte == b'0') {
         return Err(SpinoffError::Blocked(
-            "the repository has no commit yet - commit once, the start a spinoff".to_string(),
+            "the repository has no commit yet - commit once, then start a spinoff".to_string(),
         ));
     }
     if group

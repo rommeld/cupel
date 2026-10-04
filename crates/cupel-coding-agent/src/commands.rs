@@ -308,7 +308,7 @@ impl core::str::FromStr for SpinoffCommand {
                 preset: Some((*preset).to_string()),
             }),
             _ => Err(SpinoffError::Blocked(
-                "usage: /spinoff <name> [preset] (no argument lists the spinoffs".to_string(),
+                "usage: /spinoff <name> [preset] (no argument lists the spinoffs)".to_string(),
             )),
         }
     }
