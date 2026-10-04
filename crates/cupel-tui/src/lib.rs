@@ -24,6 +24,7 @@ pub mod input;
 pub mod login;
 pub mod markdown;
 pub mod project_trust;
+pub mod sessions;
 mod terminal_text;
 pub mod theme;
 pub mod transcript;
@@ -102,34 +103,38 @@ async fn event_loop(
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
 ) -> std::io::Result<()> {
-    let mut app = app::App::new(agent, meta, recorder);
+    let mut sessions = sessions::Sessions::new(app::App::new(agent, meta, recorder));
     let mut terminal_events = spawn_input_thread();
     // The spinner's clock lives outside the loop.
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
-        terminal.draw(|frame| ui::render(frame, &mut app))?;
+        terminal.draw(|frame| ui::render_sessions(frame, &mut sessions))?;
 
         // Wait for whichever source has something first. `next_agent_event`
         // parks forever while idle, so this never busy-spins.
         tokio::select! {
             event = terminal_events.recv() => {
                 match event {
-                    Some(event) => app.on_terminal_event(event),
+                    Some(event) => sessions.on_terminal_event(event),
                     None => break, // Input thread died; nothing left to do.
                 }
             }
             // Agent events and login events share one wakeup: two
             // `&mut app` futures cannot sit in the same select!, so the
             // App multiplexes them itself (App::next_event).
-            event = app.next_event() => {
-                app.on_event(event).await;
+            (index, event) = sessions.next_event() => {
+                sessions.list[index].app.on_event(event).await;
             }
-            _ = ticker.tick(), if app.is_running() => {
-                app.tick();
+            _ = ticker.tick(), if sessions.any_running() => {
+                sessions.tick();
             }
         }
+
+        // Keys only reach the session on screen, so the requests below always come
+        // from there.
+        let app = sessions.active_mut();
 
         // Ctrl+O queued a copy: emit it as OSC 52 the "set clipboard"
         // escape sequence straight to stdout. It paints nothing, so
@@ -160,12 +165,16 @@ async fn event_loop(
             }
         }
 
-        // /new or /hot-reload requested a rebuild: the loader re-reads
-        // every .cupel layer, so this must run here in async context. The
-        // old App is consumed and its replacement rebound in place.
+        // /new or /hot-reload requested a rebuild: the loader re-reads every .cupel
+        // layer, so this must run here in async context. The old App is consumed and
+        // its replacement rebound in place.
         if let Some(target) = app.pending_reload.take() {
-            app = app.hot_reload(target).await;
+            sessions.reload(target).await;
         }
+        if let Some(command) = sessions.active_mut().pending_spinoff.take() {
+            sessions.spinoff(command).await;
+        }
+        let app = sessions.active_mut();
 
         // A prompt accepted by the (synchronous) key handler starts here:
         // the prompt-path hooks are awaited first, so a pending `stop` hook
@@ -175,18 +184,14 @@ async fn event_loop(
             app.start_run(&prompt);
         }
 
-        if app.should_quit {
-            // Don't leave a run mid-flight: abort and let it settle so the
-            // terminal restore doesn't race provider output.
-            if app.is_running() {
-                app.agent.abort();
-            }
-            app.agent.wait_for_idle().await;
+        if sessions.quit_requested() {
             break;
         }
     }
-    // Normal exit: drain the hook chain and announce session-end.
-    app.recorder.end_session().await;
+    // Normal exit. Don't leave a run mid-flight. Abort and let each session settle,
+    // so the terminal restore doesn't race provider output. Then drain the hook chains
+    // and announce session-end.
+    sessions.shutdown().await;
     Ok(())
 }
 

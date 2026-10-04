@@ -12,13 +12,81 @@ use ratatui::widgets::{
     Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::{app::App, theme, transcript};
+use crate::app::{App, Status};
+use crate::sessions::Sessions;
+use crate::{theme, transcript};
 
-pub fn render(frame: &mut Frame<'_>, app: &mut App) {
+const SIDEBAR_WIDTH: u16 = 24;
+const SIDEBAR_MIN_SCREEN: u16 = 80;
+
+pub fn render_sessions(frame: &mut Frame<'_>, sessions: &mut Sessions) {
+    let area = frame.area();
+    let width = if sessions.list.len() > 1 && area.width >= SIDEBAR_MIN_SCREEN {
+        SIDEBAR_WIDTH
+    } else {
+        0
+    };
+    let [sidebar, main] =
+        Layout::horizontal([Constraint::Length(width), Constraint::Min(1)]).areas(area);
+    render_sidebar(frame, sessions, sidebar);
+    render(frame, &mut sessions.list[sessions.active].app, main);
+}
+
+/// A mark for each session's state, its label, and the session on screen highlighted.
+/// It revords where each row was drawn, so a click can find its session.
+fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect) {
+    sessions.rows.clear();
+    if area.width == 0 {
+        return;
+    }
+    let block =
+        pane_block(" sessions ").title_bottom(Span::styled(" ctrl+n/p · click ", theme::CHROME));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let room = usize::from(inner.width).saturating_sub(2);
+    let mut lines = Vec::new();
+    for (index, session) in sessions.list.iter().enumerate() {
+        let mark = match session.app.status() {
+            Status::Running => SPINNER[session.app.frame % SPINNER.len()],
+            Status::Done => "✓",
+            Status::Failed => "✗",
+            Status::New => "○",
+        };
+        let text = format!("{mark} {:<room$}", fit(&session.label, room));
+        let style = if index == sessions.active {
+            theme::POPUP_SELECTED
+        } else {
+            ratatui::style::Style::default()
+        };
+        lines.push(Line::from(Span::styled(text, style)));
+        let y = inner.y + index as u16;
+        if y < inner.bottom() {
+            let row = Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            };
+            sessions.rows.push((row, index));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn fit(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(max.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
+pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     // Input grows with its content (explicit newlines + wrapped lines),
     // capped at 5 visible lines, + 2 border rows. The inner width is the
     // full frame width minus the left/right borders.
-    let inner_width = frame.area().width.saturating_sub(2).max(1) as usize;
+    let inner_width = area.width.saturating_sub(2).max(1) as usize;
     let input_lines = app
         .input
         .text()
@@ -37,7 +105,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
         Constraint::Length(input_lines + 2),
         Constraint::Length(2),
     ])
-    .areas(frame.area());
+    .areas(area);
 
     render_transcript(frame, app, transcript_area);
     render_queued(frame, app, queued_area);
@@ -45,12 +113,18 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App) {
     render_footer(frame, app, footer_area);
     // Drawn last so it overdraws the transcript's bottom rows in
     // immediate-mode rendering, paint order is the z-order.
-    render_autocomplete(frame, app, transcript_area, input_area);
+    render_autocomplete(frame, app, area, transcript_area, input_area);
 }
 
 /// The `@path` completion popup, anchored just above the input box at the
 /// column of the token's `@`.
-fn render_autocomplete(frame: &mut Frame<'_>, app: &App, transcript_area: Rect, input_area: Rect) {
+fn render_autocomplete(
+    frame: &mut Frame<'_>,
+    app: &App,
+    area: Rect,
+    transcript_area: Rect,
+    input_area: Rect,
+) {
     let Some((rows, selected)) = app.autocomplete.visible() else {
         return;
     };
@@ -74,7 +148,7 @@ fn render_autocomplete(frame: &mut Frame<'_>, app: &App, transcript_area: Rect, 
         .max()
         .unwrap_or(10)
         .min(frame.area().width);
-    let x = (input_area.x + 1 + anchor_col).min(frame.area().width.saturating_sub(width));
+    let x = (input_area.x + 1 + anchor_col).min(area.right().saturating_sub(width));
 
     let popup = Rect {
         x,
@@ -439,7 +513,9 @@ mod tests {
 
     fn draw(app: &mut App, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|frame| render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, app, frame.area()))
+            .unwrap();
         // Flatten the buffer to a string for containment assertions.
         let buffer = terminal.backend().buffer().clone();
         let mut out = String::new();
@@ -459,7 +535,9 @@ mod tests {
     /// missing-text message instead of a confusing style mismatch.
     fn style_of(app: &mut App, needle: &str) -> ratatui::style::Style {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        terminal.draw(|frame| render(frame, app)).unwrap();
+        terminal
+            .draw(|frame| render(frame, app, frame.area()))
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         for y in 0..buffer.area.height {
             let mut row = String::new();
@@ -2813,5 +2891,330 @@ mod tests {
             .find(|text| text.contains("does not take an API key"))
             .expect("key refusal notice");
         assert!(notice.contains("openai-codex"), "{notice}");
+    }
+
+    #[tokio::test]
+    async fn status_follows_the_run_and_how_the_answer_ended() {
+        use crate::app::Status;
+        let mut app = test_app();
+        assert_eq!(app.status(), Status::New);
+        // A run against the empty registry fails in the background; until
+        // its events are pumped, the session counts as running.
+        app.start_run("hello");
+        assert_eq!(app.status(), Status::Running);
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+        assert_eq!(app.status(), Status::Failed);
+        // A good answer changes the mark back.
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: assistant_message("ok", cupel_core::types::StopReason::Stop, 1),
+        }))
+        .await;
+        assert_eq!(app.status(), Status::Done);
+    }
+
+    #[test]
+    fn spinoff_commands_wait_for_the_sessions() {
+        let mut app = test_app();
+        run_command(&mut app, "/spinoff auth fast");
+        let expected = cupel_coding_agent::commands::SpinoffCommand::Create {
+            name: "auth".parse().unwrap(),
+            preset: Some("fast".to_string()),
+        };
+        assert_eq!(app.pending_spinoff, Some(expected));
+        // A bad name is refused at once, as a notice.
+        let mut app = test_app();
+        run_command(&mut app, "/spinoff Auth");
+        assert!(app.pending_spinoff.is_none());
+        assert!(has_notice(&app, "invalid spinoff name \"Auth\""));
+    }
+
+    #[test]
+    fn ctrl_n_and_ctrl_p_switch_sessions_and_wrap_around() {
+        use crate::sessions::{Session, Sessions};
+        let mut sessions = Sessions::new(test_app());
+        for label in ["auth", "docs"] {
+            let app = test_app();
+            let label = label.to_string();
+            sessions.list.push(Session { label, app });
+        }
+        let ctrl = |c| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+
+        sessions.on_terminal_event(ctrl('n'));
+        assert_eq!(sessions.active, 1);
+        sessions.on_terminal_event(ctrl('n'));
+        sessions.on_terminal_event(ctrl('n'));
+        assert_eq!(sessions.active, 0, "after the last comes the first");
+        sessions.on_terminal_event(ctrl('p'));
+        assert_eq!(sessions.active, 2, "before the first comes the last");
+        // Every other key goes to the session on screen.
+        let x = Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        sessions.on_terminal_event(x);
+        assert_eq!(sessions.list[2].app.input.text(), "x");
+        assert_eq!(sessions.list[0].app.input.text(), "");
+        // The mouse state follows the terminal, not the session.
+        sessions.active_mut().mouse_captured = false;
+        sessions.on_terminal_event(ctrl('n'));
+        assert!(!sessions.active().mouse_captured);
+    }
+
+    #[tokio::test]
+    async fn events_arrive_from_sessions_that_are_not_on_screen() {
+        use crate::app::Status;
+        use crate::sessions::{Session, Sessions};
+        let mut sessions = Sessions::new(test_app());
+        let app = test_app();
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+        // A run in the session off screen; it fails against the empty registry.
+        sessions.list[1].app.start_run("work");
+        while sessions.any_running() {
+            // A time limit turns "never read" into a failure instead of a hang.
+            let wait = sessions.next_event();
+            let (index, event) = tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+                .await
+                .expect("no event from the session off screen");
+            assert_eq!(index, 1, "only that session has events");
+            sessions.list[index].app.on_event(event).await;
+        }
+        assert_eq!(sessions.list[1].app.status(), Status::Failed);
+        assert_eq!(sessions.active, 0, "reading events never switches");
+    }
+
+    #[test]
+    fn quitting_while_another_session_works_takes_a_second_attempt() {
+        use crate::sessions::{Session, Sessions};
+        let mut sessions = Sessions::new(test_app());
+        let mut app = test_app();
+        // A run that never ends: `_sink` keeps its channel open.
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        app.run_events = Some(events);
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+
+        assert!(!sessions.quit_requested(), "nobody asked");
+        sessions.active_mut().should_quit = true;
+        assert!(!sessions.quit_requested(), "the first attempt warns");
+        assert!(has_notice(sessions.active(), "auth still working"));
+        sessions.active_mut().should_quit = true;
+        assert!(sessions.quit_requested(), "the second attempt quits");
+
+        // Alone, the first attempt quits.
+        let mut alone = Sessions::new(test_app());
+        alone.active_mut().should_quit = true;
+        assert!(alone.quit_requested());
+    }
+
+    #[tokio::test]
+    async fn new_rebuilds_only_the_session_on_screen() {
+        use crate::app::ReloadTarget;
+        use crate::sessions::{Session, Sessions};
+        let mut sessions = Sessions::new(test_app());
+        let app = test_app();
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+        sessions.active = 1;
+        sessions.reload(ReloadTarget::New).await;
+        assert_eq!(sessions.list[1].label, "auth", "same place, same label");
+        assert_ne!(sessions.list[1].app.recorder.session_id(), "cupel-test");
+        assert_eq!(sessions.list[0].app.recorder.session_id(), "cupel-test");
+    }
+
+    /// Draw `sessions` the way the event loop does and return the screen.
+    fn draw_sessions(sessions: &mut crate::sessions::Sessions, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render_sessions(frame, sessions))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn the_sidebar_lists_every_session_once_there_are_two() {
+        use crate::sessions::{Session, Sessions};
+        let mut sessions = Sessions::new(test_app());
+        let screen = draw_sessions(&mut sessions, 100, 20);
+        assert!(!screen.contains(" sessions "), "one session: no sidebar");
+
+        let mut app = test_app();
+        // A run that never ends: `_sink` keeps its channel open.
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        app.run_events = Some(events);
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+        let screen = draw_sessions(&mut sessions, 100, 20);
+        assert!(screen.contains(" sessions "), "{screen}");
+        assert!(screen.contains("○ origin"), "{screen}");
+        assert!(screen.contains("◓ auth"), "{screen}");
+        // The spinner turns with the ticks.
+        sessions.tick();
+        assert!(draw_sessions(&mut sessions, 100, 20).contains("◑ auth"));
+        // Too narrow: the sidebar steps aside.
+        let narrow = draw_sessions(&mut sessions, 79, 20);
+        assert!(!narrow.contains(" sessions "), "{narrow}");
+    }
+
+    #[test]
+    fn a_click_on_a_sidebar_row_shows_that_session() {
+        use crate::sessions::{Session, Sessions};
+        use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut sessions = Sessions::new(test_app());
+        let app = test_app();
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+        let click = |column, row| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+
+        let screen = draw_sessions(&mut sessions, 100, 20);
+        let row = screen
+            .lines()
+            .position(|line| line.contains("○ auth"))
+            .unwrap();
+        sessions.on_terminal_event(click(5, u16::try_from(row).unwrap()));
+        assert_eq!(sessions.active, 1);
+        // A click outside the sidebar belongs to the session on screen.
+        draw_sessions(&mut sessions, 100, 20);
+        sessions.on_terminal_event(click(60, 2));
+        assert_eq!(sessions.active, 1);
+    }
+
+    #[test]
+    fn long_labels_are_cut_to_fit() {
+        assert_eq!(fit("auth", 18), "auth");
+        assert_eq!(fit("abcdefghijklmnopqrstuvwx", 18), "abcdefghijklmnopq…");
+    }
+
+    /// A git repository with one empty commit on `main`, for the `/spinoff`
+    /// tests. The path is canonical, like the paths git prints.
+    fn git_repo(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("cupel-ui-spinoff-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let identity = ["-c", "user.name=test", "-c", "user.email=test@localhost"];
+        for args in [
+            &["init", "--quiet", "--initial-branch", "main"][..],
+            &["commit", "--quiet", "--allow-empty", "--message", "init"][..],
+        ] {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(identity)
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        root
+    }
+
+    #[tokio::test]
+    async fn spinoff_opens_a_session_in_its_own_worktree() {
+        use crate::sessions::Sessions;
+        use cupel_coding_agent::commands::SpinoffCommand;
+        let repo = git_repo("create");
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        let create = SpinoffCommand::Create {
+            name: "auth".parse().unwrap(),
+            preset: None,
+        };
+        sessions.spinoff(create).await;
+
+        assert_eq!(sessions.list.len(), 2);
+        assert_eq!(sessions.active, 1, "the new session is on screen");
+        assert_eq!(sessions.list[0].label, "main");
+        assert_eq!(sessions.list[1].label, "auth");
+        let worktree = repo.join(".cupel/worktrees/auth");
+        assert!(worktree.is_dir());
+        let cwd = worktree.display().to_string();
+        assert_eq!(sessions.list[1].app.meta.cwd, cwd);
+        assert!(has_notice(&sessions.list[1].app, "spinoff auth: worktree"));
+        assert!(has_notice(&sessions.list[0].app, "spinoff auth started"));
+        // Without a preset: the model of the session it came from.
+        let model = |index: usize| sessions.list[index].app.agent.state().model.id;
+        assert_eq!(model(1), model(0));
+
+        // The listing shows it, with its session open.
+        sessions.spinoff(SpinoffCommand::List).await;
+        assert!(has_notice(sessions.active(), &format!("auth {cwd}")));
+        assert!(!has_notice(sessions.active(), "no session open"));
+    }
+
+    #[tokio::test]
+    async fn a_preset_spinoff_takes_the_preset_and_a_typo_creates_nothing() {
+        use crate::sessions::Sessions;
+        use cupel_coding_agent::commands::SpinoffCommand;
+        use cupel_core::types::ThinkingLevel;
+        let repo = git_repo("preset");
+        let mut origin = test_app_in(repo.to_str().unwrap());
+        origin.meta.settings = serde_json::from_str(
+            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                "thinkingLevel": "low", "prompt": "Answer in one sentence."}}}"#,
+        )
+        .unwrap();
+        let mut sessions = Sessions::new(origin);
+
+        // A typo in the preset is refused before git runs.
+        let typo = SpinoffCommand::Create {
+            name: "docs".parse().unwrap(),
+            preset: Some("fats".to_string()),
+        };
+        sessions.spinoff(typo).await;
+        assert!(has_notice(sessions.active(), "unknown preset: fats"));
+        assert!(!repo.join(".cupel/worktrees/docs").exists());
+        assert_eq!(sessions.list.len(), 1);
+
+        let fast = SpinoffCommand::Create {
+            name: "docs".parse().unwrap(),
+            preset: Some("fast".to_string()),
+        };
+        sessions.spinoff(fast).await;
+        let state = sessions.active().agent.state();
+        assert_eq!(state.model.id, "claude-haiku-4-5");
+        assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
+        assert!(state.system_prompt.ends_with("\n\nAnswer in one sentence."));
+    }
+
+    #[tokio::test]
+    async fn spinoff_outside_a_repository_says_why_not() {
+        use crate::sessions::Sessions;
+        use cupel_coding_agent::commands::SpinoffCommand;
+        let dir = std::env::temp_dir().join("cupel-ui-spinoff-no-repo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut sessions = Sessions::new(test_app_in(dir.to_str().unwrap()));
+        let create = SpinoffCommand::Create {
+            name: "auth".parse().unwrap(),
+            preset: None,
+        };
+        sessions.spinoff(create).await;
+        assert!(has_notice(sessions.active(), "git repository"));
+        assert_eq!(sessions.list.len(), 1);
     }
 }

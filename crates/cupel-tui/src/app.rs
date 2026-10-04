@@ -63,6 +63,27 @@ pub struct App {
     pub last_line_cells: Vec<Option<usize>>,
     pub last_transcript_inner: Rect,
     pub last_top_line: usize,
+    pub last_answer: Status,
+    pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    New,
+    Running,
+    Done,
+    Failed,
+}
+
+/// What a new session takes over from the session that opens it. The model with its
+/// thinking level and preset prompt, the API keys entered with `/provider`, and the
+/// mouse state.
+pub struct Carry {
+    pub model: cupel_core::types::Model,
+    pub thinking: Option<cupel_core::types::ThinkingLevel>,
+    pub preset_prompt: String,
+    pub session_keys: std::collections::HashMap<String, String>,
+    pub mouse_captured: bool,
 }
 
 /// One wakeup from a background source (see [`App::next_event`]).
@@ -209,6 +230,8 @@ impl App {
             last_line_cells: Vec::new(),
             last_transcript_inner: Rect::ZERO,
             last_top_line: 0,
+            last_answer: Status::New,
+            pending_spinoff: None,
         };
         app.replay_history(&history);
         // A startup condition (e.g. keyless start) leads the transcript, so
@@ -292,6 +315,16 @@ impl App {
     #[must_use]
     pub fn is_running(&self) -> bool {
         self.run_events.is_some()
+    }
+
+    /// Session's state for the sidebar.
+    #[must_use]
+    pub fn status(&self) -> Status {
+        if self.is_running() {
+            Status::Running
+        } else {
+            self.last_answer
+        }
     }
 
     pub fn tick(&mut self) {
@@ -641,62 +674,93 @@ impl App {
         session_id: String,
         seeded: Vec<AgentMessage>,
     ) -> Self {
-        // Close the old session cleanly: settles pending hooks and fires
-        // session-end, so external consumers see a real boundary.
+        // Close the old session cleanly: settles pending hooks and fires session-end,
+        // so external consumers see a real boundary.
         self.recorder.end_session().await;
-
-        let state = self.agent.state();
+        let carry = self.carry();
         let registry = self.agent.registry();
-        let ingredients =
-            cupel_coding_agent::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
+        Self::open(
+            cwd,
+            self.meta.home.clone(),
+            registry,
+            carry,
+            session_id,
+            seeded,
+        )
+        .await
+    }
 
-        let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
-        // A preset prompt survives like the model and thinking level do: it
-        // is whatever the running prompt carries beyond the old base, and it
-        // lands on the fresh base. Without a preset it is empty.
+    /// What the new session carries over from the original session ([`Carry`]).
+    #[must_use]
+    pub fn carry(&self) -> Carry {
+        let state = self.agent.state();
         let preset_prompt = state
             .system_prompt
             .strip_prefix(self.meta.base_system_prompt.as_str())
-            .unwrap_or_default();
-        options.system_prompt = format!("{}{preset_prompt}", ingredients.system_prompt);
+            .unwrap_or_default()
+            .to_string();
+        Carry {
+            model: state.model,
+            thinking: state.thinking_level,
+            preset_prompt,
+            session_keys: self.session_keys.clone(),
+            mouse_captured: self.mouse_captured,
+        }
+    }
+
+    /// Build a session in `cwd` from freshly loaded configuration (the `.cupel`
+    /// layers, context files and tools of that directory) plus what `carry` takes
+    /// over. `/new`, `/hot-reload <session-id>` and `/spinoff` all open their session
+    /// here.
+    pub async fn open(
+        cwd: &std::path::Path,
+        home: Option<std::path::PathBuf>,
+        registry: std::sync::Arc<cupel_core::provider::Registry>,
+        carry: Carry,
+        session_id: String,
+        seeded: Vec<AgentMessage>,
+    ) -> Self {
+        let ingredients = cupel_coding_agent::bootstrap::load(cwd, home.clone(), &registry).await;
+
+        let mut options = cupel_agent::AgentOptions::new(carry.model.clone(), registry);
+        options.system_prompt = format!("{}{}", ingredients.system_prompt, carry.preset_prompt);
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
-        // Session-entered keys still win, but the settings tier must come
-        // from the fresh ingredients self.meta.settings is the stale
-        // copy this reload replaces (hand edits would be lost otherwise).
-        let provider = state.model.provider.as_str();
-        options.api_key = self.session_keys.get(provider).cloned().or_else(|| {
+        // Session-entered keys still win, but the settings tier must come from the
+        // fresh ingredients. A stale copy would lost hand edits.
+        let provider = carry.model.provider.as_str();
+        options.api_key = carry.session_keys.get(provider).cloned().or_else(|| {
             cupel_coding_agent::providers::resolve_api_key(provider, &ingredients.settings)
         });
-        options.thinking_level = state.thinking_level;
+        options.thinking_level = carry.thinking;
         options.tool_execution = cupel_agent::ToolExecutionMode::Parallel;
         options.session_id = Some(session_id.clone());
         options.messages = seeded;
 
         let recorder = cupel_coding_agent::session::SessionRecorder::new(
-            self.meta.home.clone(),
+            home.clone(),
             cwd,
             &session_id,
-            &state.model.id,
+            &carry.model.id,
         );
         let meta = cupel_coding_agent::modes::SessionMeta {
-            model_name: state.model.name.clone(),
-            provider: state.model.provider.as_str().to_string(),
-            cwd: self.meta.cwd.clone(),
+            model_name: carry.model.name.clone(),
+            provider: provider.to_string(),
+            cwd: cwd.display().to_string(),
             templates: ingredients.templates,
             models: ingredients.models,
             settings: ingredients.settings,
-            home: self.meta.home.clone(),
-            // A reload is user-initiated; the startup condition was already
-            // shown once and does not repeat.
+            home,
+            // A startup condition was already shown once and does not repeat in
+            // sessions opend later.
             startup_warning: None,
             context_files: ingredients.context_files,
             base_system_prompt: ingredients.system_prompt,
         };
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
-        app.session_keys = self.session_keys;
-        app.mouse_captured = self.mouse_captured;
+        app.session_keys = carry.session_keys;
+        app.mouse_captured = carry.mouse_captured;
         app
     }
 
@@ -886,6 +950,7 @@ impl App {
             assistant.stop_reason,
             StopReason::Error | StopReason::Aborted
         ) {
+            self.last_answer = Status::Failed;
             self.transcript.cells.push(Cell::Error {
                 text: assistant
                     .error_message
@@ -894,6 +959,7 @@ impl App {
             });
             return;
         }
+        self.last_answer = Status::Done;
         if assistant.stop_reason == StopReason::Length {
             self.transcript.cells.push(Cell::Error {
                 text: "response was truncated before completion (output token limit)".to_string(),
@@ -917,7 +983,7 @@ impl App {
         });
     }
 
-    fn notice(&mut self, text: impl Into<String>) {
+    pub fn notice(&mut self, text: impl Into<String>) {
         self.transcript
             .cells
             .push(Cell::Notice { text: text.into() });
@@ -1276,6 +1342,10 @@ impl App {
                     ),
                 }
             }
+            "spinoff" => match args.parse() {
+                Ok(command) => self.pending_spinoff = Some(command),
+                Err(error) => self.notice(format!("{error}")),
+            },
             "quit" => self.should_quit = true,
             _ => return false,
         }

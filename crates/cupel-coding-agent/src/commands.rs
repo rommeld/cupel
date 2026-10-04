@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::resources::split_frontmatter;
+use crate::spinoff::{SpinoffError, SpinoffName};
 
 /// Split a command's argument string bash-style: whitespace separates,
 /// single or double quotes group.
@@ -144,7 +145,6 @@ fn substitute_braced(inner: &str, args: &[String]) -> Option<String> {
 pub struct PromptTemplate {
     pub name: String,
     pub description: String,
-    /// The body (frontmatter stripped) with `$N` placeholders intact.
     pub content: String,
     pub path: PathBuf,
 }
@@ -258,6 +258,10 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Set thinking level: /thinking off|minimal|low|medium|high|xhigh|max",
     },
     BuiltinCommand {
+        name: "spinoff",
+        description: "Start a parallel session in its own git worktree: /spinoff <name> [preset] (no argument lists them)",
+    },
+    BuiltinCommand {
         name: "session-id",
         description: "Show the current session id and list this project's sessions",
     },
@@ -278,6 +282,37 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Code review: /review [path ...] for explicit file, [diff ...], or whole project",
     },
 ];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpinoffCommand {
+    List,
+    Create {
+        name: SpinoffName,
+        preset: Option<String>,
+    },
+}
+
+impl core::str::FromStr for SpinoffCommand {
+    type Err = SpinoffError;
+
+    fn from_str(args: &str) -> Result<Self, Self::Err> {
+        let words: Vec<&str> = args.split_whitespace().collect();
+        match words.as_slice() {
+            [] => Ok(Self::List),
+            [name] => Ok(Self::Create {
+                name: name.parse()?,
+                preset: None,
+            }),
+            [name, preset] => Ok(Self::Create {
+                name: name.parse()?,
+                preset: Some((*preset).to_string()),
+            }),
+            _ => Err(SpinoffError::Blocked(
+                "usage: /spinoff <name> [preset] (no argument lists the spinoffs".to_string(),
+            )),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -359,5 +394,29 @@ mod tests {
         assert_eq!(expanded, "Project review of src/main.rs quickly.");
         assert!(expand_prompt_template("/unknown", &templates).is_none());
         assert!(expand_prompt_template("no slash", &templates).is_none());
+    }
+
+    #[test]
+    fn spinoff_arguments_parse_into_commands() {
+        assert_eq!("".parse::<SpinoffCommand>().unwrap(), SpinoffCommand::List);
+        let auth: SpinoffName = "auth".parse().unwrap();
+        let plain = SpinoffCommand::Create {
+            name: auth.clone(),
+            preset: None,
+        };
+        assert_eq!("auth".parse::<SpinoffCommand>().unwrap(), plain);
+        let with_preset = SpinoffCommand::Create {
+            name: auth,
+            preset: Some("fast".to_string()),
+        };
+        assert_eq!(
+            " auth  fast ".parse::<SpinoffCommand>().unwrap(),
+            with_preset
+        );
+        // The name rules come from SpinoffName; a third word is a usage error.
+        let bad_name = "Auth".parse::<SpinoffCommand>();
+        assert!(matches!(bad_name, Err(SpinoffError::Blocked(_))));
+        let error = "auth fast extra".parse::<SpinoffCommand>().unwrap_err();
+        assert!(error.to_string().starts_with("usage: /spinoff"));
     }
 }
