@@ -101,6 +101,9 @@ pub fn models_from_tags(json: &serde_json::Value, host: &str) -> Vec<Model> {
             // (llama-server) reject.
             compat: Some(serde_json::json!({
                 "requiresApiKey": false,
+                // Discovery provenance for the UI, ignored by the provider.
+                // An explicit models.json row replaces this along with compat.
+                "contextWindowAssumed": true,
                 "supportsStore": false,
                 "supportsDeveloperRole": false,
                 "supportsStrictMode": false,
@@ -138,6 +141,10 @@ mod tests {
         assert_eq!(models[0].api.as_str(), "openai-completions");
         assert_eq!(models[0].provider.as_str(), "ollama");
         assert_eq!(models[0].context_window, DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(
+            models[0].compat.as_ref().unwrap()["contextWindowAssumed"],
+            serde_json::json!(true)
+        );
         assert_eq!(models[0].max_tokens, 1024);
         assert!(models[0].cost.input.abs() < f64::EPSILON, "local is free");
         assert_eq!(

@@ -304,10 +304,19 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     };
     let window = app.agent.context_window();
     let percent = (app.context_tokens * 100).checked_div(window).unwrap_or(0);
+    let maximum = app.agent.max_context_window().filter(|&max| max > window);
+    let window_label = if app.agent.context_window_is_assumed() {
+        " assumed"
+    } else if maximum.is_some() {
+        " plan"
+    } else {
+        ""
+    };
+    let maximum_segment = maximum.map_or_else(String::new, |max| format!(" · max {}k", max / 1000));
     // The session id sits in the always-visible left half so `--resume
     // <id>` (or /hot-reload <id>) can be typed from what's on screen.
     let left = format!(
-        " {} ({}){} | {} | {} | {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k ({percent}%)",
+        " {} ({}){} | {} | {} | {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k{window_label} ({percent}%){maximum_segment}",
         app.meta.model_name,
         app.meta.provider,
         thinking_segment,
@@ -1529,6 +1538,80 @@ mod tests {
         }))
         .await;
         assert!(draw(&mut app, 200, 20).contains("ctx 12k/"));
+    }
+
+    #[test]
+    fn footer_distinguishes_planning_window_from_maximum_after_model_switches() {
+        let mut app = test_app();
+        app.context_tokens = 48_000;
+
+        run_command(&mut app, "/model gpt-6.1-sol");
+        let screen = draw(&mut app, 240, 20);
+        assert!(
+            screen.contains("ctx 48k/272k plan (17%) · max 922k"),
+            "{screen}"
+        );
+
+        run_command(&mut app, "/model codex/gpt-6.1-sol");
+        let screen = draw(&mut app, 240, 20);
+        assert!(
+            screen.contains("ctx 48k/272k plan (17%) · max 872k"),
+            "{screen}"
+        );
+
+        run_command(&mut app, "/model claude-sonnet-5");
+        let screen = draw(&mut app, 240, 20);
+        assert!(screen.contains("ctx 48k/1000k (4%)"), "{screen}");
+        assert!(!screen.contains(" · max "), "{screen}");
+    }
+
+    #[test]
+    fn footer_keeps_context_compact_without_a_larger_maximum() {
+        let mut app = test_app();
+        let mut model = app.agent.state().model;
+        model.context_window = 272_000;
+        app.context_tokens = 48_000;
+
+        for maximum in [None, Some(272_000)] {
+            model.max_context_window = maximum;
+            app.agent.set_model(model.clone());
+            let screen = draw(&mut app, 240, 20);
+            assert!(screen.contains("ctx 48k/272k (17%)"), "{screen}");
+            assert!(!screen.contains(" · max "), "{screen}");
+        }
+    }
+
+    #[test]
+    fn footer_marks_only_discovered_ollama_windows_as_assumed() {
+        let mut app = test_app();
+        let model = cupel_coding_agent::ollama::models_from_tags(
+            &serde_json::json!({"models": [{"name": "qwen3:8b"}]}),
+            "http://localhost:11434",
+        )
+        .remove(0);
+        app.meta.models.push(model.clone());
+        app.context_tokens = 2_000;
+
+        run_command(&mut app, "/model qwen3:8b");
+        let screen = draw(&mut app, 240, 20);
+        assert!(screen.contains("ctx 2k/4k assumed (48%)"), "{screen}");
+        assert!(!screen.contains(" · max "), "{screen}");
+
+        // Explicit models.json rows carry no discovery marker, even when
+        // the provider and context window are identical to the fallback.
+        let mut configured = serde_json::to_value(model).unwrap();
+        configured["compat"]
+            .as_object_mut()
+            .unwrap()
+            .remove("contextWindowAssumed");
+        let configured = serde_json::from_value(configured).unwrap();
+        app.meta.models = cupel_coding_agent::models::merge_models(vec![
+            app.meta.models.clone(),
+            vec![configured],
+        ]);
+        run_command(&mut app, "/model qwen3:8b");
+        let screen = draw(&mut app, 240, 20);
+        assert!(screen.contains("ctx 2k/4k (48%)"), "{screen}");
     }
 
     #[tokio::test]

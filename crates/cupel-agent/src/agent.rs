@@ -215,6 +215,30 @@ impl Agent {
             .context_window
     }
 
+    /// The current model's optional ceiling, which may exceed its planning window.
+    #[must_use]
+    pub fn max_context_window(&self) -> Option<u64> {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .model
+            .max_context_window
+    }
+
+    /// Whether discovery supplied an assumed context window rather than a known limit.
+    #[must_use]
+    pub fn context_window_is_assumed(&self) -> bool {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .model
+            .compat
+            .as_ref()
+            .and_then(|compat| compat.get("contextWindowAssumed"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
     /// Whether the current model supports reasoning at all.
     #[must_use]
     pub fn model_supports_reasoning(&self) -> bool {
