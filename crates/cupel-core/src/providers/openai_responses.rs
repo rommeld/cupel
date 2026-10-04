@@ -966,8 +966,6 @@ pub(crate) fn convert_items(
                             }
                         }
                         Value::Array(parts)
-                    } else if text.is_empty() {
-                        Value::String("(see attached image)".to_string())
                     } else {
                         Value::String(text)
                     };
@@ -988,8 +986,8 @@ pub(crate) fn convert_items(
 mod tests {
     use super::*;
     use crate::types::{
-        InputModality, Message, ModelCost, Provider as ProviderName, ThinkingLevelMap, UserMessage,
-        now_ms,
+        ImageContent, InputModality, Message, ModelCost, Provider as ProviderName,
+        ThinkingLevelMap, ToolResultMessage, UserMessage, now_ms,
     };
 
     /// A GPT-6 Astra catalog row as the generator emits it: no off, no
@@ -1032,6 +1030,67 @@ mod tests {
             reasoning: level,
             temperature: Some(0.2),
             ..StreamOptions::default()
+        }
+    }
+
+    #[test]
+    fn tool_result_placeholders_match_the_actual_output() {
+        for supports_images in [false, true] {
+            let mut model = astra_model();
+            if !supports_images {
+                model.input = vec![InputModality::Text];
+            }
+            for (content, expected) in [
+                (Vec::new(), json!("(no output)")),
+                (
+                    vec![ToolResultContent::Text(TextContent::plain(""))],
+                    json!("(no output)"),
+                ),
+                (
+                    vec![ToolResultContent::Text(TextContent::plain("file content"))],
+                    json!("file content"),
+                ),
+                (
+                    vec![ToolResultContent::Image(ImageContent {
+                        data: "abc".into(),
+                        mime_type: "image/png".into(),
+                    })],
+                    if supports_images {
+                        json!([
+                            {"type": "input_text", "text": "(see attached image)"},
+                            {
+                                "type": "input_image",
+                                "detail": "auto",
+                                "image_url": "data:image/png;base64,abc",
+                            },
+                        ])
+                    } else {
+                        json!("(tool image omitted: model does not support images)")
+                    },
+                ),
+            ] {
+                let context = Context {
+                    system_prompt: None,
+                    messages: vec![Message::ToolResult(ToolResultMessage {
+                        tool_call_id: "call_1|fc_1".into(),
+                        tool_name: "read".into(),
+                        content,
+                        details: None,
+                        is_error: false,
+                        timestamp: 0,
+                    })],
+                    tools: None,
+                };
+                let items = convert_messages(&model, &context, &openai_compat(&model));
+                assert_eq!(
+                    items,
+                    json!([{
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": expected,
+                    }])
+                );
+            }
         }
     }
 

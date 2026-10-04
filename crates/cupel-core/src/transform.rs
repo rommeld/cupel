@@ -17,6 +17,8 @@
 //!    that would be rejected on replay).
 //! 5. Inserts synthetic error tool-results for tool calls that never got an
 //!    answer, because every provider requires call/result pairing.
+//! 6. Adds text to empty tool results, referencing an attached image only
+//!    when one remains after image normalization.
 
 use crate::types::{
     AssistantContent, AssistantMessage, InputModality, Message, Model, StopReason, TextContent,
@@ -50,7 +52,7 @@ pub fn transform_messages(
         .map(|msg| match msg {
             Message::User(user) => Message::User(downgrade_user_images(user.clone(), model)),
             Message::ToolResult(result) => {
-                let mut result = downgrade_tool_result_images(result.clone(), model);
+                let mut result = normalize_tool_result(result.clone(), model);
                 if let Some(normalized) = tool_call_id_map.get(&result.tool_call_id) {
                     result.tool_call_id = normalized.clone();
                 }
@@ -171,18 +173,42 @@ fn downgrade_user_images(
     user
 }
 
-fn downgrade_tool_result_images(mut result: ToolResultMessage, model: &Model) -> ToolResultMessage {
-    if model_supports_images(model) {
+fn normalize_tool_result(mut result: ToolResultMessage, model: &Model) -> ToolResultMessage {
+    if !model_supports_images(model) {
+        let replaced = replace_images_with(
+            result.content.iter().map(|b| match b {
+                ToolResultContent::Text(t) => ContentRef::Text(t),
+                ToolResultContent::Image(_) => ContentRef::Image,
+            }),
+            NON_VISION_TOOL_IMAGE_PLACEHOLDER,
+        );
+        result.content = replaced.into_iter().map(ToolResultContent::Text).collect();
+    }
+
+    if result
+        .content
+        .iter()
+        .any(|block| matches!(block, ToolResultContent::Text(text) if !text.text.is_empty()))
+    {
         return result;
     }
-    let replaced = replace_images_with(
-        result.content.iter().map(|b| match b {
-            ToolResultContent::Text(t) => ContentRef::Text(t),
-            ToolResultContent::Image(_) => ContentRef::Image,
-        }),
-        NON_VISION_TOOL_IMAGE_PLACEHOLDER,
-    );
-    result.content = replaced.into_iter().map(ToolResultContent::Text).collect();
+
+    // Only images that survived the vision downgrade count as attachments.
+    let has_images = result
+        .content
+        .iter()
+        .any(|block| matches!(block, ToolResultContent::Image(_)));
+    let placeholder = if has_images {
+        "(see attached image)"
+    } else {
+        "(no output)"
+    };
+    result
+        .content
+        .retain(|block| matches!(block, ToolResultContent::Image(_)));
+    result
+        .content
+        .insert(0, ToolResultContent::Text(TextContent::plain(placeholder)));
     result
 }
 
@@ -333,6 +359,99 @@ mod tests {
             error_message: None,
             timestamp: 0,
         })
+    }
+
+    fn tool_result_with(content: Vec<ToolResultContent>) -> Message {
+        Message::ToolResult(ToolResultMessage {
+            tool_call_id: "call_1".into(),
+            tool_name: "read".into(),
+            content,
+            details: None,
+            is_error: false,
+            timestamp: 0,
+        })
+    }
+
+    #[test]
+    fn empty_tool_results_get_no_output() {
+        for supports_images in [false, true] {
+            for content in [
+                Vec::new(),
+                vec![ToolResultContent::Text(TextContent::plain(""))],
+                vec![
+                    ToolResultContent::Text(TextContent::plain("")),
+                    ToolResultContent::Text(TextContent::plain("")),
+                ],
+            ] {
+                let messages = vec![tool_result_with(content)];
+                let out = transform_messages(&messages, &test_model(supports_images), None);
+                assert_eq!(
+                    out,
+                    vec![tool_result_with(vec![ToolResultContent::Text(
+                        TextContent::plain("(no output)"),
+                    )])]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn image_only_tool_results_reference_attached_images() {
+        let image = ToolResultContent::Image(ImageContent {
+            data: "abc".into(),
+            mime_type: "image/png".into(),
+        });
+        for content in [
+            vec![image.clone()],
+            vec![
+                ToolResultContent::Text(TextContent::plain("")),
+                image.clone(),
+            ],
+        ] {
+            let messages = vec![tool_result_with(content.clone())];
+            let model = test_model(true);
+            let out = transform_messages(&messages, &model, None);
+            assert_eq!(
+                out,
+                vec![tool_result_with(vec![
+                    ToolResultContent::Text(TextContent::plain("(see attached image)")),
+                    image.clone(),
+                ])]
+            );
+            assert_eq!(transform_messages(&out, &model, None), out);
+            assert_eq!(messages, vec![tool_result_with(content)]);
+        }
+    }
+
+    #[test]
+    fn tool_images_are_downgraded_before_placeholder_selection() {
+        let messages = vec![tool_result_with(vec![ToolResultContent::Image(
+            ImageContent {
+                data: "abc".into(),
+                mime_type: "image/png".into(),
+            },
+        )])];
+        let out = transform_messages(&messages, &test_model(false), None);
+        assert_eq!(
+            out,
+            vec![tool_result_with(vec![ToolResultContent::Text(
+                TextContent::plain(NON_VISION_TOOL_IMAGE_PLACEHOLDER),
+            )])]
+        );
+    }
+
+    #[test]
+    fn nonempty_tool_result_text_is_preserved() {
+        for text in ["file content", " \n\t", "\n"] {
+            let messages = vec![tool_result_with(vec![
+                ToolResultContent::Text(TextContent::plain("")),
+                ToolResultContent::Text(TextContent::plain(text)),
+            ])];
+            for supports_images in [false, true] {
+                let out = transform_messages(&messages, &test_model(supports_images), None);
+                assert_eq!(out, messages);
+            }
+        }
     }
 
     #[test]

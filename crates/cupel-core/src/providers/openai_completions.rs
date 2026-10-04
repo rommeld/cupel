@@ -859,7 +859,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                         .join("\n");
                     let mut message = json!({
                         "role": "tool",
-                        "content": if text.is_empty() { "(see attached image)" } else { &text },
+                        "content": text,
                         "tool_call_id": result.tool_call_id,
                     });
                     if compat.requires_tool_result_name {
@@ -909,7 +909,9 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{InputModality, ModelCost, Provider as ProviderName};
+    use crate::types::{
+        ImageContent, InputModality, ModelCost, Provider as ProviderName, ToolResultMessage,
+    };
 
     fn model_with_compat(compat: Option<serde_json::Value>) -> Model {
         Model {
@@ -978,6 +980,55 @@ mod tests {
             system_prompt: None,
             messages: Vec::new(),
             tools: None,
+        }
+    }
+
+    #[test]
+    fn tool_result_placeholders_match_the_actual_output() {
+        for supports_images in [false, true] {
+            let mut model = model_with_compat(None);
+            if supports_images {
+                model.input.push(InputModality::Image);
+            }
+            let compat = completions_compat(&model);
+            let mut context = empty_context();
+            context.messages = vec![
+                Message::ToolResult(ToolResultMessage {
+                    tool_call_id: "image_call".into(),
+                    tool_name: "read".into(),
+                    content: vec![ToolResultContent::Image(ImageContent {
+                        data: "abc".into(),
+                        mime_type: "image/png".into(),
+                    })],
+                    details: None,
+                    is_error: false,
+                    timestamp: 0,
+                }),
+                Message::ToolResult(ToolResultMessage {
+                    tool_call_id: "empty_call".into(),
+                    tool_name: "read".into(),
+                    content: vec![ToolResultContent::Text(TextContent::plain(""))],
+                    details: None,
+                    is_error: false,
+                    timestamp: 0,
+                }),
+            ];
+            let messages = convert_messages(&model, &context, &compat);
+            let image_text = if supports_images {
+                "(see attached image)"
+            } else {
+                "(tool image omitted: model does not support images)"
+            };
+            assert_eq!(messages[0]["content"], image_text);
+            assert_eq!(messages[1]["content"], "(no output)");
+            assert_eq!(messages[1]["tool_call_id"], "empty_call");
+            assert_eq!(
+                messages.as_array().unwrap().len(),
+                if supports_images { 3 } else { 2 }
+            );
+            if supports_images {
+                assert_eq!(messages[2]["content"][1]["type"], "image_url");
+            }
         }
     }
 

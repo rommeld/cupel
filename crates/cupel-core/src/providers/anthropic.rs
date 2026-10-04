@@ -1048,7 +1048,7 @@ fn convert_tool_result_content(content: &[ToolResultContent]) -> Value {
         return Value::String(text.join("\n"));
     }
 
-    let mut blocks: Vec<Value> = content
+    let blocks: Vec<Value> = content
         .iter()
         .map(|c| match c {
             ToolResultContent::Text(t) => json!({"type": "text", "text": t.text}),
@@ -1062,14 +1062,6 @@ fn convert_tool_result_content(content: &[ToolResultContent]) -> Value {
             }),
         })
         .collect();
-    // Image-only results get placeholder text so the model has something to
-    // reference.
-    if !blocks
-        .iter()
-        .any(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-    {
-        blocks.insert(0, json!({"type": "text", "text": "(see attached image)"}));
-    }
     Value::Array(blocks)
 }
 

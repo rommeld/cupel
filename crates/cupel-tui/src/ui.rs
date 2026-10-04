@@ -2707,8 +2707,6 @@ mod tests {
         assert!(weight.add_modifier.contains(Modifier::BOLD));
     }
 
-    // ---- /login and /logout ------------------------------------------------
-
     /// Submit one line as a command (popup closed first, like a user
     /// pressing esc before enter).
     fn submit_command(app: &mut App, line: &str) {
