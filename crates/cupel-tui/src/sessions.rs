@@ -294,7 +294,7 @@ impl Sessions {
                 let prompt = resolution_prompt(name, base, &task, &log, &files);
                 let origin = &mut self.list[0].app;
                 origin.notice(format!(
-                    "merging {name} stopped at conflicts in {} - the model reolves them \
+                    "merging {name} stopped at conflicts in {} - the model resolves them \
                     now, then /spinoff merge {name} finishes the merge",
                     files.join(", ")
                 ));
@@ -521,16 +521,16 @@ fn resolution_prompt(name: &str, base: &str, task: &str, log: &str, files: &[Str
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Merging spinoff \"{name}\" (branch {branch}) into {base} stopped with conflicts. \n\
+        "Merging spinoff \"{name}\" (branch {branch}) into {base} stopped with conflicts.\n\
         The spinoff worked on: {task}\n\
         Its commits:\n\
         {log}\
-        Conflicted files (HEAD = this session's side, {branch} = the spinoff's side): \n\
+        Conflicted files (HEAD = this session's side, {branch} = the spinoff's side):\n\
         {files}\n\
         Resolve every conflict so that both sides' intent survives, remove all conflict \
         markers, and run the project's checks. Do not commit, and do not run git merge, \
         checkout or reset: cupel finishes the merge when the user runs /spinoff merge \
-        {name} again"
+        {name} again."
     )
 }
 

@@ -3472,4 +3472,73 @@ mod tests {
         assert_eq!(sessions.list.len(), 1);
         assert_eq!(git_output(&repo, &["status", "--porcelain"]), "");
     }
+
+    #[tokio::test]
+    async fn spinoff_drop_leaves_the_project_as_it_was() {
+        use crate::sessions::Sessions;
+        use cupel_coding_agent::spinoff::{Conflict, Side};
+        let repo = git_repo("drop");
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        run_spinoff(&mut sessions, "auth").await;
+        sessions.active = 0;
+        set_line(&repo.join(".cupel/worktrees/auth"), 9, "9 dropped");
+        let head = git_output(&repo, &["rev-parse", "HEAD"]);
+        // A conflict with auth, as the last check found it.
+        sessions.conflicts = vec![Conflict {
+            sides: (Side::Origin, Side::Spinoff("auth".to_string())),
+            files: vec!["a.txt".to_string()],
+        }];
+
+        run_spinoff(&mut sessions, "drop nope").await;
+        assert!(has_notice(sessions.active(), "no spinoff named nope"));
+        run_spinoff(&mut sessions, "drop auth").await;
+
+        assert_eq!(sessions.list.len(), 1);
+        assert!(!repo.join(".cupel/worktrees/auth").exists());
+        assert_eq!(git_output(&repo, &["rev-parse", "HEAD"]), head);
+        assert_eq!(git_output(&repo, &["status", "--porcelain"]), "");
+        assert_eq!(git_output(&repo, &["branch", "--list", "cupel/*"]), "");
+        assert!(
+            sessions.conflicts.is_empty(),
+            "auth's conflicts went with it"
+        );
+        // The notice names the commit that brings the work back.
+        let notice = sessions
+            .active()
+            .transcript
+            .cells
+            .iter()
+            .find_map(|cell| match cell {
+                Cell::Notice { text } if text.contains("is dropped") => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let words: Vec<&str> = notice.split_whitespace().collect();
+        let at = words.iter().position(|word| *word == "cupel/spinoff/auth");
+        let commit = words[at.unwrap() + 1];
+        let saved = git_output(&repo, &["show", &format!("{commit}:a.txt")]);
+        assert!(saved.contains("9 dropped"), "{saved}");
+    }
+
+    #[tokio::test]
+    async fn merge_and_drop_wait_for_working_agents() {
+        use crate::sessions::Sessions;
+        let repo = git_repo("merge-busy");
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        run_spinoff(&mut sessions, "auth").await;
+        sessions.active = 0;
+        // A run that never ends: `_sink` keeps its channel open.
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        sessions.list[1].app.run_events = Some(events);
+        run_spinoff(&mut sessions, "drop auth").await;
+        assert!(has_notice(sessions.active(), "auth is still working"));
+
+        // The same run, now in the origin.
+        let events = sessions.list[1].app.run_events.take();
+        sessions.list[0].app.run_events = events;
+        run_spinoff(&mut sessions, "merge auth").await;
+        assert!(has_notice(sessions.active(), "main is still working"));
+        assert_eq!(sessions.list.len(), 2, "nothing removed");
+        assert!(repo.join(".cupel/worktrees/auth").is_dir());
+    }
 }

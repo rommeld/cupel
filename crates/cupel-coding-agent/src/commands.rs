@@ -259,7 +259,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "spinoff",
-        description: "Parallel sessions in git worktrees: /spinoff <name> [preset] starts one, /spinoff merge≤drop <name> end one, no argument lists them",
+        description: "Parallel sessions in git worktrees: /spinoff <name> [preset] starts one, /spinoff merge|drop <name> ends one, no argument lists them",
     },
     BuiltinCommand {
         name: "session-id",
