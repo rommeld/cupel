@@ -981,6 +981,87 @@ mod tests {
         assert!(!app.mouse_captured);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hot_reload_current_preserves_recorder_lifecycle_and_pending_hooks() {
+        use crate::app::ReloadTarget;
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::time::Duration;
+
+        for next_prompt in [false, true] {
+            let root =
+                std::env::temp_dir().join(format!("cupel-ui-hotreload-lifecycle-{next_prompt}"));
+            let _ = std::fs::remove_dir_all(&root);
+            let mut app = test_app_with_home(&root, "cupel-current");
+            for event in ["session-start", "user-prompt-submit", "stop", "session-end"] {
+                let dir = root.join("home/hooks").join(event);
+                std::fs::create_dir_all(&dir).unwrap();
+                let script = dir.join("record");
+                let gate = if event == "stop" {
+                    ": > stop-started\nwhile [ ! -e release-stop ]; do sleep 0.01; done\n"
+                } else {
+                    ""
+                };
+                std::fs::write(
+                    &script,
+                    format!(
+                        "#!/bin/sh\n{gate}cat >> lifecycle.jsonl\nprintf '\\n' >> lifecycle.jsonl\n"
+                    ),
+                )
+                .unwrap();
+                std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+
+            app.recorder.before_prompt("first prompt").await;
+            app.recorder.on_agent_end();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !root.join("proj/stop-started").exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("stop hook started");
+
+            let mut app = app.hot_reload(ReloadTarget::Current).await;
+            assert_eq!(app.recorder.session_id(), "cupel-current");
+            let mut completion = tokio::spawn(async move {
+                if next_prompt {
+                    app.recorder.before_prompt("next prompt").await;
+                }
+                app.recorder.end_session().await;
+            });
+            let waiting_for_stop =
+                tokio::time::timeout(Duration::from_millis(100), &mut completion)
+                    .await
+                    .is_err();
+            std::fs::write(root.join("proj/release-stop"), "").unwrap();
+            if waiting_for_stop {
+                tokio::time::timeout(Duration::from_secs(5), completion)
+                    .await
+                    .expect("hook chain settled")
+                    .unwrap();
+            }
+            assert!(waiting_for_stop, "reload must retain the pending stop hook");
+
+            let events: Vec<serde_json::Value> =
+                std::fs::read_to_string(root.join("proj/lifecycle.jsonl"))
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+            let mut expected = vec!["session-start", "user-prompt-submit", "stop"];
+            if next_prompt {
+                expected.push("user-prompt-submit");
+            }
+            expected.push("session-end");
+            assert_eq!(events.len(), expected.len(), "one session lifecycle");
+            for (event, name) in events.iter().zip(expected) {
+                assert_eq!(event["event"], name, "hook order survives reload");
+                assert_eq!(event["sessionId"], "cupel-current");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn hot_reload_current_appends_only_the_agents_delta() {
         use crate::app::ReloadTarget;

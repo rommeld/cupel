@@ -595,18 +595,9 @@ impl App {
         });
         options.thinking_level = state.thinking_level;
         options.tool_execution = cupel_agent::ToolExecutionMode::Parallel;
-        options.session_id = Some(session_id.clone());
+        options.session_id = Some(session_id);
         options.messages = seeded;
 
-        // Same id -> the new recorder appends to the same transcript file.
-        // The old recorder is dropped without end_session: no session-end
-        // hook fires, because this session is not ending.
-        let recorder = cupel_coding_agent::session::SessionRecorder::new(
-            self.meta.home.clone(),
-            cwd,
-            &session_id,
-            &state.model.id,
-        );
         let meta = cupel_coding_agent::modes::SessionMeta {
             model_name: state.model.name.clone(),
             provider: state.model.provider.as_str().to_string(),
@@ -620,7 +611,9 @@ impl App {
             base_system_prompt: self.meta.base_system_prompt.clone(),
         };
 
-        let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
+        // The session continues: retain its open transcript, started state,
+        // and pending hook chain rather than creating a fresh recorder.
+        let mut app = Self::new(cupel_agent::Agent::new(options), meta, self.recorder);
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
         if let Some(message) = delta_message {

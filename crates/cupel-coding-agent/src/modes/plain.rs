@@ -8,11 +8,30 @@ use std::io::{IsTerminal as _, Write as _};
 use futures_util::StreamExt as _;
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _};
 
-use cupel_agent::{Agent, AgentEvent, AgentMessage};
+use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
 use cupel_core::types::{AssistantMessageEvent, Message, StopReason, ToolResultContent};
 
 use crate::modes::SessionMeta;
 use crate::session::SessionRecorder;
+
+enum PlainError {
+    Run(String),
+    Output(std::io::Error),
+    #[cfg(unix)]
+    Signal(i32),
+}
+
+fn write_output(
+    mut writer: impl std::io::Write,
+    args: std::fmt::Arguments<'_>,
+) -> std::io::Result<()> {
+    writer.write_fmt(args)?;
+    writer.flush()
+}
+
+fn output(args: std::fmt::Arguments<'_>) -> Result<(), PlainError> {
+    write_output(std::io::stdout().lock(), args).map_err(PlainError::Output)
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum PlainCommand {
@@ -122,40 +141,81 @@ pub async fn run(
     meta: &SessionMeta,
     mut recorder: SessionRecorder,
 ) -> Result<(), String> {
-    println!("cupel - {} ({})", meta.model_name, meta.provider);
-    println!(
-        "tools: read, grep, apply_patch, bash | cwd: {} | 'exit' to quit\n",
+    let mut events = None;
+    let result = run_session(&mut agent, meta, &mut recorder, &mut events).await;
+    if result.is_err() {
+        agent.abort();
+    }
+    // Cancellation must finish killing detached tool process groups before
+    // exit. Keep the stream so finalized messages are not lost on shutdown.
+    agent.wait_for_idle().await;
+    if let Some(mut events) = events {
+        while let Some(event) = events.next().await {
+            match event {
+                AgentEvent::MessageEnd { message } => recorder.record(&message),
+                AgentEvent::AgentEnd { .. } => recorder.on_agent_end(),
+                _ => {}
+            }
+        }
+    }
+    recorder.end_session().await;
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(PlainError::Output(error)) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(PlainError::Output(error)) => {
+            Err(format!("failed to write plain-mode output: {error}"))
+        }
+        Err(PlainError::Run(error)) => Err(error),
+        #[cfg(unix)]
+        Err(PlainError::Signal(signal)) => std::process::exit(128 + signal),
+    }
+}
+
+async fn run_session(
+    agent: &mut Agent,
+    meta: &SessionMeta,
+    recorder: &mut SessionRecorder,
+    active_events: &mut Option<AgentEventStream>,
+) -> Result<(), PlainError> {
+    output(format_args!(
+        "cupel - {} ({})\n",
+        meta.model_name, meta.provider
+    ))?;
+    output(format_args!(
+        "tools: read, grep, apply_patch, bash | cwd: {} | 'exit' to quit\n\n",
         meta.cwd
-    );
+    ))?;
     // Non-empty history at startup = a resumed session (seeded via
     // AgentOptions.messages in main).
     let restored = agent.state().messages.len();
     if restored > 0 {
-        println!(
-            "resumed session {} ({restored} messages)\n",
+        output(format_args!(
+            "resumed session {} ({restored} messages)\n\n",
             recorder.session_id()
-        );
+        ))?;
     }
 
     #[cfg(unix)]
-    let mut signals = TerminationSignals::new()?;
+    let mut signals = TerminationSignals::new().map_err(PlainError::Run)?;
     let mut last_run_error = None;
     let piped = !std::io::stdin().is_terminal();
     let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
     loop {
         if !piped {
-            print!("> ");
-            std::io::stdout().flush().ok();
+            output(format_args!("> "))?;
         }
 
         #[cfg(unix)]
         let read = tokio::select! {
             biased;
-            signal = signals.recv() => std::process::exit(128 + signal),
-            read = read_prompt(&mut reader, piped) => read?,
+            signal = signals.recv() => return Err(PlainError::Signal(signal)),
+            read = read_prompt(&mut reader, piped) => read.map_err(PlainError::Run)?,
         };
         #[cfg(not(unix))]
-        let read = read_prompt(&mut reader, piped).await?;
+        let read = read_prompt(&mut reader, piped)
+            .await
+            .map_err(PlainError::Run)?;
         let Some(line) = read else {
             break; // EOF (Ctrl-D on a TTY, or the end of a pipe)
         };
@@ -182,16 +242,16 @@ pub async fn run(
                         .iter()
                         .filter(|c| plain_command(c.name) != PlainCommand::TuiOnly)
                     {
-                        println!("  /{}  - {}", c.name, c.description);
+                        output(format_args!("  /{}  - {}\n", c.name, c.description))?;
                     }
                     for t in meta
                         .templates
                         .iter()
                         .filter(|t| plain_command(&t.name) == PlainCommand::Prompt)
                     {
-                        println!("  /{}  - {}", t.name, t.description);
+                        output(format_args!("  /{}  - {}\n", t.name, t.description))?;
                     }
-                    println!();
+                    output(format_args!("\n"))?;
                     continue;
                 }
                 // Same builder as the TUI; here the whole path is
@@ -207,16 +267,20 @@ pub async fn run(
                     ) {
                         Ok(built) => prompt = built,
                         Err(e) => {
-                            println!("{e}");
+                            output(format_args!("{e}\n"))?;
                             continue;
                         }
                     }
                 }
                 PlainCommand::TuiOnly => {
                     if matches!(name, "model" | "provider") {
-                        println!("/{name} is TUI-only; use --model <id> at startup in plain mode");
+                        output(format_args!(
+                            "/{name} is TUI-only; use --model <id> at startup in plain mode\n"
+                        ))?;
                     } else {
-                        println!("/{name} is TUI-only; use cupel in an interactive terminal");
+                        output(format_args!(
+                            "/{name} is TUI-only; use cupel in an interactive terminal\n"
+                        ))?;
                     }
                     continue;
                 }
@@ -239,7 +303,12 @@ pub async fn run(
         // user-prompt-submit before the run begins.
         recorder.before_prompt(&prompt).await;
 
-        let mut events = agent.prompt_text(&prompt).map_err(|e| e.to_string())?;
+        *active_events = Some(
+            agent
+                .prompt_text(&prompt)
+                .map_err(|e| PlainError::Run(e.to_string()))?,
+        );
+        let events = active_events.as_mut().expect("just started a run");
         // Retry/compaction can recover from an earlier failed turn. Only
         // the final turn of the last run determines the process exit code.
         last_run_error = None;
@@ -252,15 +321,7 @@ pub async fn run(
             #[cfg(unix)]
             let event = tokio::select! {
                 biased;
-                signal = signals.recv() => {
-                    // Tool cancellation kills the command's detached process
-                    // group. Wait for the agent to finish before exiting.
-                    agent.abort();
-                    drop(events);
-                    agent.wait_for_idle().await;
-                    recorder.end_session().await;
-                    std::process::exit(128 + signal);
-                }
+                signal = signals.recv() => return Err(PlainError::Signal(signal)),
                 event = events.next() => event,
             };
             #[cfg(not(unix))]
@@ -274,11 +335,10 @@ pub async fn run(
                 AgentEvent::MessageUpdate { event } => match event {
                     AssistantMessageEvent::TextDelta { delta, .. } => {
                         if in_thinking {
-                            print!("{}", reasoning_separator(thinking_newlines));
+                            output(format_args!("{}", reasoning_separator(thinking_newlines)))?;
                             in_thinking = false;
                         }
-                        print!("{delta}");
-                        std::io::stdout().flush().ok();
+                        output(format_args!("{delta}"))?;
                     }
                     AssistantMessageEvent::ThinkingDelta { delta, .. } => {
                         if !in_thinking {
@@ -286,20 +346,19 @@ pub async fn run(
                         }
                         thinking_newlines = reasoning_newlines(thinking_newlines, &delta);
                         in_thinking = true;
-                        print!("{delta}");
-                        std::io::stdout().flush().ok();
+                        output(format_args!("{delta}"))?;
                     }
                     AssistantMessageEvent::ToolCallEnd { tool_call, .. } => {
                         if in_thinking {
-                            print!("{}", reasoning_separator(thinking_newlines));
+                            output(format_args!("{}", reasoning_separator(thinking_newlines)))?;
                             in_thinking = false;
                         } else {
-                            println!();
+                            output(format_args!("\n"))?;
                         }
-                        println!(
-                            "[{}]",
+                        output(format_args!(
+                            "[{}]\n",
                             agent.describe_tool_call(&tool_call.name, &tool_call.arguments)
-                        );
+                        ))?;
                     }
                     _ => {}
                 },
@@ -307,7 +366,7 @@ pub async fn run(
                     result, is_error, ..
                 } => {
                     if is_error {
-                        print!("error: ");
+                        output(format_args!("error: "))?;
                     }
                     if let Some(diff) = result
                         .details
@@ -316,7 +375,7 @@ pub async fn run(
                         .and_then(serde_json::Value::as_str)
                     {
                         for line in diff.lines() {
-                            println!("{line}");
+                            output(format_args!("{line}\n"))?;
                         }
                     } else {
                         let text: String = result
@@ -330,16 +389,16 @@ pub async fn run(
                             .join("\n");
                         let preview: Vec<&str> = text.lines().take(10).collect();
                         let more = text.lines().count().saturating_sub(preview.len());
-                        println!("{}", preview.join("\n"));
+                        output(format_args!("{}\n", preview.join("\n")))?;
                         if more > 0 {
-                            println!("... ({more} more lines)");
+                            output(format_args!("... ({more} more lines)\n"))?;
                         }
                     }
                 }
                 AgentEvent::TurnEnd { message, .. } => {
                     let ended_thinking = in_thinking;
                     if in_thinking {
-                        print!("{}", reasoning_separator(thinking_newlines));
+                        output(format_args!("{}", reasoning_separator(thinking_newlines)))?;
                         in_thinking = false;
                     }
                     if let AgentMessage::Llm(Message::Assistant(assistant)) = message.as_ref() {
@@ -347,20 +406,21 @@ pub async fn run(
                         last_run_error =
                             turn_failure(assistant.stop_reason, assistant.error_message.as_deref());
                         if assistant.stop_reason == StopReason::Length {
-                            eprintln!(
+                            let _ = writeln!(
+                                std::io::stderr().lock(),
                                 "error: response was truncated before completion \
                                 (output token limit)"
                             );
                         }
                         let usage = &assistant.usage;
-                        println!(
-                            "{prefix}[{} in / {} out / {} cached, ${:.4}]",
+                        output(format_args!(
+                            "{prefix}[{} in / {} out / {} cached, ${:.4}]\n",
                             usage.input, usage.output, usage.cache_read, usage.cost.total
-                        );
+                        ))?;
                     }
                 }
                 AgentEvent::CompactionStart { .. } => {
-                    println!("compacting context...");
+                    output(format_args!("compacting context...\n"))?;
                 }
                 AgentEvent::CompactionEnd {
                     tokens_before,
@@ -369,17 +429,17 @@ pub async fn run(
                     summary,
                 } => match error {
                     None => {
-                        println!(
-                            "context compacted: ~{}k -> ~{}k tokens",
+                        output(format_args!(
+                            "context compacted: ~{}k -> ~{}k tokens\n",
                             tokens_before / 1000,
                             tokens_after / 1000
-                        );
+                        ))?;
                         // The checkpoint the agent works from now.
                         if let Some(summary) = summary {
-                            println!("{summary}\n");
+                            output(format_args!("{summary}\n\n"))?;
                         }
                     }
-                    Some(error) => println!("compaction failed: {error}"),
+                    Some(error) => output(format_args!("compaction failed: {error}\n"))?,
                 },
                 AgentEvent::AutoRetry {
                     attempt,
@@ -388,14 +448,14 @@ pub async fn run(
                     error_message,
                 } => {
                     if in_thinking {
-                        print!("{}", reasoning_separator(thinking_newlines));
+                        output(format_args!("{}", reasoning_separator(thinking_newlines)))?;
                         in_thinking = false;
                     }
-                    println!(
+                    output(format_args!(
                         "retrying in {:.1}s (attempt {attempt}/{max_attempts}): \
-                         {error_message}",
+                         {error_message}\n",
                         delay_ms as f64 / 1000.0
-                    );
+                    ))?;
                 }
                 AgentEvent::ToolExecutionStart { .. } | AgentEvent::ToolExecutionUpdate { .. } => {}
                 AgentEvent::AgentEnd { .. } => {
@@ -407,22 +467,63 @@ pub async fn run(
             }
         }
         agent.wait_for_idle().await;
-        println!();
+        output(format_args!("\n"))?;
     }
 
-    // Normal exit (EOF, `exit`, `/quit`): announce session-end to hooks.
-    recorder.end_session().await;
     // main formats errors on stderr and returns a nonzero exit status.
-    last_run_error.map_or(Ok(()), Err)
+    last_run_error.map_or(Ok(()), |error| Err(PlainError::Run(error)))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::modes::plain::{
         PlainCommand, plain_command, read_prompt, reasoning_newlines, reasoning_separator,
-        turn_failure,
+        turn_failure, write_output,
     };
     use cupel_core::types::StopReason;
+
+    struct FailingWriter {
+        kind: std::io::ErrorKind,
+        fail_on_flush: bool,
+    }
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.fail_on_flush {
+                Ok(buf.len())
+            } else {
+                Err(self.kind.into())
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(self.kind.into())
+        }
+    }
+
+    #[test]
+    fn output_preserves_text_and_reports_write_and_flush_errors() {
+        let mut bytes = Vec::new();
+        write_output(&mut bytes, format_args!("{}\n", "hello")).unwrap();
+        assert_eq!(bytes, b"hello\n");
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::PermissionDenied,
+        ] {
+            for fail_on_flush in [false, true] {
+                let writer = FailingWriter {
+                    kind,
+                    fail_on_flush,
+                };
+                assert_eq!(
+                    write_output(writer, format_args!("hello"))
+                        .unwrap_err()
+                        .kind(),
+                    kind
+                );
+            }
+        }
+    }
 
     #[test]
     fn only_terminal_model_failures_produce_an_error() {

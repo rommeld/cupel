@@ -4,9 +4,9 @@
 //!  cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max
 //!  (default: medium; high for codex/gpt-6-sol)] [--plain]
 //!
-//! Frontend selection: the ratatui TUI when stdout is a real terminal, the
-//! plain frontend when piped or when `--plain` is given. Non-TTY stdin is
-//! consumed as one prompt; TTY stdin uses a line REPL.
+//! Frontend selection: the ratatui TUI when both stdin and stdout are real
+//! terminals, the plain frontend when either is piped or when `--plain` is
+//! given. Non-TTY stdin is consumed as one prompt; TTY stdin uses a line REPL.
 //!
 //! Model selection: `--model` picks from the built-in catalog; without it,
 //! the `default` preset from settings.json decides; without that, a
@@ -280,9 +280,17 @@ fn init_tracing(interactive: bool) -> Option<std::path::PathBuf> {
     }
 }
 
+fn use_plain_mode(args: &CliArgs, stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
+    args.plain || !stdin_is_terminal || !stdout_is_terminal
+}
+
 async fn run() -> Result<(), AppError> {
     let args = parse_args(std::env::args().skip(1)).map_err(AppError::Arguments)?;
-    let use_plain = args.plain || !std::io::stdout().is_terminal();
+    let use_plain = use_plain_mode(
+        &args,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    );
     if let Some(log_path) = init_tracing(!use_plain) {
         // Announced before the TUI takes the screen; visible in scrollback.
         eprintln!("logging to {}", log_path.display());
@@ -407,7 +415,7 @@ async fn run() -> Result<(), AppError> {
     };
 
     // The TUI takes over the whole screen; that only makes sense on a real
-    // terminal. Piped output (cupel < script, CI logs) gets plain mode.
+    // terminal. Piped input or output (cat issue.md | cupel, CI logs) gets plain mode.
     if use_plain {
         modes::plain::run(agent, &meta, recorder)
             .await
@@ -425,6 +433,29 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<CliArgs, String> {
         parse_args(args.iter().map(ToString::to_string))
+    }
+
+    #[test]
+    fn frontend_selection_requires_terminal_stdin_and_stdout_for_tui() {
+        let args = parse(&[]).unwrap();
+        let plain_args = parse(&["--plain"]).unwrap();
+        for (stdin_is_terminal, stdout_is_terminal, expected_plain) in [
+            (true, true, false),
+            (false, true, true), // Piped stdin with terminal stdout must not start the TUI.
+            (true, false, true),
+            (false, false, true),
+        ] {
+            assert_eq!(
+                use_plain_mode(&args, stdin_is_terminal, stdout_is_terminal),
+                expected_plain,
+                "stdin terminal: {stdin_is_terminal}, stdout terminal: {stdout_is_terminal}",
+            );
+            assert!(use_plain_mode(
+                &plain_args,
+                stdin_is_terminal,
+                stdout_is_terminal,
+            ));
+        }
     }
 
     #[test]
