@@ -3130,6 +3130,9 @@ mod tests {
         let identity = ["-c", "user.name=test", "-c", "user.email=test@localhost"];
         for args in [
             &["init", "--quiet", "--initial-branch", "main"][..],
+            &["config", "user.name", "test"][..],
+            &["config", "user.email", "test@localhost"][..],
+            &["config", "commit.gpgsign", "false"][..],
             &["add", "--all"][..],
             &["commit", "--quiet", "--message", "init"][..],
         ] {
@@ -3346,5 +3349,127 @@ mod tests {
         let screen = draw_sessions(&mut sessions, 100, 20);
         assert!(row(&screen, "origin").contains(" !2"), "{screen}");
         assert!(row(&screen, "auth").contains(" !2"), "{screen}");
+    }
+
+    /// `a.txt` in `dir` with line `line` of [`TEN_LINES`] replaced by `text`.
+    fn set_line(dir: &std::path::Path, line: usize, text: &str) {
+        let changed = TEN_LINES.replace(&format!("{line}\n"), &format!("{text}\n"));
+        std::fs::write(dir.join("a.txt"), changed).unwrap();
+    }
+
+    /// `git <args>` in `dir`; its output, for checks.
+    fn git_output(dir: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// `/spinoff <args>` in the session on screen, as the event loop runs it.
+    async fn run_spinoff(sessions: &mut crate::sessions::Sessions, args: &str) {
+        sessions.spinoff(args.parse().unwrap()).await;
+    }
+
+    #[tokio::test]
+    async fn spinoff_merge_commits_merges_and_archives() {
+        use crate::sessions::Sessions;
+        let repo = git_repo("merge");
+        let home = std::env::temp_dir().join("cupel-ui-spinoff-merge-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let mut origin = test_app_in(repo.to_str().unwrap());
+        origin.meta.home = Some(home.clone());
+        let mut sessions = Sessions::new(origin);
+        run_spinoff(&mut sessions, "auth").await;
+        // A first prompt in auth, for its transcript. The run itself fails at once
+        // against the empty registry.
+        let auth = &mut sessions.list[1].app;
+        auth.start_run("number line 9");
+        while auth.is_running() {
+            let event = auth.next_event().await;
+            auth.on_event(event).await;
+        }
+        set_line(&repo.join(".cupel/worktrees/auth"), 9, "9 auth");
+
+        // auth is on screen, but merging is the origin's job.
+        run_spinoff(&mut sessions, "merge auth").await;
+        assert!(has_notice(
+            sessions.active(),
+            "run in main, the origin session"
+        ));
+        sessions.active = 0;
+        run_spinoff(&mut sessions, "merge auth").await;
+
+        assert!(has_notice(
+            sessions.active(),
+            "spinoff auth is merged into main"
+        ));
+        assert_eq!(sessions.list.len(), 1, "auth's session is closed");
+        assert!(!repo.join(".cupel/worktrees/auth").exists());
+        let merged = std::fs::read_to_string(repo.join("a.txt")).unwrap();
+        assert_eq!(merged, TEN_LINES.replace("9\n", "9 auth\n"));
+        // auth's leftovers were committed under its first prompt.
+        let subjects = git_output(&repo, &["log", "--format=%s"]);
+        assert!(
+            subjects.contains("spinoff auth: number line 9"),
+            "{subjects}"
+        );
+        // Its transcript is in the origin's archive now.
+        let sessions_dir = cupel_coding_agent::session::sessions_dir(Some(&home), &repo);
+        let archive = sessions_dir.unwrap().join("archive");
+        assert_eq!(std::fs::read_dir(archive).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_conflicted_merge_goes_to_the_origin_and_ends_with_the_next_merge() {
+        use crate::sessions::Sessions;
+        let repo = git_repo("merge-conflict");
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        run_spinoff(&mut sessions, "auth").await;
+        sessions.active = 0;
+        set_line(&repo.join(".cupel/worktrees/auth"), 5, "5 auth");
+        set_line(&repo, 5, "5 main");
+        git_output(
+            &repo,
+            &["commit", "--quiet", "--all", "--message", "main work"],
+        );
+
+        run_spinoff(&mut sessions, "merge auth").await;
+        assert!(has_notice(
+            sessions.active(),
+            "merging auth stopped at conflicts in a.txt"
+        ));
+        let prompt = sessions
+            .active_mut()
+            .pending_prompt
+            .take()
+            .unwrap_or_default();
+        let head = "Merging spinoff \"auth\" (branch cupel/spinoff/auth) into main stopped";
+        assert!(prompt.starts_with(head), "{prompt}");
+        // The leftovers commit is in the log; auth never had a prompt.
+        assert!(prompt.contains(" spinoff auth: (no prompt)\n"), "{prompt}");
+        assert!(prompt.contains("\n- a.txt\n"), "{prompt}");
+        assert_eq!(sessions.list.len(), 2, "auth stays until the merge is done");
+
+        // Markers left: refused, and no second prompt.
+        run_spinoff(&mut sessions, "merge auth").await;
+        assert!(has_notice(
+            sessions.active(),
+            "conflict markers are left in a.txt"
+        ));
+        assert!(sessions.active().pending_prompt.is_none());
+
+        // The model's resolution; the next merge finishes and cleans up.
+        set_line(&repo, 5, "5 main and auth");
+        run_spinoff(&mut sessions, "merge auth").await;
+        assert!(has_notice(
+            sessions.active(),
+            "spinoff auth is merged into main"
+        ));
+        assert_eq!(sessions.list.len(), 1);
+        assert_eq!(git_output(&repo, &["status", "--porcelain"]), "");
     }
 }

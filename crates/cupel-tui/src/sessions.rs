@@ -3,7 +3,10 @@
 //! input there, while every session's agent keeps working, on screen or not.
 
 use cupel_coding_agent::commands::SpinoffCommand;
-use cupel_coding_agent::spinoff::{self, Conflict, Group, Side, SpinoffError, SpinoffName};
+use cupel_coding_agent::session;
+use cupel_coding_agent::spinoff::{
+    self, Conflict, Group, MergeOutcome, Side, Spinoff, SpinoffError, SpinoffName,
+};
 use futures_util::future::select_all;
 use ratatui::crossterm::event::{
     Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
@@ -163,6 +166,8 @@ impl Sessions {
         let result = match command {
             SpinoffCommand::List => self.list_group(),
             SpinoffCommand::Create { name, preset } => self.create(&name, preset.as_deref()).await,
+            SpinoffCommand::Merge { name } => self.merge(&name).await,
+            SpinoffCommand::Drop { name } => self.drop_spinoff(&name).await,
         };
         if let Err(error) = result {
             self.active_mut().notice(error.to_string());
@@ -264,6 +269,139 @@ impl Sessions {
             app,
         });
         self.switch_to(self.list.len() - 1);
+        Ok(())
+    }
+
+    /// `/spinoff merge <name>`: the next step of merging spinoff `name` into the
+    /// origin's branch. Conflicts go to the origin's model as a prompt; the next
+    /// `spinoff merge` finishes the merge and cleans up.
+    async fn merge(&mut self, name: &str) -> Result<(), SpinoffError> {
+        let (group, spinoff) = self.prepare(name)?;
+        let origin = &self.list[0];
+        if origin.app.is_running() {
+            return Err(SpinoffError::Blocked(format!(
+                "{} is still working - merge when it is done",
+                origin.label
+            )));
+        }
+        let task = self.first_prompt(&spinoff);
+        let message = format!("spinoff {name}: {task}");
+        match spinoff::merge(&group, &spinoff, &message)? {
+            MergeOutcome::Merged => self.clean_up(&group, &spinoff, true).await,
+            MergeOutcome::Conflicts(files) => {
+                let log = spinoff::incoming_log(&group)?;
+                let base = group.origin.branch.as_deref().unwrap_or_default();
+                let prompt = resolution_prompt(name, base, &task, &log, &files);
+                let origin = &mut self.list[0].app;
+                origin.notice(format!(
+                    "merging {name} stopped at conflicts in {} - the model reolves them \
+                    now, then /spinoff merge {name} finishes the merge",
+                    files.join(", ")
+                ));
+                origin.send(&prompt);
+                Ok(())
+            }
+            MergeOutcome::StillConflicted(files) => Err(SpinoffError::Blocked(format!(
+                "conflict markers are left in {} - ask the model again or fix them by hand, \
+                then run /spinoff merge {name}",
+                files.join(", ")
+            ))),
+        }
+    }
+
+    /// `/spinoff` drop <name>`: delete the spinoff, and leave the origin's checkout,
+    /// branch and history alone. Its leftovers are committed to its branch first, so
+    /// the commit in the notice holds all of its work.
+    async fn drop_spinoff(&mut self, name: &str) -> Result<(), SpinoffError> {
+        let (group, spinoff) = self.prepare(name)?;
+        let message = format!("spinoff {name}: {}", self.first_prompt(&spinoff));
+        spinoff::commit_leftovers(&spinoff, &message)?;
+        self.clean_up(&group, &spinoff, false).await
+    }
+
+    /// The group and spinoff `name`, for `/spinoff merge` and `/spinoff drop`. Both
+    /// belong to the origin, and neither pulls a worktree from under a working agent.
+    fn prepare(&self, name: &str) -> Result<(Group, Spinoff), SpinoffError> {
+        let origin = &self.list[0];
+        if self.active != 0 {
+            return Err(SpinoffError::Blocked(format!(
+                "/spinoff merge and /spinoff drop run in {}, the origin session",
+                origin.label
+            )));
+        }
+        let group = Group::discover(Path::new(&origin.app.meta.cwd))?;
+        let spinoff = group
+            .spinoffs
+            .iter()
+            .find(|spinoff| spinoff.name == name)
+            .cloned()
+            .ok_or_else(|| {
+                SpinoffError::Blocked(format!("no spinoff named {name} - /spinoff lists them"))
+            })?;
+        if self
+            .index_of(&spinoff)
+            .is_some_and(|index| self.list[index].app.is_running())
+        {
+            return Err(SpinoffError::Blocked(format!(
+                "{name} is still working - wait for it, or stop it in its session"
+            )));
+        }
+        Ok((group, spinoff))
+    }
+
+    /// The open session in `spinoff`'s worktree, if there is one.
+    fn index_of(&self, spinoff: &Spinoff) -> Option<usize> {
+        (1..self.list.len())
+            .find(|&index| Path::new(&self.list[index].app.meta.cwd) == spinoff.path)
+    }
+
+    /// What the spinoff was started for: the first prompt of its oldest transcript.
+    fn first_prompt(&self, spinoff: &Spinoff) -> String {
+        let home = self.list[0].app.meta.home.as_deref();
+        session::sessions_dir(home, &spinoff.path)
+            .and_then(|dir| session::list_sessions_in(&dir).pop())
+            .map(|oldest| oldest.label)
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| "(no prompt)".to_string())
+    }
+
+    /// Close the spinoff's session, remove its worktree and branch, then archive its
+    /// transcript . In this order, the `session-end` hook still findes the worktree,
+    /// and nothing is archived when a removal fails.
+    async fn clean_up(
+        &mut self,
+        group: &Group,
+        spinoff: &Spinoff,
+        merged: bool,
+    ) -> Result<(), SpinoffError> {
+        if let Some(index) = self.index_of(spinoff) {
+            let mut closed = self.list.remove(index);
+            closed.app.recorder.end_session().await;
+        }
+        let tip = spinoff::remove(group, spinoff, merged)?;
+        let side = Side::Spinoff(spinoff.name.clone());
+        self.conflicts
+            .retain(|conflict| conflict.other(&side).is_none());
+
+        let home = self.list[0].app.meta.home.clone();
+        let into = &group.origin.path;
+        let archived = match session::archive_sessions(home.as_deref(), &spinoff.path, into) {
+            Ok(count) => format!("transcripts archived: {count}"),
+            Err(error) => format!("transcripts not archived: {error}"),
+        };
+        let name = &spinoff.name;
+        let notice = if merged {
+            let base = group.origin.branch.as_deref().unwrap_or_default();
+            format!("spinoff {name} is merged into {base}: worktree and branch removed, {archived}")
+        } else {
+            let commit = tip.get(..7).unwrap_or(&tip);
+            format!(
+                "spinoff {name} is dropped: worktree and branch removed, {archived} - git \
+                branch {}{name} {commit} brings its work back",
+                spinoff::BRANCH_PREFIX
+            )
+        };
+        self.list[0].app.notice(notice);
         Ok(())
     }
 
@@ -372,6 +510,28 @@ fn copy_trust(home: Option<&Path>, origin: &Path, worktree: &Path) -> Option<Str
     cupel_coding_agent::project_trust::save(home, worktree, decision)
         .err()
         .map(|error| format!("warning: the spinoff runs without project trust ({error})"))
+}
+
+/// The prompt that hands a stopped merge to the origin's model.
+fn resolution_prompt(name: &str, base: &str, task: &str, log: &str, files: &[String]) -> String {
+    let branch = format!("{}{name}", spinoff::BRANCH_PREFIX);
+    let files = files
+        .iter()
+        .map(|file| format!("- {file}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Merging spinoff \"{name}\" (branch {branch}) into {base} stopped with conflicts. \n\
+        The spinoff worked on: {task}\n\
+        Its commits:\n\
+        {log}\
+        Conflicted files (HEAD = this session's side, {branch} = the spinoff's side): \n\
+        {files}\n\
+        Resolve every conflict so that both sides' intent survives, remove all conflict \
+        markers, and run the project's checks. Do not commit, and do not run git merge, \
+        checkout or reset: cupel finishes the merge when the user runs /spinoff merge \
+        {name} again"
+    )
 }
 
 fn conflicts_of<'a>(conflicts: &'a [Conflict], side: &Side) -> Vec<(&'a Side, &'a [String])> {

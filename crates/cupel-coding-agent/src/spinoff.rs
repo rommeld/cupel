@@ -439,6 +439,175 @@ pub fn check(group: &Group) -> Result<Vec<Conflict>, SpinoffError> {
     Ok(found)
 }
 
+/// What one call of [`merge`] achieved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOutcome {
+    Merged,
+    Conflicts(Vec<String>),
+    StillConflicted(Vec<String>),
+}
+
+/// Take the next of merging `spinoff` into the origin's branch. Every call reads the
+/// state from git, so it can simply be repeated:
+///
+/// - a merge of this spinoff in progress: commit it once no file has conflict markers
+///   left, else report the files;
+/// - otherwise: refuse while the main checkout has changes, commit what the spinoff
+///   left uncommitted (message `leftovers`), and merge.
+pub fn merge(
+    group: &Group,
+    spinoff: &Spinoff,
+    leftovers: &str,
+) -> Result<MergeOutcome, SpinoffError> {
+    if group.origin.branch.is_none() {
+        return Err(SpinoffError::Blocked(
+            "the main checkout is on a detached HEAD - check out the branch to merge into \
+            first"
+                .to_string(),
+        ));
+    }
+    let origin = &group.origin.path;
+    let branch = format!("{BRANCH_PREFIX}{}", spinoff.name);
+    if let Some(merging) = merge_head(origin)? {
+        if merging != rev_parse(origin, &branch)? {
+            return Err(SpinoffError::Blocked(
+                "another merge is in progress in the main checkout - finish it, or undo it \
+                with git merge --abort"
+                    .to_string(),
+            ));
+        }
+        let unmerged = unmerged_files(origin)?;
+        let marked: Vec<String> = unmerged
+            .iter()
+            .filter(|file| has_markers(&origin.join(file)))
+            .cloned()
+            .collect();
+        if !marked.is_empty() {
+            return Ok(MergeOutcome::StillConflicted(marked));
+        }
+        if !unmerged.is_empty() {
+            let mut add = vec!["add", "--"];
+            add.extend(unmerged.iter().map(String::as_str));
+            git(origin, &add)?;
+        }
+        git(origin, &["commit", "--quiet", "--no-edit"])?;
+        return Ok(MergeOutcome::Merged);
+    }
+
+    let changed = tracked_changes(origin)?;
+    if !changed.is_empty() {
+        return Err(SpinoffError::Blocked(format!(
+            "commit or stash the changes in the main checkout first: {}",
+            changed.join(", ")
+        )));
+    }
+    commit_leftovers(spinoff, leftovers)?;
+    // A branch that is merged already only gets "Already up to date." from git.
+    let args = ["merge", "--quiet", "--no-ff", "--no-edit", branch.as_str()];
+    let output = run(origin, None, &args)?;
+    if output.status.success() {
+        return Ok(MergeOutcome::Merged);
+    }
+    // Conflicts leave unmerged files behind. Any other failure does not.
+    let unmerged = unmerged_files(origin)?;
+    if unmerged.is_empty() {
+        return Err(failure(&args, &output));
+    }
+    Ok(MergeOutcome::Conflicts(unmerged))
+}
+
+/// Commit everything the spinoff's worktree has not committed yet, so its branch holds
+/// all of its work. Uses your own git identity. Returns whether ther was anything to
+/// commit.
+pub fn commit_leftovers(spinoff: &Spinoff, message: &str) -> Result<bool, SpinoffError> {
+    if git(&spinoff.path, &["status", "--porcelain"])?
+        .trim()
+        .is_empty()
+    {
+        return Ok(false);
+    }
+    git(&spinoff.path, &["add", "--all"])?;
+    git(&spinoff.path, &["commit", "--quiet", "--message", message])?;
+    Ok(true)
+}
+
+/// Remove the spinoff's worktree, then its branch: with `-d` after a merge, which
+/// refuses to delete unmerged work, with `-D` for a drop. Returns the branch's last
+/// commit; `git branch <name> <commit>` brings the branch back until git's garbage
+/// collection removes the commit.
+pub fn remove(group: &Group, spinoff: &Spinoff, merged: bool) -> Result<String, SpinoffError> {
+    let origin = &group.origin.path;
+    let branch = format!("{BRANCH_PREFIX}{}", spinoff.name);
+    let tip = rev_parse(origin, &branch)?;
+    let target = spinoff.path.to_string_lossy();
+    git(origin, &["worktree", "remove", &target])?;
+    let delete = if merged { "-d" } else { "-D" };
+    git(origin, &["branch", delete, &branch])?;
+    Ok(tip)
+}
+
+/// The commits a stipped merge brings in, one line each at most 20: what the spinoff
+/// did, for the prompt that asks to resolve the conflicts.
+pub fn incoming_log(group: &Group) -> Result<String, SpinoffError> {
+    git(
+        &group.origin.path,
+        &["log", "--oneline", "--max-count=20", "HEAD..MERGE_HEAD"],
+    )
+}
+
+/// The commit a stopped merge brings in, while a merge is in progress.
+fn merge_head(dir: &Path) -> Result<Option<String>, SpinoffError> {
+    let output = run(
+        dir,
+        None,
+        &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"],
+    )?;
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(output.status.success().then_some(commit))
+}
+
+/// The commit a branch (or any other name) points at.
+fn rev_parse(dir: &Path, name: &str) -> Result<String, SpinoffError> {
+    Ok(git(dir, &["rev-parse", "--verify", name])?
+        .trim()
+        .to_string())
+}
+
+/// Files whose conflicts git has not seen resolved (`git add`) yet.
+fn unmerged_files(dir: &Path) -> Result<Vec<String>, SpinoffError> {
+    let listing = git(dir, &["diff", "--name-only", "-z", "--diff-filter=U"])?;
+    Ok(paths(&listing))
+}
+
+/// Tracked files that differ from HEAD, staged or not. Untracked files don't count:
+/// git refuses a merge that would overwrite one, and says so.
+fn tracked_changes(dir: &Path) -> Result<Vec<String>, SpinoffError> {
+    let listing = git(dir, &["diff", "--name-only", "-z", "HEAD"])?;
+    Ok(paths(&listing))
+}
+
+/// The paths of a `-z` listing: each ended by a NUL byte.
+fn paths(listing: &str) -> Vec<String> {
+    listing
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether `file` still contains conflict markers. A bare `======` doesn`t count:
+/// Markdown underlines headlines with it. A deleted file is resolved, since deleting
+/// is one way to settle a conflict. A file that can`t be read as text (a binary
+/// conflict) counts as unresolved: only `git add` can mark it resolved.
+fn has_markers(file: &Path) -> bool {
+    match std::fs::read_to_string(file) {
+        Ok(text) => text
+            .lines()
+            .any(|line| line.starts_with("<<<<<<< ") || line.starts_with(">>>>>>> ")),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +626,9 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let root = root.canonicalize().unwrap();
         sh(&root, &["init", "--quiet", "--initial-branch", "main"]);
+        sh(&root, &["config", "user.name", "test"]);
+        sh(&root, &["config", "user.email", "test@localhost"]);
+        sh(&root, &["config", "commit.gpgsign", "false"]);
         root
     }
 
@@ -728,5 +900,151 @@ mod tests {
                 &(auth_side, docs_side),
             ]
         );
+    }
+
+    #[test]
+    fn merge_commits_leftovers_and_merges_cleanly() {
+        let origin = repo("merge-clean");
+        create(&Group::discover(&origin).unwrap(), &"auth".parse().unwrap()).unwrap();
+        edit(&origin, 2, "2 origin");
+        sh(
+            &origin,
+            &["commit", "--quiet", "--all", "--message", "origin work"],
+        );
+        let group = Group::discover(&origin).unwrap();
+        let auth = &group.spinoffs[0];
+        // Work the spinoff never committed.
+        edit(&auth.path, 9, "9 auth");
+
+        let outcome = merge(&group, auth, "spinoff auth: line 9").unwrap();
+        assert_eq!(outcome, MergeOutcome::Merged);
+        let merged = std::fs::read_to_string(origin.join("a.txt")).unwrap();
+        assert!(
+            merged.contains("2 origin") && merged.contains("9 auth"),
+            "{merged}"
+        );
+        let subjects = sh(&origin, &["log", "--format=%s", "--max-count=3"]);
+        assert!(subjects.contains("spinoff auth: line 9"), "{subjects}");
+        // HEAD is a merge commit: it has a second parent.
+        sh(&origin, &["rev-parse", "--verify", "HEAD^2"]);
+        // Asking again only confirms it.
+        assert_eq!(merge(&group, auth, "unused").unwrap(), MergeOutcome::Merged);
+    }
+
+    #[test]
+    fn merge_stops_at_conflicts_and_finishes_once_they_are_resolved() {
+        let origin = repo("merge-conflict");
+        create(&Group::discover(&origin).unwrap(), &"auth".parse().unwrap()).unwrap();
+        edit(&origin, 5, "5 origin");
+        sh(
+            &origin,
+            &["commit", "--quiet", "--all", "--message", "origin work"],
+        );
+        let group = Group::discover(&origin).unwrap();
+        let auth = &group.spinoffs[0];
+        edit(&auth.path, 5, "5 auth");
+        let a_txt = vec!["a.txt".to_string()];
+
+        assert_eq!(
+            merge(&group, auth, "auth work").unwrap(),
+            MergeOutcome::Conflicts(a_txt.clone())
+        );
+        assert!(incoming_log(&group).unwrap().contains("auth work"));
+        // Nothing resolved yet: the markers are still there.
+        assert_eq!(
+            merge(&group, auth, "unused").unwrap(),
+            MergeOutcome::StillConflicted(a_txt)
+        );
+        // Resolved the way a model would: by editing the file, without git add.
+        let resolved = LINES.replace("5\n", "5 origin and auth\n");
+        std::fs::write(origin.join("a.txt"), &resolved).unwrap();
+        assert_eq!(merge(&group, auth, "unused").unwrap(), MergeOutcome::Merged);
+        assert_eq!(
+            std::fs::read_to_string(origin.join("a.txt")).unwrap(),
+            resolved
+        );
+        assert_eq!(sh(&origin, &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn merge_refuses_a_busy_or_detached_main_checkout() {
+        let origin = repo("merge-busy");
+        create(&Group::discover(&origin).unwrap(), &"auth".parse().unwrap()).unwrap();
+        edit(&origin, 2, "2 not committed");
+        let group = Group::discover(&origin).unwrap();
+        let auth = &group.spinoffs[0];
+        let message = blocked(merge(&group, auth, "unused"));
+        assert!(
+            message.contains("commit or stash") && message.contains("a.txt"),
+            "{message}"
+        );
+
+        // A merge of another commit in progress: git keeps its id in MERGE_HEAD.
+        sh(
+            &origin,
+            &["commit", "--quiet", "--all", "--message", "work"],
+        );
+        let other = sh(&origin, &["rev-parse", "HEAD"]);
+        std::fs::write(origin.join(".git/MERGE_HEAD"), other).unwrap();
+        let message = blocked(merge(&group, auth, "unused"));
+        assert!(message.contains("another merge"), "{message}");
+        std::fs::remove_file(origin.join(".git/MERGE_HEAD")).unwrap();
+
+        // An untracked file that the merge would overwrite: git itself refuses.
+        std::fs::write(auth.path.join("b.txt"), "auth\n").unwrap();
+        std::fs::write(origin.join("b.txt"), "origin\n").unwrap();
+        let refused = merge(&group, auth, "spinoff auth: b.txt");
+        assert!(
+            matches!(refused, Err(SpinoffError::Git { .. })),
+            "{refused:?}"
+        );
+
+        // A detached HEAD has no branch to merge into.
+        sh(&origin, &["checkout", "--quiet", "--detach"]);
+        let detached = Group::discover(&origin).unwrap();
+        let message = blocked(merge(&detached, &detached.spinoffs[0], "unused"));
+        assert!(message.contains("detached HEAD"), "{message}");
+    }
+
+    #[test]
+    fn a_removed_spinoff_stays_recoverable_by_its_commit() {
+        let origin = repo("remove");
+        create(&Group::discover(&origin).unwrap(), &"auth".parse().unwrap()).unwrap();
+        let group = Group::discover(&origin).unwrap();
+        let auth = &group.spinoffs[0];
+        edit(&auth.path, 9, "9 dropped work");
+        assert!(commit_leftovers(auth, "spinoff auth: dropped").unwrap());
+        assert!(!commit_leftovers(auth, "unused").unwrap(), "nothing left");
+
+        let tip = remove(&group, auth, false).unwrap();
+        assert!(!auth.path.exists());
+        assert!(Group::discover(&origin).unwrap().spinoffs.is_empty());
+        assert_eq!(sh(&origin, &["branch", "--list", "cupel/spinoff/*"]), "");
+        // The work is still reachable through its commit.
+        let saved = sh(&origin, &["show", &format!("{tip}:a.txt")]);
+        assert!(saved.contains("9 dropped work"), "{saved}");
+        // The main checkout never changed.
+        assert_eq!(
+            std::fs::read_to_string(origin.join("a.txt")).unwrap(),
+            LINES
+        );
+    }
+
+    #[test]
+    fn only_marker_lines_and_unreadable_files_count_as_unresolved() {
+        let dir = init("markers");
+        let file = |name: &str, content: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, content).unwrap();
+            path
+        };
+        let marked = file(
+            "marked.txt",
+            b"1\n<<<<<<< HEAD\n2\n=======\n3\n>>>>>>> auth\n",
+        );
+        assert!(has_markers(&marked));
+        assert!(!has_markers(&file("heading.md", b"Title\n=======\n")));
+        assert!(has_markers(&file("binary.bin", &[0xff, 0xfe, 0x00])));
+        assert!(!has_markers(&dir.join("deleted.txt")));
     }
 }

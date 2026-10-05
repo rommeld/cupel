@@ -907,7 +907,7 @@ impl App {
     }
 
     /// Route a prompt to the agent: new run when idle, queued when busy.
-    fn send(&mut self, text: &str) {
+    pub fn send(&mut self, text: &str) {
         // A prompt is headed for the agent the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately not at
         // startup (launching + quitting cupel must leave no trace), and not

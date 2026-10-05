@@ -82,6 +82,53 @@ pub fn find_latest(home: Option<&Path>, cwd: &Path) -> Option<PathBuf> {
         })
 }
 
+/// Move every transcript of the project at `from_cwd` into `archive/` in the sessins
+/// directory of the project at `into_cwd`, then remove the emptied directory.
+/// Listings, the `/hot-reload` completion and a bare `--resume` read only top-level
+/// files, so archived sessions leave all of them; moving a file back restores it. A
+/// name the archive has gets a number (`cupel-1-1.jsonl`), so no file is ever
+/// overwritten. Returns how many transcripts moved.
+pub fn archive_sessions(
+    home: Option<&Path>,
+    from_cwd: &Path,
+    into_cwd: &Path,
+) -> std::io::Result<usize> {
+    let (Some(from), Some(into)) = (sessions_dir(home, from_cwd), sessions_dir(home, into_cwd))
+    else {
+        return Ok(0);
+    };
+    let entries = match std::fs::read_dir(&from) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    let transcripts: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
+        .collect();
+    let archive = into.join("archive");
+    std::fs::create_dir_all(&archive)?;
+    for transcript in &transcripts {
+        let stem = transcript.file_stem().unwrap_or_default().to_string_lossy();
+        std::fs::rename(transcript, free_name(&archive, &stem))?;
+    }
+    let _ = std::fs::remove_dir(&from);
+    Ok(transcripts.len())
+}
+
+/// The first name in `dir` that no file has: `<stem>.jsonl`, else `<stem>-1.jsonl`,
+/// `<stem>-2.jsonl`, and so on.
+fn free_name(dir: &Path, stem: &str) -> PathBuf {
+    let mut target = dir.join(format!("{stem}.jsonl"));
+    let mut number = 0;
+    while target.exists() {
+        number += 1;
+        target = dir.join(format!("{stem}-{number}.jsonl"));
+    }
+    target
+}
+
 /// One row of the `/session-id` listing. There is no stored summary in a
 /// transcript (compaction summaries live only inside a run's context
 /// snapshot and are never persisted), so the closest human-readable label
@@ -666,5 +713,34 @@ mod tests {
         rec.before_prompt("prompt").await;
         rec.end_session().await;
         assert!(!root.join("project.log").exists());
+    }
+
+    #[test]
+    fn archived_transcripts_leave_the_listings_and_never_overwrite() {
+        let root = temp_root("archive");
+        let home = root.join("home");
+        let origin = root.join("proj");
+        let spinoff = origin.join(".cupel/worktrees/auth");
+        let from = sessions_dir(Some(&home), &spinoff).unwrap();
+        std::fs::create_dir_all(&from).unwrap();
+        for id in ["cupel-1", "cupel-2"] {
+            std::fs::write(from.join(format!("{id}.jsonl")), id).unwrap();
+        }
+        // An earlier spinoff left a cupel-1 in the archive.
+        let archive = sessions_dir(Some(&home), &origin).unwrap().join("archive");
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::write(archive.join("cupel-1.jsonl"), "older").unwrap();
+
+        assert_eq!(archive_sessions(Some(&home), &spinoff, &origin).unwrap(), 2);
+        assert!(!from.exists(), "the emptied directory is gone");
+        let read = |name: &str| std::fs::read_to_string(archive.join(name)).unwrap();
+        assert_eq!(read("cupel-1.jsonl"), "older");
+        assert_eq!(read("cupel-1-1.jsonl"), "cupel-1");
+        assert_eq!(read("cupel-2.jsonl"), "cupel-2");
+        // A bare --resume in the origin doesn't look into the archive.
+        assert!(find_latest(Some(&home), &origin).is_none());
+        // Nothing recorded, or no home: nothing to move.
+        assert_eq!(archive_sessions(Some(&home), &spinoff, &origin).unwrap(), 0);
+        assert_eq!(archive_sessions(None, &spinoff, &origin).unwrap(), 0);
     }
 }

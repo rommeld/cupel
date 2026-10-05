@@ -259,7 +259,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "spinoff",
-        description: "Start a parallel session in its own git worktree: /spinoff <name> [preset] (no argument lists them)",
+        description: "Parallel sessions in git worktrees: /spinoff <name> [preset] starts one, /spinoff merge≤drop <name> end one, no argument lists them",
     },
     BuiltinCommand {
         name: "session-id",
@@ -290,6 +290,12 @@ pub enum SpinoffCommand {
         name: SpinoffName,
         preset: Option<String>,
     },
+    Merge {
+        name: String,
+    },
+    Drop {
+        name: String,
+    },
 }
 
 impl core::str::FromStr for SpinoffCommand {
@@ -299,7 +305,13 @@ impl core::str::FromStr for SpinoffCommand {
         let words: Vec<&str> = args.split_whitespace().collect();
         match words.as_slice() {
             [] => Ok(Self::List),
-            [name] => Ok(Self::Create {
+            ["merge", name] => Ok(Self::Merge {
+                name: (*name).to_string(),
+            }),
+            ["drop", name] => Ok(Self::Drop {
+                name: (*name).to_string(),
+            }),
+            [name] if !matches!(*name, "merge" | "drop") => Ok(Self::Create {
                 name: name.parse()?,
                 preset: None,
             }),
@@ -308,7 +320,9 @@ impl core::str::FromStr for SpinoffCommand {
                 preset: Some((*preset).to_string()),
             }),
             _ => Err(SpinoffError::Blocked(
-                "usage: /spinoff <name> [preset] (no argument lists the spinoffs)".to_string(),
+                "usage: /spinoff <name> [preset], /spinoff merge <name>, /spinoff drop <name> \
+                (no argument lists the spinoffs)"
+                    .to_string(),
             )),
         }
     }
@@ -418,5 +432,22 @@ mod tests {
         assert!(matches!(bad_name, Err(SpinoffError::Blocked(_))));
         let error = "auth fast extra".parse::<SpinoffCommand>().unwrap_err();
         assert!(error.to_string().starts_with("usage: /spinoff"));
+    }
+
+    #[test]
+    fn spinoff_merge_and_drop_take_a_name() {
+        let merge = SpinoffCommand::Merge {
+            name: "auth".to_string(),
+        };
+        assert_eq!("merge auth".parse::<SpinoffCommand>().unwrap(), merge);
+        let drop = SpinoffCommand::Drop {
+            name: "auth".to_string(),
+        };
+        assert_eq!(" drop  auth ".parse::<SpinoffCommand>().unwrap(), drop);
+        // Without a name they are usage errors, not spinoffs named merge or drop.
+        for args in ["merge", "drop", "merge auth now"] {
+            let error = args.parse::<SpinoffCommand>().unwrap_err();
+            assert!(error.to_string().starts_with("usage: /spinoff"), "{args}");
+        }
     }
 }
