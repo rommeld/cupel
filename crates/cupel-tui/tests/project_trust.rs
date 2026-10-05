@@ -84,6 +84,11 @@ mod tests {
                     Err(e) => panic!("fixture endpoint was not reached: {e}"),
                 }
             };
+            // On macOS (BSD sockets), an accepted stream inherits the listener's
+            // non-blocking mode; Linux does not. Non-blocking, the read timeout
+            // below has no effect and `read` fails with `WouldBlock` whenever the
+            // request has not arrived yet, so switch the stream back to blocking.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
