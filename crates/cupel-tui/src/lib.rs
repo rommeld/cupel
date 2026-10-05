@@ -104,6 +104,7 @@ async fn event_loop(
     recorder: cupel_coding_agent::session::SessionRecorder,
 ) -> std::io::Result<()> {
     let mut sessions = sessions::Sessions::new(app::App::new(agent, meta, recorder));
+    sessions.restore().await;
     let mut terminal_events = spawn_input_thread();
     // The spinner's clock lives outside the loop.
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));

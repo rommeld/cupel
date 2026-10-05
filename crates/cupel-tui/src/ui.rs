@@ -3541,4 +3541,181 @@ mod tests {
         assert_eq!(sessions.list.len(), 2, "nothing removed");
         assert!(repo.join(".cupel/worktrees/auth").is_dir());
     }
+
+    #[tokio::test]
+    async fn inside_a_worktree_spinoff_commands_point_to_the_main_checkout() {
+        use crate::sessions::Sessions;
+        let repo = git_repo("inside");
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        run_spinoff(&mut sessions, "auth").await;
+
+        // cupel started in auth's worktree, or one of its folders.
+        let folder = repo.join(".cupel/worktrees/auth/src");
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut inside = Sessions::new(test_app_in(folder.to_str().unwrap()));
+        for args in ["docs", "", "merge auth", "drop auth"] {
+            run_spinoff(&mut inside, args).await;
+        }
+        let refusal = "cupel runs in spinoff auth's worktree";
+        let refusals = inside
+            .active()
+            .transcript
+            .cells
+            .iter()
+            .filter(|cell| matches!(cell, Cell::Notice { text } if text.contains(refusal)))
+            .count();
+        assert_eq!(refusals, 4, "every /spinoff command is refused");
+        assert!(!repo.join(".cupel/worktrees/docs").exists());
+        assert!(repo.join(".cupel/worktrees/auth").is_dir());
+    }
+
+    #[tokio::test]
+    async fn a_restart_restores_spinoffs_with_their_history_and_model() {
+        use crate::sessions::Sessions;
+        let repo = git_repo("restore");
+        let home = std::env::temp_dir().join("cupel-ui-spinoff-restore-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let origin = || {
+            let mut origin = test_app_in(repo.to_str().unwrap());
+            origin.meta.home = Some(home.clone());
+            origin.meta.settings = serde_json::from_str(
+                r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                    "thinkingLevel": "low"}}}"#,
+            )
+            .unwrap();
+            origin
+        };
+        // The first run: auth, on preset fast, gets one prompt; docs gets none. The
+        // prompt's run fails at once against the empty registry, but it is recorded.
+        let mut first = Sessions::new(origin());
+        run_spinoff(&mut first, "auth fast").await;
+        let auth = &mut first.list[1].app;
+        auth.start_run("number line 9");
+        while auth.is_running() {
+            let event = auth.next_event().await;
+            auth.on_event(event).await;
+        }
+        let auth_id = auth.recorder.session_id().to_string();
+        let auth_history = auth.agent.state().messages.len();
+        run_spinoff(&mut first, "docs").await;
+
+        // The restart.
+        let mut sessions = Sessions::new(origin());
+        sessions.restore().await;
+        assert_eq!(sessions.list.len(), 3);
+        assert_eq!(sessions.list[0].label, "main");
+        assert_eq!(sessions.active, 0, "the origin stays on screen");
+        assert!(has_notice(
+            sessions.active(),
+            "spinoffs from the last run: "
+        ));
+        let app = |label: &str| {
+            let session = sessions.list.iter().find(|session| session.label == label);
+            &session.unwrap().app
+        };
+        let auth = app("auth");
+        assert_eq!(
+            auth.recorder.session_id(),
+            auth_id,
+            "its transcript continues"
+        );
+        assert_eq!(auth.agent.state().messages.len(), auth_history);
+        assert!(has_notice(auth, "resumed session"));
+        // The history replays its last answer, a failure here, so the row shows ✗.
+        assert_eq!(auth.status(), crate::app::Status::Failed);
+        // The model of its last answer, the thinking level of the origin.
+        assert_eq!(auth.agent.state().model.id, "claude-haiku-4-5");
+        let origin_thinking = sessions.list[0].app.agent.state().thinking_level;
+        assert_eq!(auth.agent.state().thinking_level, origin_thinking);
+        assert!(app("docs").agent.state().messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn restore_keeps_a_single_session_where_there_is_nothing_to_restore() {
+        use crate::sessions::Sessions;
+        let no_repo = std::env::temp_dir().join("cupel-ui-spinoff-no-repo");
+        std::fs::create_dir_all(&no_repo).unwrap();
+        let repo = git_repo("restore-none");
+        for dir in [&no_repo, &repo] {
+            let mut sessions = Sessions::new(test_app_in(dir.to_str().unwrap()));
+            sessions.restore().await;
+            assert_eq!(sessions.list.len(), 1);
+            assert!(sessions.active().transcript.cells.is_empty(), "no notice");
+        }
+
+        // Inside a spinoff's worktree, a notice says why there is only one session.
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        run_spinoff(&mut sessions, "auth").await;
+        let worktree = repo.join(".cupel/worktrees/auth");
+        let mut inside = Sessions::new(test_app_in(worktree.to_str().unwrap()));
+        inside.restore().await;
+        assert_eq!(inside.list.len(), 1);
+        assert!(has_notice(
+            inside.active(),
+            "cupel runs in spinoff auth's worktree"
+        ));
+    }
+
+    #[tokio::test]
+    async fn restore_says_what_it_could_not_bring_back() {
+        use crate::sessions::Sessions;
+        use cupel_coding_agent::session::{TRANSCRIPT_VERSION, TranscriptHeader, sessions_dir};
+        let repo = git_repo("restore-notes");
+        let home = std::env::temp_dir().join("cupel-ui-spinoff-restore-notes-home");
+        let _ = std::fs::remove_dir_all(&home);
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        for name in ["auth", "docs"] {
+            run_spinoff(&mut sessions, name).await;
+        }
+        let transcript = |name: &str| {
+            let worktree = repo.join(".cupel/worktrees").join(name);
+            let dir = sessions_dir(Some(&home), &worktree).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.join("cupel-1.jsonl")
+        };
+        // auth's first answer came from a model the catalog has, its last one from a
+        // model it doesn't have ("mock").
+        let header = TranscriptHeader {
+            version: TRANSCRIPT_VERSION,
+            session_id: "cupel-1".to_string(),
+            cwd: "auth".to_string(),
+            model: "mock".to_string(),
+            started_at: 1,
+        };
+        let mut first = assistant_message("first", cupel_core::types::StopReason::Stop, 0);
+        if let cupel_agent::AgentMessage::Llm(cupel_core::types::Message::Assistant(answer)) =
+            &mut first
+        {
+            answer.provider = cupel_core::types::Provider::from("anthropic");
+            answer.model = "claude-haiku-4-5".to_string();
+        }
+        let last = assistant_message("last", cupel_core::types::StopReason::Stop, 0);
+        let text = format!(
+            "{}\n{}\n{}\n",
+            serde_json::to_string(&header).unwrap(),
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&last).unwrap()
+        );
+        std::fs::write(transcript("auth"), text).unwrap();
+        // docs's transcript is broken.
+        std::fs::write(transcript("docs"), "{broken").unwrap();
+
+        let mut origin = test_app_in(repo.to_str().unwrap());
+        origin.meta.home = Some(home.clone());
+        let mut restarted = Sessions::new(origin);
+        restarted.restore().await;
+        let app = |label: &str| {
+            let session = restarted.list.iter().find(|session| session.label == label);
+            &session.unwrap().app
+        };
+        let missing = "mock/mock, the model of the last answer, is not available";
+        assert!(has_notice(app("auth"), missing));
+        assert_eq!(app("auth").recorder.session_id(), "cupel-1");
+        assert!(has_notice(app("docs"), "the session starts empty"));
+        assert_ne!(
+            app("docs").recorder.session_id(),
+            "cupel-1",
+            "a new transcript"
+        );
+    }
 }

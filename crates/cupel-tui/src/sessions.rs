@@ -2,11 +2,13 @@
 //! a complete [`App`] of its own. `Sessions` decides which one is on screen and sends
 //! input there, while every session's agent keeps working, on screen or not.
 
+use cupel_agent::AgentMessage;
 use cupel_coding_agent::commands::SpinoffCommand;
 use cupel_coding_agent::session;
 use cupel_coding_agent::spinoff::{
     self, Conflict, Group, MergeOutcome, Side, Spinoff, SpinoffError, SpinoffName,
 };
+use cupel_core::types::{AssistantMessage, Message};
 use futures_util::future::select_all;
 use ratatui::crossterm::event::{
     Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
@@ -177,7 +179,7 @@ impl Sessions {
     /// `/spinoff`: the origin and every spinoff git knows, and which of them have no
     /// session in this TUI.
     fn list_group(&mut self) -> Result<(), SpinoffError> {
-        let group = Group::discover(Path::new(&self.list[0].app.meta.cwd))?;
+        let group = self.group()?;
         let branch = group.origin.branch.as_deref().unwrap_or("a detached HEAD");
         let mut lines = vec![format!(
             "origin: {} on {branch}",
@@ -239,7 +241,7 @@ impl Sessions {
         let registry = requester.agent.registry();
 
         let origin_dir = PathBuf::from(&self.list[0].app.meta.cwd);
-        let group = Group::discover(&origin_dir)?;
+        let group = self.group()?;
         let spinoff = spinoff::create(&group, name)?;
         let trust_warning = copy_trust(home.as_deref(), &origin_dir, &spinoff.path);
         let session_id = format!("cupel-{}", cupel_core::types::now_ms());
@@ -270,6 +272,86 @@ impl Sessions {
         });
         self.switch_to(self.list.len() - 1);
         Ok(())
+    }
+
+    /// After a restart: every spinoff worktree git knows becomes a session again,
+    /// continuing its newest transcript. Inside a spinoff's worktree, cupel stays
+    /// single session and says so.
+    pub async fn restore(&mut self) {
+        let group = match self.group() {
+            Ok(group) => group,
+            Err(SpinoffError::Blocked(message)) => {
+                self.list[0].app.notice(message);
+                return;
+            }
+            Err(_) => return,
+        };
+        if group.spinoffs.is_empty() {
+            return;
+        }
+        for spinoff in &group.spinoffs {
+            let app = self.reopen(spinoff).await;
+            let label = spinoff.name.clone();
+            self.list.push(Session { label, app });
+        }
+        let names: Vec<&str> = group
+            .spinoffs
+            .iter()
+            .map(|spinoff| spinoff.name.as_str())
+            .collect();
+        let origin = &mut self.list[0];
+        if let Some(branch) = &group.origin.branch {
+            origin.label = branch.clone();
+        }
+        origin.app.notice(format!(
+            "spinoffs from the last run: {} - ctrl+n/ctrl+p or a click in the sidebar \
+            switches sessions",
+            names.join(", ")
+        ));
+    }
+
+    /// A session for `spinoff` that continues its newest transcript, as `--resume`
+    /// does: the same session id, the history on screen and in the context. The model
+    /// is the one of the last answer; thinking level and preset prompt come from the
+    /// origin, because the transcript records neither.
+    async fn reopen(&self, spinoff: &Spinoff) -> App {
+        let origin = &self.list[0].app;
+        let mut carry = origin.carry();
+        let home = origin.meta.home.clone();
+        let mut notes = Vec::new();
+        let fresh = || (format!("cupel-{}", cupel_core::types::now_ms()), Vec::new());
+        let latest = session::find_latest(home.as_deref(), &spinoff.path);
+        let (session_id, history) = match latest.map(|path| session::load_transcript(&path)) {
+            Some(Ok((header, messages))) => (header.session_id, messages),
+            Some(Err(error)) => {
+                notes.push(format!("{error} - the session starts empty"));
+                fresh()
+            }
+            None => fresh(),
+        };
+        if let Some(answer) = last_answer(&history) {
+            let model = origin
+                .meta
+                .models
+                .iter()
+                .find(|model| model.provider == answer.provider && model.id == answer.model);
+            match model {
+                Some(model) => carry.model = model.clone(),
+                None => notes.push(format!(
+                    "{}/{}, the model of the last answer, is not available - the session \
+                    uses {}",
+                    answer.provider.as_str(),
+                    answer.model,
+                    carry.model.id,
+                )),
+            }
+        }
+        let registry = origin.agent.registry();
+        let mut app = App::open(&spinoff.path, home, registry, carry, session_id, history).await;
+        for note in notes {
+            app.notice(note);
+        }
+        app
     }
 
     /// `/spinoff merge <name>`: the next step of merging spinoff `name` into the
@@ -329,7 +411,7 @@ impl Sessions {
                 origin.label
             )));
         }
-        let group = Group::discover(Path::new(&origin.app.meta.cwd))?;
+        let group = self.group()?;
         let spinoff = group
             .spinoffs
             .iter()
@@ -347,6 +429,27 @@ impl Sessions {
             )));
         }
         Ok((group, spinoff))
+    }
+
+    /// The checkouts this TUI works with. Refused when cupel runs inside a spinoff's
+    /// worktree: there it is a single session, and spinoffs belong to the main
+    /// checkout.
+    fn group(&self) -> Result<Group, SpinoffError> {
+        let cwd = Path::new(&self.list[0].app.meta.cwd);
+        let group = Group::discover(cwd)?;
+        if let Some(spinoff) = group
+            .spinoffs
+            .iter()
+            .find(|spinoff| cwd.starts_with(&spinoff.path))
+        {
+            return Err(SpinoffError::Blocked(format!(
+                "cupel runs in spinoff {}'s worktree, as a single session - /spinoff works \
+                in the main checkout, {}",
+                spinoff.name,
+                group.origin.path.display()
+            )));
+        }
+        Ok(group)
     }
 
     /// The open session in `spinoff`'s worktree, if there is one.
@@ -510,6 +613,14 @@ fn copy_trust(home: Option<&Path>, origin: &Path, worktree: &Path) -> Option<Str
     cupel_coding_agent::project_trust::save(home, worktree, decision)
         .err()
         .map(|error| format!("warning: the spinoff runs without project trust ({error})"))
+}
+
+/// The last answer in `history`. It records the provider and the model that gave it.
+fn last_answer(history: &[AgentMessage]) -> Option<&AssistantMessage> {
+    history.iter().rev().find_map(|message| match message {
+        AgentMessage::Llm(Message::Assistant(answer)) => Some(answer),
+        _ => None,
+    })
 }
 
 /// The prompt that hands a stopped merge to the origin's model.
