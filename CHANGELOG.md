@@ -3,6 +3,23 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.25.0] - 2026-10-06
+
+- feat(spinoff): commit messages for /spinoff merge
+- fix(plain): clean up gracefully on broken pipes
+- feat(spinoff): restore spinoffs after a restart
+- fix(spinoff): text slips, drop and busy tests
+- test(tui): fix WouldBlock flake in the project-trust fixture on macOS
+- feat(spinoff): merge and drop spinoffs, archive their sessions
+- feat(spinoff): warn about conflicts between sessions after every run
+- fix(spinoff): message typos, spinoff id, popup width
+- fix(providers): avoid image placeholders for empty tool results
+- feat(spinoff): run spinoffs as sessions with a sidebar
+- version: sync to v0.24.0 from CHANGELOG.md
+- fix(tui): distinguish planning and assumed context limits
+- feat(spinoff): git core for parallel sessions in worktrees
+- update ci and release with macos-latest
+
 ## [v0.24.0] - 2026-10-03
 
 - fix(tui): keep the spinner turning while a reply streams
