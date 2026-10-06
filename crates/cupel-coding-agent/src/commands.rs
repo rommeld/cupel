@@ -259,7 +259,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "spinoff",
-        description: "Parallel sessions in git worktrees: /spinoff <name> [preset] starts one, /spinoff merge|drop <name> ends one, no argument lists them",
+        description: "Parallel sessions in git worktrees: /spinoff <name> [preset] starts one, /spinoff merge <name> [message] or /spinoff drop <name> ends one, no argument lists them",
     },
     BuiltinCommand {
         name: "session-id",
@@ -292,6 +292,7 @@ pub enum SpinoffCommand {
     },
     Merge {
         name: String,
+        message: Option<String>,
     },
     Drop {
         name: String,
@@ -305,8 +306,9 @@ impl core::str::FromStr for SpinoffCommand {
         let words: Vec<&str> = args.split_whitespace().collect();
         match words.as_slice() {
             [] => Ok(Self::List),
-            ["merge", name] => Ok(Self::Merge {
+            ["merge", name, ..] => Ok(Self::Merge {
                 name: (*name).to_string(),
+                message: merge_message(args),
             }),
             ["drop", name] => Ok(Self::Drop {
                 name: (*name).to_string(),
@@ -320,12 +322,31 @@ impl core::str::FromStr for SpinoffCommand {
                 preset: Some((*preset).to_string()),
             }),
             _ => Err(SpinoffError::Blocked(
-                "usage: /spinoff <name> [preset], /spinoff merge <name>, /spinoff drop <name> \
-                (no argument lists the spinoffs)"
+                "usage: /spinoff <name> [preset], /spinoff merge <name> [message], \
+                    /spinoff drop <name> (no argument lists the spinoffs)"
                     .to_string(),
             )),
         }
     }
+}
+
+/// The commit message of `merge <name> <message>`: the rest of the lines as typed,
+/// without one pair of surrounding quotes. `None` when thre is none.
+fn merge_message(args: &str) -> Option<String> {
+    let (_merge, rest) = args.trim().split_once(char::is_whitespace)?;
+    let (_name, message) = rest.trim_start().split_once(char::is_whitespace)?;
+    let message = unquote(message.trim());
+    (!message.is_empty()).then(|| message.to_string())
+}
+
+/// `text` without one pair of surrounding quotes, `"…"` or `'…'`.
+fn unquote(text: &str) -> &str {
+    for quote in ['"', '\''] {
+        if let Some(inner) = text.strip_prefix(quote).and_then(|t| t.strip_suffix(quote)) {
+            return inner;
+        }
+    }
+    text
 }
 
 #[cfg(test)]
@@ -438,6 +459,7 @@ mod tests {
     fn spinoff_merge_and_drop_take_a_name() {
         let merge = SpinoffCommand::Merge {
             name: "auth".to_string(),
+            message: None,
         };
         assert_eq!("merge auth".parse::<SpinoffCommand>().unwrap(), merge);
         let drop = SpinoffCommand::Drop {
@@ -445,9 +467,29 @@ mod tests {
         };
         assert_eq!(" drop  auth ".parse::<SpinoffCommand>().unwrap(), drop);
         // Without a name they are usage errors, not spinoffs named merge or drop.
-        for args in ["merge", "drop", "merge auth now"] {
+        for args in ["merge", "drop", "drop auth now"] {
             let error = args.parse::<SpinoffCommand>().unwrap_err();
             assert!(error.to_string().starts_with("usage: /spinoff"), "{args}");
         }
+    }
+
+    #[test]
+    fn a_merge_message_is_the_rest_of_the_line() {
+        let message = |args: &str| match args.parse::<SpinoffCommand>().unwrap() {
+            SpinoffCommand::Merge { message, .. } => message,
+            other => panic!("expected Merge, got {other:?}"),
+        };
+        assert_eq!(message("merge auth"), None);
+        let spaced = message("merge  auth  Fix the  login flow ");
+        assert_eq!(spaced.as_deref(), Some("Fix the  login flow"));
+        let quoted = message(r#"merge auth "Fix the login flow""#);
+        assert_eq!(quoted.as_deref(), Some("Fix the login flow"));
+        let single = message("merge auth 'Fix the login flow'");
+        assert_eq!(single.as_deref(), Some("Fix the login flow"));
+        assert_eq!(
+            message(r#"merge auth """#),
+            None,
+            "empty quotes, no message"
+        );
     }
 }

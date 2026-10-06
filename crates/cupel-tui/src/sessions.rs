@@ -168,7 +168,7 @@ impl Sessions {
         let result = match command {
             SpinoffCommand::List => self.list_group(),
             SpinoffCommand::Create { name, preset } => self.create(&name, preset.as_deref()).await,
-            SpinoffCommand::Merge { name } => self.merge(&name).await,
+            SpinoffCommand::Merge { name, message } => self.merge(&name, message.as_deref()).await,
             SpinoffCommand::Drop { name } => self.drop_spinoff(&name).await,
         };
         if let Err(error) = result {
@@ -354,10 +354,11 @@ impl Sessions {
         app
     }
 
-    /// `/spinoff merge <name>`: the next step of merging spinoff `name` into the
-    /// origin's branch. Conflicts go to the origin's model as a prompt; the next
-    /// `spinoff merge` finishes the merge and cleans up.
-    async fn merge(&mut self, name: &str) -> Result<(), SpinoffError> {
+    /// `/spinoff merge <name> [message]`: the next step of merging spinoff `name` into
+    /// the origin's branch, with `message` for the merge commit. Conflicts go to the
+    /// origin's model as a prompt; the next `/spinoff merge` finishes the merge and
+    /// cleans up.
+    async fn merge(&mut self, name: &str, message: Option<&str>) -> Result<(), SpinoffError> {
         let (group, spinoff) = self.prepare(name)?;
         let origin = &self.list[0];
         if origin.app.is_running() {
@@ -367,8 +368,8 @@ impl Sessions {
             )));
         }
         let task = self.first_prompt(&spinoff);
-        let message = format!("spinoff {name}: {task}");
-        match spinoff::merge(&group, &spinoff, &message)? {
+        let leftovers = format!("spinoff {name}: {task}");
+        match spinoff::merge(&group, &spinoff, &leftovers, message)? {
             MergeOutcome::Merged => self.clean_up(&group, &spinoff, true).await,
             MergeOutcome::Conflicts(files) => {
                 let log = spinoff::incoming_log(&group)?;

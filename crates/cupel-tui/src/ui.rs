@@ -3799,4 +3799,22 @@ mod tests {
             "a new transcript"
         );
     }
+
+    #[tokio::test]
+    async fn spinoff_merge_takes_a_commit_message() {
+        use crate::sessions::Sessions;
+        let repo = git_repo("merge-message");
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        run_spinoff(&mut sessions, "auth").await;
+        sessions.active = 0;
+        set_line(&repo.join(".cupel/worktrees/auth"), 9, "9 auth");
+
+        run_spinoff(&mut sessions, r#"merge auth "Add line nine""#).await;
+        assert!(has_notice(
+            sessions.active(),
+            "spinoff auth is merged into main"
+        ));
+        let subject = git_output(&repo, &["log", "-1", "--format=%s"]);
+        assert_eq!(subject, "Add line nine\n");
+    }
 }
