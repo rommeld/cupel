@@ -546,6 +546,72 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_mistral_mimo_and_ember_keep_their_reasoning_scales() {
+        // The whole map, not single keys: an extra xhigh or max key would
+        // DISABLE that level. Prices and limits stay out of this test:
+        // OpenRouter's prices change within hours, and the generator copies
+        // them from models.dev anyway.
+        // - Mistral Large 4 knows only "none" and "high": off sends effort
+        //   "none", every other level clamps to high.
+        // - MiMo V2.6 has only a toggle (like Laguna S 2.1): no map, so off
+        //   sends effort "none" and every other level goes out by its name.
+        // - Ember-1 has Kimi K3's shape: a toggle plus low/high/max.
+        let models = builtin_models();
+        for (id, map) in [
+            (
+                "mistralai/mistral-large-4-0",
+                serde_json::json!({
+                    "off": "none",
+                    "minimal": null,
+                    "low": null,
+                    "medium": null,
+                    "xhigh": null,
+                    "max": null,
+                }),
+            ),
+            ("xiaomi/mimo-v2.6-pro", serde_json::Value::Null),
+            ("xiaomi/mimo-v2.6-flash", serde_json::Value::Null),
+            (
+                "fireworks/ember-1",
+                serde_json::json!({"minimal": null, "medium": null, "xhigh": null}),
+            ),
+        ] {
+            let model = models.iter().find(|m| m.id == id).expect(id);
+            assert!(model.reasoning, "{id}");
+            assert_eq!(
+                serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+                map,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn fireworks_inkling_thinks_through_token_budgets() {
+        // models.dev lists no reasoning options for Fireworks' Inkling
+        // (OpenRouter's Inkling has a none..max effort scale). The row takes
+        // the Fireworks Anthropic template anyway: no map, so every level
+        // stays selectable, and Fireworks turns `budget_tokens` into its
+        // own effort bands.
+        let model = builtin_models()
+            .into_iter()
+            .find(|m| m.id == "accounts/fireworks/models/inkling")
+            .expect("Fireworks Inkling row");
+        assert_eq!(model.api.as_str(), Api::ANTHROPIC_MESSAGES);
+        assert!(model.reasoning);
+        assert!(model.thinking_level_map.is_none());
+        assert_eq!(
+            model.compat,
+            Some(serde_json::json!({
+                "sendSessionAffinityHeaders": true,
+                "supportsEagerToolInputStreaming": false,
+                "supportsCacheControlOnTools": false,
+                "supportsLongCacheRetention": false,
+            }))
+        );
+    }
+
+    #[test]
     fn codex_models_ride_the_chatgpt_backend() {
         // The subscription rows have namespaced ids because cupel's flat id
         // space gives the bare gpt-5.6 ids to the openai provider. They use
