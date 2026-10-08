@@ -551,29 +551,16 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_mistral_mimo_and_ember_keep_their_reasoning_scales() {
+    fn openrouter_mimo_and_ember_keep_their_reasoning_scales() {
         // The whole map, not single keys: an extra xhigh or max key would
         // DISABLE that level. Prices and limits stay out of this test:
         // OpenRouter's prices change within hours, and the generator copies
         // them from models.dev anyway.
-        // - Mistral Large 4 knows only "none" and "high": off sends effort
-        //   "none", every other level clamps to high.
         // - MiMo V2.6 has only a toggle (like Laguna S 2.1): no map, so off
         //   sends effort "none" and every other level goes out by its name.
         // - Ember-1 has Kimi K3's shape: a toggle plus low/high/max.
         let models = builtin_models();
         for (id, map) in [
-            (
-                "mistralai/mistral-large-4-0",
-                serde_json::json!({
-                    "off": "none",
-                    "minimal": null,
-                    "low": null,
-                    "medium": null,
-                    "xhigh": null,
-                    "max": null,
-                }),
-            ),
             ("xiaomi/mimo-v2.6-pro", serde_json::Value::Null),
             ("xiaomi/mimo-v2.6-flash", serde_json::Value::Null),
             (

@@ -21,29 +21,28 @@ use crate::types::{AssistantMessage, StopReason};
 /// Overflow indicators. Multi-part entries require all parts present.
 /// Comments name the provider whose wording each entry matches.
 const OVERFLOW_PATTERNS: &[&[&str]] = &[
-    &["promptistoolong"],                              // Anthropic (token overflow)
-    &["requesttoolarge"],                              // Anthropic (byte overflow, HTTP 413)
-    &["inputistoolongforrequestedmodel"],              // Amazon Bedrock
-    &["exceedsthecontextwindow"],                      // OpenAI (Completions & Responses)
-    &["exceeds", "maximumcontextlength"],              // OpenAI-compatible proxies (LiteLLM)
-    &["inputtokencount", "exceedsthemaximum"],         // Google (Gemini)
-    &["maximumpromptlengthis"],                        // xAI (Grok)
-    &["reducethelengthofthemessages"],                 // Groq
-    &["maximumcontextlengthis", "tokens"],             // OpenRouter (most backends)
-    &["exceeds", "maximumallowedinputlength"],         // OpenRouter/Poolside
-    &["islongerthanthemodelscontextlength"],           // Together AI
-    &["exceedsthelimitof"],                            // GitHub Copilot
-    &["exceedstheavailablecontextsize"],               // llama.cpp server
-    &["greaterthanthecontextlength"],                  // LM Studio
-    &["contextwindowexceedslimit"],                    // MiniMax
-    &["exceededmodeltokenlimit"],                      // Kimi For Coding
-    &["toolargeformodelwith", "maximumcontextlength"], // Mistral
+    &["promptistoolong"],                      // Anthropic (token overflow)
+    &["requesttoolarge"],                      // Anthropic (byte overflow, HTTP 413)
+    &["inputistoolongforrequestedmodel"],      // Amazon Bedrock
+    &["exceedsthecontextwindow"],              // OpenAI (Completions & Responses)
+    &["exceeds", "maximumcontextlength"],      // OpenAI-compatible proxies (LiteLLM)
+    &["inputtokencount", "exceedsthemaximum"], // Google (Gemini)
+    &["maximumpromptlengthis"],                // xAI (Grok)
+    &["reducethelengthofthemessages"],         // Groq
+    &["maximumcontextlengthis", "tokens"],     // OpenRouter (most backends)
+    &["exceeds", "maximumallowedinputlength"], // OpenRouter/Poolside
+    &["islongerthanthemodelscontextlength"],   // Together AI
+    &["exceedsthelimitof"],                    // GitHub Copilot
+    &["exceedstheavailablecontextsize"],       // llama.cpp server
+    &["greaterthanthecontextlength"],          // LM Studio
+    &["contextwindowexceedslimit"],            // MiniMax
+    &["exceededmodeltokenlimit"],              // Kimi For Coding
     &["prompthas", "tokensbuttheconfiguredcontextsizeis"], // DS4 server
-    &["modelcontextwindowexceeded"],                   // Bedrock/z.ai finish reason as text
-    &["prompttoolongexceeded", "contextlength"],       // Ollama explicit overflow
-    &["contextlengthexceeded"],                        // generic fallback
-    &["toomanytokens"],                                // generic fallback
-    &["tokenlimitexceeded"],                           // generic fallback
+    &["modelcontextwindowexceeded"],           // Bedrock/z.ai finish reason as text
+    &["prompttoolongexceeded", "contextlength"], // Ollama explicit overflow
+    &["contextlengthexceeded"],                // generic fallback
+    &["toomanytokens"],                        // generic fallback
+    &["tokenlimitexceeded"],                   // generic fallback
 ];
 
 /// Messages matching these are not overflow even when an overflow pattern

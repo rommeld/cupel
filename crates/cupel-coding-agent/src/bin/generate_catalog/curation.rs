@@ -385,7 +385,6 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("meta/muse-spark-1.3", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling", Thinking::FromEffort),
             openrouter("poolside/laguna-s-2.1", Thinking::FromEffort),
-            openrouter("mistralai/mistral-large-4-0", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-pro", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-flash", Thinking::FromEffort),
             openrouter("fireworks/ember-1", Thinking::FromEffort),
