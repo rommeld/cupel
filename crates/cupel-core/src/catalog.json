@@ -44,7 +44,7 @@
     "cost": {
       "input": 2.0,
       "output": 10.0,
-      "cachedRead": 0.2,
+      "cachedRead": 0.1,
       "cachedWrite": 2.5
     },
     "contextWindow": 1000000,
@@ -243,7 +243,7 @@
       "cachedRead": 0.3,
       "cachedWrite": 3.75
     },
-    "contextWindow": 1000000,
+    "contextWindow": 200000,
     "maxTokens": 64000
   },
   {
@@ -566,7 +566,7 @@
     "cost": {
       "input": 2.0,
       "output": 10.0,
-      "cachedRead": 0.2,
+      "cachedRead": 0.1,
       "cachedWrite": 2.5
     },
     "contextWindow": 1000000,
@@ -935,9 +935,9 @@
       "image"
     ],
     "cost": {
-      "input": 1.39,
-      "output": 14.0,
-      "cachedRead": 0.46,
+      "input": 0.62,
+      "output": 12.3,
+      "cachedRead": 0.43,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -964,9 +964,9 @@
       "text"
     ],
     "cost": {
-      "input": 0.07,
-      "output": 7.0,
-      "cachedRead": 0.065,
+      "input": 0.059,
+      "output": 3.39,
+      "cachedRead": 0.048,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -1023,9 +1023,9 @@
       "text"
     ],
     "cost": {
-      "input": 0.2088,
-      "output": 0.4176,
-      "cachedRead": 0.0174,
+      "input": 0.29232,
+      "output": 0.58464,
+      "cachedRead": 0.02436,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -1051,13 +1051,13 @@
       "text"
     ],
     "cost": {
-      "input": 0.4,
-      "output": 5.0,
-      "cachedRead": 0.36,
+      "input": 0.66,
+      "output": 1.98,
+      "cachedRead": 0.022,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 943718,
+    "maxTokens": 393216,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -1079,9 +1079,9 @@
       "text"
     ],
     "cost": {
-      "input": 0.0152,
+      "input": 0.006,
       "output": 1.28,
-      "cachedRead": 0.0152,
+      "cachedRead": 0.006,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -1416,13 +1416,13 @@
       "image"
     ],
     "cost": {
-      "input": 0.95,
+      "input": 1.0,
       "output": 4.05,
-      "cachedRead": 0.16,
+      "cachedRead": 0.17,
       "cachedWrite": 0.0
     },
     "contextWindow": 524288,
-    "maxTokens": 262144,
+    "maxTokens": 471859,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
