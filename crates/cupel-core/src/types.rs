@@ -158,7 +158,6 @@ pub enum UserContentBody {
 #[serde(rename_all = "camelCase")]
 pub struct UserMessage {
     pub content: UserContentBody,
-    /// Unix timestamp in milliseconds.
     pub timestamp: u64,
 }
 

@@ -467,9 +467,7 @@ pub async fn start_device_auth(http: &reqwest::Client) -> Result<DeviceAuth, OAu
 
 #[derive(Debug, PartialEq, Eq)]
 enum DevicePoll {
-    /// The user has not finished logging on in the browser.
     Pending,
-    /// RFC 8628 back-pressure.
     SlowDown,
     /// The code arrived, plus the verifier for the exchange.
     Complete {
