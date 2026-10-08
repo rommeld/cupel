@@ -3,6 +3,18 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.26.0] - 2026-10-08
+
+- feat(tui): use white italics and double-chevron task prompts
+- chore(session): use neutral slug fixtures and trim label docs
+- docs(core): trim device-auth polling and timestamp comments
+- Remove Mistral from catalog and overflow handling
+- feat(catalog): take GPT-6.1 Sol from models.dev, add it on OpenRouter
+- chore(catalog): sync prices and limits from models.dev
+- feat(catalog): add Mistral Large 4, MiMo V2.6, Ember-1 and Fireworks Inkling
+- chore(catalog): sync Sonnet and OpenRouter rows from models.dev
+- feat(anthropic): replace Haiku 4.5 with Haiku 5.5
+
 ## [v0.25.0] - 2026-10-06
 
 - feat(spinoff): commit messages for /spinoff merge
