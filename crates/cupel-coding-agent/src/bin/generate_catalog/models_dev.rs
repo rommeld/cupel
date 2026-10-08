@@ -79,7 +79,7 @@ pub struct Cost {
     pub cache_read: f64,
     /// Absent for providers that do not bill cache writes (Fireworks).
     pub cache_write: f64,
-    /// Long-context price tiers (e.g. GPT-5.6 above 272k prompt tokens).
+    /// Long-context price tiers (e.g. Haiku 5.5 above 100k prompt tokens).
     pub tiers: Vec<RawTier>,
 }
 
@@ -221,6 +221,24 @@ mod tests {
                     "cost": {"input": 2, "output": 10, "cache_read": 0.2, "cache_write": 2.5},
                     "limit": {"context": 1000000, "output": 128000}
                 },
+                "claude-haiku-5-5": {
+                    "name": "Claude Haiku 5.5",
+                    "reasoning": true,
+                    "reasoning_options": [
+                        {"type": "toggle"},
+                        {"type": "effort", "values": ["low", "medium", "high", "xhigh", "max"]}
+                    ],
+                    "temperature": false,
+                    "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]},
+                    "cost": {
+                        "input": 0.1, "output": 0.5, "cache_read": 0.01, "cache_write": 0.125,
+                        "tiers": [{
+                            "input": 0.5, "output": 2.5, "cache_read": 0.05, "cache_write": 0.625,
+                            "tier": {"type": "context", "size": 100000}
+                        }]
+                    },
+                    "limit": {"context": 1000000, "output": 128000}
+                },
                 "paint-o-matic": {"name": "Painter", "cost": null, "modalities": {"input": ["image"]}}
             }
         },
@@ -232,7 +250,7 @@ mod tests {
         // "weird-provider" is malformed, but we never asked for it.
         let catalog = parse_wanted(FIXTURE, &["anthropic"]).expect("wanted providers parse");
         assert_eq!(catalog.len(), 1);
-        assert_eq!(catalog["anthropic"].models.len(), 2);
+        assert_eq!(catalog["anthropic"].models.len(), 3);
     }
 
     #[test]
@@ -276,6 +294,32 @@ mod tests {
             .copied()
             .map(|(level, value)| (level.to_string(), value.map(str::to_string)))
             .collect()
+    }
+
+    #[test]
+    fn haiku55_parses_the_toggle_effort_and_100k_price_tier() {
+        let catalog = parse_wanted(FIXTURE, &["anthropic"]).expect("fixture parses");
+        let entry = catalog["anthropic"]
+            .model("anthropic", "claude-haiku-5-5")
+            .expect("Haiku entry parses");
+        assert!(!entry.temperature);
+        assert_eq!(entry.limit.context, 1_000_000);
+        assert_eq!(entry.limit.output, 128_000);
+        assert_eq!(entry.limit.input, None);
+        assert_eq!(
+            thinking_level_map_from_effort(&entry.reasoning_options),
+            Some(map_of(&[("minimal", None)]))
+        );
+        let cost = entry.cost.expect("pricing");
+        assert!((cost.input - 0.1).abs() < f64::EPSILON);
+        assert!((cost.output - 0.5).abs() < f64::EPSILON);
+        assert_eq!(cost.tiers.len(), 1);
+        let tier = &cost.tiers[0];
+        assert_eq!(tier.tier.size, 100_000);
+        assert!((tier.input - 0.5).abs() < f64::EPSILON);
+        assert!((tier.output - 2.5).abs() < f64::EPSILON);
+        assert!((tier.cache_read - 0.05).abs() < f64::EPSILON);
+        assert!((tier.cache_write - 0.625).abs() < f64::EPSILON);
     }
 
     #[test]

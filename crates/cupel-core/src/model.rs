@@ -251,4 +251,42 @@ mod tests {
         assert_close(usage.cost.input, 4.0 * 200_000.0 / PER_M);
         assert_close(usage.cost.cache_read, 0.4 * 100_000.0 / PER_M);
     }
+
+    #[test]
+    fn haiku55_prices_the_whole_request_by_prompt_length() {
+        let model = crate::catalog::builtin_models()
+            .into_iter()
+            .find(|m| m.id == "claude-haiku-5-5")
+            .expect("Haiku 5.5 in catalog");
+        for (prompt_tokens, multiplier) in [(99_999, 1.0), (100_000, 1.0), (100_001, 5.0)] {
+            // Cache reads and both write durations count as prompt tokens;
+            // output tokens do not push an otherwise cheap prompt over 100k.
+            let mut usage = Usage {
+                input: prompt_tokens - 60_000,
+                output: 128_000,
+                cache_read: 40_000,
+                cache_write: 20_000,
+                cache_write1h: Some(5_000),
+                ..Usage::default()
+            };
+            calculate_cost(&model, &mut usage);
+            assert_close(
+                usage.cost.input,
+                0.1 * multiplier * usage.input as f64 / PER_M,
+            );
+            assert_close(usage.cost.output, 0.5 * multiplier * 128_000.0 / PER_M);
+            assert_close(usage.cost.cache_read, 0.01 * multiplier * 40_000.0 / PER_M);
+            assert_close(
+                usage.cost.cache_write,
+                multiplier * (0.125 * 15_000.0 + 0.2 * 5_000.0) / PER_M,
+            );
+            assert_close(
+                usage.cost.total,
+                usage.cost.input
+                    + usage.cost.output
+                    + usage.cost.cache_read
+                    + usage.cost.cache_write,
+            );
+        }
+    }
 }

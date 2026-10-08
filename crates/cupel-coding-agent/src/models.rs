@@ -385,7 +385,7 @@ mod tests {
         );
         assert!(catalog.iter().any(|m| m.id == "local-model"));
         // Builtins that nobody touched are still there.
-        assert!(catalog.iter().any(|m| m.id == "claude-haiku-4-5"));
+        assert!(catalog.iter().any(|m| m.id == "claude-haiku-5-5"));
     }
 
     #[test]

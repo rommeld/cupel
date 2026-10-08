@@ -44,9 +44,9 @@ pub enum Thinking {
 pub enum Window {
     /// models.dev's `limit.context` verbatim.
     ModelsDev,
-    /// OpenAI's long-context family (GPT-5.6, GPT-6): the planning
-    /// window is the long-context price tier's threshold, and models.dev's
-    /// `limit.input` becomes `maxContextWindow`.
+    /// Models with long-context pricing (GPT-5.6, GPT-6, Haiku 5.5): the
+    /// planning window is the price tier's threshold, and models.dev's
+    /// `limit.input` (or `limit.context`) becomes `maxContextWindow`.
     PriceTier,
 }
 
@@ -161,7 +161,7 @@ const fn anthropic_adaptive(id: &'static str) -> Curated {
 }
 
 /// Adaptive Claude models that run the preserved-thinking check (Opus 5.5,
-/// Sonnet 5.5): a thinking block is only valid in the unchanged
+/// Sonnet 5.5, Haiku 5.5): a thinking block is only valid in the unchanged
 /// conversation that produced it. Accounts created on or after 2026-08-31
 /// get a 400 for a replayed block after an edit, and cupel edits history
 /// (compaction, the date line of a resumed session). "drop_block" makes
@@ -270,7 +270,13 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             anthropic_adaptive("claude-opus-5"),
             anthropic_adaptive("claude-fable-5"),
             anthropic_adaptive("claude-fable-5-1"),
-            anthropic("claude-haiku-4-5", Some("Claude Haiku 4.5")),
+            // Haiku accepts `disabled` (unlike Sonnet 5.5), so derive its
+            // map from the toggle/effort list. Plan below the 100k price
+            // boundary; the full 1M window remains an explicit opt-in.
+            Curated {
+                window: Window::PriceTier,
+                ..anthropic_preserved("claude-haiku-5-5")
+            },
             anthropic("claude-sonnet-4-6", None),
             anthropic("claude-sonnet-4-5", Some("Claude Sonnet 4.5")),
         ],

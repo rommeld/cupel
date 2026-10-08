@@ -113,7 +113,7 @@ mod tests {
         let models = builtin_models();
         for id in [
             "claude-sonnet-5",
-            "claude-haiku-4-5",
+            "claude-haiku-5-5",
             "claude-sonnet-4-5",
             "gpt-6-astra",
             "codex/gpt-6-astra",
@@ -474,6 +474,52 @@ mod tests {
         );
         assert_eq!(model.context_window, 1_000_000);
         assert_eq!(model.max_tokens, 128_000);
+    }
+
+    #[test]
+    fn haiku55_row_is_adaptive_and_plans_against_the_100k_price_tier() {
+        let models = builtin_models();
+        assert!(!models.iter().any(|m| m.id == "claude-haiku-4-5"));
+        let model = models
+            .iter()
+            .find(|m| m.id == "claude-haiku-5-5")
+            .expect("claude-haiku-5-5 in catalog");
+        assert_eq!(model.name, "Claude Haiku 5.5");
+        assert_eq!(model.provider.as_str(), Provider::ANTHROPIC);
+        assert_eq!(model.api.as_str(), Api::ANTHROPIC_MESSAGES);
+        assert!(model.reasoning);
+        assert_eq!(
+            model.compat,
+            Some(serde_json::json!({
+                "forceAdaptiveThinking": true,
+                "supportsTemperature": false,
+                "prefixMismatchBehavior": "drop_block",
+            }))
+        );
+        // Haiku's toggle sends `disabled`; Sonnet's `between_tools` is a 400.
+        assert_eq!(
+            serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+            serde_json::json!({"minimal": null})
+        );
+        assert_eq!(model.context_window, 100_000);
+        assert_eq!(model.max_context_window, Some(1_000_000));
+        assert_eq!(model.max_tokens, 128_000);
+        assert_eq!(
+            model.cost,
+            crate::types::ModelCost {
+                input: 0.1,
+                output: 0.5,
+                cached_read: 0.01,
+                cached_write: 0.125,
+                tiers: Some(vec![crate::types::CostTier {
+                    context_over: 100_000,
+                    input: 0.5,
+                    output: 2.5,
+                    cached_read: 0.05,
+                    cached_write: 0.625,
+                }]),
+            }
+        );
     }
 
     #[test]

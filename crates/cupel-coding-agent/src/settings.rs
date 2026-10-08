@@ -671,7 +671,7 @@ mod tests {
             r#"{"model": {
                 "default": {"provider": "openai-codex", "model": "codex/gpt-6-sol",
                             "thinkingLevel": "xhigh"},
-                "fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                "fast": {"provider": "anthropic", "model": "claude-haiku-5-5",
                          "thinkingLevel": "off", "prompt": "Answer briefly."}
             }}"#,
         )
@@ -691,13 +691,13 @@ mod tests {
     #[test]
     fn presets_without_a_required_field_or_with_an_unknown_level_are_rejected() {
         let missing = serde_json::from_str::<Settings>(
-            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5"}}}"#,
+            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-5-5"}}}"#,
         )
         .unwrap_err();
         assert!(missing.to_string().contains("thinkingLevel"), "{missing}");
 
         let typo = serde_json::from_str::<Settings>(
-            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-5-5",
                                    "thinkingLevel": "hihg"}}}"#,
         )
         .unwrap_err();
@@ -709,7 +709,7 @@ mod tests {
     fn save_keeps_presets_and_injects_no_empty_model_section() {
         let home = temp_root("save-presets");
         let written = r#"{"model": {"fast": {"provider": "anthropic",
-            "model": "claude-haiku-4-5", "thinkingLevel": "xhigh", "prompt": "Be brief."}}}"#;
+            "model": "claude-haiku-5-5", "thinkingLevel": "xhigh", "prompt": "Be brief."}}}"#;
         std::fs::write(home.join("settings.json"), written).unwrap();
         save_provider_key(Some(&home), "anthropic", "sk-a").unwrap();
         let saved = load_settings(&home.join("settings.json")).unwrap();
@@ -754,12 +754,12 @@ mod tests {
         let catalog = cupel_core::catalog::builtin_models();
         let mut preset = Preset {
             provider: "anthropic".into(),
-            model: "claude-haiku-4-5".into(),
+            model: "claude-haiku-5-5".into(),
             thinking_level: ThinkingSetting::Low,
             prompt: None,
         };
         let found = preset.find_model(&catalog).map(|model| model.id.as_str());
-        assert_eq!(found, Some("claude-haiku-4-5"));
+        assert_eq!(found, Some("claude-haiku-5-5"));
 
         // Right id, wrong provider: not found.
         preset.provider = "openrouter".into();

@@ -118,7 +118,7 @@ A preset names a model, a thinking level, and optionally an additional system pr
     },
     "fast": {
       "provider": "anthropic",
-      "model": "claude-haiku-5",
+      "model": "claude-haiku-5-5",
       "thinkingLevel": "medium",
       "prompt": "Answer in at most three sentences."
     }

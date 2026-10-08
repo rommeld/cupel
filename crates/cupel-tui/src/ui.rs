@@ -2162,7 +2162,7 @@ mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        assert_eq!(app.input.text(), "/model claude-haiku-4-5 ");
+        assert_eq!(app.input.text(), "/model claude-haiku-5-5 ");
         assert!(app.pending_prompt.is_none(), "accept must not submit");
 
         // Same flow for /thinking.
@@ -2259,7 +2259,7 @@ mod tests {
         let mut app = test_app();
         app.meta.settings = serde_json::from_str(
             r#"{"model": {
-                "fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                "fast": {"provider": "anthropic", "model": "claude-haiku-5-5",
                          "thinkingLevel": "low", "prompt": "Answer in one sentence."},
                 "deep": {"provider": "anthropic", "model": "claude-sonnet-5",
                          "thinkingLevel": "xhigh"}
@@ -2286,7 +2286,7 @@ mod tests {
         run_command(&mut app, "/preset");
         assert!(has_notice(
             &app,
-            "fast  - anthropic/claude-haiku-4-5, thinking low, + prompt"
+            "fast  - anthropic/claude-haiku-5-5, thinking low, + prompt"
         ));
         assert!(has_notice(
             &app,
@@ -2296,7 +2296,7 @@ mod tests {
         // One command switches model, thinking level, and prompt.
         run_command(&mut app, "/preset fast");
         let state = app.agent.state();
-        assert_eq!(state.model.id, "claude-haiku-4-5");
+        assert_eq!(state.model.id, "claude-haiku-5-5");
         assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
         assert_eq!(state.system_prompt, "BASE\n\nAnswer in one sentence.");
         assert_eq!(app.meta.provider, "anthropic");
@@ -2531,7 +2531,7 @@ mod tests {
         let mut app = test_app_with_home(&root, "cupel-current");
         std::fs::write(
             root.join("home/settings.json"),
-            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-5-5",
                                    "thinkingLevel": "low", "prompt": "PRESET RULES"}}}"#,
         )
         .unwrap();
@@ -3270,7 +3270,7 @@ mod tests {
         let repo = git_repo("preset");
         let mut origin = test_app_in(repo.to_str().unwrap());
         origin.meta.settings = serde_json::from_str(
-            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+            r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-5-5",
                 "thinkingLevel": "low", "prompt": "Answer in one sentence."}}}"#,
         )
         .unwrap();
@@ -3292,7 +3292,7 @@ mod tests {
         };
         sessions.spinoff(fast).await;
         let state = sessions.active().agent.state();
-        assert_eq!(state.model.id, "claude-haiku-4-5");
+        assert_eq!(state.model.id, "claude-haiku-5-5");
         assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
         assert!(state.system_prompt.ends_with("\n\nAnswer in one sentence."));
     }
@@ -3660,7 +3660,7 @@ mod tests {
             let mut origin = test_app_in(repo.to_str().unwrap());
             origin.meta.home = Some(home.clone());
             origin.meta.settings = serde_json::from_str(
-                r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-4-5",
+                r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-5-5",
                     "thinkingLevel": "low"}}}"#,
             )
             .unwrap();
@@ -3705,7 +3705,7 @@ mod tests {
         // The history replays its last answer, a failure here, so the row shows ✗.
         assert_eq!(auth.status(), crate::app::Status::Failed);
         // The model of its last answer, the thinking level of the origin.
-        assert_eq!(auth.agent.state().model.id, "claude-haiku-4-5");
+        assert_eq!(auth.agent.state().model.id, "claude-haiku-5-5");
         let origin_thinking = sessions.list[0].app.agent.state().thinking_level;
         assert_eq!(auth.agent.state().thinking_level, origin_thinking);
         assert!(app("docs").agent.state().messages.is_empty());
@@ -3768,7 +3768,7 @@ mod tests {
             &mut first
         {
             answer.provider = cupel_core::types::Provider::from("anthropic");
-            answer.model = "claude-haiku-4-5".to_string();
+            answer.model = "claude-haiku-5-5".to_string();
         }
         let last = assistant_message("last", cupel_core::types::StopReason::Stop, 0);
         let text = format!(

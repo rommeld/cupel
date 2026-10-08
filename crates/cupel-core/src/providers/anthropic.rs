@@ -59,10 +59,10 @@ struct AnthropicCompat {
     /// a session's requests to the same cache shard. Without it requests
     /// still succeed, but prompt-cache hit rates suffer.
     send_session_affinity_headers: bool,
-    /// Preserved thinking (Opus 5.5, Sonnet 5.5): every thinking block is
-    /// bound to the conversation that produced it (system prompt, tools,
-    /// earlier messages). After an edit there (a resumed session's new date
-    /// line, a compaction), the API rejects the replayed block with a 400.
+    /// Preserved thinking (Opus 5.5, Sonnet 5.5, Haiku 5.5): every thinking
+    /// block is bound to the conversation that produced it (system prompt,
+    /// tools, earlier messages). After an edit there (a resumed session's
+    /// new date line, a compaction), the API rejects the replayed block with a 400.
     /// `"drop_block"` asks it to drop such blocks instead. Sent as
     /// `thinking.block_binding.prefix_mismatch_behavior`, which only adaptive
     /// and budget thinking accept, together with the thinking-binding beta.
@@ -1186,7 +1186,7 @@ mod tests {
                 .unwrap();
             writer.write_all(response.as_bytes()).await.unwrap();
         });
-        let mut model = catalog_model("claude-haiku-4-5");
+        let mut model = catalog_model("claude-haiku-5-5");
         model.base_url = format!("http://{address}");
         let options = StreamOptions {
             api_key: Some("test".into()),
@@ -1307,8 +1307,8 @@ mod tests {
             temperature: Some(0.2),
             ..StreamOptions::default()
         };
-        let haiku = catalog_model("claude-haiku-4-5");
-        let body = body_for(&haiku, &options);
+        let sonnet = catalog_model("claude-sonnet-4-5");
+        let body = body_for(&sonnet, &options);
         assert_eq!(body["thinking"], json!({"type": "disabled"}));
         assert_eq!(body["temperature"], json!(0.2));
 
@@ -1480,53 +1480,75 @@ mod tests {
     }
 
     #[test]
-    fn sonnet55_levels_map_to_adaptive_effort() {
-        // Every other level is plain adaptive thinking: Sonnet 5.5 answers
-        // `budget_tokens` with a 400, like Sonnet 5 and Opus 5.5.
-        let sonnet = catalog_model("claude-sonnet-5-5");
-        for (level, effort) in [
-            // No "minimal" effort upstream: the map's null entry falls
-            // back to the provider default, which is "low".
-            (ThinkingLevel::Minimal, "low"),
-            (ThinkingLevel::Low, "low"),
-            (ThinkingLevel::Medium, "medium"),
-            (ThinkingLevel::High, "high"),
-            (ThinkingLevel::XHigh, "xhigh"),
-            (ThinkingLevel::Max, "max"),
-        ] {
-            let options = StreamOptions {
-                reasoning: Some(level),
+    fn haiku55_off_disables_thinking_without_temperature() {
+        // Unlike Sonnet 5.5, Haiku accepts `disabled`, not `between_tools`.
+        // No effort override leaves the API default (medium), safely below
+        // the xhigh/max efforts that reject disabled thinking.
+        let haiku = catalog_model("claude-haiku-5-5");
+        let body = body_for(
+            &haiku,
+            &StreamOptions {
+                temperature: Some(0.2),
                 ..StreamOptions::default()
-            };
-            let body = body_for(&sonnet, &options);
-            assert_eq!(
-                body["thinking"],
-                json!({
-                    "type": "adaptive",
-                    "display": "summarized",
-                    "block_binding": {"prefix_mismatch_behavior": "drop_block"},
-                }),
-                "{level:?}"
-            );
-            assert_eq!(
-                body["output_config"],
-                json!({"effort": effort}),
-                "{level:?}"
-            );
+            },
+        );
+        assert_eq!(body["thinking"], json!({"type": "disabled"}));
+        assert!(body.get("output_config").is_none(), "{body}");
+        assert!(body.get("temperature").is_none(), "{body}");
+    }
+
+    #[test]
+    fn sonnet55_and_haiku55_levels_map_to_adaptive_effort() {
+        // Both models reject `budget_tokens` and need summarized display
+        // plus preserved-thinking controls, like Opus 5.5.
+        for id in ["claude-sonnet-5-5", "claude-haiku-5-5"] {
+            let model = catalog_model(id);
+            for (level, effort) in [
+                // No "minimal" effort upstream: the map's null entry falls
+                // back to the provider default, which is "low".
+                (ThinkingLevel::Minimal, "low"),
+                (ThinkingLevel::Low, "low"),
+                (ThinkingLevel::Medium, "medium"),
+                (ThinkingLevel::High, "high"),
+                (ThinkingLevel::XHigh, "xhigh"),
+                (ThinkingLevel::Max, "max"),
+            ] {
+                let options = StreamOptions {
+                    reasoning: Some(level),
+                    temperature: Some(0.2),
+                    ..StreamOptions::default()
+                };
+                let body = body_for(&model, &options);
+                assert_eq!(
+                    body["thinking"],
+                    json!({
+                        "type": "adaptive",
+                        "display": "summarized",
+                        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+                    }),
+                    "{id} {level:?}"
+                );
+                assert_eq!(
+                    body["output_config"],
+                    json!({"effort": effort}),
+                    "{id} {level:?}"
+                );
+                assert!(body.get("temperature").is_none(), "{id}: {body}");
+            }
         }
     }
 
     #[test]
     fn preserved_thinking_binds_adaptive_requests_only() {
-        // Opus 5.5 and Sonnet 5.5 run the preserved-thinking check, so
-        // their adaptive requests ask the API to drop blocks that a history
-        // edit invalidated, plus the beta header that field needs (the
-        // field without the header is a 400 of its own).
+        // Opus 5.5, Sonnet 5.5 and Haiku 5.5 run the preserved-thinking check.
+        // Their adaptive requests ask the API to drop blocks that a history
+        // edit invalidated, plus the beta header that field needs (the field
+        // without the header is a 400 of its own).
         let medium = StreamOptions {
             reasoning: Some(ThinkingLevel::Medium),
             ..StreamOptions::default()
         };
-        for id in ["claude-opus-5-5", "claude-sonnet-5-5"] {
+        for id in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] {
             let model = catalog_model(id);
             let body = body_for(&model, &medium);
             assert_eq!(
@@ -1536,12 +1558,13 @@ mod tests {
             );
             let betas = request_betas(&anthropic_compat(&model), &hello(), &body);
             assert!(betas.contains(&THINKING_BINDING_BETA), "{id}: {betas:?}");
+            assert_eq!(betas, vec![THINKING_BINDING_BETA], "{id}");
         }
 
-        // Off never carries it: `between_tools` rejects the field (Sonnet
-        // 5.5), and an omitted `thinking` has no object to put it in (Opus
-        // 5.5). No field, no header; the agent loop covers these requests.
-        for id in ["claude-opus-5-5", "claude-sonnet-5-5"] {
+        // Off never carries it: `between_tools` and `disabled` reject the
+        // field, and omitted `thinking` has no object to put it in. No
+        // field, no header; the agent loop covers these requests.
+        for id in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] {
             let model = catalog_model(id);
             let body = body_for(&model, &StreamOptions::default());
             assert!(body.pointer("/thinking/block_binding").is_none(), "{id}");

@@ -169,24 +169,42 @@
     }
   },
   {
-    "id": "claude-haiku-4-5",
-    "name": "Claude Haiku 4.5",
+    "id": "claude-haiku-5-5",
+    "name": "Claude Haiku 5.5",
     "api": "anthropic-messages",
     "provider": "anthropic",
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null
+    },
     "input": [
       "text",
       "image"
     ],
     "cost": {
-      "input": 1.0,
-      "output": 5.0,
-      "cachedRead": 0.1,
-      "cachedWrite": 1.25
+      "input": 0.1,
+      "output": 0.5,
+      "cachedRead": 0.01,
+      "cachedWrite": 0.125,
+      "tiers": [
+        {
+          "contextOver": 100000,
+          "input": 0.5,
+          "output": 2.5,
+          "cachedRead": 0.05,
+          "cachedWrite": 0.625
+        }
+      ]
     },
-    "contextWindow": 200000,
-    "maxTokens": 64000
+    "contextWindow": 100000,
+    "maxContextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "prefixMismatchBehavior": "drop_block",
+      "supportsTemperature": false
+    }
   },
   {
     "id": "claude-sonnet-4-6",
