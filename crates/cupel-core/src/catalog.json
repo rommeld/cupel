@@ -776,6 +776,32 @@
     }
   },
   {
+    "id": "accounts/fireworks/models/inkling",
+    "name": "Inkling",
+    "api": "anthropic-messages",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.0,
+      "output": 4.05,
+      "cachedRead": 0.17,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 1048576,
+    "compat": {
+      "sendSessionAffinityHeaders": true,
+      "supportsCacheControlOnTools": false,
+      "supportsEagerToolInputStreaming": false,
+      "supportsLongCacheRetention": false
+    }
+  },
+  {
     "id": "accounts/fireworks/models/glm-5p3",
     "name": "GLM 5.3",
     "api": "openai-completions",
@@ -1485,6 +1511,115 @@
     },
     "contextWindow": 1048576,
     "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "mistralai/mistral-large-4-0",
+    "name": "Mistral Large 4",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "low": null,
+      "max": null,
+      "medium": null,
+      "minimal": null,
+      "off": "none",
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.68,
+      "output": 2.09,
+      "cachedRead": 0.07,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "xiaomi/mimo-v2.6-pro",
+    "name": "MiMo-V2.6-Pro",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.435,
+      "output": 0.87,
+      "cachedRead": 0.0036,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1050000,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "xiaomi/mimo-v2.6-flash",
+    "name": "MiMo-V2.6-Flash",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.14,
+      "output": 0.28,
+      "cachedRead": 0.0028,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1050000,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "fireworks/ember-1",
+    "name": "Ember-1",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3.0,
+      "output": 15.0,
+      "cachedRead": 0.3,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
