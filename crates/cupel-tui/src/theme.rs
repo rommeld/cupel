@@ -16,20 +16,18 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
-/// The user's task opening a turn: bright and bold, the "> " prefix rides
+/// The user's task opening a turn: bright, the ">> " prefix rides
 /// in transcript.rs.
 pub const TASK: Style = Style::new().fg(Color::LightGreen);
-/// Mid-turn assistant prose (commentary between tool calls): plain.
-pub const ASSISTANT: Style = Style::new();
+/// Mid-turn assistant prose (commentary between tool calls): white and italic.
+pub const ASSISTANT: Style = Style::new().fg(Color::White).add_modifier(Modifier::ITALIC);
 /// The turn's final answer: the emphasized counterpart to `TASK`. Magenta
 /// because green (task), cyan (tools), red (errors), and yellow
 /// (notices) are taken and bold alone is too subtle next to plain
 /// prose.
 pub const ANSWER: Style = Style::new().fg(Color::Magenta);
-/// Model reasoning: present but visually receded (M3 tunes this).
-pub const REASONING: Style = Style::new()
-    .fg(Color::DarkGray)
-    .add_modifier(Modifier::ITALIC);
+/// Model reasoning and context summaries: white and italic.
+pub const REASONING: Style = Style::new().fg(Color::White).add_modifier(Modifier::ITALIC);
 /// A tool call header (`$ cargo test`, `edite src/x.rs`).
 pub const TOOL_HEADER: Style = Style::new().fg(Color::Cyan);
 /// De-emphasized detail lines: pending markers, ok tool output, overflow

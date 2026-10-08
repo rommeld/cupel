@@ -14,8 +14,6 @@ pub struct InputState {
     history: Vec<String>,
     /// Current position while browsing history (`None` = editing new input).
     history_index: Option<usize>,
-    /// What was being typed before history browsing started, restored when
-    /// the user navigates past the newest entry.
     stash: String,
 }
 

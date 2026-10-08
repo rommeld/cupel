@@ -252,7 +252,7 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     match cell {
         Cell::User { text } => {
-            push_wrapped(&mut out, &format!("> {text}"), width, theme::TASK);
+            push_wrapped(&mut out, &format!(">> {text}"), width, theme::TASK);
         }
         Cell::Assistant { text } => {
             // Assistant prose is markdown; the base style keeps the cell
@@ -526,6 +526,22 @@ mod tests {
             panic!("expected assistant cell");
         };
         assert_eq!(text, "Hello");
+    }
+
+    #[test]
+    fn assistant_prose_is_white_and_italic() {
+        let mut transcript = Transcript::default();
+        transcript.append_assistant("Checking **the code** now.");
+        let rendered = transcript.to_lines(80, None);
+        assert_eq!(line_text(&rendered.lines[0]), "Checking the code now.");
+        for span in &rendered.lines[0].spans {
+            assert_eq!(span.style.fg, Some(ratatui::style::Color::White));
+            assert!(
+                span.style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::ITALIC)
+            );
+        }
     }
 
     #[test]

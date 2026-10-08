@@ -573,10 +573,10 @@ mod tests {
             text: "the answer".into(),
         });
 
-        let task = style_of(&mut app, "> the task");
+        let task = style_of(&mut app, ">> the task");
         assert_eq!(task.fg, Some(Color::LightGreen));
 
-        assert_eq!(style_of(&mut app, "pondering").fg, Some(Color::DarkGray));
+        assert_eq!(style_of(&mut app, "pondering").fg, Some(Color::White));
 
         let answer = style_of(&mut app, "the answer");
         assert_eq!(answer.fg, Some(Color::Magenta));
@@ -1827,7 +1827,7 @@ mod tests {
         assert!(screen.contains("fix the retry backoff"), "{screen}");
         assert_eq!(
             style_of(&mut app, "fix the retry backoff").fg,
-            Some(Color::DarkGray)
+            Some(Color::White)
         );
     }
 
@@ -2668,13 +2668,13 @@ mod tests {
                 .position(|row| row.contains(needle))
                 .unwrap_or_else(|| panic!("{needle:?} missing:\n{screen}"))
         };
-        assert!(row_of("> task") < row_of("let me look"));
+        assert!(row_of(">> task") < row_of("let me look"));
         assert!(row_of("let me look") < row_of("read src/main.rs"));
         assert!(row_of("read src/main.rs") < row_of("found it"));
         // ...and the padding keeps every line off the frame: border, one
         // blank column, then text.
-        let row = screen.lines().nth(row_of("> task")).unwrap();
-        assert!(row.starts_with("│ > task"), "{row:?}");
+        let row = screen.lines().nth(row_of(">> task")).unwrap();
+        assert!(row.starts_with("│ >> task"), "{row:?}");
     }
 
     #[test]
