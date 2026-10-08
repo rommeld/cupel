@@ -287,6 +287,11 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models: &[
             openai("gpt-6-astra", None),
             openai("gpt-6-sol", None),
+            // Unlike Sol and Luna, GPT-6.1 Sol has no "none" effort (OpenAI's
+            // model page: "none" and "minimal" are not supported). The
+            // derived map therefore gives off -> null, and the provider
+            // leaves `reasoning` out, as it does for Astra.
+            openai("gpt-6.1-sol", None),
             openai("gpt-6-luna", None),
             openai("gpt-5.6-sol", Some("GPT-5.6 Solar")),
             openai("gpt-5.6-luna", None),
@@ -374,6 +379,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("google/gemini-3.8-flash", Thinking::FromEffort),
             openrouter_openai("openai/gpt-6-astra"),
             openrouter_openai("openai/gpt-6-sol"),
+            openrouter_openai("openai/gpt-6.1-sol"),
             openrouter_openai("openai/gpt-6-luna"),
             openrouter("meta/muse-spark-1.3", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling", Thinking::FromEffort),
@@ -435,8 +441,8 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         temperature: false,
     },
     // The model card lists the same standard input/output prices as Sol
-    // but $0.10/M cached input. Codex limits and effort scale inherit Sol's
-    // pinned settings until the backend publishes separate metadata.
+    // but $0.10/M cached input. Codex CLI's models.json gives GPT-6.1 Sol
+    // the same limits and effort scale as Sol (checked 2026-10-08).
     // https://openai.com/de-DE/index/introducing-gpt-6-1-sol/
     PinnedCodex {
         id: "gpt-6.1-sol",
