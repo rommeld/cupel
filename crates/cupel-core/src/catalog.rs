@@ -288,16 +288,19 @@ mod tests {
     }
 
     #[test]
-    fn gpt_61_sol_rows_match_the_model_card_and_sol_shape() {
+    fn gpt_61_sol_rows_match_the_model_card_and_cannot_switch_off() {
+        // GPT-6.1 Sol keeps Sol's prices and window but halves the cached
+        // input price. Unlike Sol, its effort scale has no "none" (OpenAI's
+        // model page: "none" and "minimal" are not supported). So off ->
+        // null in every dialect: the provider leaves `reasoning` out and
+        // never sends the unsupported effort "none".
         let models = builtin_models();
-        for (id, api, ceiling, off) in [
-            ("gpt-6.1-sol", Api::OPENAI_RESPONSES, 922_000, Some("none")),
-            (
-                "codex/gpt-6.1-sol",
-                Api::OPENAI_CODEX_RESPONSES,
-                872_000,
-                None,
-            ),
+        // Each tuple is one dialect: (catalog id, wire API, opt-in ceiling).
+        // Only Codex has a lower ceiling, pinned from Codex CLI's models.json.
+        for (id, api, ceiling) in [
+            ("gpt-6.1-sol", Api::OPENAI_RESPONSES, 922_000),
+            ("openai/gpt-6.1-sol", Api::OPENAI_COMPLETIONS, 922_000),
+            ("codex/gpt-6.1-sol", Api::OPENAI_CODEX_RESPONSES, 872_000),
         ] {
             let model = models.iter().find(|m| m.id == id).expect(id);
             assert_eq!(model.name, "GPT-6.1 Sol");
@@ -312,7 +315,9 @@ mod tests {
             assert_eq!(tier.context_over, 272_000);
             assert!((tier.cached_read - 0.2).abs() < f64::EPSILON);
             let map = model.thinking_level_map.as_ref().expect("effort map");
-            assert_eq!(map.get("off"), Some(&off.map(str::to_string)));
+            // `Some(&None)` = the key exists with a JSON null: "off" is
+            // unsupported. `Some(&Some("none"))` would send effort "none".
+            assert_eq!(map.get("off"), Some(&None), "{id}");
             assert!(!map.contains_key("max"));
             assert_eq!(
                 model

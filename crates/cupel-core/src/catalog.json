@@ -329,7 +329,7 @@
     "reasoning": true,
     "thinkingLevelMap": {
       "minimal": null,
-      "off": "none"
+      "off": null
     },
     "input": [
       "text",
@@ -1321,6 +1321,45 @@
           "input": 4.0,
           "output": 15.0,
           "cachedRead": 0.4,
+          "cachedWrite": 5.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 922000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "openai/gpt-6.1-sol",
+    "name": "GPT-6.1 Sol",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 2.5,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 4.0,
+          "output": 15.0,
+          "cachedRead": 0.2,
           "cachedWrite": 5.0
         }
       ]
