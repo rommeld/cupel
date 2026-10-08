@@ -139,7 +139,6 @@ pub struct SessionSummary {
     pub started_at: u64,
     pub model: String,
     pub message_count: usize,
-    /// First user prompt, truncated; empty when the session has none.
     pub label: String,
 }
 
@@ -507,8 +506,8 @@ mod tests {
     #[test]
     fn project_slug_flattens_paths() {
         assert_eq!(
-            project_slug(Path::new("/Users/denny/repos/cupel")),
-            "-Users-denny-repos-cupel"
+            project_slug(Path::new("/workspace/repos/project")),
+            "-workspace-repos-project"
         );
         assert_eq!(project_slug(Path::new("/a/b.c d_e")), "-a-b-c-d_e");
     }
