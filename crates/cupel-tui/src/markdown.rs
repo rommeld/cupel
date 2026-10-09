@@ -1,4 +1,4 @@
-//! Markdown rendering for assistant prose, a hand-rolled subset on
+//! Markdown rendering for conversation text, a hand-rolled subset on
 //! ratatui's primitives (Span -> Line), no parser crate.
 //!
 //! ratatui ships no markdown widget its docs model text as Span/
@@ -22,8 +22,8 @@ use crate::terminal_text::sanitize;
 use crate::theme;
 use crate::transcript::wrap_line;
 
-/// Render markdown into wrapped, styled lines for one transcrip cell.
-/// `base` is the cell's identity style (`ASSISTANT`, `ANSWER`).
+/// Render markdown into wrapped, styled lines for one transcript cell.
+/// `base` is the cell's identity style (`TASK`, `ASSISTANT`, `ANSWER`).
 #[must_use]
 pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
     let mut out = Vec::new();
@@ -270,7 +270,7 @@ fn push_wrapped_spans(
             line_width += word_width;
             continue;
         }
-        if !line.is_empty() || first {
+        if !line.is_empty() || (first && prefix_width > 0) {
             emit(&mut line, &mut first, out);
             line_width = cont_indent;
         }
@@ -594,6 +594,16 @@ mod tests {
         for line in &lines {
             assert_eq!(line.spans.len(), 1);
             assert_eq!(line.spans[0].style, base);
+        }
+    }
+
+    #[test]
+    fn a_long_first_word_wraps_without_an_empty_leading_line() {
+        let lines = render("**日本語日本語**", 8, Style::new());
+        assert_eq!(flat_text(&lines), ["日本語日", "本語"]);
+        assert!(lines.iter().all(|line| line.width() <= 8));
+        for line in &lines {
+            assert!(line.spans[0].style.add_modifier.contains(Modifier::BOLD));
         }
     }
 

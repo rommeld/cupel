@@ -25,12 +25,12 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::AsyncReadExt as _;
 use tokio_util::sync::CancellationToken;
 
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::now_ms;
 
+use crate::process::{EXIT_STDIO_GRACE, kill_process_group, output_chunks};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, TruncationResult,
     format_size, truncate_tail,
@@ -38,11 +38,6 @@ use crate::truncate::{
 
 /// Minimum interval between streamed progress updates to the UI.
 const UPDATE_THROTTLE: Duration = Duration::from_millis(100);
-
-/// How long to keep reading after the shell has exited. Give background
-/// writers room for scheduling delays on busy hosts; every chunk restarts
-/// the timer, while silent processes cannot hold the call open indefinitely.
-const EXIT_STDIO_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Deserialize)]
 struct BashArgs {
@@ -215,19 +210,6 @@ impl BashTool {
     }
 }
 
-/// SIGKILL the child's whole process group. Shells out to `kill` because
-/// direct syscalls need `unsafe`, which this workspace forbids.
-fn kill_process_group(pid: u32) {
-    let _ = std::process::Command::new("kill")
-        // `--` is required: a negative PID (= process group) looks like an
-        // option flag otherwise. BSD kill (macOS) tolerates its absence,
-        // Linux's procps kill does not. It silently refuses, and the group
-        // survives, and "timeout" waits out the full command (caught by CI
-        // on the first-ever Linux run).
-        .args(["-9", "--", &format!("-{pid}")])
-        .output();
-}
-
 fn is_executable(path: &Path) -> bool {
     path.metadata().is_ok_and(|metadata| {
         if !metadata.is_file() {
@@ -350,16 +332,7 @@ impl AgentTool for BashTool {
 
         // stdout and stderr are read on their own tasks feeding one channel,
         // preserving arrival order well enough for interleaved output.
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
-        if let Some(stdout) = child.stdout.take() {
-            spawn_reader(stdout, tx.clone());
-        }
-        if let Some(stderr) = child.stderr.take() {
-            spawn_reader(stderr, tx);
-        } else {
-            // tx clones must all drop for rx to close; the stderr branch owns
-            // the last one, so this path (no stderr) needs nothing extra.
-        }
+        let mut rx = output_chunks(&mut child);
 
         let mut output = OutputAccumulator::new();
         // Backdated so the first chunk sends an update immediately; falls
@@ -409,7 +382,7 @@ impl AgentTool for BashTool {
                 chunk = rx.recv() => {
                     match chunk {
                         Some(chunk) => {
-                            output.append(&chunk);
+                            output.append(chunk.as_bytes());
                             // Still writing after the shell exited: keep listening.
                             if let Some((_, quiet_until)) = &mut exited {
                                 *quiet_until = tokio::time::Instant::now() + EXIT_STDIO_GRACE;
@@ -454,7 +427,7 @@ impl AgentTool for BashTool {
             while let Ok(Some(chunk)) =
                 tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
             {
-                output.append(&chunk);
+                output.append(chunk.as_bytes());
             }
             // Bounded reap: if the process somehow survived both kills, give
             // up after a beat instead of hanging the turn. The OS reaps the
@@ -542,36 +515,6 @@ impl AgentTool for BashTool {
             }),
         }
     }
-}
-
-/// Copy one pipe into the chunk channel until EOF, or until the run stops
-/// listening. The second case matters when a background process keeps the
-/// pipe open after the shell exits: returning drops `pipe`, which closes
-/// our end of it. Its
-/// later writes then fail with EPIPE, so a background server should log to
-/// a file (`server > server.log 2>&1 &`).
-fn spawn_reader(
-    mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,
-    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
-) {
-    tokio::spawn(async move {
-        let mut buffer = [0_u8; 8192];
-        loop {
-            let read = tokio::select! {
-                read = pipe.read(&mut buffer) => read,
-                // The run finished and dropped the receiver.
-                () = tx.closed() => break,
-            };
-            match read {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx.send(buffer[..n].to_vec()).await.is_err() {
-                        break; // Receiver gone: the run was torn down.
-                    }
-                }
-            }
-        }
-    });
 }
 
 #[cfg(test)]

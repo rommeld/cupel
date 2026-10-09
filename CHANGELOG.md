@@ -27,7 +27,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - fix(spinoff): message typos, spinoff id, popup width
 - fix(providers): avoid image placeholders for empty tool results
 - feat(spinoff): run spinoffs as sessions with a sidebar
-- version: sync to v0.24.0 from CHANGELOG.md
 - fix(tui): distinguish planning and assumed context limits
 - feat(spinoff): git core for parallel sessions in worktrees
 - update ci and release with macos-latest

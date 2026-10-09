@@ -59,6 +59,9 @@ pub struct Ingredients {
     /// the system prompt they were embedded into, so a later in-place
     /// `/hot-reload` can diff against them instead of re-reading blind.
     pub context_files: Vec<crate::resources::ContextFile>,
+    /// Non-fatal configuration failures. Frontends choose the output channel:
+    /// stderr in plain mode, transcript notices in the TUI.
+    pub warnings: Vec<String>,
 }
 
 /// Load every ingredient fresh from disk (and the bounded ollama probe).
@@ -72,20 +75,21 @@ pub async fn load(
     let roots = crate::resources::roots_for(home.clone(), cwd);
     let context_files = crate::resources::load_context_files(&roots);
     let templates = crate::commands::load_prompt_templates(&roots);
-    let models = crate::models::build_catalog(registry, home.as_deref(), cwd).await;
-    let guard = BashGuard::from_config(home.as_deref(), cwd);
-    let settings = Settings::layered(
-        crate::settings::load_home_settings(home.as_deref()),
-        crate::settings::load_project_settings(cwd),
-    );
+    let (home_settings, mut warnings) = crate::settings::load_home_settings(home.as_deref());
+    let (project_settings, project_warnings) = crate::settings::load_project_settings(cwd);
+    warnings.extend(project_warnings);
+    warnings.extend(crate::settings::project_settings_warning(cwd));
+    let (models, model_warnings) =
+        crate::models::build_catalog(registry, home.as_deref(), cwd, &home_settings).await;
+    warnings.extend(model_warnings);
+    let (guard, guard_warnings) = BashGuard::from_config(home.as_deref(), cwd);
+    warnings.extend(guard_warnings);
+    let settings = Settings::layered(home_settings, project_settings);
     let hooks = SessionHooks::new(
         guard,
         LoopKiller::new(settings.loop_killer_max_repeats()),
         home.clone(),
     );
-    // A project-side settings.json must never hold keys. Warn once here,
-    // on the same stderr channel as the models.json warnings.
-    crate::settings::warn_project_settings(cwd);
 
     // The grep tool talks to a CodeSearch backend.
     let backend = Arc::new(GrepSearch::new(cwd));
@@ -104,6 +108,7 @@ pub async fn load(
         models,
         hooks,
         settings,
+        warnings,
     }
 }
 
@@ -218,11 +223,78 @@ mod tests {
         assert!(ingredients.templates.iter().any(|t| t.name == "greet"));
         assert!(ingredients.models.iter().any(|m| m.id == "local-test"));
         assert_eq!(ingredients.tools.len(), 4);
+        assert!(ingredients.warnings.is_empty());
         assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
         assert_eq!(ingredients.settings.loop_killer_max_repeats(), Some(2));
         assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
         // The guard carries defaults and the project rule.
         // (Verified through the public hook in guard.rs tests; here the
         // cheap signal is that construction succeeded with both layers.)
+    }
+
+    #[tokio::test]
+    async fn load_collects_warnings_from_both_config_layers_once() {
+        let root = std::env::temp_dir().join("cupel-bootstrap-warnings");
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, cwd) = (root.join("home"), root.join("proj"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(cwd.join(".cupel")).unwrap();
+        let broken_files = [
+            home.join("settings.json"),
+            cwd.join(".cupel/settings.json"),
+            home.join("models.json"),
+            cwd.join(".cupel/models.json"),
+        ];
+        for path in &broken_files {
+            std::fs::write(path, "{broken").unwrap();
+        }
+        std::fs::write(home.join("bash-deny"), "[home-rule\n").unwrap();
+        std::fs::write(cwd.join(".cupel/bash-deny"), "[project-rule\n").unwrap();
+
+        let registry = cupel_core::default_registry();
+        let ingredients = load(&cwd, Some(home.clone()), &registry).await;
+        assert_eq!(ingredients.settings, Settings::default());
+        assert_eq!(ingredients.warnings.len(), 6, "{:?}", ingredients.warnings);
+        for path in broken_files {
+            assert_eq!(
+                ingredients
+                    .warnings
+                    .iter()
+                    .filter(|warning| { warning.contains(&path.display().to_string()) })
+                    .count(),
+                1,
+                "each broken layer is reported once"
+            );
+        }
+        for pattern in ["[home-rule", "[project-rule"] {
+            assert!(
+                ingredients
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains(pattern))
+            );
+        }
+
+        // Project credentials remain ignored and the notice never includes keys.
+        std::fs::write(
+            cwd.join(".cupel/settings.json"),
+            r#"{"providers":{"fixture":"do-not-display-this-key"}}"#,
+        )
+        .unwrap();
+        let ingredients = load(&cwd, Some(home), &registry).await;
+        assert_eq!(ingredients.settings.api_key("fixture"), None);
+        assert!(
+            ingredients
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("API keys belong"))
+        );
+        assert!(
+            ingredients
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("do-not-display-this-key"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

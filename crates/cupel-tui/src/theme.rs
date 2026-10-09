@@ -15,14 +15,16 @@
 //! fn, so `Modifier::DIM | Modifier::ITALIC` would not compile here.
 
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::Padding;
 
-/// The user's task opening a turn: bright, the ">> " prefix rides
-/// in transcript.rs.
-pub const TASK: Style = Style::new().fg(Color::LightGreen);
+/// User messages in the conversation: white on a gray surface (#585858).
+pub const TASK: Style = Style::new().fg(Color::White).bg(Color::Indexed(240));
+/// User messages have one column on each side and one blank row above and below.
+pub const USER_MESSAGE_PADDING: Padding = Padding::new(1, 1, 1, 1);
 /// Mid-turn assistant prose (commentary between tool calls): white and italic.
 pub const ASSISTANT: Style = Style::new().fg(Color::White).add_modifier(Modifier::ITALIC);
 /// The turn's final answer: the emphasized counterpart to `TASK`. Magenta
-/// because green (task), cyan (tools), red (errors), and yellow
+/// because cyan (tools), red (errors), and yellow
 /// (notices) are taken and bold alone is too subtle next to plain
 /// prose.
 pub const ANSWER: Style = Style::new().fg(Color::Magenta);

@@ -3,7 +3,8 @@
 //! Text files stream back with head truncation (2000 lines / 50 KB) and
 //! *actionable* continuation notices. "use offset=N to continue" teaches
 //! the model how to page through big files instead of giving up. Images are
-//! detected by extension and returned as base64 attachments; the core
+//! detected by extension, checked for matching signatures and a 4 MiB size
+//! limit, and returned as base64 attachments; the core
 //! transform layer already downgrades them to a text placeholder for models
 //! without vision, so the tool doesn't need to know the active model.
 
@@ -12,6 +13,7 @@ use std::path::PathBuf;
 use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::io::AsyncReadExt as _;
 use tokio_util::sync::CancellationToken;
 
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
@@ -22,6 +24,9 @@ use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, format_size,
     truncate_head,
 };
+
+// Leave headroom below providers' per-image limits (Anthropic: 5 MiB).
+const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +52,29 @@ fn image_mime_type(path: &std::path::Path) -> Option<&'static str> {
     }
 }
 
+/// Recognize the full magic signature, not just a filename or partial prefix.
+fn image_mime_type_from_bytes(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', ..] => Some("image/png"),
+        [0xff, 0xd8, 0xff, ..] => Some("image/jpeg"),
+        [b'G', b'I', b'F', b'8', b'7' | b'9', b'a', ..] => Some("image/gif"),
+        bytes if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") => {
+            Some("image/webp")
+        }
+        _ => None,
+    }
+}
+
+fn image_size_error(path: &str, size: u64) -> Option<String> {
+    (size > MAX_IMAGE_BYTES as u64).then(|| {
+        format!(
+            "Image file {path} is too large ({size} bytes; limit: {}). \
+             Resize or compress the image before reading it.",
+            format_size(MAX_IMAGE_BYTES)
+        )
+    })
+}
+
 pub struct ReadTool {
     cwd: PathBuf,
     description: String,
@@ -59,7 +87,9 @@ impl ReadTool {
             cwd: cwd.into(),
             description: format!(
                 "Read the contents of a file. Supports text files and images (jpg, png, gif, \
-                 webp). Images are sent as attachments. For text files, output is truncated to \
+                 webp). Images up to 4 MiB with matching file signatures are sent as \
+                 attachments; resize or compress larger images first. For text files, output \
+                 is truncated to \
                  {DEFAULT_MAX_LINES} lines or {}KB (whichever is hit first). Use offset/limit \
                  for large files. When you need the full file, continue with offset until \
                  complete.",
@@ -133,7 +163,37 @@ impl AgentTool for ReadTool {
         }
 
         if let Some(mime_type) = image_mime_type(&absolute_path) {
-            let bytes = tokio::fs::read(&absolute_path).await?;
+            let file = tokio::fs::File::open(&absolute_path)
+                .await
+                .map_err(|e| format!("Could not read image file: {} ({e})", args.path))?;
+            let metadata = file
+                .metadata()
+                .await
+                .map_err(|e| format!("Could not inspect image file: {} ({e})", args.path))?;
+            if let Some(error) = image_size_error(&args.path, metadata.len()) {
+                return Err(error.into());
+            }
+
+            // Bound the read as well, in case the file grows after the metadata check.
+            let mut bytes = Vec::new();
+            file.take(MAX_IMAGE_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .await
+                .map_err(|e| format!("Could not read image file: {} ({e})", args.path))?;
+            if let Some(error) = image_size_error(&args.path, bytes.len() as u64) {
+                return Err(error.into());
+            }
+            if cancel.is_cancelled() {
+                return Err("Operation aborted".into());
+            }
+            if image_mime_type_from_bytes(&bytes) != Some(mime_type) {
+                return Err(format!(
+                    "Could not read image file: {} (file signature does not match {mime_type}). \
+                     Use a valid PNG, JPEG, GIF or WEBP image with the matching extension.",
+                    args.path
+                )
+                .into());
+            }
             let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
             return Ok(AgentToolResult {
                 content: vec![
@@ -299,23 +359,106 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn image_is_returned_as_attachment() {
-        let dir = std::env::temp_dir().join("cupel-read-test-4");
+    async fn supported_images_are_returned_as_attachments() {
+        let dir = std::env::temp_dir().join(format!("cupel-read-images-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("p.png"), [0x89, 0x50, 0x4E, 0x47]).unwrap();
+        let tool = ReadTool::new(&dir);
+        let cases: [(&str, &[u8], &str); 6] = [
+            ("p.PNG", b"\x89PNG\r\n\x1a\n", "image/png"),
+            ("p.jpg", b"\xff\xd8\xff", "image/jpeg"),
+            ("p.jpeg", b"\xff\xd8\xff", "image/jpeg"),
+            ("old.gif", b"GIF87a", "image/gif"),
+            ("new.gif", b"GIF89a", "image/gif"),
+            ("p.webp", b"RIFF\x04\x00\x00\x00WEBP", "image/webp"),
+        ];
+        for (path, bytes, mime_type) in cases {
+            std::fs::write(dir.join(path), bytes).unwrap();
+            let result = tool
+                .execute("c", json!({"path": path}), CancellationToken::new(), None)
+                .await
+                .unwrap();
+            assert_eq!(result.content.len(), 2);
+            let ToolResultContent::Image(image) = &result.content[1] else {
+                panic!("expected an image attachment for {path}");
+            };
+            assert_eq!(image.mime_type, mime_type);
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(&image.data)
+                    .unwrap(),
+                bytes
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_or_mismatched_image_signatures_are_errors() {
+        let dir =
+            std::env::temp_dir().join(format!("cupel-read-invalid-images-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cases: [(&str, &[u8]); 10] = [
+            ("empty.png", b""),
+            ("text.png", b"not an image"),
+            ("partial.png", b"\x89PNG"),
+            ("wrong.png", b"\xff\xd8\xff"),
+            ("partial.jpg", b"\xff\xd8"),
+            ("wrong.jpeg", b"\x89PNG\r\n\x1a\n"),
+            ("wrong.gif", b"GIF88a"),
+            ("partial.webp", b"RIFF"),
+            ("audio.webp", b"RIFF\x04\x00\x00\x00WAVE"),
+            ("wrong.webp", b"NOPE\x04\x00\x00\x00WEBP"),
+        ];
+        for (path, bytes) in cases {
+            std::fs::write(dir.join(path), bytes).unwrap();
+            let err = run_read(&dir, json!({"path": path})).await.unwrap_err();
+            assert!(err.contains(path), "got: {err}");
+            assert!(err.contains("file signature does not match"), "got: {err}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn image_size_limit_accepts_boundary_and_rejects_larger_files() {
+        let dir =
+            std::env::temp_dir().join(format!("cupel-read-image-limit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("large.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\n").unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(MAX_IMAGE_BYTES as u64).unwrap();
+
         let tool = ReadTool::new(&dir);
         let result = tool
             .execute(
                 "c",
-                json!({"path": "p.png"}),
+                json!({"path": "large.png"}),
                 CancellationToken::new(),
                 None,
             )
             .await
             .unwrap();
-        assert_eq!(result.content.len(), 2);
-        assert!(
-            matches!(&result.content[1], ToolResultContent::Image(img) if img.mime_type == "image/png")
+        let ToolResultContent::Image(image) = &result.content[1] else {
+            panic!("expected an image attachment at the size limit");
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&image.data)
+                .unwrap()
+                .len(),
+            MAX_IMAGE_BYTES
         );
+
+        for size in [MAX_IMAGE_BYTES as u64 + 1, 8 * 1024 * 1024] {
+            file.set_len(size).unwrap();
+            let err = run_read(&dir, json!({"path": "large.png"}))
+                .await
+                .unwrap_err();
+            assert!(err.contains("large.png"), "got: {err}");
+            assert!(err.contains("too large"), "got: {err}");
+            assert!(err.contains("Resize or compress"), "got: {err}");
+        }
+        drop(file);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

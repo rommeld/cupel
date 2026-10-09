@@ -210,11 +210,13 @@ impl Transcript {
             }
             let mut lines = cell_lines(cell, width);
             if selected == Some(index) {
-                // The line style paints first, spans patch on top: a
-                // bg-only style tints the row without touching the
-                // span foregrounds.
+                // Spans can carry their own panel background. Tint both
+                // layers without changing foregrounds or Markdown modifiers.
                 for line in &mut lines {
                     line.style = line.style.patch(theme::SELECTED);
+                    for span in &mut line.spans {
+                        span.style = span.style.patch(theme::SELECTED);
+                    }
                 }
             }
             rendered
@@ -226,7 +228,7 @@ impl Transcript {
     }
 
     /// The raw text a copy places on the clipboard. The unrendered cell
-    /// content (no `> ` prefix, no wrapping, markdown source exactly as
+    /// content (no surface padding, no wrapping, markdown source exactly as
     /// the model wrote it). Tool cells return None: a click on them toggles
     /// the preview instead of selecting, so they stay out of the copy
     /// feature.
@@ -252,7 +254,7 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     match cell {
         Cell::User { text } => {
-            push_wrapped(&mut out, &format!(">> {text}"), width, theme::TASK);
+            out.extend(user_lines(text, width));
         }
         Cell::Assistant { text } => {
             // Assistant prose is markdown; the base style keeps the cell
@@ -280,6 +282,43 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
         }
         Cell::Tool { .. } => out.extend(tool_lines(cell, width)),
     }
+    out
+}
+
+/// A full-width user surface with a `>>` marker on the first content row.
+/// Render Markdown before adding the marker and padding so
+/// headings and code fences are recognized at the start of source lines.
+fn user_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+    let padding = theme::USER_MESSAGE_PADDING;
+    let left = usize::from(padding.left);
+    let prefix = ">> ";
+    let inset = left + prefix.len();
+    let content_width = width
+        .saturating_sub(inset + usize::from(padding.right))
+        .max(1);
+    let blank = Line::from(" ".repeat(width)).style(theme::TASK);
+    let mut out: Vec<_> = std::iter::repeat_n(blank.clone(), usize::from(padding.top)).collect();
+    out.extend(
+        crate::markdown::render(text, content_width, theme::TASK)
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut line)| {
+                let trailing = width.saturating_sub(inset + line.width());
+                line.style = theme::TASK.patch(line.style);
+                line.spans.insert(
+                    0,
+                    Span::raw(if index == 0 {
+                        prefix.to_string()
+                    } else {
+                        " ".repeat(prefix.len())
+                    }),
+                );
+                line.spans.insert(0, Span::raw(" ".repeat(left)));
+                line.spans.push(Span::raw(" ".repeat(trailing)));
+                line
+            }),
+    );
+    out.extend(std::iter::repeat_n(blank, usize::from(padding.bottom)));
     out
 }
 
@@ -540,6 +579,145 @@ mod tests {
                 span.style
                     .add_modifier
                     .contains(ratatui::style::Modifier::ITALIC)
+            );
+        }
+    }
+
+    #[test]
+    fn user_messages_render_markdown_with_a_padded_background() {
+        use ratatui::style::{Color, Modifier};
+
+        let source = "plain **bold** and *italic* with `code`\n```rust\nfn main() {}\n```";
+        let transcript = Transcript {
+            cells: vec![Cell::User {
+                text: source.into(),
+            }],
+        };
+        let rendered = transcript.to_lines(48, None);
+        assert_eq!(
+            rendered.lines.len(),
+            4,
+            "two content rows plus two padding rows"
+        );
+        assert_eq!(
+            rendered.cell_at,
+            vec![Some(0); 4],
+            "padding belongs to the user cell"
+        );
+        for line in &rendered.lines {
+            assert_eq!(line.width(), 48, "the surface fills the column");
+            assert_eq!(line.style.fg, Some(Color::White));
+            assert_eq!(line.style.bg, Some(Color::Indexed(240)));
+        }
+        for index in [0, 3] {
+            assert_eq!(line_text(&rendered.lines[index]), " ".repeat(48));
+        }
+        let prose = &rendered.lines[1];
+        assert_eq!(
+            line_text(prose).trim(),
+            ">> plain bold and italic with code"
+        );
+        assert_eq!(prose.spans[0].content, " ", "one column of left padding");
+        assert_eq!(prose.spans[1].content, ">> ", "the user message marker");
+        for (word, modifier) in [("bold", Modifier::BOLD), ("italic", Modifier::ITALIC)] {
+            let span = prose
+                .spans
+                .iter()
+                .find(|span| span.content == word)
+                .unwrap();
+            assert_eq!(span.style.fg, Some(Color::White));
+            assert!(span.style.add_modifier.contains(modifier));
+        }
+        let code = prose
+            .spans
+            .iter()
+            .find(|span| span.content == "code")
+            .unwrap();
+        assert_eq!(
+            code.style.fg,
+            Some(Color::Cyan),
+            "inline code retains its accent"
+        );
+        let fenced = &rendered.lines[2];
+        assert_eq!(line_text(fenced).trim(), "fn main() {}");
+        let code = fenced
+            .spans
+            .iter()
+            .find(|span| span.content.contains("fn main"))
+            .unwrap();
+        assert_eq!(fenced.style.patch(code.style).fg, Some(Color::White));
+        assert_eq!(code.style.bg, Some(theme::MD_CODE_BLOCK_BG));
+        assert_eq!(
+            transcript.copy_text(0),
+            Some(source),
+            "copy keeps Markdown source"
+        );
+    }
+
+    #[test]
+    fn user_messages_wrap_wide_characters_inside_the_padding() {
+        use ratatui::style::Modifier;
+
+        let transcript = Transcript {
+            cells: vec![Cell::User {
+                text: "**日本語日本語**".into(),
+            }],
+        };
+        let rendered = transcript.to_lines(10, None);
+        assert_eq!(rendered.lines.len(), 5);
+        assert_eq!(line_text(&rendered.lines[1]), " >> 日本  ");
+        assert_eq!(line_text(&rendered.lines[2]), "    語日  ");
+        assert_eq!(line_text(&rendered.lines[3]), "    本語  ");
+        assert!(rendered.lines.iter().all(|line| line.width() == 10));
+        for line in &rendered.lines[1..4] {
+            assert!(line.spans[2].style.add_modifier.contains(Modifier::BOLD));
+        }
+    }
+
+    #[test]
+    fn user_message_marker_appears_once_and_continuations_align() {
+        let source = "hello brave new world\nnext line";
+        let transcript = Transcript {
+            cells: vec![Cell::User {
+                text: source.into(),
+            }],
+        };
+        let rendered = transcript.to_lines(16, None);
+        let lines: Vec<String> = rendered
+            .lines
+            .iter()
+            .map(|line| line_text(line).trim_end().to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                "",
+                " >> hello",
+                "    brave new",
+                "    world",
+                "    next line",
+                ""
+            ]
+        );
+        assert!(rendered.lines.iter().all(|line| line.width() == 16));
+        assert_eq!(rendered.cell_at, vec![Some(0); 6]);
+        assert_eq!(transcript.copy_text(0), Some(source));
+    }
+
+    #[test]
+    fn selected_user_messages_highlight_padding_prose_and_code() {
+        let transcript = Transcript {
+            cells: vec![Cell::User {
+                text: "**bold**\n```rust\nlet x = 1;\n```".into(),
+            }],
+        };
+        let rendered = transcript.to_lines(40, Some(0));
+        for line in &rendered.lines {
+            assert_eq!(line.style.bg, theme::SELECTED.bg);
+            assert!(
+                line.spans
+                    .iter()
+                    .all(|span| span.style.bg == theme::SELECTED.bg)
             );
         }
     }

@@ -209,6 +209,13 @@ pub trait AgentHooks: Send + Sync {
         Vec::new()
     }
 
+    /// Resolves once steering message are waiting. The loop races every model reply
+    /// against it and cuts the reply short when it resolves. The default never:
+    /// without steering, nothing interrupts.
+    async fn steering_arrived(&self) {
+        std::future::pending::<()>().await;
+    }
+
     /// Messages to process once the agent would otherwise stop.
     async fn follow_up_messages(&self) -> Vec<AgentMessage> {
         Vec::new()
@@ -227,8 +234,8 @@ pub enum CompactionReason {
     Overflow,
 }
 
-/// Events emitted by the agent for UIs. `AgentEnd` is always the last event
-/// of a run.
+/// Events emitted by the agent for state synchronization and UIs.
+/// `AgentEnd` is always the last event of a run.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     AgentEnd {
@@ -252,6 +259,14 @@ pub enum AgentEvent {
         tokens_after: u64,
         error: Option<String>,
         summary: Option<String>,
+        /// Effective context, including any pruning retained on failure.
+        /// Replaces the agent's messages; does not rewrite the session log.
+        messages: Vec<AgentMessage>,
+    },
+    ThinkingBlocksRemoved {
+        /// Effective context after removing invalid thinking blocks.
+        /// Replaces the agent's messages; does not rewrite the session log.
+        messages: Vec<AgentMessage>,
     },
     AutoRetry {
         attempt: u32,

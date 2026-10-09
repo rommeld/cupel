@@ -103,11 +103,8 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
         .map(|line| transcript::wrap_line(line, inner_width).len())
         .sum::<usize>()
         .clamp(1, 5) as u16;
-    let queued_lines = if app.queued.is_empty() {
-        0
-    } else {
-        app.queued.len() as u16 + 1
-    };
+    let waiting = app.steering.len() + app.queued.len();
+    let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
     let [transcript_area, queued_area, input_area, footer_area] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(queued_lines),
@@ -257,16 +254,23 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     }
 }
 
-/// The queued prompts, oldest first, as "Follow-up:" rows above the input
-/// box: the first line of each prompt, then the key that takes them back.
+/// The waiting prompts above the input box: "Steer:" rows first (they go in sooner),
+/// then "Follow-up:" rows, oldest first. The first line of each prompt, then the key
+/// that takes them back.
 fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    if app.queued.is_empty() {
+    if app.steering.is_empty() && app.queued.is_empty() {
         return;
     }
+    let first_line = |text: &String| text.lines().next().unwrap_or_default().to_string();
     let lines: Vec<Line<'_>> = app
-        .queued
+        .steering
         .iter()
-        .map(|text| format!(" Follow-up: {}", text.lines().next().unwrap_or_default()))
+        .map(|text| format!(" Steer: {}", first_line(text)))
+        .chain(
+            app.queued
+                .iter()
+                .map(|text| format!(" Follow-up: {}", first_line(text))),
+        )
         .chain([" ↳ alt+up to edit all queued messages".to_string()])
         .map(|line| Line::from(Span::styled(line, theme::CHROME)))
         .collect();
@@ -416,9 +420,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // the wheel currently does. It shares the status row's left margin because
     // a right-aligned hint row would sit staggered against it.
     let hints = if app.mouse_captured {
-        " enter send · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
+        " enter send · ctrl+enter steer · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
     } else {
-        " enter send · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
+        " enter send · ctrl+enter steer · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =
@@ -494,6 +498,7 @@ mod tests {
                 settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
+                warnings: Vec::new(),
                 context_files: Vec::new(),
                 base_system_prompt: String::new(),
             },
@@ -573,13 +578,110 @@ mod tests {
             text: "the answer".into(),
         });
 
-        let task = style_of(&mut app, ">> the task");
-        assert_eq!(task.fg, Some(Color::LightGreen));
+        let task = style_of(&mut app, "the task");
+        assert_eq!(task.fg, Some(Color::White));
+        assert_eq!(task.bg, Some(Color::Indexed(240)));
 
         assert_eq!(style_of(&mut app, "pondering").fg, Some(Color::White));
 
         let answer = style_of(&mut app, "the answer");
         assert_eq!(answer.fg, Some(Color::Magenta));
+    }
+
+    #[test]
+    fn user_markdown_uses_a_gray_surface_without_changing_the_prompt() {
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::User {
+            text:
+                "# User task\nplain **bold** and *italic* with `code`\n```rust\nfn main() {}\n```"
+                    .into(),
+        });
+        app.input.insert_str("**draft**");
+        let screen = draw(&mut app, 80, 24);
+        assert!(screen.contains(">> User task"), "{screen}");
+        assert!(
+            screen.contains("plain bold and italic with code"),
+            "{screen}"
+        );
+        assert!(screen.contains("fn main() {}"), "{screen}");
+        assert!(
+            !screen.contains("**bold**") && !screen.contains("```"),
+            "{screen}"
+        );
+        for (text, modifier) in [
+            ("User task", Modifier::BOLD),
+            ("bold", Modifier::BOLD),
+            ("italic", Modifier::ITALIC),
+        ] {
+            let style = style_of(&mut app, text);
+            assert_eq!(style.fg, Some(Color::White));
+            assert_eq!(style.bg, Some(Color::Indexed(240)));
+            assert!(style.add_modifier.contains(modifier));
+        }
+        assert!(
+            screen.contains("**draft**"),
+            "the prompt stays raw:\n{screen}"
+        );
+        let prompt = style_of(&mut app, "**draft**");
+        assert_eq!(prompt.fg, Some(Color::Reset));
+        assert_eq!(prompt.bg, Some(Color::Reset));
+        assert!(!prompt.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(style_of(&mut app, "fn main").fg, Some(Color::White));
+        app.selected_cell = Some(0);
+        assert_eq!(style_of(&mut app, "bold").bg, theme::SELECTED.bg);
+        assert_eq!(style_of(&mut app, "fn main").bg, theme::SELECTED.bg);
+    }
+
+    #[test]
+    fn prompt_editor_keeps_its_default_background_and_markdown_source() {
+        let mut app = test_app();
+        app.input.insert_str("**draft**");
+        let mut terminal = Terminal::new(TestBackend::new(20, 3)).unwrap();
+        terminal
+            .draw(|frame| render_input(frame, &app, frame.area()))
+            .unwrap();
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(10, 1)
+        );
+        let buffer = terminal.backend().buffer();
+        for x in 1..19 {
+            let cell = &buffer[(x, 1)];
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+            assert!(!cell.modifier.contains(Modifier::BOLD));
+        }
+        let text: String = (1..10).map(|x| buffer[(x, 1)].symbol()).collect();
+        assert_eq!(text, "**draft**", "editing shows the raw source");
+    }
+
+    #[test]
+    fn prompt_wrapping_and_cursor_use_the_same_inner_width() {
+        let mut app = test_app();
+        app.input.insert_str("hello brave new world");
+        let mut terminal = Terminal::new(TestBackend::new(20, 20)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &mut app, frame.area()))
+            .unwrap();
+        // Two border rows plus two text rows: input starts at y=14.
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(6, 16)
+        );
+        let buffer = terminal.backend().buffer();
+        let first: String = (1..17).map(|x| buffer[(x, 15)].symbol()).collect();
+        let second: String = (1..6).map(|x| buffer[(x, 16)].symbol()).collect();
+        assert_eq!(first, "hello brave new ");
+        assert_eq!(second, "world");
+    }
+
+    #[test]
+    fn prompt_handles_small_terminals() {
+        for (width, height) in [(6, 6), (10, 10), (20, 12)] {
+            let mut app = test_app();
+            app.input.insert_str("a long draft on a small terminal");
+            let _ = draw(&mut app, width, height);
+        }
     }
 
     #[test]
@@ -605,6 +707,7 @@ mod tests {
                 startup_warning: Some(
                     "no credentials found - use /provider <name> <api-key>".into(),
                 ),
+                warnings: Vec::new(),
                 context_files: Vec::new(),
                 base_system_prompt: String::new(),
             },
@@ -628,6 +731,34 @@ mod tests {
             KeyModifiers::NONE,
         )));
         assert!(app.pending_prompt.is_some(), "session accepts prompts");
+    }
+
+    #[test]
+    fn configuration_warnings_render_as_notices_once() {
+        let app = test_app();
+        let mut meta = app.meta;
+        meta.warnings = vec![
+            "warning: ignoring settings file: broken JSON".into(),
+            "warning: ignoring invalid bash-deny pattern".into(),
+        ];
+        let mut app = App::new(app.agent, meta, app.recorder);
+        assert!(app.meta.warnings.is_empty(), "notices consume the warnings");
+        for _ in 0..2 {
+            let screen = draw(&mut app, 100, 20);
+            assert!(screen.contains("ignoring settings file"), "{screen}");
+            assert!(screen.contains("invalid bash-deny pattern"), "{screen}");
+        }
+        assert_eq!(app.transcript.cells.len(), 2);
+        assert!(
+            app.transcript
+                .cells
+                .iter()
+                .all(|cell| matches!(cell, Cell::Notice { .. }))
+        );
+        assert!(
+            app.agent.state().messages.is_empty(),
+            "warnings are UI-only"
+        );
     }
 
     #[test]
@@ -713,6 +844,7 @@ mod tests {
                 settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
+                warnings: Vec::new(),
                 context_files: Vec::new(),
                 base_system_prompt: String::new(),
             },
@@ -768,6 +900,7 @@ mod tests {
                 settings: cupel_coding_agent::settings::Settings::default(),
                 home: Some(home),
                 startup_warning: None,
+                warnings: Vec::new(),
                 context_files: Vec::new(),
                 base_system_prompt: String::new(),
             },
@@ -1204,7 +1337,7 @@ mod tests {
 
         let screen = draw(&mut app, 80, 20);
         assert!(
-            screen.contains("> find the bug"),
+            screen.contains("find the bug"),
             "user cell missing:\n{screen}"
         );
         assert!(
@@ -1546,13 +1679,15 @@ mod tests {
                 settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
+                warnings: Vec::new(),
                 context_files: Vec::new(),
                 base_system_prompt: String::new(),
             },
             recorder,
         );
 
-        let screen = draw(&mut app, 80, 24);
+        // Leave room for the replayed history and the padded user message.
+        let screen = draw(&mut app, 80, 28);
         assert!(
             screen.contains("resumed session cupel-resumed (4 messages)"),
             "resume notice missing:\n{screen}"
@@ -1703,6 +1838,7 @@ mod tests {
             tokens_after: 12_000,
             error: None,
             summary: None,
+            messages: Vec::new(),
         }))
         .await;
         assert!(draw(&mut app, 200, 20).contains("ctx 12k/"));
@@ -1816,6 +1952,7 @@ mod tests {
             tokens_after: 12_000,
             error: None,
             summary: Some("## Goal\nfix the retry backoff".into()),
+            messages: Vec::new(),
         }))
         .await;
         assert!(matches!(
@@ -1857,6 +1994,7 @@ mod tests {
                 settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
+                warnings: Vec::new(),
                 context_files: Vec::new(),
                 base_system_prompt: String::new(),
             },
@@ -1961,6 +2099,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ctrl_enter_while_running_steers_the_prompt() {
+        let mut app = test_app();
+        app.start_run("build it");
+        type_text(&mut app, "use the other file");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.input.is_empty(), "the prompt left the input box");
+        assert_eq!(app.steering, ["use the other file"]);
+        assert!(app.queued.is_empty(), "steered, not queued");
+        // Ctrl+J is the fallback for terminals without keyboard enhancement.
+        type_text(&mut app, "and keep the tests");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL,
+        )));
+        assert_eq!(app.steering, ["use the other file", "and keep the tests"]);
+        let screen = draw(&mut app, 80, 20);
+        assert!(screen.contains("Steer: use the other file"), "{screen}");
+        assert!(screen.contains("Steer: and keep the tests"), "{screen}");
+
+        // The empty registry fails every run at once. Both steered prompts
+        // reach the model together, as one block.
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+        assert_eq!(
+            user_prompts(&app),
+            ["build it", "use the other file", "and keep the tests"]
+        );
+        assert!(app.steering.is_empty());
+        assert!(!draw(&mut app, 80, 20).contains("Steer:"));
+    }
+
+    #[tokio::test]
+    async fn a_prompt_steered_after_the_last_look_starts_the_next_run() {
+        let mut app = test_app();
+        app.start_run("build it");
+        let mut steered = false;
+        while app.is_running() {
+            let event = app.next_event().await;
+            // The run is over but its end is not handled yet: the loop
+            // will never look at the steering queue again.
+            if !steered
+                && matches!(
+                    event,
+                    crate::app::AppEvent::Agent(Some(AgentEvent::AgentEnd { .. }))
+                )
+            {
+                type_text(&mut app, "late");
+                app.on_terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Enter,
+                    KeyModifiers::CONTROL,
+                )));
+                steered = true;
+            }
+            app.on_event(event).await;
+        }
+        assert!(steered);
+        assert_eq!(user_prompts(&app), ["build it", "late"]);
+        assert!(app.steering.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_reply_cut_short_by_steering_is_no_error() {
+        let mut app = test_app();
+        app.steering.push("smaller steps".to_string());
+        app.on_agent_event(Some(AgentEvent::MessageUpdate {
+            event: cupel_core::types::AssistantMessageEvent::TextDelta {
+                content_index: 0,
+                delta: "half a plan".into(),
+            },
+        }))
+        .await;
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: assistant_message("half a plan", cupel_core::types::StopReason::Aborted, 0),
+        }))
+        .await;
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: cupel_agent::AgentMessage::user_text("smaller steps"),
+        }))
+        .await;
+        assert!(app.steering.is_empty(), "delivered, so no longer waiting");
+        // The partial prose stays plain prose: it is no final answer.
+        assert!(matches!(
+            app.transcript.cells.as_slice(),
+            [
+                Cell::Assistant { text: partial },
+                Cell::Notice { text: notice },
+                Cell::User { text: prompt },
+            ] if partial == "half a plan"
+                && notice == "interrupted to steer"
+                && prompt == "smaller steps"
+        ));
+    }
+
+    #[tokio::test]
+    async fn esc_takes_steered_prompts_back_first() {
+        let mut app = test_app();
+        app.start_run("build it");
+        type_text(&mut app, "steered");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::CONTROL,
+        )));
+        submit_paste(&mut app, "queued");
+        type_text(&mut app, "draft");
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert_eq!(app.input.text(), "steered\n\nqueued\n\ndraft");
+        assert!(app.steering.is_empty() && app.queued.is_empty());
+        // Taken back means never sent: the agent's copies are gone as well.
+        assert!(app.agent.take_steering().is_empty());
+        assert!(app.agent.take_follow_up().is_none());
+    }
+
+    #[tokio::test]
     async fn the_spinner_turns_with_every_tick_while_running() {
         let mut app = test_app();
         // A run against the empty registry errors in the background; until
@@ -2003,6 +2259,7 @@ mod tests {
                 settings: cupel_coding_agent::settings::Settings::default(),
                 home: None,
                 startup_warning: None,
+                warnings: Vec::new(),
                 context_files: Vec::new(),
                 base_system_prompt: String::new(),
             },
@@ -2524,6 +2781,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_reload_target_shows_configuration_warnings() {
+        use crate::app::ReloadTarget;
+
+        for (name, target) in [
+            ("current", ReloadTarget::Current),
+            ("new", ReloadTarget::New),
+            ("resume", ReloadTarget::Resume("cupel-old".into())),
+        ] {
+            let root = std::env::temp_dir().join(format!("cupel-ui-reload-warnings-{name}"));
+            let _ = std::fs::remove_dir_all(&root);
+            let mut app = test_app_with_home(&root, "cupel-current");
+            // A real registry avoids unrelated warnings for built-in models.
+            app.agent = Agent::new(AgentOptions::new(
+                acme_model(),
+                Arc::new(cupel_core::default_registry()),
+            ));
+            std::fs::create_dir_all(root.join("proj/.cupel")).unwrap();
+            std::fs::write(root.join("home/settings.json"), "{broken").unwrap();
+            std::fs::write(root.join("home/models.json"), "{broken").unwrap();
+            std::fs::write(root.join("proj/.cupel/bash-deny"), "[unclosed").unwrap();
+            std::fs::write(
+                root.join("proj/.cupel/settings.json"),
+                r#"{"providers":{"acme":"project-secret"}}"#,
+            )
+            .unwrap();
+            let dir = app.recorder.sessions_dir().unwrap();
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(
+                dir.join("cupel-old.jsonl"),
+                format!(
+                    "{}\n",
+                    serde_json::json!({
+                        "version": 1, "sessionId": "cupel-old", "cwd": "x",
+                        "model": "acme-1", "startedAt": 1000
+                    })
+                ),
+            )
+            .unwrap();
+
+            let mut app = app.hot_reload(target).await;
+            assert_eq!(app.agent.api_key(), None, "project keys are never honored");
+            for needle in [
+                "ignoring settings file",
+                "ignoring models file",
+                "invalid bash-deny pattern",
+                "API keys belong",
+            ] {
+                assert_eq!(
+                    app.transcript
+                        .cells
+                        .iter()
+                        .filter(|cell| matches!(
+                            cell, Cell::Notice { text } if text.contains(needle)
+                        ))
+                        .count(),
+                    1,
+                    "{name}: {needle}"
+                );
+            }
+            if name == "current" {
+                assert!(has_notice(&app, "reloaded in place with warnings"));
+            }
+            let screen = draw(&mut app, 160, 40);
+            assert!(
+                screen.contains("ignoring settings file"),
+                "{name}: {screen}"
+            );
+            assert!(
+                screen.contains("invalid bash-deny pattern"),
+                "{name}: {screen}"
+            );
+            assert!(!screen.contains("project-secret"));
+            assert!(
+                app.agent.state().messages.is_empty(),
+                "not sent to the model"
+            );
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn a_preset_prompt_survives_both_hot_reloads() {
         use crate::app::ReloadTarget;
         let root = std::env::temp_dir().join("cupel-ui-preset-reload");
@@ -2580,7 +2918,7 @@ mod tests {
             "the task must lead the turn"
         );
         let screen = draw(&mut app, 80, 20);
-        assert!(screen.contains("> find the bug"), "{screen}");
+        assert!(screen.contains("find the bug"), "{screen}");
 
         while app.is_running() {
             let event = app.next_event().await;
@@ -2668,13 +3006,12 @@ mod tests {
                 .position(|row| row.contains(needle))
                 .unwrap_or_else(|| panic!("{needle:?} missing:\n{screen}"))
         };
-        assert!(row_of(">> task") < row_of("let me look"));
+        assert!(row_of("task") < row_of("let me look"));
         assert!(row_of("let me look") < row_of("read src/main.rs"));
         assert!(row_of("read src/main.rs") < row_of("found it"));
-        // ...and the padding keeps every line off the frame: border, one
-        // blank column, then text.
-        let row = screen.lines().nth(row_of(">> task")).unwrap();
-        assert!(row.starts_with("│ >> task"), "{row:?}");
+        // Border, pane padding, then the user surface's own padding.
+        let row = screen.lines().nth(row_of("task")).unwrap();
+        assert!(row.starts_with("│  >> task"), "{row:?}");
     }
 
     #[test]

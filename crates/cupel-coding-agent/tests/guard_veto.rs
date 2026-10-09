@@ -113,7 +113,9 @@ async fn denied_bash_command_never_executes_and_the_model_learns_why() {
     options.api_key = Some("test".into());
     options.tools = vec![Arc::new(BashTool::new(&cwd)) as Arc<dyn AgentTool>];
     // No config files: the built-in defaults alone must block rm -rf.
-    options.hooks = Arc::new(BashGuard::from_config(None, &cwd));
+    let (guard, warnings) = BashGuard::from_config(None, &cwd);
+    assert!(warnings.is_empty());
+    options.hooks = Arc::new(guard);
     let mut agent = Agent::new(options);
 
     let mut events = agent.prompt_text("delete everything").unwrap();

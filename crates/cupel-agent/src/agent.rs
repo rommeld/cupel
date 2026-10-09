@@ -10,6 +10,7 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt as _;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use cupel_core::{
@@ -86,6 +87,8 @@ pub struct Agent {
     state: Arc<Mutex<AgentState>>,
     tools: Vec<Arc<dyn AgentTool>>,
     follow_ups: Arc<Mutex<VecDeque<AgentMessage>>>,
+    steering: Arc<Mutex<Vec<AgentMessage>>>,
+    steering_signal: Arc<Notify>,
     hooks: Arc<dyn AgentHooks>,
     registry: Arc<Registry>,
     api_key: Option<String>,
@@ -113,6 +116,8 @@ impl Agent {
             })),
             tools: options.tools,
             follow_ups: Arc::new(Mutex::new(VecDeque::new())),
+            steering: Arc::new(Mutex::new(Vec::new())),
+            steering_signal: Arc::new(Notify::new()),
             hooks: options.hooks,
             registry: options.registry,
             api_key: options.api_key,
@@ -289,6 +294,38 @@ impl Agent {
             .clear();
     }
 
+    /// Steer the active run. The message goes in before the model's next request, and
+    /// a reply that is streaming right now is cut short so that request comes at once.
+    /// Tools that are already running finish first. Unlike a follow-up, every wait
+    /// steering message is delivered at the same moment.
+    pub fn steer(&self, message: AgentMessage) {
+        self.steering
+            .lock()
+            .expect("steering queue lock poisoned")
+            .push(message);
+        // notify_one stores a permit when nobody si waiting right now, so a message
+        // that arrives just before the next reply starts streaming still interrupts
+        // it.
+        self.steering_signal.notify_one();
+    }
+
+    /// Take every waiting steering message out of the queue. Like follow-ups, they can
+    /// outlive a run that ended before the loop looked at them. A frontend then starts
+    /// the next run with them.
+    #[must_use]
+    pub fn take_steering(&self) -> Vec<AgentMessage> {
+        core::mem::take(&mut *self.steering.lock().expect("steering queue lock poisoned"))
+    }
+
+    /// Drop every waiting steering message. The user took the prompts back into the
+    /// editor.
+    pub fn clear_steering(&self) {
+        self.steering
+            .lock()
+            .expect("steering queue lock poisoned")
+            .clear();
+    }
+
     /// Cancellation token of the active run, if any (e.g. for a Ctrl-C
     /// handler).
     #[must_use]
@@ -359,6 +396,8 @@ impl Agent {
         let hooks: Arc<dyn AgentHooks> = Arc::new(RunHooks {
             inner: Arc::clone(&self.hooks),
             follow_ups: Arc::clone(&self.follow_ups),
+            steering: Arc::clone(&self.steering),
+            steering_signal: Arc::clone(&self.steering_signal),
         });
         let registry = Arc::clone(&self.registry);
 
@@ -411,6 +450,10 @@ async fn forward_events(
                 AgentEvent::MessageEnd { message } => {
                     state.messages.push(message.clone());
                 }
+                AgentEvent::CompactionEnd { messages, .. }
+                | AgentEvent::ThinkingBlocksRemoved { messages } => {
+                    state.messages.clone_from(messages);
+                }
                 AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
                     state.pending_tool_calls.insert(tool_call_id.clone());
                 }
@@ -435,6 +478,8 @@ async fn forward_events(
 struct RunHooks {
     inner: Arc<dyn AgentHooks>,
     follow_ups: Arc<Mutex<VecDeque<AgentMessage>>>,
+    steering: Arc<Mutex<Vec<AgentMessage>>>,
+    steering_signal: Arc<Notify>,
 }
 
 #[async_trait::async_trait]
@@ -478,5 +523,35 @@ impl AgentHooks for RunHooks {
                 .pop_front(),
         );
         messages
+    }
+
+    async fn steering_messages(&self) -> Vec<AgentMessage> {
+        let mut messages = self.inner.steering_messages().await;
+        messages.append(&mut self.steering.lock().expect("steering queue lock poisoned"));
+        messages
+    }
+
+    async fn steering_arrived(&self) {
+        let own = async {
+            loop {
+                self.steering_signal.notified().await;
+                // A permit can be older than the queue's last drain. The message it
+                // announced went out at a turn boundary already. Only a waiting
+                // message is worth an interruption.
+                let waiting = !self
+                    .steering
+                    .lock()
+                    .expect("steering queue is poisoned")
+                    .is_empty();
+                if waiting {
+                    return;
+                }
+            }
+        };
+        // Whichever source has something first.
+        tokio::select! {
+            () = own => {}
+            () = self.inner.steering_arrived() => {}
+        }
     }
 }

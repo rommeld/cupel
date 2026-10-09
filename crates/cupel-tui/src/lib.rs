@@ -4,12 +4,13 @@
 //!
 //! ## Event architecture
 //!
-//! Two async event sources feed one state struct ([`app::App`]):
+//! Terminal input, agent events and termination signals feed the event loop:
 //!
 //! ```text
 //!  crossterm (blocking thread) ──channel──▶            ┌── ui::render
 //!                                          tokio::select ──▶ App ──┘
 //!  AgentEventStream (active run) ─────────▶
+//!  TerminationSignals ──────────────────▶
 //! ```
 //!
 //! Terminal input is read on a dedicated OS thread because crossterm's
@@ -31,20 +32,23 @@ pub mod transcript;
 pub mod ui;
 
 use cupel_agent::Agent;
-use cupel_coding_agent::modes::SessionMeta;
+use cupel_coding_agent::modes::{SessionMeta, TerminationSignals};
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 
 /// Run the interactive session until the user quits.
 ///
-/// Errors are terminal I/O failures; agent failures surface inside the UI.
+/// Errors are I/O failures; agent failures surface inside the UI.
 pub async fn run(
     agent: Agent,
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
 ) -> std::io::Result<()> {
+    // Register before entering raw mode so termination always takes the restore path.
+    let signals = TerminationSignals::new()?;
     // `ratatui::init` enters raw mode + the alternate screen and installs a
     // panic hook that restores the terminal without that, a panic would
     // leave the user's shell in raw mode (no echo, no line editing).
@@ -59,8 +63,18 @@ pub async fn run(
     // instead of a stream of key presses without it, every newline in the
     // pasted text would hit the Enter handler and submit a partial prompt.
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+    // Keyboard enhancement (the kitty keyboard protocol) makes the terminal report
+    // modified keys as unambiguous escape codes, so Ctrl+Enter arrives as Ctrl+Enter
+    // instead of plain Enter. Terminals without the protocol ignore the request. It
+    // gets its own `execute!` because it fails on Windows, and a failed command would
+    // skip the ones after it.
+    let _ = execute!(
+        std::io::stdout(),
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
     let ratatui_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
         let _ = execute!(
             std::io::stdout(),
             DisableMouseCapture,
@@ -68,13 +82,18 @@ pub async fn run(
         );
         ratatui_hook(info);
     }));
-    let result = event_loop(&mut terminal, agent, meta, recorder).await;
+    let result = event_loop(&mut terminal, agent, meta, recorder, signals).await;
+    // Pop what was pushed, before `restore` leaves the alternate screen it was
+    // pushed on.
+    let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     let _ = execute!(
         std::io::stdout(),
         DisableMouseCapture,
         DisableBracketedPaste
     );
-    ratatui::restore();
+    // A hung-up terminal can reject restoration. Avoid restore()'s stderr
+    // diagnostic, which can itself panic when stderr was that terminal too.
+    let _ = ratatui::try_restore();
     result
 }
 
@@ -102,6 +121,7 @@ async fn event_loop(
     agent: Agent,
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
+    mut signals: TerminationSignals,
 ) -> std::io::Result<()> {
     let mut sessions = sessions::Sessions::new(app::App::new(agent, meta, recorder));
     sessions.restore().await;
@@ -110,16 +130,20 @@ async fn event_loop(
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-    loop {
-        terminal.draw(|frame| ui::render_sessions(frame, &mut sessions))?;
+    let result = loop {
+        if let Err(error) = terminal.draw(|frame| ui::render_sessions(frame, &mut sessions)) {
+            break Err(error);
+        }
 
         // Wait for whichever source has something first. `next_agent_event`
         // parks forever while idle, so this never busy-spins.
         tokio::select! {
+            // External termination must not wait for the busy-spinoff quit confirmation.
+            _ = signals.recv() => break Ok(()),
             event = terminal_events.recv() => {
                 match event {
                     Some(event) => sessions.on_terminal_event(event),
-                    None => break, // Input thread died; nothing left to do.
+                    None => break Ok(()), // Input thread died; nothing left to do.
                 }
             }
             // Agent events and login events share one wakeup: two
@@ -191,14 +215,14 @@ async fn event_loop(
         }
 
         if sessions.quit_requested() {
-            break;
+            break Ok(());
         }
-    }
-    // Normal exit. Don't leave a run mid-flight. Abort and let each session settle,
-    // so the terminal restore doesn't race provider output. Then drain the hook chains
-    // and announce session-end.
+    };
+    // Don't leave a run mid-flight, even if drawing failed after a terminal hangup.
+    // Abort and let each session settle so the terminal restore doesn't race provider
+    // output. Then drain the hook chains and announce session-end.
     sessions.shutdown().await;
-    Ok(())
+    result
 }
 
 /// The OSC 52 "set clipboard" sequence for `text`.

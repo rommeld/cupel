@@ -113,11 +113,9 @@ async fn repeated_identical_calls_are_cut_off_and_redirected() {
     let mut options = AgentOptions::new(mock_model(), Arc::new(registry));
     options.api_key = Some("test".into());
     options.tools = vec![Arc::new(BashTool::new(&cwd)) as Arc<dyn AgentTool>];
-    options.hooks = Arc::new(SessionHooks::new(
-        BashGuard::from_config(None, &cwd),
-        LoopKiller::new(Some(2)),
-        None,
-    ));
+    let (guard, warnings) = BashGuard::from_config(None, &cwd);
+    assert!(warnings.is_empty());
+    options.hooks = Arc::new(SessionHooks::new(guard, LoopKiller::new(Some(2)), None));
     let mut agent = Agent::new(options);
 
     let mut events = agent.prompt_text("keep counting").unwrap();

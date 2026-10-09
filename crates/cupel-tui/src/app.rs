@@ -50,6 +50,7 @@ pub struct App {
     pub recorder: SessionRecorder,
     pub pending_prompt: Option<String>,
     pub queued: Vec<String>,
+    pub steering: Vec<String>,
     pub mouse_captured: bool,
     pub mouse_toggle_requested: bool,
     pub session_keys: std::collections::HashMap<String, String>,
@@ -66,6 +67,13 @@ pub struct App {
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
     pub run_finished: bool,
+}
+
+/// How a prompt sent while the agent works reaches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Queue,
+    Steer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +226,7 @@ impl App {
             recorder,
             pending_prompt: None,
             queued: Vec::new(),
+            steering: Vec::new(),
             mouse_captured: true,
             mouse_toggle_requested: false,
             session_keys: std::collections::HashMap::new(),
@@ -236,9 +245,11 @@ impl App {
             run_finished: false,
         };
         app.replay_history(&history);
-        // A startup condition (e.g. keyless start) leads the transcript, so
-        // it is the first thing the user reads and scrolls away like any
-        // other notice instead of blocking the session.
+        for warning in std::mem::take(&mut app.meta.warnings) {
+            app.notice(warning);
+        }
+        // A startup condition (e.g. keyless start) also appears as a notice
+        // instead of blocking the session.
         if let Some(warning) = app.meta.startup_warning.take() {
             app.notice(warning);
         }
@@ -445,16 +456,21 @@ impl App {
                 self.scroll_by(i64::from(self.last_transcript_height / 2).max(1));
             }
             (KeyCode::PageDown, ..) => {
-                self.scroll_by(-i64::from(self.last_transcript_height / 2).max(-1));
+                self.scroll_by(-i64::from(self.last_transcript_height / 2).max(1));
             }
 
+            // Ctrl+Enter steers. A terminal reports it only with the keyboard
+            // enhancemetn lib.rs switches on. Without it, most end a plain Enter.
+            // Ctrl+j is the same key in every terhimal. It sends the line feed
+            // byte, which som terminals also send of Ctrl+Enter.
+            (KeyCode::Enter | KeyCode::Char('j'), true, _) => self.submit(Delivery::Steer),
             // Alt+Enter inserts a newline (Shift+Enter is indistinguishable
             // from Enter in most terminals, so Alt is the portable choice).
             (KeyCode::Enter, _, true) => {
                 self.input.insert('\n');
                 self.refresh_autocomplete();
             }
-            (KeyCode::Enter, ..) => self.submit(),
+            (KeyCode::Enter, ..) => self.submit(Delivery::Queue),
             (KeyCode::Backspace, ..) => {
                 self.input.delete_back();
                 self.refresh_autocomplete();
@@ -569,6 +585,11 @@ impl App {
         let registry = self.agent.registry();
         let ingredients =
             cupel_coding_agent::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
+        let warning_suffix = if ingredients.warnings.is_empty() {
+            ""
+        } else {
+            " with warnings"
+        };
 
         // The delta between what the session started with and what is on
         // disk now, as a user message the next request will carry.
@@ -607,6 +628,7 @@ impl App {
             models: ingredients.models,
             home: self.meta.home.clone(),
             startup_warning: None,
+            warnings: ingredients.warnings,
             context_files: ingredients.context_files,
             base_system_prompt: self.meta.base_system_prompt.clone(),
         };
@@ -620,11 +642,13 @@ impl App {
             // The transcript file gets the update too a later --resume
             // replays the same conversation the model saw.
             app.recorder.record(&message);
-            app.notice(
-                "configuration reloaded in place - context changes appended to the conversation",
-            );
+            app.notice(format!(
+                "configuration reloaded in place{warning_suffix} - context changes appended to the conversation"
+            ));
         } else {
-            app.notice("configuration reloaded in place - no context file changes");
+            app.notice(format!(
+                "configuration reloaded in place{warning_suffix} - no context file changes"
+            ));
         }
         app
     }
@@ -749,6 +773,7 @@ impl App {
             // A startup condition was already shown once and does not repeat in
             // sessions opend later.
             startup_warning: None,
+            warnings: ingredients.warnings,
             context_files: ingredients.context_files,
             base_system_prompt: ingredients.system_prompt,
         };
@@ -833,7 +858,7 @@ impl App {
 
     /// Enter: dispatch commands locally, expand templates, or send
     /// the text as a prompt (queued when a run is active).
-    fn submit(&mut self) {
+    fn submit(&mut self, delivery: Delivery) {
         // Enter is consumed by the popup while open, so this is normally a
         // no-op, so no code path can submit with a live session.
         self.autocomplete.close();
@@ -858,11 +883,11 @@ impl App {
             }
             let expanded = commands::expand_prompt_template(&trimmed, &self.meta.templates);
             if let Some(expanded) = expanded {
-                self.send(&expanded);
+                self.send(&expanded, delivery);
                 return;
             }
         }
-        self.send(&trimmed);
+        self.send(&trimmed, delivery);
     }
 
     /// Esc or Ctrl-C while running. The queued prompts go back into the
@@ -874,14 +899,19 @@ impl App {
         self.agent.abort();
     }
 
-    /// Hand every queued prompt back to the input box, oldest first and
-    /// ahead of whatever is typed. Returns how many came back.
+    /// Hand every waiting prompt back to the input box, steered ones first (they were
+    /// due sooner), then queued ones, oldest first and ahead of whatever is typed.
+    /// Returns how many came back.
     fn restore_queued(&mut self) -> usize {
-        // Both copies go: a prompt that is back in the input box must not
-        // also reach the model from the agent's queue.
+        // Both copies go: a prompt that is back in the input box must not also reach
+        // the model from the agent's queue.
+        self.agent.clear_steering();
         self.agent.clear_follow_ups();
         // mem::take moves the list out and leaves an empty Vec behind.
-        let queued = core::mem::take(&mut self.queued);
+        let queued: Vec<String> = core::mem::take(&mut self.steering)
+            .into_iter()
+            .chain(core::mem::take(&mut self.queued))
+            .collect();
         let restored = queued.len();
         if restored > 0 {
             let typed = self.input.text().to_string();
@@ -900,7 +930,7 @@ impl App {
     }
 
     /// Route a prompt to the agent: new run when idle, queued when busy.
-    pub fn send(&mut self, text: &str) {
+    pub fn send(&mut self, text: &str, delivery: Delivery) {
         // A prompt is headed for the agent the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately not at
         // startup (launching + quitting cupel must leave no trace), and not
@@ -910,9 +940,18 @@ impl App {
             &self.meta.cwd,
         ));
         if self.is_running() {
-            self.agent.follow_up(AgentMessage::user_text(text));
+            let message = AgentMessage::user_text(text);
+            match delivery {
+                Delivery::Queue => {
+                    self.agent.follow_up(message);
+                    self.queued.push(text.to_string());
+                }
+                Delivery::Steer => {
+                    self.agent.steer(message);
+                    self.steering.push(text.to_string());
+                }
+            }
             self.recorder.on_queued_prompt(text);
-            self.queued.push(text.to_string());
         } else {
             // Not started here: the event loop takes it via
             // `take_pending_prompt`, awaits the prompt-path hooks
@@ -941,6 +980,13 @@ impl App {
     }
 
     fn account_assistant(&mut self, assistant: &cupel_core::types::AssistantMessage) {
+        // Steering cut this reply short on purpose. No error. The run goes on with
+        // the steered prompt. Esc empties `steering` before it aborts, so an Esc never
+        // lands here.
+        if assistant.stop_reason == StopReason::Aborted && !self.steering.is_empty() {
+            self.notice("interrupted to steer");
+            return;
+        }
         if matches!(
             assistant.stop_reason,
             StopReason::Error | StopReason::Aborted
@@ -1261,7 +1307,7 @@ impl App {
                     std::path::Path::new(&self.meta.cwd),
                     &review_args,
                 ) {
-                    Ok(prompt) => self.send(&prompt),
+                    Ok(prompt) => self.send(&prompt, Delivery::Queue),
                     Err(e) => self.notice(e),
                 }
             }
@@ -1543,6 +1589,17 @@ impl App {
                     self.transcript
                         .cells
                         .push(Cell::User { text: text.clone() });
+                } else if let AgentMessage::Llm(Message::User(user)) = &message
+                    && let UserContentBody::Text(text) = &user.content
+                    && let Some(index) = self.steering.iter().position(|steered| steered == text)
+                {
+                    // A steered prompt reached the model. Unlike a queue one it
+                    // arrives mid-task, so the prose before it is no final answer and
+                    // stays as it is.
+                    self.steering.remove(index);
+                    self.transcript
+                        .cells
+                        .push(Cell::User { text: text.clone() });
                 }
             }
             AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
@@ -1582,6 +1639,7 @@ impl App {
                 tokens_after,
                 error,
                 summary,
+                ..
             } => {
                 let text = match error {
                     None => {
@@ -1613,7 +1671,7 @@ impl App {
                 });
             }
             AgentEvent::AgentEnd { .. } => self.finish_run().await,
-            AgentEvent::TurnEnd { .. } => {}
+            AgentEvent::TurnEnd { .. } | AgentEvent::ThinkingBlocksRemoved { .. } => {}
         }
     }
 
@@ -1628,10 +1686,17 @@ impl App {
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
         self.run_finished = true;
-        // A queued prompt can outlive its run. Submitted after the loop's
-        // last look at the queue, or queued behind a run that failed.
-        if let Some(message) = self.agent.take_follow_up() {
-            match self.agent.prompt(vec![message]) {
+        // A waiting prompt can outlive its run. Submitted after loop's last look at
+        // the queues, or waiting behind a run that failed. Steered prompts go first,
+        // all together, as they would have in the run.
+        let steering = self.agent.take_steering();
+        let next = if steering.is_empty() {
+            self.agent.take_follow_up().map(|message| vec![message])
+        } else {
+            Some(steering)
+        };
+        if let Some(messages) = next {
+            match self.agent.prompt(messages) {
                 Ok(events) => self.run_events = Some(events),
                 Err(err) => self.transcript.cells.push(Cell::Error {
                     text: err.to_string(),

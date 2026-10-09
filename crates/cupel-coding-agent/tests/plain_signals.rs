@@ -133,6 +133,7 @@ mod tests {
             home: None,
             settings: Settings::default(),
             startup_warning: None,
+            warnings: Vec::new(),
             context_files: Vec::new(),
             base_system_prompt: String::new(),
         };

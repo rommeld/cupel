@@ -38,4 +38,74 @@ mod tests {
 
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn configuration_warnings_go_to_stderr_even_when_model_selection_fails() {
+        let root = std::env::temp_dir().join(format!(
+            "cupel-plain-warnings-{}-{}",
+            std::process::id(),
+            cupel_core::types::now_ms()
+        ));
+        let (home, project) = (root.join("home"), root.join("project"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(project.join(".cupel")).unwrap();
+        for path in [
+            home.join("settings.json"),
+            home.join("models.json"),
+            project.join(".cupel/models.json"),
+        ] {
+            std::fs::write(path, "{broken").unwrap();
+        }
+        std::fs::write(
+            project.join(".cupel/settings.json"),
+            r#"{"providers":{"fixture":"project-secret"}}"#,
+        )
+        .unwrap();
+        std::fs::write(project.join(".cupel/bash-deny"), "[unclosed").unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_cupel"))
+            .args(["--plain", "--model", "no-such-model"])
+            .current_dir(&project)
+            .env("CUPEL_HOME", &home)
+            .env("OLLAMA_HOST", "http://127.0.0.1:9")
+            .env_remove("RUST_LOG")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(!stdout.contains("warning:"), "{stdout}");
+        assert_eq!(
+            stderr.matches("warning: ignoring settings file:").count(),
+            1,
+            "{stderr}"
+        );
+        assert_eq!(
+            stderr.matches("warning: ignoring models file:").count(),
+            2,
+            "{stderr}"
+        );
+        assert!(stderr.contains("invalid bash-deny pattern"), "{stderr}");
+        assert!(stderr.contains("API keys belong"), "{stderr}");
+        assert!(!stderr.contains("project-secret"), "{stderr}");
+
+        // --help also consumes the offline catalog's returned warnings.
+        let output = Command::new(env!("CARGO_BIN_EXE_cupel"))
+            .arg("--help")
+            .current_dir(&project)
+            .env("CUPEL_HOME", &home)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stdout.contains("available models:"), "{stdout}");
+        assert!(!stdout.contains("warning:"), "{stdout}");
+        assert_eq!(
+            stderr.matches("warning: ignoring models file:").count(),
+            2,
+            "{stderr}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

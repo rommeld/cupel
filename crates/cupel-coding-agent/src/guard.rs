@@ -53,11 +53,12 @@ pub struct BashGuard {
 }
 
 impl BashGuard {
-    /// Compile a pattern list. Invalid regexes are reported on stderr and
+    /// Compile a pattern list. Invalid regexes are returned as warnings and
     /// skipped (warn-and-continue): a typo in one rule must not disable
     /// the session or silently drop the rest of the list.
     #[must_use]
-    pub fn new(patterns: &[String]) -> Self {
+    pub fn new(patterns: &[String]) -> (Self, Vec<String>) {
+        let mut warnings = Vec::new();
         let rules = patterns
             .iter()
             .filter_map(
@@ -67,19 +68,21 @@ impl BashGuard {
                         matcher,
                     }),
                     Err(e) => {
-                        eprintln!("warning: ignoring invalid bash-deny pattern \"{pattern}\": {e}");
+                        warnings.push(format!(
+                            "warning: ignoring invalid bash-deny pattern \"{pattern}\": {e}"
+                        ));
                         None
                     }
                 },
             )
             .collect();
-        Self { rules }
+        (Self { rules }, warnings)
     }
 
     /// The production constructor: built-in defaults + `~/.cupel/bash-deny`
     /// + `<cwd>/.cupel/bash-deny`.
     #[must_use]
-    pub fn from_config(home: Option<&Path>, cwd: &Path) -> Self {
+    pub fn from_config(home: Option<&Path>, cwd: &Path) -> (Self, Vec<String>) {
         let mut patterns: Vec<String> = DEFAULT_DENY.iter().map(ToString::to_string).collect();
         if let Some(home) = home {
             patterns.extend(read_deny_file(&home.join("bash-deny")));
@@ -158,7 +161,9 @@ mod tests {
 
     fn default_guard() -> BashGuard {
         let patterns: Vec<String> = DEFAULT_DENY.iter().map(ToString::to_string).collect();
-        BashGuard::new(&patterns)
+        let (guard, warnings) = BashGuard::new(&patterns);
+        assert!(warnings.is_empty());
+        guard
     }
 
     #[test]
@@ -195,7 +200,8 @@ mod tests {
         .unwrap();
         std::fs::write(cwd.join(".cupel/bash-deny"), "DROP\\s+TABLE\n").unwrap();
 
-        let guard = BashGuard::from_config(Some(&home), &cwd);
+        let (guard, warnings) = BashGuard::from_config(Some(&home), &cwd);
+        assert!(warnings.is_empty());
         // Union: defaults and both layers are all active.
         assert!(guard.deny_match("rm -rf /").is_some(), "defaults kept");
         assert!(guard.deny_match("git push --force").is_some(), "home rule");
@@ -205,7 +211,10 @@ mod tests {
 
     #[test]
     fn invalid_patterns_are_skipped_not_fatal() {
-        let guard = BashGuard::new(&["[unclosed".to_string(), r"\brm\s+-rf".to_string()]);
+        let (guard, warnings) =
+            BashGuard::new(&["[unclosed".to_string(), r"\brm\s+-rf".to_string()]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("invalid bash-deny pattern \"[unclosed\""));
         // The bad rule is dropped; the good one still guards.
         assert!(guard.deny_match("rm -rf /").is_some());
         assert!(guard.deny_match("[unclosed").is_none());

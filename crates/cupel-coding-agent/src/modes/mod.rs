@@ -8,6 +8,49 @@
 
 pub mod plain;
 
+/// Termination signals shared by the frontends so they can shut down cleanly.
+/// On non-Unix platforms, reception stays pending.
+pub struct TerminationSignals {
+    #[cfg(unix)]
+    term: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    hup: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    int: tokio::signal::unix::Signal,
+}
+
+impl TerminationSignals {
+    /// Register handlers before entering a frontend's input loop.
+    pub fn new() -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+
+            Ok(Self {
+                term: signal(SignalKind::terminate())?,
+                hup: signal(SignalKind::hangup())?,
+                int: signal(SignalKind::interrupt())?,
+            })
+        }
+        #[cfg(not(unix))]
+        Ok(Self {})
+    }
+
+    /// Wait for SIGTERM, SIGHUP or SIGINT, returning its signal number.
+    pub async fn recv(&mut self) -> i32 {
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                _ = self.term.recv() => 15,
+                _ = self.hup.recv() => 1,
+                _ = self.int.recv() => 2,
+            }
+        }
+        #[cfg(not(unix))]
+        std::future::pending().await
+    }
+}
+
 /// Static session info the frontends display (header/footer), plus the
 /// command resources both frontends dispatch against.
 pub struct SessionMeta {
@@ -30,9 +73,12 @@ pub struct SessionMeta {
     /// (session-entered > env var > this).
     pub settings: crate::settings::Settings,
     /// A startup condition worth telling the user about (e.g. "no
-    /// credentials found"). The TUI shows it as the first transcript
+    /// credentials found"). The TUI shows it as a transcript
     /// notice instead of refusing to start.
     pub startup_warning: Option<String>,
+    /// Warnings from loading the session configuration. The TUI consumes
+    /// these as transcript notices, including on runtime reloads.
+    pub warnings: Vec<String>,
     /// The context files as loaded at session start (already embedded in
     /// the agent's system prompt). Bare `/hot-reload` diffs the files on
     /// disk against these and appends only the delta to the conversation.

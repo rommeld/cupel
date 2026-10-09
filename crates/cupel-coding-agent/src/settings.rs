@@ -142,7 +142,7 @@ impl Settings {
     }
     /// Merge home and project into the runtime view, per field:
     /// - providers: home only. A project settings.json must never supply
-    /// credentials (warn_project_settings already told the user why);
+    /// credentials (project_settings_warning tells the user why);
     /// the project's map is deliverately not touched at all.
     /// - loopKiller: project overrides home when present (the usual
     /// later-wins layering, mirroring models.json).
@@ -201,19 +201,20 @@ pub fn load_settings(path: &Path) -> Result<Settings, String> {
     serde_json::from_str(&content).map_err(|e| format!("{} is not valid: {e}", path.display()))
 }
 
+/// Load the home layer, returning defaults and a warning on failure.
 #[must_use]
-pub fn load_home_settings(home: Option<&Path>) -> Settings {
+pub fn load_home_settings(home: Option<&Path>) -> (Settings, Vec<String>) {
     let Some(home) = home else {
-        return Settings::default();
+        return (Settings::default(), Vec::new());
     };
     match load_settings(&settings_path(home)) {
-        Ok(settings) => settings,
-        Err(e) => {
-            eprintln!(
+        Ok(settings) => (settings, Vec::new()),
+        Err(e) => (
+            Settings::default(),
+            vec![format!(
                 "warning: ignoring settings file: {e} (fix the JSON syntax, e.g. remove trailing commas)"
-            );
-            Settings::default()
-        }
+            )],
+        ),
     }
 }
 
@@ -224,13 +225,13 @@ pub fn load_home_settings(home: Option<&Path>) -> Settings {
 /// filtering has nothing to do (security by construction beats secruity
 /// by inspection).
 #[must_use]
-pub fn load_project_settings(cwd: &Path) -> Settings {
+pub fn load_project_settings(cwd: &Path) -> (Settings, Vec<String>) {
     match load_settings(&project_settings_path(cwd)) {
-        Ok(settings) => settings,
-        Err(e) => {
-            eprintln!("warning: ignoring project settings file: {e}");
-            Settings::default()
-        }
+        Ok(settings) => (settings, Vec::new()),
+        Err(e) => (
+            Settings::default(),
+            vec![format!("warning: ignoring project settings file: {e}")],
+        ),
     }
 }
 
@@ -372,15 +373,16 @@ fn project_settings_define_providers(path: &Path) -> bool {
 /// Keys in a project settings file are one `git add` away from a leaked
 /// secret, so they are never honored, only warned about. A project file
 /// without a providers key stays silent.
-pub fn warn_project_settings(cwd: &Path) {
+#[must_use]
+pub fn project_settings_warning(cwd: &Path) -> Option<String> {
     let path = project_settings_path(cwd);
-    if project_settings_define_providers(&path) {
-        eprintln!(
+    project_settings_define_providers(&path).then(|| {
+        format!(
             "warning: provider keys in {} are ignored - API keys belong in \
-            ~/.cupel/settings.json only; remove them before they get commited",
+            ~/.cupel/settings.json only; remove them before they get committed",
             path.display()
-        );
-    }
+        )
+    })
 }
 
 #[cfg(test)]
@@ -399,7 +401,11 @@ mod tests {
         let root = temp_root("missing");
         let settings = load_settings(&root.join("settings.jons")).unwrap();
         assert!(settings.providers.is_empty());
-        assert!(load_home_settings(None).providers.is_empty());
+        assert_eq!(load_home_settings(None), (Settings::default(), Vec::new()));
+        assert_eq!(
+            load_home_settings(Some(&root)),
+            (Settings::default(), Vec::new())
+        );
     }
 
     #[test]
@@ -420,12 +426,16 @@ mod tests {
     #[test]
     fn malformed_files_are_errors_and_the_wrapper_defaults() {
         let root = temp_root("malformed");
-        let path = root.join("settings.jons");
+        let path = root.join("settings.json");
         for bad in ["{not json", "[]", r#"{"providers": {"anthropic": 42}}"#] {
             std::fs::write(&path, bad).unwrap();
             assert!(load_settings(&path).is_err(), "should reject: {bad}");
+            let (settings, warnings) = load_home_settings(Some(&root));
+            assert_eq!(settings, Settings::default());
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].contains(&path.display().to_string()));
+            assert!(warnings[0].contains("ignoring settings file"));
         }
-        assert!(load_home_settings(Some(&root)).providers.is_empty());
     }
 
     #[test]
@@ -645,24 +655,22 @@ mod tests {
         std::fs::create_dir_all(root.join(".cupel")).unwrap();
         assert_eq!(
             load_project_settings(&root),
-            Settings::default(),
+            (Settings::default(), Vec::new()),
             "missing file = defaults"
         );
         std::fs::write(root.join(".cupel/settings.json"), "{broken").unwrap();
-        assert_eq!(
-            load_project_settings(&root),
-            Settings::default(),
-            "malformed = warn + defaults"
-        );
+        let (settings, warnings) = load_project_settings(&root);
+        assert_eq!(settings, Settings::default(), "malformed = warn + defaults");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("ignoring project settings file"));
         std::fs::write(
             root.join(".cupel/settings.json"),
             r#"{"loopKiller": {"maxRepeats": 2}}"#,
         )
         .unwrap();
-        assert_eq!(
-            load_project_settings(&root).loop_killer_max_repeats(),
-            Some(2)
-        );
+        let (settings, warnings) = load_project_settings(&root);
+        assert_eq!(settings.loop_killer_max_repeats(), Some(2));
+        assert!(warnings.is_empty());
     }
 
     #[test]

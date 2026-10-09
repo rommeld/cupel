@@ -16,7 +16,7 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Position, Rect};
 use std::path::{Path, PathBuf};
 
-use crate::app::{App, AppEvent, ReloadTarget};
+use crate::app::{App, AppEvent, Delivery, ReloadTarget};
 
 pub struct Session {
     pub label: String,
@@ -381,7 +381,7 @@ impl Sessions {
                     now, then /spinoff merge {name} finishes the merge",
                     files.join(", ")
                 ));
-                origin.send(&prompt);
+                origin.send(&prompt, Delivery::Queue);
                 Ok(())
             }
             MergeOutcome::StillConflicted(files) => Err(SpinoffError::Blocked(format!(

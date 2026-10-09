@@ -21,6 +21,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::process::{EXIT_STDIO_GRACE, OutputChunk, kill_process_group, output_chunks};
+
 /// A lifecycle event plus its event-specific payload fields.
 pub enum HookEvent<'a> {
     /// First prompt of this process (fires for resumed sessions too).
@@ -227,9 +229,10 @@ fn hook_command(script: &Path, cwd: &Path) -> tokio::process::Command {
         // corrupt the ratatui screen.
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        // If the timeout drops the child future, the process dies with it
-        // instead of leaking.
+        // Backstop for cancellation or failed explicit timeout cleanup.
         .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
     command
 }
 
@@ -246,28 +249,75 @@ async fn run_one(script: &Path, payload: &str, cwd: &Path, timeout: Duration) {
         }
     };
 
-    // Write the payload and close stdin (drop) so `cat`-style hooks see EOF.
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes()).await;
-        drop(stdin);
-    }
+    let pid = child.id();
+    let stdin = child.stdin.take();
+    let mut rx = output_chunks(&mut child);
+    let mut stderr = Vec::new();
 
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => {
-            if output.status.success() {
+    let result = tokio::time::timeout(timeout, async {
+        let status = {
+            // Writing and waiting race independently: a hook can exit while
+            // a descendant holds stdin open without reading the payload.
+            let write = async {
+                if let Some(mut stdin) = stdin {
+                    let _ = stdin.write_all(payload.as_bytes()).await;
+                    // Dropping stdin delivers EOF to `cat`-style hooks.
+                }
+            };
+            tokio::pin!(write);
+            let mut writing = true;
+            let mut reading = true;
+            loop {
+                tokio::select! {
+                    status = child.wait() => break status?,
+                    () = &mut write, if writing => writing = false,
+                    chunk = rx.recv(), if reading => {
+                        match chunk {
+                            Some(OutputChunk::Stderr(bytes)) => stderr.extend(bytes),
+                            Some(OutputChunk::Stdout(_)) => {},
+                            None => reading = false,
+                        }
+                    }
+                }
+            }
+        };
+
+        // Descendants may inherit the pipes. Capture output already in
+        // flight, but never wait indefinitely for their EOF or quietness.
+        let _ = tokio::time::timeout(EXIT_STDIO_GRACE, async {
+            while let Some(chunk) = rx.recv().await {
+                if let OutputChunk::Stderr(bytes) = chunk {
+                    stderr.extend(bytes);
+                }
+            }
+        })
+        .await;
+        Ok::<_, std::io::Error>(status)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(status)) => {
+            if status.success() {
                 tracing::debug!(hook = %script.display(), "hook completed");
             } else {
                 tracing::warn!(
                     hook = %script.display(),
-                    status = %output.status,
-                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    status = %status,
+                    stderr = %String::from_utf8_lossy(&stderr),
                     "hook exited non-zero"
                 );
             }
         }
         Ok(Err(e)) => tracing::warn!(hook = %script.display(), "hook failed: {e}"),
         Err(_) => {
-            // The timeout dropped the child future; kill_on_drop reaps it.
+            if let Some(pid) = pid {
+                kill_process_group(pid);
+            }
+            // Fall back to killing the direct child, then reap it without
+            // allowing a failed kill to freeze the prompt path.
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
             tracing::warn!(hook = %script.display(), ?timeout, "hook timed out and was killed");
         }
     }
@@ -409,6 +459,114 @@ mod tests {
         runner.dispatch(HookEvent::Stop).await;
         assert!(start.elapsed() < Duration::from_secs(2), "must not wait 5s");
         assert!(!marker.exists(), "hook must have been killed");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn background_process_cannot_hold_pipes_or_stdin_open() {
+        let root = temp_root("background-pipes");
+        let marker = root.join("next-hook");
+        install_script(
+            &root,
+            "user-prompt-submit",
+            "a-background",
+            // Explicitly inherit stdin as well as stdout/stderr. Neither
+            // writing a large payload nor waiting for EOF may block exit.
+            "echo $$ > hook.pid\nsleep 10 <&0 &",
+        );
+        install_script(&root, "user-prompt-submit", "b-next", "touch next-hook");
+
+        let prompt = "x".repeat(1024 * 1024);
+        let mut runner = runner(vec![root.clone()], &root).with_timeout(Duration::from_secs(6));
+        let result = tokio::time::timeout(
+            Duration::from_secs(4),
+            runner.dispatch(HookEvent::UserPromptSubmit { prompt: &prompt }),
+        )
+        .await;
+        // Successful hooks may leave background processes running; clean
+        // up the test's process group before making assertions.
+        let pid = std::fs::read_to_string(root.join("hook.pid")).unwrap();
+        kill_process_group(pid.trim().parse().unwrap());
+        assert!(result.is_ok(), "must return before the per-hook timeout");
+        assert!(marker.exists(), "subsequent hooks must still run");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_includes_writing_a_large_prompt() {
+        let root = temp_root("blocked-stdin");
+        install_script(
+            &root,
+            "user-prompt-submit",
+            "a-no-reader",
+            "echo $$ > hook.pid\nsleep 10",
+        );
+        install_script(&root, "user-prompt-submit", "b-next", "touch next-hook");
+
+        let prompt = "x".repeat(1024 * 1024);
+        let mut runner = runner(vec![root.clone()], &root).with_timeout(Duration::from_secs(2));
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            runner.dispatch(HookEvent::UserPromptSubmit { prompt: &prompt }),
+        )
+        .await;
+        let pid = std::fs::read_to_string(root.join("hook.pid")).unwrap();
+        kill_process_group(pid.trim().parse().unwrap());
+        assert!(result.is_ok(), "writing stdin must obey the timeout");
+        assert!(root.join("next-hook").exists(), "dispatch must continue");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_descendants_too() {
+        let root = temp_root("timeout-descendants");
+        let marker = root.join("finished");
+        install_script(
+            &root,
+            "stop",
+            "sleeper",
+            "cat > /dev/null\n(sleep 4; touch finished) &\ntouch started\nwait",
+        );
+
+        let mut runner = runner(vec![root.clone()], &root).with_timeout(Duration::from_secs(2));
+        tokio::time::timeout(Duration::from_secs(5), runner.dispatch(HookEvent::Stop))
+            .await
+            .unwrap();
+        assert!(
+            root.join("started").exists(),
+            "descendant must have started"
+        );
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert!(!marker.exists(), "the descendant must have been killed too");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pipes_are_drained_while_writing_stdin() {
+        let root = temp_root("pipe-backpressure");
+        install_script(
+            &root,
+            "user-prompt-submit",
+            "capture",
+            "head -c 262144 /dev/zero\nhead -c 262144 /dev/zero >&2\ncat > captured.json",
+        );
+
+        let prompt = "x".repeat(1024 * 1024);
+        let mut runner = runner(vec![root.clone()], &root).with_timeout(Duration::from_secs(5));
+        tokio::time::timeout(
+            Duration::from_secs(8),
+            runner.dispatch(HookEvent::UserPromptSubmit { prompt: &prompt }),
+        )
+        .await
+        .unwrap();
+        let captured: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("captured.json")).unwrap())
+                .unwrap();
+        assert_eq!(captured["prompt"], prompt);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]

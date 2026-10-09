@@ -14,7 +14,8 @@ use futures_util::StreamExt as _;
 use tokio_util::sync::CancellationToken;
 
 use cupel_agent::{
-    AgentEvent, AgentLoopConfig, AgentMessage, NoHooks, RetryConfig, ToolExecutionMode,
+    Agent, AgentEvent, AgentHooks, AgentLoopConfig, AgentMessage, AgentOptions, NoHooks,
+    RetryConfig, ToolExecutionMode,
     agent_loop::{agent_event_channel, agent_loop},
     types::AgentContext,
 };
@@ -23,7 +24,8 @@ use cupel_core::{
     provider::{Provider, Registry},
     types::{
         Api, AssistantContent, AssistantMessage, Context, Message, Model, ModelCost, StopReason,
-        StreamOptions, TextContent, ThinkingContent, Usage, now_ms,
+        StreamOptions, TextContent, ThinkingContent, ToolCall, ToolResultContent,
+        ToolResultMessage, Usage, now_ms,
     },
 };
 
@@ -37,6 +39,7 @@ struct BindingProvider {
     /// keeps failing must not make the loop spin).
     always_reject: bool,
     replayed_thinking: Mutex<Vec<bool>>,
+    seen_messages: Mutex<Vec<Vec<Message>>>,
 }
 
 impl BindingProvider {
@@ -44,6 +47,7 @@ impl BindingProvider {
         Self {
             always_reject,
             replayed_thinking: Mutex::new(Vec::new()),
+            seen_messages: Mutex::new(Vec::new()),
         }
     }
 
@@ -89,6 +93,10 @@ impl Provider for BindingProvider {
             .lock()
             .expect("lock")
             .push(has_thinking);
+        self.seen_messages
+            .lock()
+            .expect("lock")
+            .push(context.messages);
 
         let (stream, sink) = assistant_message_channel();
         let _ = sink.start();
@@ -218,6 +226,24 @@ async fn stale_thinking_blocks_are_stripped_and_the_turn_retried() {
             .iter()
             .any(|e| matches!(e, AgentEvent::AutoRetry { .. }))
     );
+    let removed: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ThinkingBlocksRemoved { messages } => Some(messages),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(removed.len(), 1);
+    assert!(removed[0].iter().all(|message| {
+        match message {
+            AgentMessage::Llm(Message::Assistant(a)) => a
+                .content
+                .iter()
+                .all(|block| !matches!(block, AssistantContent::Thinking(_))),
+            _ => true,
+        }
+    }));
+    assert_eq!(removed[0].len(), 4, "seed + prompt + rejection");
 }
 
 #[tokio::test]
@@ -230,4 +256,87 @@ async fn stripping_happens_once_per_failure_episode() {
     assert_eq!(provider.replayed_thinking(), vec![true, false]);
     let last = last_assistant(&events).expect("final assistant message");
     assert_eq!(last.stop_reason, StopReason::Error);
+}
+
+#[tokio::test]
+async fn thinking_removal_persists_across_runs_even_when_recovery_fails() {
+    for always_reject in [false, true] {
+        let provider = Arc::new(BindingProvider::new(always_reject));
+        let mut registry = Registry::new();
+        registry.register(Arc::<BindingProvider>::clone(&provider));
+        let mut seed = earlier_turn(&mock_model());
+        let tool_call = ToolCall {
+            id: "old_call".into(),
+            name: "read".into(),
+            arguments: serde_json::json!({}),
+        };
+        let AgentMessage::Llm(Message::Assistant(earlier)) = &mut seed[1] else {
+            panic!("seed assistant");
+        };
+        earlier
+            .content
+            .push(AssistantContent::Thinking(ThinkingContent {
+                thinking: String::new(),
+                thinking_signature: Some("encrypted reasoning".into()),
+                redacted: Some(true),
+            }));
+        earlier
+            .content
+            .push(AssistantContent::ToolCall(tool_call.clone()));
+        earlier.stop_reason = StopReason::ToolUse;
+        seed.push(AgentMessage::Llm(Message::ToolResult(ToolResultMessage {
+            tool_call_id: tool_call.id.clone(),
+            tool_name: tool_call.name.clone(),
+            content: vec![ToolResultContent::Text(TextContent::plain("file contents"))],
+            details: None,
+            is_error: false,
+            timestamp: now_ms(),
+        })));
+        let mut options = AgentOptions::new(mock_model(), Arc::new(registry));
+        options.messages = seed.clone();
+        options.retry.max_retries = 0;
+        let mut agent = Agent::new(options);
+
+        let mut events = agent.prompt_text("hello").expect("agent is idle");
+        let mut effective = seed.clone();
+        let mut removed = 0;
+        while let Some(event) = events.next().await {
+            match event {
+                AgentEvent::MessageEnd { message } => effective.push(message),
+                AgentEvent::ThinkingBlocksRemoved { messages } => {
+                    effective = messages;
+                    removed += 1;
+                }
+                _ => {}
+            }
+        }
+        agent.wait_for_idle().await;
+        assert_eq!(removed, 1);
+        let retained = agent.state().messages;
+        assert_eq!(retained, effective);
+        assert_eq!(retained.len(), seed.len() + 3, "prompt + rejection + retry");
+        let AgentMessage::Llm(Message::Assistant(earlier)) = &retained[1] else {
+            panic!("retained assistant");
+        };
+        assert_eq!(
+            earlier.content,
+            vec![
+                AssistantContent::Text(TextContent::plain("earlier answer")),
+                AssistantContent::ToolCall(tool_call),
+            ]
+        );
+        assert_eq!(retained[0], seed[0]);
+        assert_eq!(retained[2], seed[2], "tool result stays unchanged");
+
+        let mut events = agent.prompt_text("next question").expect("agent is idle");
+        while let Some(event) = events.next().await {
+            assert!(!matches!(event, AgentEvent::ThinkingBlocksRemoved { .. }));
+        }
+        agent.wait_for_idle().await;
+        assert_eq!(provider.replayed_thinking(), vec![true, false, false]);
+        let expected = NoHooks.convert_to_llm(&retained).await;
+        let requests = provider.seen_messages.lock().expect("lock");
+        assert_eq!(&requests[2][..expected.len()], expected.as_slice());
+        assert_eq!(requests[2].len(), expected.len() + 1);
+    }
 }

@@ -22,6 +22,8 @@ use std::path::Path;
 
 use cupel_core::types::Model;
 
+use crate::settings::Settings;
+
 /// Parse one `models.json`: a JSON array of Model descriptors in the
 /// workspace-wide camelCase serde form (`baseUrl`, `contextWindow`,
 /// `maxTokens`, ...). A missing file is simply an empty layer; a malformed
@@ -37,33 +39,37 @@ pub fn load_models_file(path: &Path) -> Result<Vec<Model>, String> {
 }
 
 /// The user layers in precedence order: cupel home first, project second.
-/// Parse errors are announced on stderr (visible in scrollback before the
-/// TUI takes the screen, like the "logging to ..." line) and
-/// the broken layer is skipped, never aborting startup.
+/// Parse errors are collected as warnings and the broken layer is skipped,
+/// never aborting startup. Reuse the loaded home settings for credential
+/// checks so a malformed settings file is reported only once.
 #[must_use]
-pub fn load_user_models(home: Option<&Path>, cwd: &Path) -> Vec<Vec<Model>> {
+pub fn load_user_models(
+    home: Option<&Path>,
+    cwd: &Path,
+    settings: &Settings,
+    warnings: &mut Vec<String>,
+) -> Vec<Vec<Model>> {
     let mut layers = Vec::new();
     if let Some(home) = home {
-        layers.push(load_layer(&home.join("models.json")));
+        layers.push(load_layer(&home.join("models.json"), warnings));
     }
-    let project = load_layer(&cwd.join(".cupel/models.json"));
+    let project = load_layer(&cwd.join(".cupel/models.json"), warnings);
     if crate::project_trust::is_trusted(home, cwd) {
         layers.push(project);
     } else {
         let mut known = cupel_core::catalog::builtin_models();
         known.extend(layers.iter().flatten().cloned());
-        let settings = crate::settings::load_home_settings(home);
         let auth = crate::auth::load_auth(home);
         layers.push(
             project
                 .into_iter()
                 .filter(|model| {
-                    let allowed = untrusted_model_allowed(model, &known, &settings, &auth);
+                    let allowed = untrusted_model_allowed(model, &known, settings, &auth);
                     if !allowed {
-                        eprintln!(
+                        warnings.push(format!(
                             "warning: ignoring project model {}: explicit project trust required",
                             model.id
-                        );
+                        ));
                     }
                     allowed
                 })
@@ -73,11 +79,11 @@ pub fn load_user_models(home: Option<&Path>, cwd: &Path) -> Vec<Vec<Model>> {
     layers
 }
 
-fn load_layer(path: &Path) -> Vec<Model> {
+fn load_layer(path: &Path, warnings: &mut Vec<String>) -> Vec<Model> {
     match load_models_file(path) {
         Ok(models) => models,
         Err(e) => {
-            eprintln!("warning: ignoring models file: {e}");
+            warnings.push(format!("warning: ignoring models file: {e}"));
             Vec::new()
         }
     }
@@ -164,6 +170,7 @@ fn with_context_ceiling(existing: &Model, mut replacement: Model) -> Model {
 pub fn filter_registered(
     models: Vec<Model>,
     registry: &cupel_core::provider::Registry,
+    warnings: &mut Vec<String>,
 ) -> Vec<Model> {
     models
         .into_iter()
@@ -175,11 +182,11 @@ pub fn filter_registered(
                     api = %model.api.as_str(),
                     "skipping model: no provider implements this api"
                 );
-                eprintln!(
+                warnings.push(format!(
                     "warning: skipping model {} - no provider implements api \"{}\"",
                     model.id,
                     model.api.as_str()
-                );
+                ));
             }
             registered
         })
@@ -188,14 +195,16 @@ pub fn filter_registered(
 
 /// The full startup catalog: built-ins, user layers, then ollama
 /// discovery for ids not already defined. Async because discovery is a
-/// (bounded, fail-soft) network probe.
+/// (bounded, fail-soft) network probe. Returns the catalog and load warnings.
 pub async fn build_catalog(
     registry: &cupel_core::provider::Registry,
     home: Option<&Path>,
     cwd: &Path,
-) -> Vec<Model> {
+    settings: &Settings,
+) -> (Vec<Model>, Vec<String>) {
+    let mut warnings = Vec::new();
     let mut layers = vec![cupel_core::catalog::builtin_models()];
-    layers.extend(load_user_models(home, cwd));
+    layers.extend(load_user_models(home, cwd, settings, &mut warnings));
     let mut merged = merge_models(layers);
 
     // Discovered models rank below everything explicit: only ids nobody
@@ -206,16 +215,17 @@ pub async fn build_catalog(
             merged.push(model);
         }
     }
-    filter_registered(merged, registry)
+    (filter_registered(merged, registry, &mut warnings), warnings)
 }
 
 /// The `--help` catalog: built-ins + user layers, no network probe (help
 /// must be instant and side-effect-free).
 #[must_use]
-pub fn build_catalog_offline(home: Option<&Path>, cwd: &Path) -> Vec<Model> {
+pub fn build_catalog_offline(home: Option<&Path>, cwd: &Path) -> (Vec<Model>, Vec<String>) {
+    let (settings, mut warnings) = crate::settings::load_home_settings(home);
     let mut layers = vec![cupel_core::catalog::builtin_models()];
-    layers.extend(load_user_models(home, cwd));
-    merge_models(layers)
+    layers.extend(load_user_models(home, cwd, &settings, &mut warnings));
+    (merge_models(layers), warnings)
 }
 
 #[cfg(test)]
@@ -344,11 +354,17 @@ mod tests {
         model[0].api = cupel_core::types::Api::from("grpc-magic");
 
         let registry = cupel_core::default_registry();
-        assert!(filter_registered(model, &registry).is_empty());
+        let mut warnings = Vec::new();
+        assert!(filter_registered(model, &registry, &mut warnings).is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("skipping model x"));
+        assert!(warnings[0].contains("grpc-magic"));
         // Sanity: a real api survives.
         let ok: Vec<Model> =
             serde_json::from_value(serde_json::json!([entry_json("y", 1000)])).unwrap();
-        assert_eq!(filter_registered(ok, &registry).len(), 1);
+        warnings.clear();
+        assert_eq!(filter_registered(ok, &registry, &mut warnings).len(), 1);
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -374,7 +390,8 @@ mod tests {
 
         crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Trusted)
             .unwrap();
-        let catalog = build_catalog_offline(Some(&home), &cwd);
+        let (catalog, warnings) = build_catalog_offline(Some(&home), &cwd);
+        assert!(warnings.is_empty());
         let sonnet = catalog
             .iter()
             .find(|m| m.id == "claude-sonnet-4-5")
@@ -452,7 +469,12 @@ mod tests {
             if let Some(trust) = trust {
                 crate::project_trust::save(&home, &cwd, trust).unwrap();
             }
-            let catalog = build_catalog_offline(Some(&home), &cwd);
+            let (catalog, warnings) = build_catalog_offline(Some(&home), &cwd);
+            assert!(
+                warnings
+                    .iter()
+                    .any(|warning| warning.contains("forged-openai"))
+            );
             let sonnet = catalog
                 .iter()
                 .find(|m| m.id == "claude-sonnet-4-5")
@@ -477,7 +499,8 @@ mod tests {
 
         crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Trusted)
             .unwrap();
-        let trusted = build_catalog_offline(Some(&home), &cwd);
+        let (trusted, warnings) = build_catalog_offline(Some(&home), &cwd);
+        assert!(warnings.is_empty());
         assert_eq!(
             trusted
                 .iter()
@@ -497,11 +520,9 @@ mod tests {
         // The same loader is used by /hot-reload, so revocation is honored.
         crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Restricted)
             .unwrap();
-        assert!(
-            !build_catalog_offline(Some(&home), &cwd)
-                .iter()
-                .any(|m| m.id == "forged-openai-codex")
-        );
+        let (restricted, warnings) = build_catalog_offline(Some(&home), &cwd);
+        assert!(!warnings.is_empty());
+        assert!(!restricted.iter().any(|m| m.id == "forged-openai-codex"));
     }
 
     #[test]

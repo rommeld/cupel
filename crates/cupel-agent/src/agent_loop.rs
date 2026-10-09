@@ -160,10 +160,34 @@ async fn run_loop(
                 .await;
             }
 
+            // THis reply's own token. A child token is cancelled with its parent (Esc
+            // still stops everything) but can also be cancelled alone. Steering does
+            // that, and the run goes on.
+            let turn = cancel.child_token();
             let message =
-                stream_assistant_response(&mut context, &config, &hooks, &registry, &cancel, sink)
+                stream_assistant_response(&mut context, &config, &hooks, &registry, &turn, sink)
                     .await;
             new_messages.push(AgentMessage::Llm(Message::Assistant(message.clone())));
+
+            // Steering cut this reply short. The partial reply stays in the transcript
+            // but never goes over the wire again (aborted turns are skipped when
+            // messages are converted for the provider). Its tool calls were never
+            // executed. The next request carries the steering messages instead.
+            if message.stop_reason == StopReason::Aborted
+                && turn.is_cancelled()
+                && !cancel.is_cancelled()
+            {
+                tracing::info!("reply interrupted by steering");
+                sink.emit(AgentEvent::TurnEnd {
+                    message: Box::new(AgentMessage::Llm(Message::Assistant(message.clone()))),
+                    tool_results: Vec::new(),
+                });
+                pending_messages = hooks.steering_messages().await;
+                // Request again even if the user took the message back in the
+                // meantime: the interrupted reply still needs answer
+                has_more_tool_calls = true;
+                continue;
+            }
 
             if matches!(message.stop_reason, StopReason::Error | StopReason::Aborted) {
                 tracing::warn!(
@@ -219,6 +243,9 @@ async fn run_loop(
                     && !cancel.is_cancelled()
                     && strip_thinking_blocks(&mut context)
                 {
+                    sink.emit(AgentEvent::ThinkingBlocksRemoved {
+                        messages: context.messages.clone(),
+                    });
                     tracing::warn!(
                         "thinking blocks bound to an edited history; retrying without them"
                     );
@@ -384,6 +411,7 @@ async fn run_compaction(
                 tokens_after: outcome.tokens_after,
                 error: None,
                 summary: outcome.summary,
+                messages: context.messages.clone(),
             });
             true
         }
@@ -391,9 +419,10 @@ async fn run_compaction(
             tracing::warn!(?reason, error = %err, "compaction failed");
             sink.emit(AgentEvent::CompactionEnd {
                 tokens_before,
-                tokens_after: tokens_before,
+                tokens_after: compaction::estimate_context_tokens(context),
                 error: Some(err.to_string()),
                 summary: None,
+                messages: context.messages.clone(),
             });
             false
         }
@@ -401,9 +430,9 @@ async fn run_compaction(
 }
 
 /// Remove every thinking block from the assistant turns in `context`;
-/// returns whether there was anything to remove. Only this run's context
-/// changes: the session keeps the blocks, and a later run that trips over
-/// them strips them again.
+/// returns whether there was anything to remove. The caller emits the
+/// updated context so future runs keep the removal; the session log still
+/// retains the original blocks recorded via `MessageEnd`.
 fn strip_thinking_blocks(context: &mut AgentContext) -> bool {
     context
         .messages
@@ -484,23 +513,36 @@ async fn stream_assistant_response(
     let mut stream = stream;
     let mut started = false;
     let mut final_message: Option<AssistantMessage> = None;
+    // One wait for the whole reply. pin! fixes the future in place, so each pass of
+    // the loop below polls the same wait through `&mut` instead of starting a new one.
+    let mut steering = core::pin::pin!(hooks.steering_arrived());
 
-    while let Some(event) = stream.next().await {
-        match event {
-            AssistantMessageEvent::Start => {
-                started = true;
+    loop {
+        tokio::select! {
+            event = stream.next() => {
+                let Some(event) = event else { break };
+                match event {
+                    AssistantMessageEvent::Start => {
+                        started = true;
+                    }
+                    AssistantMessageEvent::Done { message, .. } => {
+                        final_message = Some(message);
+                        break;
+                    }
+                    AssistantMessageEvent::Error { error, .. } => {
+                        final_message = Some(error);
+                        break;
+                    }
+                    other => {
+                         sink.emit(AgentEvent::MessageUpdate { event: other });
+                    }
+                }
             }
-            AssistantMessageEvent::Done { message, .. } => {
-                final_message = Some(message);
-                break;
-            }
-            AssistantMessageEvent::Error { error, .. } => {
-                final_message = Some(error);
-                break;
-            }
-            other => {
-                sink.emit(AgentEvent::MessageUpdate { event: other });
-            }
+            // Cancel only this reply. The provider sees its signal fire and ends the
+            // stream with an aborted message, which the arm above receives like any
+            // other ending. The `if` switches this arm off once the token is
+            // cancelled: a finished future must not be polled again.
+            () = &mut steering, if !cancel.is_cancelled() => cancel.cancel(),
         }
     }
 

@@ -12,6 +12,8 @@ use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
 use cupel_core::types::{AssistantMessageEvent, Message, StopReason, ToolResultContent};
 
 use crate::modes::SessionMeta;
+#[cfg(unix)]
+use crate::modes::TerminationSignals;
 use crate::session::SessionRecorder;
 
 enum PlainError {
@@ -108,34 +110,6 @@ async fn read_prompt(
     Ok((bytes != 0).then_some(text))
 }
 
-#[cfg(unix)]
-struct TerminationSignals {
-    term: tokio::signal::unix::Signal,
-    hup: tokio::signal::unix::Signal,
-    int: tokio::signal::unix::Signal,
-}
-
-#[cfg(unix)]
-impl TerminationSignals {
-    fn new() -> Result<Self, String> {
-        use tokio::signal::unix::{SignalKind, signal};
-
-        Ok(Self {
-            term: signal(SignalKind::terminate()).map_err(|error| error.to_string())?,
-            hup: signal(SignalKind::hangup()).map_err(|error| error.to_string())?,
-            int: signal(SignalKind::interrupt()).map_err(|error| error.to_string())?,
-        })
-    }
-
-    async fn recv(&mut self) -> i32 {
-        tokio::select! {
-            _ = self.term.recv() => 15,
-            _ = self.hup.recv() => 1,
-            _ = self.int.recv() => 2,
-        }
-    }
-}
-
 pub async fn run(
     mut agent: Agent,
     meta: &SessionMeta,
@@ -197,7 +171,8 @@ async fn run_session(
     }
 
     #[cfg(unix)]
-    let mut signals = TerminationSignals::new().map_err(PlainError::Run)?;
+    let mut signals =
+        TerminationSignals::new().map_err(|error| PlainError::Run(error.to_string()))?;
     let mut last_run_error = None;
     let piped = !std::io::stdin().is_terminal();
     let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
@@ -427,6 +402,7 @@ async fn run_session(
                     tokens_after,
                     error,
                     summary,
+                    ..
                 } => match error {
                     None => {
                         output(format_args!(
@@ -457,7 +433,9 @@ async fn run_session(
                         delay_ms as f64 / 1000.0
                     ))?;
                 }
-                AgentEvent::ToolExecutionStart { .. } | AgentEvent::ToolExecutionUpdate { .. } => {}
+                AgentEvent::ToolExecutionStart { .. }
+                | AgentEvent::ToolExecutionUpdate { .. }
+                | AgentEvent::ThinkingBlocksRemoved { .. } => {}
                 AgentEvent::AgentEnd { .. } => {
                     // Fire the `stop` hook without holding up the prompt
                     // loop; the next before_prompt settles it.

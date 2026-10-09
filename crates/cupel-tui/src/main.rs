@@ -123,9 +123,12 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                 // network. Discovered models appear in the TUI's /model.
                 let home = cupel_coding_agent::resources::config_home();
                 let cwd = std::env::current_dir().unwrap_or_default();
-                for model in
-                    cupel_coding_agent::models::build_catalog_offline(home.as_deref(), &cwd)
-                {
+                let (models, warnings) =
+                    cupel_coding_agent::models::build_catalog_offline(home.as_deref(), &cwd);
+                for warning in warnings {
+                    eprintln!("{warning}");
+                }
+                for model in models {
                     help.push_str(&format!("  {} ({})\n", model.id, model.provider.as_str()));
                 }
                 // `print!` panics when stdout is a pipe whose reader closed
@@ -318,6 +321,13 @@ async fn run() -> Result<(), AppError> {
         );
     }
     let ingredients = cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry).await;
+    // Surface plain-mode warnings before model selection can fail. In the
+    // TUI they travel with SessionMeta, never through the alternate screen.
+    if use_plain {
+        for warning in &ingredients.warnings {
+            eprintln!("{warning}");
+        }
+    }
 
     // No credentials is fatal only where it is unrecoverable. The TUI can
     // fix it at runtime (`/provider <name> <api-key>`, `/model`), so it
@@ -410,6 +420,7 @@ async fn run() -> Result<(), AppError> {
         settings: ingredients.settings,
         home,
         startup_warning,
+        warnings: ingredients.warnings,
         context_files: ingredients.context_files,
         base_system_prompt: ingredients.system_prompt,
     };
