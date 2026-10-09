@@ -383,7 +383,7 @@ pub struct Model {
 
 // `StreamOptions` is *runtime configuration*, never serialized, so it carries no
 // serde derives.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct StreamOptions {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
@@ -400,6 +400,27 @@ pub struct StreamOptions {
     pub reasoning: Option<ThinkingLevel>,
     /// Custom per-level thinking budgets (budget-based thinking models only).
     pub thinking_budgets: Option<ThinkingBudgets>,
+}
+
+/// Keep API keys and OAuth tokens out of debug logs without changing runtime values.
+impl core::fmt::Debug for StreamOptions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StreamOptions")
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field("signal", &self.signal)
+            .field("cache_retention", &self.cache_retention)
+            .field("session_id", &self.session_id)
+            .field("headers", &self.headers)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("max_retries", &self.max_retries)
+            .field("metadata", &self.metadata)
+            .field("env", &self.env)
+            .field("reasoning", &self.reasoning)
+            .field("thinking_budgets", &self.thinking_budgets)
+            .finish()
+    }
 }
 
 /// Current Unix time in milliseconds.
@@ -458,4 +479,40 @@ pub enum AssistantMessageEvent {
         reason: StopReason,
         error: AssistantMessage,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::types::{StreamOptions, ThinkingLevel};
+
+    #[test]
+    fn stream_options_debug_redacts_api_keys_and_jwts() {
+        for secret in [
+            "sk-test-secret-key",
+            "eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        ] {
+            let options = StreamOptions {
+                api_key: Some(secret.to_string()),
+                max_tokens: Some(8192),
+                reasoning: Some(ThinkingLevel::High),
+                ..StreamOptions::default()
+            };
+            for rendered in [format!("{options:?}"), format!("{options:#?}")] {
+                assert!(!rendered.contains(secret), "API key leaked: {rendered}");
+                assert!(rendered.contains("[redacted]"), "{rendered}");
+                assert!(rendered.contains("max_tokens") && rendered.contains("8192"));
+                assert!(rendered.contains("reasoning") && rendered.contains("High"));
+            }
+            assert_eq!(options.api_key.as_deref(), Some(secret));
+        }
+    }
+
+    #[test]
+    fn stream_options_debug_distinguishes_absent_and_empty_api_keys() {
+        let mut options = StreamOptions::default();
+        assert!(format!("{options:?}").contains("api_key: None"));
+
+        options.api_key = Some(String::new());
+        assert!(format!("{options:?}").contains("api_key: Some(\"[redacted]\")"));
+    }
 }
