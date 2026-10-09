@@ -110,7 +110,17 @@ fn completions_compat(model: &Model) -> CompletionsCompat {
     model
         .compat
         .clone()
-        .and_then(|v| serde_json::from_value(v).ok())
+        .map(|value| {
+            serde_json::from_value(value).unwrap_or_else(|error| {
+                tracing::warn!(
+                    model = %model.id,
+                    provider = %model.provider.as_str(),
+                    error = %error,
+                    "invalid OpenAI Completions compat settings; using defaults"
+                );
+                CompletionsCompat::default()
+            })
+        })
         .unwrap_or_default()
 }
 
@@ -947,15 +957,42 @@ mod tests {
     }
 
     #[test]
-    fn malformed_compat_falls_back_to_all_defaults() {
-        // A type error fails the whole parse, which `.ok()` turns into the
-        // defaults, so a typo'd requiresApiKey silently demands a key
-        // again. Pinned here so a future change to per-field tolerance is
-        // a conscious decision.
-        let compat = completions_compat(&model_with_compat(Some(serde_json::json!({
-            "requiresApiKey": "nope",
-        }))));
+    fn malformed_compat_warns_before_falling_back_to_defaults() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for LogWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let log = LogWriter(Arc::new(Mutex::new(Vec::new())));
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || writer.clone())
+            .finish();
+        let mut model = model_with_compat(Some(serde_json::json!({"requiresApiKey": "false"})));
+        model.id = "bad-llama-compat-fixture".to_string();
+        let compat = tracing::subscriber::with_default(subscriber, || completions_compat(&model));
         assert!(compat.requires_api_key);
+        let output = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        assert!(output.contains(&model.id), "{output}");
+        assert!(
+            output.contains("invalid OpenAI Completions compat settings"),
+            "{output}"
+        );
+        assert!(output.contains("expected a boolean"), "{output}");
+        assert!(output.contains("using defaults"), "{output}");
     }
 
     /// A reasoning model pinned to the OpenRouter thinking format, with an
