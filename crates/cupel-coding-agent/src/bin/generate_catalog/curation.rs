@@ -198,6 +198,20 @@ const fn bedrock(id: &'static str, rename: Option<&'static str>, thinking: Think
     }
 }
 
+/// Claude 4.7+ on Bedrock: the same adaptive compat as the Anthropic twin, so
+/// the Bedrock provider reads the model's capabilities from the catalog
+/// instead of guessing them from the id.
+const fn bedrock_adaptive(
+    id: &'static str,
+    rename: Option<&'static str>,
+    thinking: Thinking,
+) -> Curated {
+    Curated {
+        compat: Compat::AdaptiveAnthropic,
+        ..bedrock(id, rename, thinking)
+    }
+}
+
 const fn fireworks_anthropic(id: &'static str) -> Curated {
     Curated {
         id,
@@ -308,24 +322,24 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 Some("Claude Sonnet 4.5 (Bedrock)"),
                 Thinking::Budget,
             ),
-            bedrock(
+            bedrock_adaptive(
                 "us.anthropic.claude-sonnet-5",
                 Some("Claude Sonnet 5 (Bedrock)"),
                 Thinking::FromEffort,
             ),
             // models.dev lists Sonnet 5.5 only as the global cross-region
             // profile so far; its off switch is the same as on the API.
-            bedrock(
+            bedrock_adaptive(
                 "global.anthropic.claude-sonnet-5-5",
                 Some("Claude Sonnet 5.5 (Bedrock)"),
                 Thinking::Explicit(SONNET55_THINKING),
             ),
-            bedrock(
+            bedrock_adaptive(
                 "us.anthropic.claude-fable-5",
                 Some("Claude Fable 5 (Bedrock)"),
                 Thinking::FromEffort,
             ),
-            bedrock(
+            bedrock_adaptive(
                 "us.anthropic.claude-fable-5-1",
                 Some("Claude Fable 5.1 (Bedrock)"),
                 Thinking::FromEffort,

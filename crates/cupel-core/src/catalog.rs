@@ -592,4 +592,44 @@ mod tests {
         }
         assert_eq!(seen, 8, "only supported Codex models belong in the catalog");
     }
+
+    #[test]
+    fn bedrock_claude_rows_share_the_anthropic_twins_thinking_compat() {
+        // Both adapters read `forceAdaptiveThinking` from the row. A Bedrock
+        // twin that drifted would think differently from the same model on
+        // the Anthropic API (budget_tokens where only adaptive is accepted).
+        let models = builtin_models();
+        let forced = |model: &Model| {
+            model
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("forceAdaptiveThinking"))
+                .and_then(serde_json::Value::as_bool)
+        };
+        let mut twins = 0;
+        for bedrock in models
+            .iter()
+            .filter(|m| m.api.as_str() == Api::BEDROCK_CONVERSE_STREAM)
+        {
+            let Some((_, base)) = bedrock.id.split_once("anthropic.") else {
+                continue;
+            };
+            let Some(anthropic) = models.iter().find(|m| {
+                m.provider.as_str() == Provider::ANTHROPIC
+                    && m.api.as_str() == Api::ANTHROPIC_MESSAGES
+                    && m.id == base
+            }) else {
+                continue;
+            };
+            assert_eq!(
+                forced(bedrock),
+                forced(anthropic),
+                "{} vs {}",
+                bedrock.id,
+                anthropic.id
+            );
+            twins += 1;
+        }
+        assert!(twins > 0, "Claude rows exist on both Bedrock and Anthropic");
+    }
 }

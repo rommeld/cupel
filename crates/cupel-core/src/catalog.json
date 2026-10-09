@@ -546,7 +546,11 @@
       "cachedWrite": 2.75
     },
     "contextWindow": 1000000,
-    "maxTokens": 128000
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    }
   },
   {
     "id": "global.anthropic.claude-sonnet-5-5",
@@ -570,7 +574,11 @@
       "cachedWrite": 2.5
     },
     "contextWindow": 1000000,
-    "maxTokens": 128000
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    }
   },
   {
     "id": "us.anthropic.claude-fable-5",
@@ -594,7 +602,11 @@
       "cachedWrite": 13.75
     },
     "contextWindow": 1000000,
-    "maxTokens": 128000
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    }
   },
   {
     "id": "us.anthropic.claude-fable-5-1",
@@ -618,7 +630,11 @@
       "cachedWrite": 13.75
     },
     "contextWindow": 1000000,
-    "maxTokens": 128000
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    }
   },
   {
     "id": "accounts/fireworks/models/deepseek-v4p1-flash",

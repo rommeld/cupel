@@ -96,47 +96,105 @@ fn match_candidates(model: &Model) -> Vec<String> {
         .collect()
 }
 
+/// The catalog knob Bedrock reads from `model.compat`. It has the same key and
+/// meaning as in the Anthropic adapter, so one curated template describes a
+/// Claude model on both APIs. Rows without it (a user's models.json row, an
+/// application inference profile) fall back to the id tables below.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct BedrockCompat {
+    /// Claude 4.7+ generation: adaptive thinking with native `xhigh` and
+    /// prompt caching. `Some(false)` forces token-budget thinking.
+    force_adaptive_thinking: Option<bool>,
+}
+
+/// Parsed several times per request, so it stays silent here; [`run`] warns
+/// once per request when the compat value is malformed.
+fn bedrock_compat(model: &Model) -> BedrockCompat {
+    model
+        .compat
+        .clone()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn warn_on_invalid_compat(model: &Model) {
+    if let Some(Err(error)) = model
+        .compat
+        .clone()
+        .map(serde_json::from_value::<BedrockCompat>)
+    {
+        tracing::warn!(
+            model = %model.id,
+            provider = %model.provider.as_str(),
+            error = %error,
+            "invalid Bedrock compat settings; using defaults"
+        );
+    }
+}
+
+/// Catalog compat marks a Claude row even when its id is an ARN and its name
+/// says nothing.
 fn is_claude_model(model: &Model) -> bool {
+    if bedrock_compat(model).force_adaptive_thinking.is_some() {
+        return true;
+    }
     let id = model.id.to_lowercase();
     let name = model.name.to_lowercase();
     id.contains("anthropic.claude") || id.contains("anthropic/claude") || name.contains("claude")
 }
 
-/// Opus 4.6+/Sonnet 4.6+/Fable 5 use adaptive thinking (effort) instead of
-/// token budgets.
+/// Claude 4.6+ use adaptive thinking (effort) instead of token budgets.
 fn supports_adaptive_thinking(model: &Model) -> bool {
-    match_candidates(model).iter().any(|s| {
-        s.contains("opus-4-6")
-            || s.contains("opus-4-7")
-            || s.contains("opus-4-8")
-            || s.contains("sonnet-4-6")
-            || s.contains("sonnet-5")
-            || s.contains("fable-5")
-    })
+    bedrock_compat(model)
+        .force_adaptive_thinking
+        .unwrap_or_else(|| {
+            match_candidates(model).iter().any(|s| {
+                s.contains("opus-4-6")
+                    || s.contains("opus-4-7")
+                    || s.contains("opus-4-8")
+                    || s.contains("sonnet-4-6")
+                    || s.contains("opus-5")
+                    || s.contains("sonnet-5")
+                    || s.contains("haiku-5")
+                    || s.contains("fable-5")
+            })
+        })
 }
 
 /// The xhigh effort arrived with Opus 4.7; the 4.6 models stop at high.
-/// "sonnet-5" also matches Sonnet 5.5.
+/// "opus-5" also matches Opus 5.5, "sonnet-5" Sonnet 5.5.
 fn supports_native_xhigh(model: &Model) -> bool {
-    match_candidates(model).iter().any(|s| {
-        s.contains("opus-4-7")
-            || s.contains("opus-4-8")
-            || s.contains("fable-5")
-            || s.contains("sonnet-5")
-    })
+    bedrock_compat(model)
+        .force_adaptive_thinking
+        .unwrap_or_else(|| {
+            match_candidates(model).iter().any(|s| {
+                s.contains("opus-4-7")
+                    || s.contains("opus-4-8")
+                    || s.contains("opus-5")
+                    || s.contains("sonnet-5")
+                    || s.contains("haiku-5")
+                    || s.contains("fable-5")
+            })
+        })
 }
 
 /// Prompt caching is only available on newer Claude models. Application
-/// inference profiles hide the model name in the ARN. There the model's
-/// display name (user-controlled) is the only signal.
+/// inference profiles hide the model name in the ARN. There the catalog
+/// compat or the model's display name (user-controlled) is the only signal.
 fn supports_prompt_caching(model: &Model) -> bool {
+    if bedrock_compat(model).force_adaptive_thinking == Some(true) {
+        return true;
+    }
     let candidates = match_candidates(model);
     if !candidates.iter().any(|s| s.contains("claude")) {
         return false;
     }
     candidates.iter().any(|s| {
         s.contains("fable-5")
+            || s.contains("opus-5")
             || s.contains("sonnet-5")
+            || s.contains("haiku-5")
             || s.contains("-4-") // any Claude 4.x
             || s.contains("claude-3-7-sonnet")
             || s.contains("claude-3-5-haiku")
@@ -150,6 +208,7 @@ async fn run(
     options: &StreamOptions,
     sink: &EventSink,
 ) -> Result<()> {
+    warn_on_invalid_compat(model);
     let client = build_client(model, options).await;
     let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
 
@@ -922,7 +981,8 @@ mod tests {
     use crate::error::{InferenceError, Result};
     use crate::event_stream::assistant_message_channel;
     use crate::providers::bedrock::{
-        build_additional_model_request_fields, consume_stream, format_sdk_error,
+        build_additional_model_request_fields, consume_stream, format_sdk_error, is_claude_model,
+        supports_prompt_caching,
     };
     use crate::providers::error_message;
     use crate::retry::is_retryable_assistant_error;
@@ -1210,6 +1270,8 @@ mod tests {
         // that key. With max/high disabled, the nearest sendable level is medium.
         model.id = "us.anthropic.claude-sonnet-4-6".to_string();
         model.name = "Claude Sonnet 4.6".to_string();
+        // A 4.6 row carries no 4.7+ compat; the id tables decide.
+        model.compat = None;
         for level in [ThinkingLevel::XHigh, ThinkingLevel::Max] {
             let fields = fields(&model, Some(level)).unwrap();
             assert_eq!(fields["output_config"]["effort"], "balanced");
@@ -1224,6 +1286,55 @@ mod tests {
         ] {
             let model = catalog_model(id);
             assert_eq!(fields(&model, None), None, "{id}");
+            assert_eq!(
+                fields(&model, Some(ThinkingLevel::XHigh)),
+                Some(json!({
+                    "thinking": {"type": "adaptive", "display": "summarized"},
+                    "output_config": {"effort": "xhigh"},
+                })),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn compat_decides_capabilities_where_the_id_says_nothing() {
+        // An application inference profile hides the model in its ARN and
+        // carries a user-chosen name; the curated compat is the only signal.
+        let mut profile = catalog_model("us.anthropic.claude-sonnet-5");
+        profile.id =
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123".into();
+        profile.name = "Team profile".into();
+        profile.compat = Some(json!({"forceAdaptiveThinking": true}));
+        assert!(is_claude_model(&profile));
+        assert!(supports_prompt_caching(&profile));
+        assert_eq!(
+            fields(&profile, Some(ThinkingLevel::XHigh)),
+            Some(json!({
+                "thinking": {"type": "adaptive", "display": "summarized"},
+                "output_config": {"effort": "xhigh"},
+            }))
+        );
+
+        // An explicit `false` wins over the id tables: token-budget thinking.
+        let mut budget = catalog_model("us.anthropic.claude-sonnet-5");
+        budget.compat = Some(json!({"forceAdaptiveThinking": false}));
+        let thinking = fields(&budget, Some(ThinkingLevel::High)).unwrap();
+        assert_eq!(thinking["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn opus_and_haiku_5_ids_without_compat_use_adaptive_effort() {
+        // A user's models.json row without compat: the id tables decide.
+        let mut model = catalog_model("us.anthropic.claude-sonnet-5");
+        model.compat = None;
+        for id in [
+            "global.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-haiku-5-5",
+        ] {
+            model.id = id.to_string();
+            model.name = id.to_string();
+            assert!(supports_prompt_caching(&model), "{id}");
             assert_eq!(
                 fields(&model, Some(ThinkingLevel::XHigh)),
                 Some(json!({
