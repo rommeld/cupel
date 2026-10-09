@@ -87,7 +87,18 @@ pub(crate) fn supported_thinking_levels(model: &Model) -> Vec<ModelThinkingLevel
 /// level, then walk upward, then downward.
 #[must_use]
 pub(crate) fn clamp_thinking_level(model: &Model, level: ModelThinkingLevel) -> ModelThinkingLevel {
-    let available = supported_thinking_levels(model);
+    clamp_thinking_level_with(model, level, |_| true)
+}
+
+/// Clamp against model metadata and additional constraints of the wire protocol.
+#[must_use]
+pub(crate) fn clamp_thinking_level_with(
+    model: &Model,
+    level: ModelThinkingLevel,
+    supported: impl Fn(ModelThinkingLevel) -> bool,
+) -> ModelThinkingLevel {
+    let mut available = supported_thinking_levels(model);
+    available.retain(|level| supported(*level));
     if available.contains(&level) {
         return level;
     }

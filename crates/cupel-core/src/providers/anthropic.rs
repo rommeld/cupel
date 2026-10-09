@@ -12,21 +12,22 @@ use serde_json::{Value, json};
 
 use crate::{
     error::{InferenceError, Result},
-    event_stream::{AssistantMessageStream, EventSink, assistant_message_channel},
+    event_stream::{AssistantMessageStream, EventSink},
     json_util::parse_streaming_json,
     model::calculate_cost,
     options_util::{adjust_max_tokens_for_thinking, clamp_max_tokens_to_context},
     provider::Provider,
     providers::{
-        CONTENT_FILTER_MESSAGE, apply_custom_headers, error_message, finish_output,
-        new_output_message, with_cancel,
+        CONTENT_FILTER_MESSAGE, EffortStyle, apply_custom_headers, finish_output,
+        new_output_message, normalize_anthropic_tool_call_id, off_effort, send_request,
+        spawn_provider_stream, thinking_effort, with_cancel,
     },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
     types::{
         Api, AssistantContent, AssistantMessage, CacheRetention, Context, Message, Model,
-        StopReason, StreamOptions, TextContent, ThinkingContent, ThinkingLevel, Tool, ToolCall,
-        ToolResultContent, UserContent, UserContentBody,
+        StopReason, StreamOptions, TextContent, ThinkingContent, Tool, ToolCall, ToolResultContent,
+        UserContent, UserContentBody,
     },
 };
 
@@ -162,26 +163,10 @@ impl Provider for AnthropicProvider {
         context: Context,
         options: StreamOptions,
     ) -> AssistantMessageStream {
-        // Create the channel; hand the stream back, keep the sink for the task.
-        let (stream, sink) = assistant_message_channel();
-
-        // The spawned task needs owned data (`'static`); descriptors are cheap
-        // to clone, the HTTP client is internally reference-counted.
-        let model = model.clone();
         let http = self.http.clone();
-
-        // The whole body is wrapped so *any* error becomes an `Error` event on
-        // the stream. The caller-facing contract is "never panic, never
-        // reject; report failures in-band".
-        tokio::spawn(async move {
-            if let Err(err) = run(&http, &model, &context, &options, &sink).await {
-                tracing::warn!(error = %err, "provider request failed");
-                let msg = error_message(&model, &err);
-                let _ = sink.error(msg.stop_reason, msg);
-            }
-        });
-
-        stream
+        spawn_provider_stream(model, move |model, sink| async move {
+            run(&http, &model, &context, &options, &sink).await
+        })
     }
 }
 
@@ -244,17 +229,7 @@ async fn run(
         req = req.timeout(core::time::Duration::from_millis(timeout));
     }
 
-    // Send, racing the cancellation token.
-    let response = with_cancel(options, req.json(&body).send()).await??;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(InferenceError::ApiStatus {
-            status: status.as_u16(),
-            body,
-        });
-    }
+    let response = send_request(req.json(&body), options).await?;
 
     // Stream + decode the SSE body.
     let mut output = new_output_message(model);
@@ -700,15 +675,24 @@ fn build_request_body(
     if model.reasoning {
         match options.reasoning {
             Some(level) => {
-                thinking_enabled = true;
                 if compat.force_adaptive_thinking {
                     // Adaptive: the model decides when/how much to think; we
                     // only steer with an effort level. "summarized" keeps the
                     // display behavior consistent with older Claude 4 models.
-                    thinking = Some(json!({"type": "adaptive", "display": "summarized"}));
-                    output_config =
-                        Some(json!({"effort": map_thinking_level_to_effort(model, level)}));
+                    if let Some(effort) = thinking_effort(
+                        model,
+                        Some(level),
+                        EffortStyle::Claude { native_xhigh: true },
+                    ) {
+                        thinking_enabled = true;
+                        thinking = Some(json!({"type": "adaptive", "display": "summarized"}));
+                        output_config = Some(json!({"effort": effort}));
+                    } else {
+                        thinking = off_effort(model, Some("disabled"))
+                            .map(|off_type| json!({"type": off_type}));
+                    }
                 } else {
+                    thinking_enabled = true;
                     let adjusted = adjust_max_tokens_for_thinking(
                         options.max_tokens,
                         model.max_tokens,
@@ -735,12 +719,8 @@ fn build_request_body(
                 // switched off, so `thinking` is left out entirely.
                 // The type travels alone: `between_tools` answers any
                 // other field (even `display`) with a 400.
-                let off = model.thinking_level_map.as_ref().and_then(|m| m.get("off"));
-                thinking = match off {
-                    None => Some(json!({"type": "disabled"})),
-                    Some(Some(off_type)) => Some(json!({"type": off_type})),
-                    Some(None) => None,
-                };
+                thinking =
+                    off_effort(model, Some("disabled")).map(|off_type| json!({"type": off_type}));
             }
         }
     }
@@ -826,45 +806,6 @@ fn build_request_body(
     body
 }
 
-/// Map the unified thinking level onto an adaptive-thinking effort string.
-/// The model's `thinking_level_map` can override the default mapping.
-fn map_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> String {
-    let key = match level {
-        ThinkingLevel::Minimal => "minimal",
-        ThinkingLevel::Low => "low",
-        ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High => "high",
-        ThinkingLevel::XHigh => "xhigh",
-        ThinkingLevel::Max => "max",
-    };
-    if let Some(Some(mapped)) = model.thinking_level_map.as_ref().and_then(|m| m.get(key)) {
-        return mapped.clone();
-    }
-    match level {
-        ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
-        ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High => "high",
-        ThinkingLevel::XHigh => "xhigh",
-        ThinkingLevel::Max => "max",
-    }
-    .to_string()
-}
-
-/// Anthropic requires tool-call ids matching `^[a-zA-Z0-9_-]{1,64}$`.
-fn normalize_tool_call_id(id: &str, _model: &Model, _source: &AssistantMessage) -> String {
-    let sanitized: String = id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    sanitized.chars().take(64).collect()
-}
-
 fn convert_messages(
     context: &Context,
     model: &Model,
@@ -872,7 +813,11 @@ fn convert_messages(
     cache_control: Option<&Value>,
     compat: &AnthropicCompat,
 ) -> Value {
-    let transformed = transform_messages(&context.messages, model, Some(normalize_tool_call_id));
+    let transformed = transform_messages(
+        &context.messages,
+        model,
+        Some(normalize_anthropic_tool_call_id),
+    );
     let mut params: Vec<Value> = Vec::new();
 
     let mut i = 0;
@@ -1353,6 +1298,35 @@ mod tests {
                 json!({"effort": effort}),
                 "{level:?}"
             );
+        }
+    }
+
+    #[test]
+    fn adaptive_effort_clamps_unsupported_levels_before_applying_aliases() {
+        let mut model = catalog_model("claude-sonnet-5-5");
+        let map = model
+            .thinking_level_map
+            .get_or_insert_with(Default::default);
+        map.insert("low".to_string(), None);
+        map.insert("medium".to_string(), Some("balanced".to_string()));
+        map.insert("high".to_string(), None);
+        map.insert("xhigh".to_string(), None);
+        map.insert("max".to_string(), None);
+        for level in [
+            ThinkingLevel::Minimal,
+            ThinkingLevel::Low,
+            ThinkingLevel::High,
+            ThinkingLevel::Max,
+        ] {
+            let body = body_for(
+                &model,
+                &StreamOptions {
+                    reasoning: Some(level),
+                    ..StreamOptions::default()
+                },
+            );
+            assert_eq!(body["thinking"]["type"], "adaptive");
+            assert_eq!(body["output_config"]["effort"], "balanced");
         }
     }
 

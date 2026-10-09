@@ -19,19 +19,20 @@ use serde_json::{Value, json};
 
 use crate::{
     error::{InferenceError, Result},
-    event_stream::{AssistantMessageStream, EventSink, assistant_message_channel},
+    event_stream::{AssistantMessageStream, EventSink},
     json_util::parse_streaming_json,
     model::calculate_cost,
     options_util::{adjust_max_tokens_for_thinking, clamp_max_tokens_to_context},
     provider::Provider,
     providers::{
-        CONTENT_FILTER_MESSAGE, error_message, finish_output, new_output_message, with_cancel,
+        CONTENT_FILTER_MESSAGE, EffortStyle, finish_output, new_output_message,
+        normalize_anthropic_tool_call_id, off_effort, spawn_provider_stream, thinking_effort,
+        with_cancel,
     },
     transform::transform_messages,
     types::{
-        Api, AssistantContent, AssistantMessage, CacheRetention, Context, Message, Model,
-        StopReason, StreamOptions, TextContent, ThinkingContent, ThinkingLevel, ToolResultContent,
-        UserContent, UserContentBody,
+        Api, AssistantContent, CacheRetention, Context, Message, Model, StopReason, StreamOptions,
+        TextContent, ThinkingContent, ToolResultContent, UserContent, UserContentBody,
     },
 };
 
@@ -64,18 +65,9 @@ impl Provider for BedrockProvider {
         context: Context,
         options: StreamOptions,
     ) -> AssistantMessageStream {
-        let (stream, sink) = assistant_message_channel();
-        let model = model.clone();
-
-        tokio::spawn(async move {
-            if let Err(err) = run(&model, &context, &options, &sink).await {
-                tracing::warn!(error = %err, "provider request failed");
-                let msg = error_message(&model, &err);
-                let _ = sink.error(msg.stop_reason, msg);
-            }
-        });
-
-        stream
+        spawn_provider_stream(model, move |model, sink| async move {
+            run(&model, &context, &options, &sink).await
+        })
     }
 }
 
@@ -578,20 +570,6 @@ fn build_system_prompt(
     Some(blocks)
 }
 
-fn normalize_tool_call_id(id: &str, _model: &Model, _source: &AssistantMessage) -> String {
-    let sanitized: String = id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    sanitized.chars().take(64).collect()
-}
-
 /// A text block, or `None` when the text is blank (Bedrock rejects blanks).
 fn non_blank_text_block(text: &str) -> Option<bedrock::ContentBlock> {
     (!text.trim().is_empty()).then(|| bedrock::ContentBlock::Text(text.to_string()))
@@ -661,7 +639,11 @@ fn convert_messages(
     model: &Model,
     cache_retention: CacheRetention,
 ) -> Result<Vec<bedrock::Message>> {
-    let transformed = transform_messages(&context.messages, model, Some(normalize_tool_call_id));
+    let transformed = transform_messages(
+        &context.messages,
+        model,
+        Some(normalize_anthropic_tool_call_id),
+    );
     let supports_signature = is_claude_model(model);
     let mut result: Vec<bedrock::Message> = Vec::new();
 
@@ -862,38 +844,37 @@ fn build_additional_model_request_fields(
         // Match Anthropic's off convention: no entry explicitly disables
         // thinking, a named entry sends that type alone (Sonnet 5.5:
         // `between_tools`), and null means thinking cannot be switched off.
-        let off = model.thinking_level_map.as_ref().and_then(|m| m.get("off"));
-        return match off {
-            None => Some(json!({"thinking": {"type": "disabled"}})),
-            Some(Some(off_type)) => Some(json!({"thinking": {"type": off_type}})),
-            Some(None) => None,
-        };
+        return off_effort(model, Some("disabled"))
+            .map(|off_type| json!({"thinking": {"type": off_type}}));
     };
 
     if supports_adaptive_thinking(model) {
+        let Some(effort) = thinking_effort(
+            model,
+            Some(level),
+            EffortStyle::Claude {
+                native_xhigh: supports_native_xhigh(model),
+            },
+        ) else {
+            return off_effort(model, Some("disabled"))
+                .map(|off_type| json!({"thinking": {"type": off_type}}));
+        };
         return Some(json!({
             "thinking": {"type": "adaptive", "display": "summarized"},
-            "output_config": {"effort": map_thinking_level_to_effort(model, level)},
+            "output_config": {"effort": effort},
         }));
     }
 
     // Budget-based thinking for older Claude models.
-    let default_budget = match level {
-        ThinkingLevel::Minimal => 1024,
-        ThinkingLevel::Low => 2048,
-        ThinkingLevel::Medium => 8192,
-        // Claude budget models don't support xhigh; clamp to high.
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => 16384,
-    };
-    let custom_budget = options.thinking_budgets.and_then(|b| match level {
-        ThinkingLevel::Minimal => b.minimal,
-        ThinkingLevel::Low => b.low,
-        ThinkingLevel::Medium => b.medium,
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => b.high,
+    let budget = thinking_budget_override.unwrap_or_else(|| {
+        adjust_max_tokens_for_thinking(
+            options.max_tokens,
+            model.max_tokens,
+            level,
+            options.thinking_budgets,
+        )
+        .thinking_budget
     });
-    let budget = thinking_budget_override
-        .or(custom_budget)
-        .unwrap_or(default_budget);
 
     Some(json!({
         "thinking": {
@@ -905,32 +886,6 @@ fn build_additional_model_request_fields(
         // beta flag on budget models; adaptive models have it built in.
         "anthropic_beta": ["interleaved-thinking-2025-05-14"],
     }))
-}
-
-fn map_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> String {
-    if level == ThinkingLevel::XHigh && supports_native_xhigh(model) {
-        return "xhigh".to_string();
-    }
-    let key = match level {
-        ThinkingLevel::Minimal => "minimal",
-        ThinkingLevel::Low => "low",
-        ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High => "high",
-        ThinkingLevel::XHigh => "xhigh",
-        ThinkingLevel::Max => "max",
-    };
-    if let Some(Some(mapped)) = model.thinking_level_map.as_ref().and_then(|m| m.get(key)) {
-        return mapped.clone();
-    }
-    match level {
-        ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
-        ThinkingLevel::Medium => "medium",
-        // Only reached without native xhigh (see supports_native_xhigh).
-        ThinkingLevel::High | ThinkingLevel::XHigh => "high",
-        // Every adaptive model has max, the 4.6 ones included.
-        ThinkingLevel::Max => "max",
-    }
-    .to_string()
 }
 
 /// Convert `serde_json::Value` into the AWS SDK's `Document` type. The two
@@ -1235,6 +1190,29 @@ mod tests {
                 })),
                 "{level:?}"
             );
+        }
+    }
+
+    #[test]
+    fn adaptive_effort_clamps_metadata_and_legacy_wire_limits_together() {
+        let mut model = catalog_model("global.anthropic.claude-sonnet-5-5");
+        let map = model
+            .thinking_level_map
+            .get_or_insert_with(Default::default);
+        map.insert("low".to_string(), None);
+        map.insert("medium".to_string(), Some("balanced".to_string()));
+        map.insert("high".to_string(), None);
+        map.insert("max".to_string(), None);
+        let minimal = fields(&model, Some(ThinkingLevel::Minimal)).unwrap();
+        assert_eq!(minimal["output_config"]["effort"], "balanced");
+
+        // Older adaptive Claude models cannot send xhigh even if metadata omits
+        // that key. With max/high disabled, the nearest sendable level is medium.
+        model.id = "us.anthropic.claude-sonnet-4-6".to_string();
+        model.name = "Claude Sonnet 4.6".to_string();
+        for level in [ThinkingLevel::XHigh, ThinkingLevel::Max] {
+            let fields = fields(&model, Some(level)).unwrap();
+            assert_eq!(fields["output_config"]["effort"], "balanced");
         }
     }
 

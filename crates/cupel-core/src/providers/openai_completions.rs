@@ -18,21 +18,22 @@ use serde_json::{Value, json};
 
 use crate::{
     error::{InferenceError, Result},
-    event_stream::{AssistantMessageStream, EventSink, assistant_message_channel},
+    event_stream::{AssistantMessageStream, EventSink},
     json_util::parse_streaming_json,
-    model::{calculate_cost, clamp_thinking_level},
+    model::calculate_cost,
     options_util::clamp_max_tokens_to_context,
     provider::Provider,
     providers::{
-        CONTENT_FILTER_MESSAGE, apply_custom_headers, error_message, finish_output,
-        new_output_message, with_cancel,
+        CONTENT_FILTER_MESSAGE, EffortStyle, apply_custom_headers, finish_output,
+        new_output_message, off_effort, send_request, spawn_provider_stream, thinking_effort,
+        with_cancel,
     },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
     types::{
-        Api, AssistantContent, AssistantMessage, Context, Message, Model, ModelThinkingLevel,
-        StopReason, StreamOptions, TextContent, ThinkingContent, ThinkingLevel, ToolCall,
-        ToolResultContent, UserContent, UserContentBody,
+        Api, AssistantContent, AssistantMessage, Context, Message, Model, StopReason,
+        StreamOptions, TextContent, ThinkingContent, ToolCall, ToolResultContent, UserContent,
+        UserContentBody,
     },
 };
 
@@ -154,19 +155,10 @@ impl Provider for OpenAiCompletionsProvider {
         context: Context,
         options: StreamOptions,
     ) -> AssistantMessageStream {
-        let (stream, sink) = assistant_message_channel();
-        let model = model.clone();
         let http = self.http.clone();
-
-        tokio::spawn(async move {
-            if let Err(err) = run(&http, &model, &context, &options, &sink).await {
-                tracing::warn!(error = %err, "provider request failed");
-                let msg = error_message(&model, &err);
-                let _ = sink.error(msg.stop_reason, msg);
-            }
-        });
-
-        stream
+        spawn_provider_stream(model, move |model, sink| async move {
+            run(&http, &model, &context, &options, &sink).await
+        })
     }
 }
 
@@ -218,15 +210,7 @@ async fn run(
         req = req.timeout(core::time::Duration::from_millis(timeout));
     }
 
-    let response = with_cancel(options, req.json(&body).send()).await??;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(InferenceError::ApiStatus {
-            status: status.as_u16(),
-            body,
-        });
-    }
+    let response = send_request(req.json(&body), options).await?;
 
     let mut output = new_output_message(model);
     if !sink.start() {
@@ -598,87 +582,41 @@ fn build_request_body(
     }
 
     if model.reasoning {
-        // Clamp to what the model supports, then map through the model's own
-        // level -> effort table.
-        let requested = options.reasoning.map(|level| match level {
-            ThinkingLevel::Minimal => ModelThinkingLevel::Minimal,
-            ThinkingLevel::Low => ModelThinkingLevel::Low,
-            ThinkingLevel::Medium => ModelThinkingLevel::Medium,
-            ThinkingLevel::High => ModelThinkingLevel::High,
-            ThinkingLevel::XHigh => ModelThinkingLevel::XHigh,
-            ThinkingLevel::Max => ModelThinkingLevel::Max,
-        });
-        let clamped = requested.map(|level| clamp_thinking_level(model, level));
-        let effort_on = clamped.filter(|level| *level != ModelThinkingLevel::Off);
+        let effort = thinking_effort(model, options.reasoning, EffortStyle::OpenAi);
 
         match compat.thinking_format {
             ThinkingFormat::Deepseek => {
-                if effort_on.is_some() {
+                if effort.is_some() {
                     body["thinking"] = json!({"type": "enabled"});
-                } else {
-                    let off_unsupported = model
-                        .thinking_level_map
-                        .as_ref()
-                        .is_some_and(|m| matches!(m.get("off"), Some(None)));
-                    if !off_unsupported {
-                        body["thinking"] = json!({"type": "disabled"});
-                    }
+                } else if off_effort(model, Some("disabled")).is_some() {
+                    body["thinking"] = json!({"type": "disabled"});
                 }
-                if let Some(level) = effort_on
+                if let Some(effort) = &effort
                     && compat.supports_reasoning_effort
                 {
-                    body["reasoning_effort"] = json!(mapped_effort(model, level));
+                    body["reasoning_effort"] = json!(effort);
                 }
             }
             ThinkingFormat::Openai => {
                 if compat.supports_reasoning_effort {
-                    if let Some(level) = effort_on {
-                        body["reasoning_effort"] = json!(mapped_effort(model, level));
-                    } else if let Some(Some(off_value)) = model
-                        .thinking_level_map
-                        .as_ref()
-                        .map(|m| m.get("off").cloned().flatten())
-                    {
-                        body["reasoning_effort"] = json!(off_value);
+                    // Chat Completions omits off unless metadata names an effort.
+                    if let Some(effort) = effort.as_deref().or_else(|| off_effort(model, None)) {
+                        body["reasoning_effort"] = json!(effort);
                     }
                 }
             }
             ThinkingFormat::Openrouter => {
-                if let Some(level) = effort_on {
-                    body["reasoning"] = json!({"effort": mapped_effort(model, level)});
-                } else {
-                    // "off": a map entry `off -> null` means the model cannot stop
-                    // thinking, so omit the parameter. Any other state sends an explicit
-                    // effort: the mapped off value, or OpenRouter's own "none".
-                    match model.thinking_level_map.as_ref().and_then(|m| m.get("off")) {
-                        Some(None) => {}
-                        Some(Some(value)) => {
-                            body["reasoning"] = json!(
-                                {"effort": value}
-                            );
-                        }
-                        None => {
-                            body["reasoning"] = json!(
-                                {"effort": "none"}
-                            );
-                        }
-                    }
+                if let Some(effort) = effort
+                    .as_deref()
+                    .or_else(|| off_effort(model, Some("none")))
+                {
+                    body["reasoning"] = json!({"effort": effort});
                 }
             }
         }
     }
 
     body
-}
-
-/// Apply the model's level -> effort override table, falling back to the
-/// level's own name.
-fn mapped_effort(model: &Model, level: ModelThinkingLevel) -> String {
-    model
-        .thinking_level_map
-        .as_ref()
-        .and_then(|m| m.get(level.as_str()).cloned().flatten())
-        .unwrap_or_else(|| level.as_str().to_string())
 }
 
 fn has_tool_history(messages: &[Message]) -> bool {
@@ -915,7 +853,8 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
 mod tests {
     use super::*;
     use crate::types::{
-        ImageContent, InputModality, ModelCost, Provider as ProviderName, ToolResultMessage,
+        ImageContent, InputModality, ModelCost, Provider as ProviderName, ThinkingLevel,
+        ToolResultMessage,
     };
 
     fn model_with_compat(compat: Option<serde_json::Value>) -> Model {

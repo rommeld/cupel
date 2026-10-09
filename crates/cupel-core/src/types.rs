@@ -302,6 +302,19 @@ pub enum ModelThinkingLevel {
     Max,
 }
 
+impl From<ThinkingLevel> for ModelThinkingLevel {
+    fn from(level: ThinkingLevel) -> Self {
+        match level {
+            ThinkingLevel::Minimal => Self::Minimal,
+            ThinkingLevel::Low => Self::Low,
+            ThinkingLevel::Medium => Self::Medium,
+            ThinkingLevel::High => Self::High,
+            ThinkingLevel::XHigh => Self::XHigh,
+            ThinkingLevel::Max => Self::Max,
+        }
+    }
+}
+
 impl ModelThinkingLevel {
     /// String key used to look the level up in a model's `thinking_level_map`.
     #[must_use]
@@ -497,7 +510,21 @@ pub enum AssistantMessageEvent {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{StreamOptions, ThinkingLevel};
+    use crate::types::{ModelThinkingLevel, StreamOptions, ThinkingLevel};
+
+    #[test]
+    fn thinking_level_conversion_preserves_every_enabled_level() {
+        for (level, expected) in [
+            (ThinkingLevel::Minimal, ModelThinkingLevel::Minimal),
+            (ThinkingLevel::Low, ModelThinkingLevel::Low),
+            (ThinkingLevel::Medium, ModelThinkingLevel::Medium),
+            (ThinkingLevel::High, ModelThinkingLevel::High),
+            (ThinkingLevel::XHigh, ModelThinkingLevel::XHigh),
+            (ThinkingLevel::Max, ModelThinkingLevel::Max),
+        ] {
+            assert_eq!(ModelThinkingLevel::from(level), expected);
+        }
+    }
 
     #[test]
     fn stream_options_debug_redacts_api_keys_and_jwts() {
