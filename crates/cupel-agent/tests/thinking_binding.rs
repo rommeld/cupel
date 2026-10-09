@@ -67,6 +67,7 @@ fn base_message(model: &Model) -> AssistantMessage {
         usage: Usage::default(),
         stop_reason: StopReason::Stop,
         error_message: None,
+        error_kind: None,
         timestamp: now_ms(),
     }
 }

@@ -36,8 +36,7 @@ use crate::{
         with_cancel,
     },
     types::{
-        Api, AssistantMessage, Context, Model, ModelThinkingLevel, StopReason, StreamOptions,
-        ThinkingLevel,
+        Api, AssistantMessage, Context, Model, ModelThinkingLevel, StreamOptions, ThinkingLevel,
     },
 };
 
@@ -77,14 +76,9 @@ impl Provider for OpenAiCodexResponsesProvider {
 
         tokio::spawn(async move {
             if let Err(err) = run(&http, &model, &context, &options, &sink).await {
-                let reason = if matches!(err, InferenceError::Aborted) {
-                    StopReason::Aborted
-                } else {
-                    StopReason::Error
-                };
                 tracing::warn!(error = %err, "provider request failed");
-                let msg = error_message(&model, reason, err.to_string());
-                let _ = sink.error(reason, msg);
+                let msg = error_message(&model, &err);
+                let _ = sink.error(msg.stop_reason, msg);
             }
         });
         stream
@@ -301,7 +295,7 @@ fn normalize_tool_call_id_codex(id: &str, _model: &Model, source: &AssistantMess
 mod tests {
     use super::*;
     use crate::types::{
-        AssistantContent, InputModality, Message, ModelCost, Provider, TextContent,
+        AssistantContent, InputModality, Message, ModelCost, Provider, StopReason, TextContent,
         ThinkingLevelMap, Tool, Usage, UserContentBody, UserMessage, now_ms,
     };
 
@@ -532,6 +526,7 @@ mod tests {
             usage: Usage::default(),
             stop_reason: StopReason::Stop,
             error_message: None,
+            error_kind: None,
             timestamp: now_ms(),
         };
 

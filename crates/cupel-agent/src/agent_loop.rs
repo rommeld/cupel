@@ -13,10 +13,11 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use cupel_core::{
+    error::{InferenceError, MessageStreamError},
     provider::Registry,
     types::{
-        AssistantContent, AssistantMessage, AssistantMessageEvent, Context, Message, StopReason,
-        StreamOptions, Tool, ToolCall, ToolResultMessage, now_ms,
+        AssistantContent, AssistantMessage, AssistantMessageEvent, Context, ErrorKind, Message,
+        StopReason, StreamOptions, Tool, ToolCall, ToolResultMessage, now_ms,
     },
 };
 
@@ -504,7 +505,7 @@ async fn stream_assistant_response(
         Err(err) => {
             // No provider registered for this API. Synthesize the error
             // message the provider would have produced.
-            let message = error_assistant_message(config, err.to_string());
+            let message = error_assistant_message(config, &err);
             emit_final_message(context, sink, message.clone(), false);
             return message;
         }
@@ -549,7 +550,10 @@ async fn stream_assistant_response(
     let message = final_message.unwrap_or_else(|| {
         // Channel closed without a terminal event: a provider bug, but the
         // loop must still terminate cleanly.
-        error_assistant_message(config, "stream closed before terminal event".to_string())
+        error_assistant_message(
+            config,
+            &InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
+        )
     });
     emit_final_message(context, sink, message.clone(), started);
     message
@@ -567,14 +571,21 @@ fn error_shell(config: &AgentLoopConfig) -> AssistantMessage {
         usage: cupel_core::types::Usage::default(),
         stop_reason: StopReason::Stop,
         error_message: None,
+        error_kind: None,
         timestamp: now_ms(),
     }
 }
 
-fn error_assistant_message(config: &AgentLoopConfig, error: String) -> AssistantMessage {
+fn error_assistant_message(config: &AgentLoopConfig, error: &InferenceError) -> AssistantMessage {
+    let kind = error.kind();
     AssistantMessage {
-        stop_reason: StopReason::Error,
-        error_message: Some(error),
+        stop_reason: if kind == ErrorKind::Aborted {
+            StopReason::Aborted
+        } else {
+            StopReason::Error
+        },
+        error_message: Some(error.to_string()),
+        error_kind: Some(kind),
         ..error_shell(config)
     }
 }

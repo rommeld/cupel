@@ -75,6 +75,7 @@ fn assistant(model: &Model, content: Vec<AssistantContent>) -> AssistantMessage 
         usage: Usage::default(),
         stop_reason: StopReason::Stop,
         error_message: None,
+        error_kind: None,
         timestamp: now_ms(),
     }
 }

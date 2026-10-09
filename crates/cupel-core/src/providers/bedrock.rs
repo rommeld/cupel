@@ -69,14 +69,9 @@ impl Provider for BedrockProvider {
 
         tokio::spawn(async move {
             if let Err(err) = run(&model, &context, &options, &sink).await {
-                let reason = if matches!(err, InferenceError::Aborted) {
-                    StopReason::Aborted
-                } else {
-                    StopReason::Error
-                };
                 tracing::warn!(error = %err, "provider request failed");
-                let msg = error_message(&model, reason, err.to_string());
-                let _ = sink.error(reason, msg);
+                let msg = error_message(&model, &err);
+                let _ = sink.error(msg.stop_reason, msg);
             }
         });
 
@@ -225,7 +220,7 @@ async fn run(
         let item = stream
             .recv()
             .await
-            .map_err(|e| InferenceError::Other(format!("Bedrock stream error: {e}")))?;
+            .map_err(|e| InferenceError::Other(format_sdk_error(&e)))?;
         Ok(item.map(|item| (item, stream)))
     });
     consume_stream(model, options, sink, stream).await
@@ -969,9 +964,11 @@ mod tests {
     use futures_util::StreamExt as _;
     use serde_json::{Value, json};
 
-    use crate::error::Result;
+    use crate::error::{InferenceError, Result};
     use crate::event_stream::assistant_message_channel;
-    use crate::providers::bedrock::{build_additional_model_request_fields, consume_stream};
+    use crate::providers::bedrock::{
+        build_additional_model_request_fields, consume_stream, format_sdk_error,
+    };
     use crate::providers::error_message;
     use crate::retry::is_retryable_assistant_error;
     use crate::types::{AssistantMessageEvent, Model, StopReason, StreamOptions, ThinkingLevel};
@@ -1045,8 +1042,68 @@ mod tests {
                     .any(|e| matches!(e, AssistantMessageEvent::Done { .. }))
             );
             let model = catalog_model("global.anthropic.claude-sonnet-5-5");
-            let message = error_message(&model, StopReason::Error, error.to_string());
+            let message = error_message(&model, &error);
             assert!(is_retryable_assistant_error(&message));
+        }
+    }
+
+    #[test]
+    fn sdk_stream_errors_keep_exception_details_for_classification() {
+        use aws_sdk_bedrockruntime::error::SdkError;
+        use bedrock::error::{
+            ConverseStreamOutputError, InternalServerException, ModelStreamErrorException,
+            ThrottlingException, ValidationException,
+        };
+
+        let model = catalog_model("global.anthropic.claude-sonnet-5-5");
+        for (service_error, retryable, overflow) in [
+            (
+                ConverseStreamOutputError::ThrottlingException(
+                    ThrottlingException::builder()
+                        .message("Too many tokens, please wait before trying again")
+                        .build(),
+                ),
+                true,
+                false,
+            ),
+            (
+                ConverseStreamOutputError::InternalServerException(
+                    InternalServerException::builder()
+                        .message("opaque failure")
+                        .build(),
+                ),
+                true,
+                false,
+            ),
+            (
+                ConverseStreamOutputError::ModelStreamErrorException(
+                    ModelStreamErrorException::builder()
+                        .message("opaque failure")
+                        .build(),
+                ),
+                true,
+                false,
+            ),
+            (
+                ConverseStreamOutputError::ValidationException(
+                    ValidationException::builder()
+                        .message("Input is too long for requested model")
+                        .build(),
+                ),
+                false,
+                true,
+            ),
+        ] {
+            let sdk_error = SdkError::service_error(service_error, ());
+            assert_eq!(sdk_error.to_string(), "service error");
+            let error = InferenceError::Other(format_sdk_error(&sdk_error));
+            let message = error_message(&model, &error);
+            assert_eq!(is_retryable_assistant_error(&message), retryable, "{error}");
+            assert_eq!(
+                crate::overflow::is_context_overflow(&message, 200_000),
+                overflow,
+                "{error}"
+            );
         }
     }
 

@@ -578,6 +578,7 @@ mod tests {
                     usage: cupel_core::types::Usage::default(),
                     stop_reason: cupel_core::types::StopReason::ToolUse,
                     error_message: None,
+                    error_kind: None,
                     timestamp: 0,
                 })),
                 AgentMessage::Llm(Message::ToolResult(cupel_core::types::ToolResultMessage {

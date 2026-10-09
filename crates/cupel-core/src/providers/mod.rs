@@ -23,8 +23,9 @@ pub mod openai_codex_responses;
 pub mod openai_completions;
 pub mod openai_responses;
 
+use crate::error::InferenceError;
 use crate::event_stream::EventSink;
-use crate::types::{AssistantMessage, Model, StopReason, StreamOptions, Usage, now_ms};
+use crate::types::{AssistantMessage, ErrorKind, Model, StopReason, StreamOptions, Usage, now_ms};
 
 pub(crate) const CONTENT_FILTER_MESSAGE: &str =
     "The provider's content filter stopped the response. Partial output may be incomplete.";
@@ -43,6 +44,7 @@ pub(crate) fn new_output_message(model: &Model) -> AssistantMessage {
         usage: Usage::default(),
         stop_reason: StopReason::Stop,
         error_message: None,
+        error_kind: None,
         timestamp: now_ms(),
     }
 }
@@ -50,10 +52,16 @@ pub(crate) fn new_output_message(model: &Model) -> AssistantMessage {
 /// Build the minimal error message emitted when a provider task fails before
 /// (or instead of) producing a terminal event.
 #[must_use]
-pub(crate) fn error_message(model: &Model, reason: StopReason, text: String) -> AssistantMessage {
+pub(crate) fn error_message(model: &Model, error: &InferenceError) -> AssistantMessage {
+    let kind = error.kind();
     AssistantMessage {
-        stop_reason: reason,
-        error_message: Some(text),
+        stop_reason: if kind == ErrorKind::Aborted {
+            StopReason::Aborted
+        } else {
+            StopReason::Error
+        },
+        error_message: Some(error.to_string()),
+        error_kind: Some(kind),
         ..new_output_message(model)
     }
 }
@@ -67,6 +75,13 @@ pub(crate) fn finish_output(mut output: AssistantMessage, sink: &EventSink) {
         output
             .error_message
             .get_or_insert_with(|| "The provider stopped generation with an error".to_string());
+        output
+            .error_kind
+            .get_or_insert(if reason == StopReason::Aborted {
+                ErrorKind::Aborted
+            } else {
+                ErrorKind::Provider
+            });
     }
     log_completion(&output);
     let _ = match reason {
@@ -138,10 +153,59 @@ pub(crate) fn apply_custom_headers(
 
 #[cfg(test)]
 mod tests {
-    use crate::error::MessageStreamError;
+    use crate::error::{InferenceError, MessageStreamError};
     use crate::event_stream::assistant_message_channel;
-    use crate::providers::{finish_output, new_output_message};
-    use crate::types::{AssistantContent, StopReason, TextContent};
+    use crate::providers::{error_message, finish_output, new_output_message};
+    use crate::types::{AssistantContent, AssistantMessage, ErrorKind, StopReason, TextContent};
+
+    #[test]
+    fn worker_errors_keep_their_category_and_display_text() {
+        let model = crate::catalog::builtin_models().remove(0);
+        for error in [
+            InferenceError::ApiStatus {
+                status: 400,
+                body: "request id 429500".into(),
+            },
+            InferenceError::ApiStatus {
+                status: 503,
+                body: "opaque".into(),
+            },
+            InferenceError::MissingApiKey("provider".into()),
+            InferenceError::Aborted,
+            InferenceError::Other("ThrottlingException".into()),
+        ] {
+            let message = error_message(&model, &error);
+            assert_eq!(message.error_kind, Some(error.kind()));
+            assert_eq!(message.error_message, Some(error.to_string()));
+            assert_eq!(
+                message.stop_reason == StopReason::Aborted,
+                error.kind() == ErrorKind::Aborted
+            );
+        }
+    }
+
+    #[test]
+    fn error_categories_round_trip_and_old_messages_remain_readable() {
+        let model = crate::catalog::builtin_models().remove(0);
+        let mut message = new_output_message(&model);
+        let legacy = serde_json::to_value(&message).unwrap();
+        assert!(legacy.get("errorKind").is_none());
+        let restored: AssistantMessage = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.error_kind, None);
+
+        for kind in [
+            ErrorKind::HttpStatus { status: 429 },
+            ErrorKind::Transport,
+            ErrorKind::Aborted,
+            ErrorKind::Config,
+            ErrorKind::Provider,
+        ] {
+            message.error_kind = Some(kind);
+            let json = serde_json::to_value(&message).unwrap();
+            let restored: AssistantMessage = serde_json::from_value(json).unwrap();
+            assert_eq!(restored, message);
+        }
+    }
 
     #[tokio::test]
     async fn terminal_stops_preserve_the_accumulated_message() {
@@ -166,6 +230,11 @@ mod tests {
             let failed = matches!(reason, StopReason::Error | StopReason::Aborted);
             if failed {
                 output.error_message = Some("provider stop explanation".into());
+                output.error_kind = Some(if reason == StopReason::Aborted {
+                    ErrorKind::Aborted
+                } else {
+                    ErrorKind::Provider
+                });
             }
 
             let (stream, sink) = assistant_message_channel();

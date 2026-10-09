@@ -175,14 +175,9 @@ impl Provider for AnthropicProvider {
         // reject; report failures in-band".
         tokio::spawn(async move {
             if let Err(err) = run(&http, &model, &context, &options, &sink).await {
-                let reason = if matches!(err, InferenceError::Aborted) {
-                    StopReason::Aborted
-                } else {
-                    StopReason::Error
-                };
                 tracing::warn!(error = %err, "provider request failed");
-                let msg = error_message(&model, reason, err.to_string());
-                let _ = sink.error(reason, msg);
+                let msg = error_message(&model, &err);
+                let _ = sink.error(msg.stop_reason, msg);
             }
         });
 

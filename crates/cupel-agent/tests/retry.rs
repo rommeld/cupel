@@ -23,7 +23,7 @@ use cupel_core::{
     event_stream::{AssistantMessageStream, assistant_message_channel},
     provider::{Provider, Registry},
     types::{
-        Api, AssistantContent, AssistantMessage, Context, Model, ModelCost, StopReason,
+        Api, AssistantContent, AssistantMessage, Context, ErrorKind, Model, ModelCost, StopReason,
         StreamOptions, TextContent, Usage, now_ms,
     },
 };
@@ -33,6 +33,7 @@ use cupel_core::{
 struct FlakyProvider {
     fail_times: u32,
     error_text: &'static str,
+    error_kind: Option<ErrorKind>,
     calls: AtomicU32,
 }
 
@@ -41,6 +42,7 @@ impl FlakyProvider {
         Self {
             fail_times,
             error_text,
+            error_kind: None,
             calls: AtomicU32::new(0),
         }
     }
@@ -57,6 +59,7 @@ fn base_message(model: &Model) -> AssistantMessage {
         usage: Usage::default(),
         stop_reason: StopReason::Stop,
         error_message: None,
+        error_kind: None,
         timestamp: now_ms(),
     }
 }
@@ -79,6 +82,7 @@ impl Provider for FlakyProvider {
             let message = AssistantMessage {
                 stop_reason: StopReason::Error,
                 error_message: Some(self.error_text.to_string()),
+                error_kind: self.error_kind,
                 ..base_message(model)
             };
             let _ = sink.error(StopReason::Error, message);
@@ -230,6 +234,47 @@ async fn non_retryable_errors_fail_immediately() {
         "billing errors must not retry"
     );
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn typed_transient_failures_recover_without_text_patterns() {
+    for kind in [
+        ErrorKind::Transport,
+        ErrorKind::HttpStatus { status: 429 },
+        ErrorKind::HttpStatus { status: 503 },
+        ErrorKind::HttpStatus { status: 529 },
+    ] {
+        let mut provider = FlakyProvider::new(1, "opaque failure");
+        provider.error_kind = Some(kind);
+        let provider = Arc::new(provider);
+        let events = run_loop_with(Arc::clone(&provider), fast_retry(3)).await;
+
+        assert_eq!(auto_retries(&events), vec![(1, 3)], "{kind:?}");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            last_assistant(&events).unwrap().stop_reason,
+            StopReason::Stop
+        );
+    }
+}
+
+#[tokio::test]
+async fn typed_permanent_failures_override_transient_text() {
+    for kind in [
+        ErrorKind::Config,
+        ErrorKind::Aborted,
+        ErrorKind::HttpStatus { status: 400 },
+        ErrorKind::HttpStatus { status: 403 },
+    ] {
+        let mut provider = FlakyProvider::new(10, "HTTP 503: overloaded request id 429500");
+        provider.error_kind = Some(kind);
+        let provider = Arc::new(provider);
+        let events = run_loop_with(Arc::clone(&provider), fast_retry(3)).await;
+
+        assert!(auto_retries(&events).is_empty(), "{kind:?}");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(last_assistant(&events).unwrap().error_kind, Some(kind));
+    }
 }
 
 #[tokio::test]

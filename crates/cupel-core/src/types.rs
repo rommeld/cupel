@@ -161,6 +161,17 @@ pub struct UserMessage {
     pub timestamp: u64,
 }
 
+/// Failure category retained alongside the provider's human-readable error text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ErrorKind {
+    HttpStatus { status: u16 },
+    Transport,
+    Aborted,
+    Config,
+    Provider,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantMessage {
@@ -177,6 +188,9 @@ pub struct AssistantMessage {
     pub stop_reason: StopReason,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub error_message: Option<String>,
+    /// Absent in older session files and messages from unclassified providers.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error_kind: Option<ErrorKind>,
     pub timestamp: u64,
 }
 

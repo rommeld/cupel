@@ -235,6 +235,7 @@ mod tests {
             usage: Usage::default(),
             stop_reason: StopReason::ToolUse,
             error_message: None,
+            error_kind: None,
             timestamp: cupel_core::types::now_ms(),
         };
         let call = |name: &str, args: serde_json::Value| ToolCall {
