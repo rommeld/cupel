@@ -4,7 +4,8 @@
 //! quirks, and thinking-map exceptions.
 //!
 //! Routine maintenance happens here: adding a model = one row in
-//! [`PROVIDERS`], then `cargo run -p cupel-coding-agent --bin generate-cataglo`.
+//! [`PROVIDERS`], then refresh the snapshot with
+//! `cargo run -p cupel-coding-agent --bin generate-catalog -- --fetch`.
 
 use cupel_core::types::{Api, Provider};
 

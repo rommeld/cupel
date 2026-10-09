@@ -8,11 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cupel_core::types::ThinkingLevelMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One provider block. Each model stays raw JSON until it is actually
 /// curated. Only curated entries must parse as [`ModelEntry`].
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ProviderEntry {
     pub models: BTreeMap<String, serde_json::Value>,
 }
@@ -21,7 +21,7 @@ pub struct ProviderEntry {
 /// Every field is defaulted so sparse upstream entries still parse; hard
 /// requirements (cost present, usable limits) are enforced later, where
 /// the error message can name the curated model.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ModelEntry {
     pub name: String,
@@ -51,7 +51,7 @@ impl Default for ModelEntry {
 /// How a model's thinking is switched upstream. Internally tagged on
 /// "type"; struct variants tolerate extra fields, and `Unknown` swallows
 /// any tag models.dev invents later.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningOption {
     Toggle,
@@ -64,14 +64,14 @@ pub enum ReasoningOption {
     Unknown,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Modalities {
     pub input: Vec<String>,
 }
 
 /// USD per million tokes, models.dev field names.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Cost {
     pub input: f64,
@@ -84,7 +84,7 @@ pub struct Cost {
 }
 
 /// models.dev nests the threshold: `tier: {type: "context", size: N}`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RawTier {
     pub input: f64,
     pub output: f64,
@@ -95,12 +95,12 @@ pub struct RawTier {
     pub tier: TierThreshold,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TierThreshold {
     pub size: u64,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Limit {
     pub context: u64,
