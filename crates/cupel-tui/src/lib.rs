@@ -15,8 +15,9 @@
 //!
 //! Terminal input is read on a dedicated OS thread because crossterm's
 //! `read()` is blocking; a channel bridges it into the async world. Agent
-//! events already arrive as a `Stream`. Each `select!` wakeup mutates the
-//! `App`, then the loop redraws. That's the whole architecture.
+//! events already arrive as a `Stream`. After each `select!` wakeup, the
+//! loop handles the ready background events before redrawing, so a burst
+//! of streaming deltas shares one render pass.
 
 pub mod app;
 pub mod autocomplete;
@@ -156,6 +157,10 @@ async fn event_loop(
                 sessions.tick();
             }
         }
+
+        // Catch up without waiting: rendering the entire transcript per queued
+        // delta would make a fast stream fall behind the producer.
+        sessions.drain_ready_events().await;
 
         // A run ended somewhere. Check for conflicts between the checkouts.
         if sessions.take_finished_runs() {
