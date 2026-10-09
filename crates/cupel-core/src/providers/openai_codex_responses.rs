@@ -513,6 +513,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn missing_access_token_emits_login_guidance() {
+        use crate::error::MessageStreamError;
+        use crate::provider::Provider as _;
+        use crate::types::ErrorKind;
+
+        let error = OpenAiCodexResponsesProvider::new()
+            .stream(
+                &codex_model(),
+                context_with_prompt(),
+                StreamOptions::default(),
+            )
+            .result()
+            .await
+            .unwrap_err();
+        let MessageStreamError::ProviderError { reason, message } = error else {
+            panic!("expected a missing-credential error");
+        };
+        assert_eq!(reason, StopReason::Error);
+        assert_eq!(message.error_kind, Some(ErrorKind::Config));
+        assert!(
+            message
+                .error_message
+                .as_deref()
+                .is_some_and(|text| text.contains("/login openai-codex"))
+        );
+    }
+
     #[test]
     fn tool_call_ids_from_the_openai_family_stay_usable() {
         let model = codex_model();

@@ -25,7 +25,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use cupel_core::oauth::openai_codex::{self, OAuthCredential};
+use cupel_core::oauth::openai_codex::{self, OAuthCredential, OAuthError};
 use serde::{Deserialize, Serialize};
 
 /// One stored credential. The `type` tag leaves room for other credential
@@ -36,8 +36,8 @@ pub enum StoredCredential {
     Oauth(OAuthCredential),
 }
 
-/// Refresh when less than five minutes of validity remain. Generous enough
-/// that a token can never expire between resolution and the request.
+/// Refresh proactively when less than five minutes of validity remain.
+/// Entering this margin does not invalidate the stored access token.
 const REFRESH_MARGIN_MS: u64 = 5 * 60 * 1000;
 
 /// `~/.cupel/auth.json`.
@@ -195,10 +195,11 @@ pub fn needs_refresh(credential: &OAuthCredential, now_ms: u64) -> bool {
 }
 
 /// A request-ready Codex access token: the stored one while it is fresh,
-/// or a refreshed (and re-persisted) one. `None` = not logged in or the
-/// refresh failed. The provider then errors and the TUI points at
-/// /login. This runs on every request via the agent-loop api_key hook, which
-/// keeps week-long sessions alive across token expiry.
+/// or a refreshed (and re-persisted) one. A failed refresh still permits the
+/// stored token until its actual expiry. `None` = not logged in, or refresh
+/// failed with no valid access token left. The provider points at `/login`.
+/// This runs on every request via the agent-loop api_key hook, which keeps
+/// week-long sessions alive across token expiry.
 pub async fn openai_codex_access_token(
     home: Option<&Path>,
     http: &reqwest::Client,
@@ -207,7 +208,18 @@ pub async fn openai_codex_access_token(
     if !needs_refresh(&stored, cupel_core::types::now_ms()) {
         return Some(stored.access);
     }
-    match openai_codex::refresh(http, &stored.refresh).await {
+    let refreshed = openai_codex::refresh(http, &stored.refresh).await;
+    token_after_refresh(home, stored, refreshed, cupel_core::types::now_ms())
+}
+
+/// Resolve the refresh result against the time *after* the request finished.
+fn token_after_refresh(
+    home: Option<&Path>,
+    stored: OAuthCredential,
+    refreshed: Result<OAuthCredential, OAuthError>,
+    now_ms: u64,
+) -> Option<String> {
+    match refreshed {
         Ok(fresh) => {
             // Persist the rotated pair. A failed save is only a warning:
             // the fresh token still serves this session; the next start
@@ -219,9 +231,13 @@ pub async fn openai_codex_access_token(
             Some(fresh.access)
         }
         Err(e) => {
-            // No silent fallback to a stale token after a failed refresh.
-            tracing::warn!("codex token refresh failed: {e}");
-            None
+            let still_valid = stored.expires > now_ms;
+            tracing::warn!(
+                error = %e,
+                using_stored_token = still_valid,
+                "codex token refresh failed; run /login openai-codex to log in again if needed"
+            );
+            still_valid.then_some(stored.access)
         }
     }
 }
@@ -324,6 +340,86 @@ mod tests {
         assert!(needs_refresh(&credential_fixture(now + margin), now));
         assert!(needs_refresh(&credential_fixture(now + 1), now));
         assert!(needs_refresh(&credential_fixture(now - 1), now));
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_uses_stored_tokens_only_before_actual_expiry() {
+        let home = temp_home("failed-refresh");
+        let now = 1_000_000_000;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(1))
+            .build()
+            .unwrap();
+
+        for expires in [now + 60_000, now, now - 1] {
+            let stored = credential_fixture(expires);
+            assert!(needs_refresh(&stored, now));
+            save_credential(Some(&home), "openai-codex", &stored).unwrap();
+            let before = std::fs::read_to_string(auth_path(&home)).unwrap();
+            let network_error = http
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap_err();
+            for error in [
+                OAuthError::TokenStatus {
+                    operation: "refresh",
+                    status: 400,
+                    body: "invalid_grant".to_string(),
+                },
+                OAuthError::TokenStatus {
+                    operation: "refresh",
+                    status: 500,
+                    body: "server error".to_string(),
+                },
+                OAuthError::Http(network_error),
+            ] {
+                let token = token_after_refresh(Some(&home), stored.clone(), Err(error), now);
+                assert_eq!(token.as_deref(), (expires > now).then_some("access-1"));
+                assert_eq!(std::fs::read_to_string(auth_path(&home)).unwrap(), before);
+            }
+        }
+    }
+
+    #[test]
+    fn successful_refresh_returns_and_persists_the_rotated_pair() {
+        let home = temp_home("successful-refresh");
+        let now = 1_000_000_000;
+        let stored = credential_fixture(now);
+        save_credential(Some(&home), "openai-codex", &stored).unwrap();
+        let fresh = OAuthCredential {
+            access: "access-2".to_string(),
+            refresh: "refresh-2".to_string(),
+            expires: now + 60 * 60 * 1000,
+            account_id: "acc-1".to_string(),
+        };
+        let token = token_after_refresh(Some(&home), stored, Ok(fresh.clone()), now);
+        assert_eq!(token.as_deref(), Some("access-2"));
+        assert_eq!(credential(Some(&home), "openai-codex"), Some(fresh));
+    }
+
+    #[test]
+    fn refreshed_token_remains_usable_when_persistence_fails() {
+        let home = temp_home("refresh-save-failure");
+        // A hand edit while the refresh was in flight must not be overwritten.
+        std::fs::write(auth_path(&home), "{broken").unwrap();
+        let mut fresh = credential_fixture(2_000_000_000);
+        fresh.access = "access-2".to_string();
+        let token = token_after_refresh(
+            Some(&home),
+            credential_fixture(1_000_000_000),
+            Ok(fresh),
+            1_000_000_000,
+        );
+        assert_eq!(token.as_deref(), Some("access-2"));
+        assert_eq!(
+            std::fs::read_to_string(auth_path(&home)).unwrap(),
+            "{broken"
+        );
     }
 
     #[tokio::test]

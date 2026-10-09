@@ -4,7 +4,7 @@
 
 use thiserror::Error;
 
-use crate::types::{AssistantMessage, ErrorKind, StopReason};
+use crate::types::{AssistantMessage, ErrorKind, Provider, StopReason};
 
 pub type Result<T> = core::result::Result<T, InferenceError>;
 
@@ -30,7 +30,7 @@ pub enum InferenceError {
     NoProvider(String),
 
     /// A provider needed an API key but none was supplied.
-    #[error("no API key for provider: {0}")]
+    #[error("no API key for provider: {0}{hint}", hint = missing_api_key_hint(.0))]
     MissingApiKey(String),
 
     /// The upstream HTTP API returned a non-2xx status. We keep the body
@@ -80,6 +80,14 @@ impl InferenceError {
     }
 }
 
+fn missing_api_key_hint(provider: &str) -> &'static str {
+    if provider == Provider::OPENAI_CODEX {
+        " - run /login openai-codex to log in with ChatGPT again"
+    } else {
+        ""
+    }
+}
+
 /// `err`, then each error in its `source()` chain, joined by `: `.
 ///
 /// `successors` walks the linked list: start at the first cause, and keep
@@ -96,6 +104,18 @@ fn with_causes(err: &reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_codex_credentials_point_to_login_without_changing_the_category() {
+        let error = InferenceError::MissingApiKey(Provider::OPENAI_CODEX.to_string());
+        assert!(error.to_string().contains("/login openai-codex"));
+        assert_eq!(error.kind(), ErrorKind::Config);
+
+        assert_eq!(
+            InferenceError::MissingApiKey(Provider::ANTHROPIC.to_string()).to_string(),
+            "no API key for provider: anthropic"
+        );
+    }
 
     #[tokio::test]
     async fn transport_errors_name_their_cause() {
