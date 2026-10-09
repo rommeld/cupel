@@ -143,7 +143,7 @@ pub fn estimate_context_tokens(context: &AgentContext) -> u64 {
 /// Provider usage describes the original transcript. After editing history,
 /// invalidate every anchor so both agent estimation and provider output
 /// clamping fall back to message lengths until the next fresh response.
-fn invalidate_usage_anchors(messages: &mut [AgentMessage]) {
+pub(crate) fn invalidate_usage_anchors(messages: &mut [AgentMessage]) {
     for message in messages {
         if let AgentMessage::Llm(Message::Assistant(assistant)) = message {
             assistant.usage = cupel_core::types::Usage::default();

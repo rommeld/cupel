@@ -7,6 +7,7 @@
 //! own pace while the internal forwarder keeps [`AgentState`] up to date.
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt as _;
@@ -15,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use cupel_core::{
     provider::Registry,
-    types::{Message, Model, ThinkingLevel},
+    types::{Message, Model, StopReason, ThinkingLevel},
 };
 
 use crate::agent_loop::{AgentEventSink, AgentEventStream, agent_event_channel, agent_loop};
@@ -98,12 +99,18 @@ pub struct Agent {
     tool_execution: ToolExecutionMode,
     retry: RetryConfig,
     compaction: crate::compaction::CompactionConfig,
+    /// Seeded history (a resumed transcript, a restored spinoff, a hot reload)
+    /// carries provider usage measured on whatever context its original run
+    /// sent, possibly a compacted one. Until a reply of this agent's own reports
+    /// the real size again, runs estimate that history from its content.
+    unverified_usage: Arc<AtomicBool>,
     active: Option<(CancellationToken, tokio::task::JoinHandle<()>)>,
 }
 
 impl Agent {
     #[must_use]
     pub fn new(options: AgentOptions) -> Self {
+        let unverified_usage = Arc::new(AtomicBool::new(!options.messages.is_empty()));
         Self {
             state: Arc::new(Mutex::new(AgentState {
                 system_prompt: options.system_prompt,
@@ -127,6 +134,7 @@ impl Agent {
             tool_execution: options.tool_execution,
             retry: options.retry,
             compaction: options.compaction,
+            unverified_usage,
             active: None,
         }
     }
@@ -260,6 +268,7 @@ impl Agent {
             state.messages.clear();
             state.error_message = None;
         }
+        self.unverified_usage.store(false, Ordering::SeqCst);
     }
 
     /// Queue a message to run once the agent would otherwise stop.
@@ -372,10 +381,14 @@ impl Agent {
         // Snapshot everything the run needs.
         let (context, config) = {
             let state = self.state.lock().expect("agent state lock poisoned");
+            let mut messages = state.messages.clone();
+            if self.unverified_usage.load(Ordering::SeqCst) {
+                crate::compaction::invalidate_usage_anchors(&mut messages);
+            }
             (
                 AgentContext {
                     system_prompt: state.system_prompt.clone(),
-                    messages: state.messages.clone(),
+                    messages,
                     tools: self.tools.clone(),
                 },
                 AgentLoopConfig {
@@ -425,8 +438,9 @@ impl Agent {
         // Task 2: the forwarder reduces every event into AgentState,
         // then re-emits it to the caller.
         let state = Arc::clone(&self.state);
+        let unverified_usage = Arc::clone(&self.unverified_usage);
         let handle = tokio::spawn(async move {
-            forward_events(internal_stream, &state, &public_sink).await;
+            forward_events(internal_stream, &state, &unverified_usage, &public_sink).await;
             let mut state = state.lock().expect("agent state lock poisoned");
             state.is_streaming = false;
             state.pending_tool_calls.clear();
@@ -441,6 +455,7 @@ impl Agent {
 async fn forward_events(
     mut events: AgentEventStream,
     state: &Arc<Mutex<AgentState>>,
+    unverified_usage: &AtomicBool,
     sink: &AgentEventSink,
 ) {
     while let Some(event) = events.next().await {
@@ -448,6 +463,9 @@ async fn forward_events(
             let mut state = state.lock().expect("agent state lock poisoned");
             match &event {
                 AgentEvent::MessageEnd { message } => {
+                    if reports_context_size(message) {
+                        unverified_usage.store(false, Ordering::SeqCst);
+                    }
                     state.messages.push(message.clone());
                 }
                 AgentEvent::CompactionEnd { messages, .. }
@@ -472,6 +490,23 @@ async fn forward_events(
         }
         sink.emit(event);
     }
+}
+
+/// A successful reply with provider usage measures the context this agent
+/// actually sent. Same test as the usage anchor in
+/// [`estimate_context_tokens`](crate::compaction::estimate_context_tokens).
+fn reports_context_size(message: &AgentMessage) -> bool {
+    let AgentMessage::Llm(Message::Assistant(assistant)) = message else {
+        return false;
+    };
+    if matches!(
+        assistant.stop_reason,
+        StopReason::Error | StopReason::Aborted
+    ) {
+        return false;
+    }
+    let usage = &assistant.usage;
+    usage.total_tokens > 0 || usage.input + usage.output + usage.cache_read + usage.cache_write > 0
 }
 
 /// Hook decorator that adds the Agent's queue draining on top of user hooks.

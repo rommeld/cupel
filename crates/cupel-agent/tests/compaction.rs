@@ -732,6 +732,38 @@ async fn assert_compaction_persists(reason: CompactionReason) {
     );
 }
 
+/// A resumed transcript keeps every message, but its newest reply reports the
+/// usage of the compacted request the original run sent. That number must not
+/// hide the reloaded history: the first prompt estimates from content and
+/// compacts, and the reply it gets makes usage trustworthy again.
+#[tokio::test]
+async fn seeded_history_does_not_trust_usage_it_did_not_observe() {
+    let provider = Arc::new(CompactionAwareProvider::new(0, ""));
+    let model = mock_model(3000);
+    let mut history = big_history(5);
+    let mut reply = assistant(
+        &model,
+        vec![AssistantContent::Text(TextContent::plain("done"))],
+    );
+    // Window 3000, threshold 2250: five ~1000-token messages exceed it, but
+    // this anchor from a compacted request says the context held 200 tokens.
+    reply.usage.input = 200;
+    history.push(AgentMessage::Llm(Message::Assistant(reply)));
+    let mut agent = stateful_agent(Arc::clone(&provider), 3000, history);
+
+    let first = prompt_agent(&mut agent, "next question").await;
+    assert_eq!(
+        compaction_events(&first),
+        vec![(CompactionReason::Threshold, true)],
+        "the reloaded history must be estimated from its content"
+    );
+
+    // The reply to the compacted request reports the real size again.
+    let second = prompt_agent(&mut agent, "and then?").await;
+    assert!(compaction_events(&second).is_empty());
+    assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn threshold_compaction_persists_in_state_and_the_next_prompt() {
     assert_compaction_persists(CompactionReason::Threshold).await;
