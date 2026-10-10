@@ -16,7 +16,7 @@
 //! Pattern matching uses the same compression trick as [`crate::retry`]
 //! (lowercase, alphanumerics only) instead of regexes.
 
-use crate::types::{AssistantMessage, StopReason};
+use crate::types::{AssistantMessage, ErrorKind, StopReason};
 
 /// Overflow indicators. Multi-part entries require all parts present.
 /// Comments name the provider whose wording each entry matches.
@@ -49,7 +49,7 @@ const OVERFLOW_PATTERNS: &[&[&str]] = &[
 /// also matches. Example: Bedrock throttling says "Too many tokens, please
 /// wait before trying again" because that's rate limiting, not overflow.
 const NON_OVERFLOW_PATTERNS: &[&str] = &[
-    "throttlingerror",
+    "throttling",
     "serviceunavailable",
     "ratelimit",
     "toomanyrequests",
@@ -69,6 +69,15 @@ fn compress(text: &str) -> String {
 pub fn is_context_overflow(message: &AssistantMessage, context_window: u64) -> bool {
     // Case 1: explicit overflow error.
     if message.stop_reason == StopReason::Error
+        && matches!(
+            message.error_kind,
+            None | Some(
+                ErrorKind::Provider
+                    | ErrorKind::HttpStatus {
+                        status: 400 | 413 | 422
+                    }
+            )
+        )
         && let Some(error_message) = &message.error_message
     {
         let compressed = compress(error_message);
@@ -122,6 +131,7 @@ mod tests {
             usage,
             stop_reason,
             error_message: error.map(str::to_string),
+            error_kind: None,
             timestamp: 0,
         }
     }
@@ -161,6 +171,39 @@ mod tests {
             ),
             200_000
         ));
+        assert!(!is_context_overflow(
+            &message(
+                StopReason::Error,
+                Some("Bedrock error: ThrottlingException: Too many tokens"),
+                Usage::default(),
+            ),
+            200_000
+        ));
+    }
+
+    #[test]
+    fn only_request_and_provider_errors_can_be_explicit_overflow() {
+        for (kind, expected) in [
+            (ErrorKind::Aborted, false),
+            (ErrorKind::Config, false),
+            (ErrorKind::Transport, false),
+            (ErrorKind::HttpStatus { status: 401 }, false),
+            (ErrorKind::HttpStatus { status: 403 }, false),
+            (ErrorKind::HttpStatus { status: 429 }, false),
+            (ErrorKind::HttpStatus { status: 503 }, false),
+            (ErrorKind::HttpStatus { status: 400 }, true),
+            (ErrorKind::HttpStatus { status: 413 }, true),
+            (ErrorKind::HttpStatus { status: 422 }, true),
+            (ErrorKind::Provider, true),
+        ] {
+            let mut message = message(
+                StopReason::Error,
+                Some("prompt is too long"),
+                Usage::default(),
+            );
+            message.error_kind = Some(kind);
+            assert_eq!(is_context_overflow(&message, 200_000), expected, "{kind:?}");
+        }
     }
 
     #[test]

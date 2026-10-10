@@ -53,6 +53,7 @@ impl Provider for StuckProvider {
             usage: Usage::default(),
             stop_reason: StopReason::Stop,
             error_message: None,
+            error_kind: None,
             timestamp: now_ms(),
         };
         let _ = sink.start();

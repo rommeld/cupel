@@ -23,11 +23,146 @@ pub mod openai_codex_responses;
 pub mod openai_completions;
 pub mod openai_responses;
 
-use crate::event_stream::EventSink;
-use crate::types::{AssistantMessage, Model, StopReason, StreamOptions, Usage, now_ms};
+use crate::error::{InferenceError, Result};
+use crate::event_stream::{AssistantMessageStream, EventSink, assistant_message_channel};
+use crate::model::{clamp_thinking_level, clamp_thinking_level_with};
+use crate::types::{
+    AssistantMessage, ErrorKind, Model, ModelThinkingLevel, StopReason, StreamOptions,
+    ThinkingLevel, Usage, now_ms,
+};
 
 pub(crate) const CONTENT_FILTER_MESSAGE: &str =
     "The provider's content filter stopped the response. Partial output may be incomplete.";
+
+/// Shared producer/consumer split and in-band worker error contract.
+pub(crate) fn spawn_provider_stream<F>(
+    model: &Model,
+    worker: impl FnOnce(Model, EventSink) -> F + Send + 'static,
+) -> AssistantMessageStream
+where
+    F: core::future::Future<Output = Result<()>> + Send + 'static,
+{
+    let (stream, sink) = assistant_message_channel();
+    let model = model.clone();
+    tokio::spawn(async move {
+        if let Err(error) = worker(model.clone(), sink.clone()).await {
+            tracing::warn!(error = %error, "provider request failed");
+            let message = error_message(&model, &error);
+            let _ = sink.error(message.stop_reason, message);
+        }
+    });
+    stream
+}
+
+/// Send a request and preserve HTTP status/body errors. Cancellation also applies
+/// while reading an error body; a missing body never hides the known status.
+pub(crate) async fn send_request(
+    request: reqwest::RequestBuilder,
+    options: &StreamOptions,
+) -> Result<reqwest::Response> {
+    let response = with_cancel(options, request.send()).await??;
+    check_http_response(response, options).await
+}
+
+async fn check_http_response(
+    response: reqwest::Response,
+    options: &StreamOptions,
+) -> Result<reqwest::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let body = with_cancel(options, response.text())
+        .await?
+        .unwrap_or_default();
+    Err(InferenceError::ApiStatus {
+        status: status.as_u16(),
+        body,
+    })
+}
+
+/// Protocol-native fallback names. Model metadata is still authoritative for
+/// clamping and remapping; old Bedrock Claude models have no native xhigh.
+#[derive(Clone, Copy)]
+pub(crate) enum EffortStyle {
+    OpenAi,
+    Claude { native_xhigh: bool },
+}
+
+#[must_use]
+pub(crate) fn thinking_effort(
+    model: &Model,
+    requested: Option<ThinkingLevel>,
+    style: EffortStyle,
+) -> Option<String> {
+    let requested = match (requested?, style) {
+        (
+            ThinkingLevel::XHigh,
+            EffortStyle::Claude {
+                native_xhigh: false,
+            },
+        ) => ModelThinkingLevel::High,
+        (level, _) => ModelThinkingLevel::from(level),
+    };
+    let level = match style {
+        EffortStyle::OpenAi => clamp_thinking_level(model, requested),
+        EffortStyle::Claude { native_xhigh } => {
+            clamp_thinking_level_with(model, requested, |level| match level {
+                ModelThinkingLevel::XHigh => native_xhigh,
+                // Claude has no native "minimal" effort, but an explicit alias is valid.
+                ModelThinkingLevel::Minimal => model
+                    .thinking_level_map
+                    .as_ref()
+                    .is_some_and(|map| matches!(map.get("minimal"), Some(Some(_)))),
+                _ => true,
+            })
+        }
+    };
+    if level == ModelThinkingLevel::Off {
+        return None;
+    }
+    Some(
+        model
+            .thinking_level_map
+            .as_ref()
+            .and_then(|map| map.get(level.as_str()))
+            .and_then(Option::as_ref)
+            .cloned()
+            .unwrap_or_else(|| level.as_str().to_string()),
+    )
+}
+
+/// Explicit off never clamps up into enabled reasoning. A null override means
+/// omission, a named override wins, and an absent entry uses the wire default.
+#[must_use]
+pub(crate) fn off_effort<'a>(model: &'a Model, default: Option<&'a str>) -> Option<&'a str> {
+    match model
+        .thinking_level_map
+        .as_ref()
+        .and_then(|map| map.get("off"))
+    {
+        Some(mapped) => mapped.as_deref(),
+        None => default,
+    }
+}
+
+/// Anthropic Messages and Bedrock share the same 64-character tool-call ids.
+pub(crate) fn normalize_anthropic_tool_call_id(
+    id: &str,
+    _model: &Model,
+    _source: &AssistantMessage,
+) -> String {
+    id.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect()
+}
 
 /// Build the skeleton assistant message a provider accumulates into while
 /// streaming. Every provider starts from this same shape.
@@ -43,6 +178,7 @@ pub(crate) fn new_output_message(model: &Model) -> AssistantMessage {
         usage: Usage::default(),
         stop_reason: StopReason::Stop,
         error_message: None,
+        error_kind: None,
         timestamp: now_ms(),
     }
 }
@@ -50,10 +186,16 @@ pub(crate) fn new_output_message(model: &Model) -> AssistantMessage {
 /// Build the minimal error message emitted when a provider task fails before
 /// (or instead of) producing a terminal event.
 #[must_use]
-pub(crate) fn error_message(model: &Model, reason: StopReason, text: String) -> AssistantMessage {
+pub(crate) fn error_message(model: &Model, error: &InferenceError) -> AssistantMessage {
+    let kind = error.kind();
     AssistantMessage {
-        stop_reason: reason,
-        error_message: Some(text),
+        stop_reason: if kind == ErrorKind::Aborted {
+            StopReason::Aborted
+        } else {
+            StopReason::Error
+        },
+        error_message: Some(error.to_string()),
+        error_kind: Some(kind),
         ..new_output_message(model)
     }
 }
@@ -67,6 +209,13 @@ pub(crate) fn finish_output(mut output: AssistantMessage, sink: &EventSink) {
         output
             .error_message
             .get_or_insert_with(|| "The provider stopped generation with an error".to_string());
+        output
+            .error_kind
+            .get_or_insert(if reason == StopReason::Aborted {
+                ErrorKind::Aborted
+            } else {
+                ErrorKind::Provider
+            });
     }
     log_completion(&output);
     let _ = match reason {
@@ -83,7 +232,7 @@ pub(crate) fn finish_output(mut output: AssistantMessage, sink: &EventSink) {
 pub(crate) async fn with_cancel<T>(
     options: &StreamOptions,
     fut: impl core::future::Future<Output = T>,
-) -> Result<T, crate::error::InferenceError> {
+) -> Result<T> {
     match &options.signal {
         Some(token) => {
             tokio::select! {
@@ -138,10 +287,304 @@ pub(crate) fn apply_custom_headers(
 
 #[cfg(test)]
 mod tests {
-    use crate::error::MessageStreamError;
+    use crate::error::{InferenceError, MessageStreamError};
     use crate::event_stream::assistant_message_channel;
-    use crate::providers::{finish_output, new_output_message};
-    use crate::types::{AssistantContent, StopReason, TextContent};
+    use crate::providers::{
+        EffortStyle, check_http_response, error_message, finish_output, new_output_message,
+        normalize_anthropic_tool_call_id, off_effort, send_request, spawn_provider_stream,
+        thinking_effort,
+    };
+    use crate::types::{
+        AssistantContent, AssistantMessage, ErrorKind, Model, StopReason, StreamOptions,
+        TextContent, ThinkingLevel,
+    };
+
+    fn reasoning_model() -> Model {
+        let mut model = crate::catalog::builtin_models().remove(0);
+        model.thinking_level_map = None;
+        model.reasoning = true;
+        model
+    }
+
+    #[test]
+    fn effort_scales_preserve_native_top_levels_and_legacy_claude_limits() {
+        let model = reasoning_model();
+        for (level, openai, claude, legacy) in [
+            (ThinkingLevel::Minimal, "minimal", "low", "low"),
+            (ThinkingLevel::Low, "low", "low", "low"),
+            (ThinkingLevel::Medium, "medium", "medium", "medium"),
+            (ThinkingLevel::High, "high", "high", "high"),
+            (ThinkingLevel::XHigh, "xhigh", "xhigh", "high"),
+            (ThinkingLevel::Max, "max", "max", "max"),
+        ] {
+            for (style, expected) in [
+                (EffortStyle::OpenAi, openai),
+                (EffortStyle::Claude { native_xhigh: true }, claude),
+                (
+                    EffortStyle::Claude {
+                        native_xhigh: false,
+                    },
+                    legacy,
+                ),
+            ] {
+                assert_eq!(
+                    thinking_effort(&model, Some(level), style).as_deref(),
+                    Some(expected)
+                );
+                assert!(thinking_effort(&model, None, style).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn effort_clamps_then_applies_aliases_and_respects_wire_constraints() {
+        let mut model = reasoning_model();
+        model.thinking_level_map = Some(
+            [
+                ("minimal".to_string(), None),
+                ("low".to_string(), None),
+                ("medium".to_string(), Some("balanced".to_string())),
+                ("high".to_string(), None),
+                ("max".to_string(), None),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        for style in [
+            EffortStyle::OpenAi,
+            EffortStyle::Claude { native_xhigh: true },
+            EffortStyle::Claude {
+                native_xhigh: false,
+            },
+        ] {
+            assert_eq!(
+                thinking_effort(&model, Some(ThinkingLevel::Minimal), style).as_deref(),
+                Some("balanced")
+            );
+        }
+        assert_eq!(
+            thinking_effort(
+                &model,
+                Some(ThinkingLevel::Max),
+                EffortStyle::Claude {
+                    native_xhigh: false
+                }
+            )
+            .as_deref(),
+            Some("balanced")
+        );
+        assert_eq!(
+            thinking_effort(&model, Some(ThinkingLevel::Max), EffortStyle::OpenAi).as_deref(),
+            Some("xhigh")
+        );
+        model.reasoning = false;
+        assert!(thinking_effort(&model, Some(ThinkingLevel::High), EffortStyle::OpenAi).is_none());
+    }
+
+    #[test]
+    fn off_overrides_are_shared_but_wire_defaults_remain_explicit() {
+        let mut model = reasoning_model();
+        assert_eq!(off_effort(&model, Some("disabled")), Some("disabled"));
+        assert_eq!(off_effort(&model, Some("none")), Some("none"));
+        assert_eq!(off_effort(&model, None), None);
+        for mapped in [
+            None,
+            Some("between_tools".to_string()),
+            Some("none".to_string()),
+        ] {
+            model.thinking_level_map =
+                Some([("off".to_string(), mapped.clone())].into_iter().collect());
+            for default in [None, Some("none"), Some("disabled")] {
+                assert_eq!(off_effort(&model, default), mapped.as_deref());
+            }
+            assert!(thinking_effort(&model, None, EffortStyle::OpenAi).is_none());
+        }
+    }
+
+    #[test]
+    fn anthropic_id_normalization_is_ascii_and_capped_without_trimming() {
+        let model = reasoning_model();
+        let source = new_output_message(&model);
+        assert_eq!(
+            normalize_anthropic_tool_call_id("call-1|雪 ", &model, &source),
+            "call-1___"
+        );
+        assert_eq!(
+            normalize_anthropic_tool_call_id(&"x".repeat(100), &model, &source),
+            "x".repeat(64)
+        );
+    }
+
+    #[tokio::test]
+    async fn spawned_workers_emit_typed_errors_or_preserve_terminal_output() {
+        let model = reasoning_model();
+        for error in [
+            InferenceError::Aborted,
+            InferenceError::MissingApiKey("mock".to_string()),
+            InferenceError::ApiStatus {
+                status: 429,
+                body: "slow down".to_string(),
+            },
+        ] {
+            let mut expected = error_message(&model, &error);
+            let stream = spawn_provider_stream(&model, move |_, _| async move { Err(error) });
+            let MessageStreamError::ProviderError { reason, message } =
+                stream.result().await.unwrap_err()
+            else {
+                panic!("worker errors must produce a terminal Error event");
+            };
+            assert_eq!(reason, expected.stop_reason);
+            expected.timestamp = message.timestamp;
+            assert_eq!(*message, expected);
+        }
+        let mut expected = new_output_message(&model);
+        expected
+            .content
+            .push(AssistantContent::Text(TextContent::plain("complete")));
+        let output = expected.clone();
+        let stream = spawn_provider_stream(&model, move |_, sink| async move {
+            finish_output(output, &sink);
+            Ok(())
+        });
+        assert_eq!(stream.result().await.unwrap(), expected);
+    }
+
+    async fn request_for_response(response: String) -> reqwest::RequestBuilder {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio::io::BufReader::new(socket);
+            let mut line = String::new();
+            while socket.read_line(&mut line).await.unwrap() > 0 {
+                if line == "\r\n" {
+                    break;
+                }
+                line.clear();
+            }
+            socket
+                .get_mut()
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+        });
+        reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .get(format!("http://{address}"))
+    }
+
+    #[tokio::test]
+    async fn http_status_errors_keep_the_body_and_do_not_match_body_digits() {
+        let body = "requested 500429 tokens";
+        for status in [200, 400, 401, 429, 500] {
+            let request = request_for_response(format!(
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ))
+            .await;
+            let result = send_request(request, &StreamOptions::default()).await;
+            if status == 200 {
+                assert_eq!(result.unwrap().text().await.unwrap(), body);
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind(), ErrorKind::HttpStatus { status });
+                let InferenceError::ApiStatus { body: actual, .. } = &error else {
+                    panic!("HTTP error");
+                };
+                assert_eq!(actual, body);
+                let message = error_message(&reasoning_model(), &error);
+                assert_eq!(
+                    crate::retry::is_retryable_assistant_error(&message),
+                    status == 429 || status == 500
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn truncated_http_error_bodies_do_not_hide_the_status() {
+        let request = request_for_response(
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort"
+                .to_string(),
+        )
+        .await;
+        let error = send_request(request, &StreamOptions::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::HttpStatus { status: 400 });
+    }
+
+    #[tokio::test]
+    async fn error_body_reads_honor_cancellation() {
+        let request = request_for_response(
+            "HTTP/1.1 500 Error\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody".to_string(),
+        )
+        .await;
+        let response = request.send().await.unwrap();
+        let signal = tokio_util::sync::CancellationToken::new();
+        signal.cancel();
+        let options = StreamOptions {
+            signal: Some(signal),
+            ..StreamOptions::default()
+        };
+        assert!(matches!(
+            check_http_response(response, &options).await,
+            Err(InferenceError::Aborted)
+        ));
+    }
+
+    #[test]
+    fn worker_errors_keep_their_category_and_display_text() {
+        let model = crate::catalog::builtin_models().remove(0);
+        for error in [
+            InferenceError::ApiStatus {
+                status: 400,
+                body: "request id 429500".into(),
+            },
+            InferenceError::ApiStatus {
+                status: 503,
+                body: "opaque".into(),
+            },
+            InferenceError::MissingApiKey("provider".into()),
+            InferenceError::Aborted,
+            InferenceError::Other("ThrottlingException".into()),
+        ] {
+            let message = error_message(&model, &error);
+            assert_eq!(message.error_kind, Some(error.kind()));
+            assert_eq!(message.error_message, Some(error.to_string()));
+            assert_eq!(
+                message.stop_reason == StopReason::Aborted,
+                error.kind() == ErrorKind::Aborted
+            );
+        }
+    }
+
+    #[test]
+    fn error_categories_round_trip_and_old_messages_remain_readable() {
+        let model = crate::catalog::builtin_models().remove(0);
+        let mut message = new_output_message(&model);
+        let legacy = serde_json::to_value(&message).unwrap();
+        assert!(legacy.get("errorKind").is_none());
+        let restored: AssistantMessage = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.error_kind, None);
+
+        for kind in [
+            ErrorKind::HttpStatus { status: 429 },
+            ErrorKind::Transport,
+            ErrorKind::Aborted,
+            ErrorKind::Config,
+            ErrorKind::Provider,
+        ] {
+            message.error_kind = Some(kind);
+            let json = serde_json::to_value(&message).unwrap();
+            let restored: AssistantMessage = serde_json::from_value(json).unwrap();
+            assert_eq!(restored, message);
+        }
+    }
 
     #[tokio::test]
     async fn terminal_stops_preserve_the_accumulated_message() {
@@ -166,6 +609,11 @@ mod tests {
             let failed = matches!(reason, StopReason::Error | StopReason::Aborted);
             if failed {
                 output.error_message = Some("provider stop explanation".into());
+                output.error_kind = Some(if reason == StopReason::Aborted {
+                    ErrorKind::Aborted
+                } else {
+                    ErrorKind::Provider
+                });
             }
 
             let (stream, sink) = assistant_message_channel();

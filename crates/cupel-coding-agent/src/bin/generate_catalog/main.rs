@@ -1,11 +1,12 @@
 //! Dev-time model-catalog generator.
 //!
-//! Fetches <https://models.dev/api.json>, applies the curation tables in
-//! curation.rs, validates, and writes the committed
-//! crates/cupel-core/src/catalog.json that builtin_models() embeds via
-//! include_str!. Run on demand:
+//! Uses the checked-in models_dev.json snapshot, applies curation.rs, validates,
+//! and writes crates/cupel-core/src/catalog.json. --fetch refreshes the snapshot
+//! from <https://models.dev/api.json>, keeping only curated models and consumed
+//! fields. Run on demand:
 //!
 //!     cargo run -p cupel-coding-agent --bin generate-catalog
+//!     cargo run -p cupel-coding-agent --bin generate-catalog -- --fetch
 //!
 //! It never runs at cupel runtime. The catalog is data checked into git.
 
@@ -24,6 +25,22 @@ use crate::models_dev::ProviderEntry;
 
 // const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Command {
+    Generate,
+    Fetch,
+    Help,
+}
+
+fn parse_command(args: &[String]) -> Result<Command, String> {
+    match args {
+        [] => Ok(Command::Generate),
+        [flag] if flag == "--fetch" => Ok(Command::Fetch),
+        [flag] if flag == "--help" || flag == "-h" => Ok(Command::Help),
+        _ => Err("usage: generate-catalog [--fetch]".to_string()),
+    }
+}
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     match run().await {
@@ -36,16 +53,47 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run() -> Result<(), String> {
-    let raw = fetch(MODELS_DEV_URL).await?;
+    let use_fetch = match parse_command(&std::env::args().skip(1).collect::<Vec<_>>())? {
+        Command::Generate => false,
+        Command::Fetch => true,
+        Command::Help => {
+            println!(
+                "usage: generate-catalog [--fetch]\n\nWithout --fetch, uses the checked-in models_dev.json snapshot."
+            );
+            return Ok(());
+        }
+    };
+    let snapshot_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/generate_catalog/models_dev.json");
+    let raw = if use_fetch {
+        curated_snapshot(&fetch(MODELS_DEV_URL).await?)?
+    } else {
+        std::fs::read_to_string(&snapshot_path)
+            .map_err(|error| format!("read {}: {error}", snapshot_path.display()))?
+    };
+    let (models, json) = generate(&raw)?;
+    print_summary(&models);
+    // Validate everything before updating either checked-in artifact.
+    if use_fetch {
+        std::fs::write(&snapshot_path, raw)
+            .map_err(|error| format!("write {}: {error}", snapshot_path.display()))?;
+        println!("wrote {}", snapshot_path.display());
+    }
+    let path = output_path();
+    std::fs::write(&path, &json).map_err(|error| format!("write {}: {error}", path.display()))?;
+    println!("wrote {} models to {}", models.len(), path.display());
+    Ok(())
+}
+
+fn generate(raw: &str) -> Result<(Vec<Model>, String), String> {
     let wanted: Vec<&str> = PROVIDERS.iter().map(|p| p.models_dev_id).collect();
-    let catalog = models_dev::parse_wanted(&raw, &wanted)?;
+    let catalog = models_dev::parse_wanted(raw, &wanted)?;
     let mut models = build_models(PROVIDERS, &catalog)?;
     // Codex rides behind the models.dev providers. Appended here
     // (not inside build_models) so the join stays a pure function of the
     // curation table.
     models.extend(openai_codex_models());
     validate(&models)?;
-    print_summary(&models);
 
     let json = to_pretty_json(&models)?;
     // Round-trip self-check: the bytes we are about to commit must parse
@@ -55,11 +103,33 @@ async fn run() -> Result<(), String> {
     if reparsed != models {
         return Err("round-trip check failed: reparsed catalog differs".to_string());
     }
+    Ok((models, json))
+}
 
-    let path = output_path();
-    std::fs::write(&path, &json).map_err(|error| format!("write {}: {error}", path.display()))?;
-    println!("wrote {} models to {}", models.len(), path.display());
-    Ok(())
+/// A deterministic, normalized subset: only curated models and fields represented
+/// by the models.dev mirror. Unused upstream schema changes stay out of the snapshot.
+fn curated_snapshot(raw: &str) -> Result<String, String> {
+    let wanted: Vec<&str> = PROVIDERS.iter().map(|p| p.models_dev_id).collect();
+    let catalog = models_dev::parse_wanted(raw, &wanted)?;
+    let mut snapshot = BTreeMap::new();
+    for provider in PROVIDERS {
+        let entry = catalog
+            .get(provider.models_dev_id)
+            .ok_or_else(|| format!("provider {} missing in models.dev", provider.models_dev_id))?;
+        let models = provider
+            .models
+            .iter()
+            .map(|row| {
+                let model = entry.model(provider.models_dev_id, row.id)?;
+                let value = serde_json::to_value(model).map_err(|error| {
+                    format!("serialize {}/{}: {error}", provider.models_dev_id, row.id)
+                })?;
+                Ok((row.id.to_string(), value))
+            })
+            .collect::<Result<BTreeMap<_, _>, String>>()?;
+        snapshot.insert(provider.models_dev_id, ProviderEntry { models });
+    }
+    to_pretty_json(&snapshot)
 }
 
 /// One bounded GET, like the ollama probe: explicit
@@ -299,9 +369,9 @@ fn print_summary(models: &[Model]) {
     }
 }
 
-fn to_pretty_json(models: &[Model]) -> Result<String, String> {
+fn to_pretty_json(value: &(impl serde::Serialize + ?Sized)) -> Result<String, String> {
     let mut json =
-        serde_json::to_string_pretty(models).map_err(|error| format!("serialize: {error}"))?;
+        serde_json::to_string_pretty(value).map_err(|error| format!("serialize: {error}"))?;
     // Comitted files end with a newline.
     json.push('\n');
     Ok(json)
@@ -389,6 +459,64 @@ mod tests {
     use super::*;
     use crate::curation::Compat;
 
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn checked_in_catalog_is_generated_from_snapshot_and_curation() {
+        let (models, json) = generate(include_str!("models_dev.json"))
+            .expect("snapshot must contain all curated models; refresh with --fetch if needed");
+        assert_eq!(
+            models.len(),
+            PROVIDERS.iter().map(|p| p.models.len()).sum::<usize>() + OPENAI_CODEX_MODELS.len()
+        );
+        assert_eq!(
+            json,
+            include_str!("../../../../cupel-core/src/catalog.json"),
+            "catalog drift: run cargo run -p cupel-coding-agent --bin generate-catalog"
+        );
+    }
+
+    #[test]
+    fn snapshot_keeps_only_curated_models_and_consumed_fields() {
+        let source = include_str!("models_dev.json");
+        let mut upstream: serde_json::Value = serde_json::from_str(source).unwrap();
+        upstream["unused-provider"] = serde_json::json!({"models": "bad schema"});
+        upstream["anthropic"]["models"]["unused-model"] = serde_json::json!({"unknown": 42});
+        upstream["anthropic"]["models"]["claude-sonnet-5"]["unknown"] = serde_json::json!(42);
+        let snapshot = curated_snapshot(&upstream.to_string()).unwrap();
+        assert_eq!(snapshot, curated_snapshot(source).unwrap());
+        assert_eq!(generate(&snapshot).unwrap(), generate(source).unwrap());
+        upstream["anthropic"]["models"]
+            .as_object_mut()
+            .unwrap()
+            .remove("claude-sonnet-5");
+        assert!(
+            curated_snapshot(&upstream.to_string())
+                .unwrap_err()
+                .contains("claude-sonnet-5")
+        );
+    }
+
+    #[test]
+    fn fetch_is_explicit_and_unknown_arguments_are_rejected() {
+        assert_eq!(parse_command(&[]).unwrap(), Command::Generate);
+        assert_eq!(
+            parse_command(&["--fetch".to_string()]).unwrap(),
+            Command::Fetch
+        );
+        assert_eq!(
+            parse_command(&["--help".to_string()]).unwrap(),
+            Command::Help
+        );
+        assert!(parse_command(&["--offline".to_string()]).is_err());
+        assert!(parse_command(&["--fetch".to_string(), "extra".to_string()]).is_err());
+    }
+
     fn sonnet_entry() -> models_dev::ModelEntry {
         serde_json::from_value(serde_json::json!({
             "name": "Claude Sonnet 5",
@@ -428,6 +556,9 @@ mod tests {
         assert_eq!(model.provider.as_str(), "anthropic");
         // pdf is dropped because cupel only models text and image input.
         assert_eq!(model.input, vec![InputModality::Text, InputModality::Image]);
+        assert_close(model.cost.input, 2.0);
+        assert_close(model.cost.output, 10.0);
+        assert_close(model.cost.cached_read, 0.2);
         assert!((model.cost.cached_write - 2.5).abs() < f64::EPSILON);
         assert_eq!(model.context_window, 1_000_000);
         assert_eq!(model.max_tokens, 128_000);
@@ -478,10 +609,25 @@ mod tests {
         // documented max input), tier prices carried along.
         assert_eq!(model.context_window, 272_000);
         assert_eq!(model.max_context_window, Some(922_000));
+        assert_eq!(model.max_tokens, 128_000);
         assert_eq!(
             model.cost.tiers.as_ref().expect("tier")[0].context_over,
             272_000
         );
+        let cost = &model.cost;
+        let tier = &cost.tiers.as_ref().expect("tier")[0];
+        for (actual, expected) in [
+            (cost.input, 10.0),
+            (cost.output, 50.0),
+            (cost.cached_read, 1.0),
+            (cost.cached_write, 12.5),
+            (tier.input, 20.0),
+            (tier.output, 75.0),
+            (tier.cached_read, 2.0),
+            (tier.cached_write, 25.0),
+        ] {
+            assert_close(actual, expected);
+        }
         // The effort scale: off/minimal disabled, xhigh/max kept by omission.
         let map = model.thinking_level_map.expect("map");
         assert_eq!(map.get("off"), Some(&None));

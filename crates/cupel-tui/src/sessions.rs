@@ -9,6 +9,7 @@ use cupel_coding_agent::spinoff::{
     self, Conflict, Group, MergeOutcome, Side, Spinoff, SpinoffError, SpinoffName,
 };
 use cupel_core::types::{AssistantMessage, Message};
+use futures_util::FutureExt as _;
 use futures_util::future::select_all;
 use ratatui::crossterm::event::{
     Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
@@ -104,6 +105,20 @@ impl Sessions {
             Box::pin(async move { (index, session.app.next_event().await) })
         });
         select_all(waits).await.0
+    }
+
+    /// Handle buffered background events in every session without waiting for the
+    /// next one. The event loop calls this before drawing a single frame for the batch.
+    pub async fn drain_ready_events(&mut self) {
+        for session in &mut self.list {
+            // Only the readiness probe is unconstrained: Tokio's receive budget
+            // must not end the batch while events are still buffered.
+            while let Some(event) =
+                tokio::task::unconstrained(session.app.next_event()).now_or_never()
+            {
+                session.app.on_event(event).await;
+            }
+        }
     }
 
     #[must_use]

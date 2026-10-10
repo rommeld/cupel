@@ -3,9 +3,9 @@
 //! When a turn ends with `stop_reason: Error`, the agent needs to decide:
 //! is this worth retrying (a 529 "overloaded", a dropped connection), or
 //! would a retry just burn money (invalid request, exhausted quota)? The
-//! answer lives in the error text because that's all providers give us.
-//! our unified error path collapses HTTP status, SDK exception names, and
-//! stream-level error events into one message string.
+//! retained error category takes precedence over text heuristics. Provider
+//! errors and older messages still use HTTP wrappers and provider wording;
+//! quota/billing wording can veto retries even for a 429 response.
 //!
 //! This module only classifies. Retry policy (budget, backoff, restarting
 //! the turn) lives in the agent loop.
@@ -16,7 +16,7 @@
 //! become "ratelimit". Same effect, one allocation, and the pattern tables
 //! stay readable.
 
-use crate::types::{AssistantMessage, StopReason};
+use crate::types::{AssistantMessage, ErrorKind, StopReason};
 
 /// Hard request/account failures: retrying cannot help and may mask a real
 /// problem from the user. Checked first because some of these arrive
@@ -43,14 +43,12 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "overloaded",
     "ratelimit",
     "toomanyrequests",
-    "429",
-    "500",
-    "502",
-    "503",
-    "504",
+    "throttling",
     "serviceunavailable",
     "servererror",
     "internalerror",
+    "internalserverexception",
+    "modelstreamerrorexception",
     // Wrapper/gateway text for transient upstream failures.
     "providerreturnederror",
     // Network / proxy / transport failures.
@@ -96,6 +94,26 @@ fn compress(text: &str) -> String {
         .collect()
 }
 
+fn retryable_status(status: u16) -> bool {
+    status == 429 || (500..600).contains(&status)
+}
+
+/// Recognize only explicit status wrappers, never numbers inside arbitrary bodies.
+fn legacy_http_status(text: &str) -> Option<u16> {
+    let status = if let Some(rest) = text.strip_prefix("Error Code ") {
+        rest.split_once(':')?.0.trim().parse().ok()?
+    } else {
+        let rest = text
+            .strip_prefix("provider returned HTTP ")
+            .or_else(|| text.strip_prefix("HTTP "))?;
+        rest.split(|c: char| c == ':' || c.is_ascii_whitespace())
+            .next()?
+            .parse()
+            .ok()?
+    };
+    (100..600).contains(&status).then_some(status)
+}
+
 /// Does this failed assistant message look like a transient provider or
 /// transport error, i.e. should the caller consider restarting the turn?
 ///
@@ -106,17 +124,14 @@ pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
     if message.stop_reason != StopReason::Error {
         return false;
     }
-    let Some(error_message) = &message.error_message else {
-        return false;
+    let error_message = message.error_message.as_deref().unwrap_or_default();
+    let status = match message.error_kind {
+        Some(ErrorKind::Aborted | ErrorKind::Config) => return false,
+        Some(ErrorKind::Transport) => return true,
+        Some(ErrorKind::HttpStatus { status }) => Some(status),
+        Some(ErrorKind::Provider) | None => legacy_http_status(error_message),
     };
-    // An explicit stream-level client error outweighs generic gateway text
-    // such as "Provider returned error". Rate limiting remains retryable.
-    if error_message
-        .strip_prefix("Error Code ")
-        .and_then(|rest| rest.split_once(':'))
-        .and_then(|(code, _)| code.trim().parse::<u16>().ok())
-        .is_some_and(|code| (400..500).contains(&code) && code != 429)
-    {
+    if status.is_some_and(|status| !retryable_status(status)) {
         return false;
     }
     let compressed = compress(error_message);
@@ -126,9 +141,10 @@ pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
     {
         return false;
     }
-    RETRYABLE_PATTERNS
-        .iter()
-        .any(|pattern| compressed.contains(pattern))
+    status.is_some()
+        || RETRYABLE_PATTERNS
+            .iter()
+            .any(|pattern| compressed.contains(pattern))
 }
 
 /// Preserved thinking: Anthropic binds every thinking block to the
@@ -145,6 +161,10 @@ const THINKING_BINDING_PATTERN: &str = "boundtoadifferentconversation";
 #[must_use]
 pub fn is_thinking_binding_mismatch(message: &AssistantMessage) -> bool {
     message.stop_reason == StopReason::Error
+        && matches!(
+            message.error_kind,
+            None | Some(ErrorKind::Provider | ErrorKind::HttpStatus { status: 400 })
+        )
         && message
             .error_message
             .as_deref()
@@ -167,6 +187,7 @@ mod tests {
             usage: Usage::default(),
             stop_reason,
             error_message: error.map(str::to_string),
+            error_kind: None,
             timestamp: 0,
         }
     }
@@ -204,10 +225,63 @@ mod tests {
             // A 429 wrapper around a hard account limit must not retry.
             "429: FreeUsageLimitError",
         ] {
-            assert!(
-                !is_retryable_assistant_error(&message(StopReason::Error, Some(error))),
-                "expected non-retryable: {error}"
-            );
+            for kind in [None, Some(ErrorKind::HttpStatus { status: 429 })] {
+                let mut message = message(StopReason::Error, Some(error));
+                message.error_kind = kind;
+                assert!(
+                    !is_retryable_assistant_error(&message),
+                    "expected non-retryable: {error} ({kind:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn categories_override_misleading_or_missing_text() {
+        for (kind, expected) in [
+            (ErrorKind::Aborted, false),
+            (ErrorKind::Config, false),
+            (ErrorKind::Transport, true),
+            (ErrorKind::HttpStatus { status: 400 }, false),
+            (ErrorKind::HttpStatus { status: 401 }, false),
+            (ErrorKind::HttpStatus { status: 403 }, false),
+            (ErrorKind::HttpStatus { status: 429 }, true),
+            (ErrorKind::HttpStatus { status: 500 }, true),
+            (ErrorKind::HttpStatus { status: 502 }, true),
+            (ErrorKind::HttpStatus { status: 503 }, true),
+            (ErrorKind::HttpStatus { status: 504 }, true),
+            (ErrorKind::HttpStatus { status: 529 }, true),
+        ] {
+            for text in [None, Some("overloaded Error Code 400: request id 500429")] {
+                let mut message = message(StopReason::Error, text);
+                message.error_kind = Some(kind);
+                assert_eq!(
+                    is_retryable_assistant_error(&message),
+                    expected,
+                    "{kind:?}: {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn digits_in_error_bodies_are_not_retry_indicators() {
+        for code in [429, 500, 502, 503, 504] {
+            for text in [
+                format!("invalid request: identifier {code}"),
+                format!("invalid request: requested {code}0 tokens"),
+                format!("provider returned HTTP 400: request {code}, upstream overloaded"),
+            ] {
+                for kind in [
+                    None,
+                    Some(ErrorKind::Provider),
+                    Some(ErrorKind::HttpStatus { status: 400 }),
+                ] {
+                    let mut message = message(StopReason::Error, Some(&text));
+                    message.error_kind = kind;
+                    assert!(!is_retryable_assistant_error(&message), "{kind:?}: {text}");
+                }
+            }
         }
     }
 

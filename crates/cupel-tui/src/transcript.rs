@@ -190,9 +190,8 @@ impl Transcript {
 
     /// Flatten every cell into styled, wrapped lines for the given inner
     /// width. `selected` tints that cell's lines so the user sees what
-    /// Ctrl+O would copy. Called once per frame; cheap enough at
-    /// chat-transcript sizes that we don't cache (ratatui diffs the actual
-    /// terminal writes anyway).
+    /// Ctrl+O would copy. Called once per frame; the event loop batches ready
+    /// background events so buffered deltas do not each rebuild the lines.
     /// All text is sanitized before layout; raw cells remain unchanged for
     /// streaming, session history, and explicit clipboard copying.
     #[must_use]

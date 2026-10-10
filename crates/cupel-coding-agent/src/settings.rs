@@ -42,8 +42,8 @@ pub struct Settings {
 pub const DEFAULT_PRESET: &str = "default";
 
 /// One named preset. `provider`, `model`, and `thinkingLevel` are
-/// required. serde rejects a preset without them, and with it the whole
-/// file (the same visible-failure tier as any malformed settings.json).
+/// required. Loading skips invalid presets individually with a warning;
+/// saving remains strict so invalid hand-written entries are not erased.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preset {
@@ -188,17 +188,55 @@ pub fn project_settings_path(cwd: &Path) -> PathBuf {
     cwd.join(".cupel/settings.json")
 }
 
-/// Parse the settings file. A missing file is simply empty defaults; a
-/// malformed file is an error the caller must surface. A config the user
-/// wrote by hand deserves a visible failure (same tiers as
-/// `models::load_models_file`).
+/// Parse the settings file, logging warnings for invalid presets. A missing
+/// file is simply empty defaults; invalid JSON or other settings data is an
+/// error the caller must surface. Startup uses the same parser but collects
+/// preset warnings for the frontend instead of logging them.
 pub fn load_settings(path: &Path) -> Result<Settings, String> {
+    let (settings, warnings) = load_settings_with_warnings(path)?;
+    for warning in warnings {
+        tracing::warn!("{warning}");
+    }
+    Ok(settings)
+}
+
+fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), String> {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Settings::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((Settings::default(), Vec::new()));
+        }
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
-    serde_json::from_str(&content).map_err(|e| format!("{} is not valid: {e}", path.display()))
+    let mut value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("{} has invalid JSON syntax: {e}", path.display()))?;
+    let presets = value
+        .as_object_mut()
+        .and_then(|object| object.remove("model"));
+    let mut settings: Settings = serde_json::from_value(value)
+        .map_err(|e| format!("{} has invalid settings data: {e}", path.display()))?;
+    let mut warnings = Vec::new();
+    match presets {
+        Some(serde_json::Value::Object(presets)) => {
+            for (name, value) in presets {
+                match serde_json::from_value(value) {
+                    Ok(preset) => {
+                        settings.presets.insert(name, preset);
+                    }
+                    Err(error) => warnings.push(format!(
+                        "warning: ignoring preset {name:?} in {}: {error}",
+                        path.display()
+                    )),
+                }
+            }
+        }
+        Some(_) => warnings.push(format!(
+            "warning: ignoring model presets in {}: expected an object",
+            path.display()
+        )),
+        None => {}
+    }
+    Ok((settings, warnings))
 }
 
 /// Load the home layer, returning defaults and a warning on failure.
@@ -207,13 +245,11 @@ pub fn load_home_settings(home: Option<&Path>) -> (Settings, Vec<String>) {
     let Some(home) = home else {
         return (Settings::default(), Vec::new());
     };
-    match load_settings(&settings_path(home)) {
-        Ok(settings) => (settings, Vec::new()),
+    match load_settings_with_warnings(&settings_path(home)) {
+        Ok(loaded) => loaded,
         Err(e) => (
             Settings::default(),
-            vec![format!(
-                "warning: ignoring settings file: {e} (fix the JSON syntax, e.g. remove trailing commas)"
-            )],
+            vec![format!("warning: ignoring settings file: {e}")],
         ),
     }
 }
@@ -226,8 +262,8 @@ pub fn load_home_settings(home: Option<&Path>) -> (Settings, Vec<String>) {
 /// by inspection).
 #[must_use]
 pub fn load_project_settings(cwd: &Path) -> (Settings, Vec<String>) {
-    match load_settings(&project_settings_path(cwd)) {
-        Ok(settings) => (settings, Vec::new()),
+    match load_settings_with_warnings(&project_settings_path(cwd)) {
+        Ok(loaded) => loaded,
         Err(e) => (
             Settings::default(),
             vec![format!("warning: ignoring project settings file: {e}")],
@@ -239,7 +275,7 @@ pub fn load_project_settings(cwd: &Path) -> (Settings, Vec<String>) {
 pub enum SaveError {
     #[error("no cupel home resolvable - set CUPEL_HOME or home directory")]
     NoHome,
-    #[error("{} is not valid JSON ({reason}) - fix or remove, then retry", path.display())]
+    #[error("{} is not valid configuration ({reason}) - fix or remove, then retry", path.display())]
     Malformed { path: PathBuf, reason: String },
     #[error("cannot write {}: {reason}", path.display())]
     Io { path: PathBuf, reason: String },
@@ -427,7 +463,14 @@ mod tests {
     fn malformed_files_are_errors_and_the_wrapper_defaults() {
         let root = temp_root("malformed");
         let path = root.join("settings.json");
-        for bad in ["{not json", "[]", r#"{"providers": {"anthropic": 42}}"#] {
+        for (bad, category) in [
+            ("{not json", "invalid JSON syntax"),
+            ("[]", "invalid settings data"),
+            (
+                r#"{"providers": {"anthropic": 42}}"#,
+                "invalid settings data",
+            ),
+        ] {
             std::fs::write(&path, bad).unwrap();
             assert!(load_settings(&path).is_err(), "should reject: {bad}");
             let (settings, warnings) = load_home_settings(Some(&root));
@@ -435,6 +478,118 @@ mod tests {
             assert_eq!(warnings.len(), 1);
             assert!(warnings[0].contains(&path.display().to_string()));
             assert!(warnings[0].contains("ignoring settings file"));
+            assert!(warnings[0].contains(category), "{warnings:?}");
+            if category == "invalid settings data" {
+                assert!(!warnings[0].contains("JSON syntax"));
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_presets_leave_credentials_valid_presets_and_other_settings_intact() {
+        let home = temp_root("invalid-presets");
+        let path = settings_path(&home);
+        std::fs::write(&path, r#"{
+            "providers": {"anthropic": "keep-this-key"},
+            "loopKiller": {"maxRepeats": 4},
+            "editor": "vim",
+            "model": {
+                "default": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "low"},
+                "fast": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "off"},
+                "bad-level": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "High"},
+                "missing-level": {"provider": "anthropic", "model": "claude-haiku-5-5"},
+                "bad-prompt": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "low", "prompt": 42}
+            }
+        }"#).unwrap();
+
+        let (settings, warnings) = load_home_settings(Some(&home));
+        assert_eq!(settings.api_key("anthropic"), Some("keep-this-key"));
+        assert_eq!(settings.loop_killer_max_repeats(), Some(4));
+        assert_eq!(settings.extra["editor"], serde_json::json!("vim"));
+        assert_eq!(settings.presets.len(), 2);
+        assert_eq!(
+            settings.presets["default"].thinking_level,
+            ThinkingSetting::Low
+        );
+        assert_eq!(
+            settings.presets["fast"].thinking_level,
+            ThinkingSetting::Off
+        );
+        assert_eq!(load_settings(&path).unwrap(), settings);
+        assert_eq!(warnings.len(), 3);
+        for name in ["bad-level", "missing-level", "bad-prompt"] {
+            assert!(
+                warnings.iter().any(|warning| {
+                    warning.contains(name) && warning.contains(&path.display().to_string())
+                }),
+                "{warnings:?}"
+            );
+        }
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| !warning.contains("keep-this-key"))
+        );
+    }
+
+    #[test]
+    fn invalid_project_preset_does_not_replace_a_valid_home_preset() {
+        let root = temp_root("invalid-project-preset");
+        std::fs::create_dir_all(root.join(".cupel")).unwrap();
+        std::fs::write(settings_path(&root), r#"{
+            "providers": {"anthropic": "home-key"},
+            "model": {"default": {"provider": "anthropic", "model": "home-model", "thinkingLevel": "low"}}
+        }"#).unwrap();
+        let project_path = project_settings_path(&root);
+        std::fs::write(
+            &project_path,
+            r#"{
+            "loopKiller": {"maxRepeats": 2},
+            "model": {
+                "default": {"provider": "anthropic", "model": "bad-model", "thinkingLevel": "High"},
+                "fast": {"provider": "anthropic", "model": "project-model", "thinkingLevel": "off"}
+            }
+        }"#,
+        )
+        .unwrap();
+
+        let (home, warnings) = load_home_settings(Some(&root));
+        assert!(warnings.is_empty());
+        let (project, warnings) = load_project_settings(&root);
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("default")
+                && warnings[0].contains(&project_path.display().to_string())
+        );
+        let merged = Settings::layered(home, project);
+        assert_eq!(merged.api_key("anthropic"), Some("home-key"));
+        assert_eq!(merged.loop_killer_max_repeats(), Some(2));
+        assert_eq!(merged.presets["default"].model, "home-model");
+        assert_eq!(merged.presets["fast"].model, "project-model");
+    }
+
+    #[test]
+    fn invalid_preset_section_does_not_discard_other_settings() {
+        let home = temp_root("invalid-preset-section");
+        for model in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!("not an object"),
+        ] {
+            std::fs::write(
+                settings_path(&home),
+                serde_json::json!({
+                    "providers": {"anthropic": "kept"},
+                    "model": model
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let (settings, warnings) = load_home_settings(Some(&home));
+            assert_eq!(settings.api_key("anthropic"), Some("kept"));
+            assert!(settings.presets.is_empty());
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].contains("expected an object"));
         }
     }
 
@@ -519,6 +674,23 @@ mod tests {
         assert!(matches!(err, SaveError::Malformed { .. }), "{err}");
         // The user's bytes are untouched, and no tmp litter remains.
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{broken");
+        assert!(!home.join("settings.json.tmp").exists());
+    }
+
+    #[test]
+    fn saving_does_not_erase_an_invalid_preset_or_call_it_invalid_json() {
+        let home = temp_root("save-invalid-preset");
+        let path = settings_path(&home);
+        let content = r#"{
+            "providers": {"anthropic": "old-key"},
+            "model": {"bad": {"provider": "anthropic", "model": "m", "thinkingLevel": "High"}}
+        }"#;
+        std::fs::write(&path, content).unwrap();
+        let error = save_provider_key(Some(&home), "anthropic", "new-key").unwrap_err();
+        assert!(matches!(error, SaveError::Malformed { .. }));
+        assert!(!error.to_string().contains("not valid JSON"));
+        assert!(error.to_string().contains("High"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), content);
         assert!(!home.join("settings.json.tmp").exists());
     }
 

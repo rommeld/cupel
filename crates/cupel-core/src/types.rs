@@ -161,6 +161,17 @@ pub struct UserMessage {
     pub timestamp: u64,
 }
 
+/// Failure category retained alongside the provider's human-readable error text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ErrorKind {
+    HttpStatus { status: u16 },
+    Transport,
+    Aborted,
+    Config,
+    Provider,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantMessage {
@@ -177,6 +188,9 @@ pub struct AssistantMessage {
     pub stop_reason: StopReason,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub error_message: Option<String>,
+    /// Absent in older session files and messages from unclassified providers.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub error_kind: Option<ErrorKind>,
     pub timestamp: u64,
 }
 
@@ -288,6 +302,19 @@ pub enum ModelThinkingLevel {
     Max,
 }
 
+impl From<ThinkingLevel> for ModelThinkingLevel {
+    fn from(level: ThinkingLevel) -> Self {
+        match level {
+            ThinkingLevel::Minimal => Self::Minimal,
+            ThinkingLevel::Low => Self::Low,
+            ThinkingLevel::Medium => Self::Medium,
+            ThinkingLevel::High => Self::High,
+            ThinkingLevel::XHigh => Self::XHigh,
+            ThinkingLevel::Max => Self::Max,
+        }
+    }
+}
+
 impl ModelThinkingLevel {
     /// String key used to look the level up in a model's `thinking_level_map`.
     #[must_use]
@@ -383,7 +410,7 @@ pub struct Model {
 
 // `StreamOptions` is *runtime configuration*, never serialized, so it carries no
 // serde derives.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct StreamOptions {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
@@ -400,6 +427,27 @@ pub struct StreamOptions {
     pub reasoning: Option<ThinkingLevel>,
     /// Custom per-level thinking budgets (budget-based thinking models only).
     pub thinking_budgets: Option<ThinkingBudgets>,
+}
+
+/// Keep API keys and OAuth tokens out of debug logs without changing runtime values.
+impl core::fmt::Debug for StreamOptions {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("StreamOptions")
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field("signal", &self.signal)
+            .field("cache_retention", &self.cache_retention)
+            .field("session_id", &self.session_id)
+            .field("headers", &self.headers)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("max_retries", &self.max_retries)
+            .field("metadata", &self.metadata)
+            .field("env", &self.env)
+            .field("reasoning", &self.reasoning)
+            .field("thinking_budgets", &self.thinking_budgets)
+            .finish()
+    }
 }
 
 /// Current Unix time in milliseconds.
@@ -458,4 +506,54 @@ pub enum AssistantMessageEvent {
         reason: StopReason,
         error: AssistantMessage,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::types::{ModelThinkingLevel, StreamOptions, ThinkingLevel};
+
+    #[test]
+    fn thinking_level_conversion_preserves_every_enabled_level() {
+        for (level, expected) in [
+            (ThinkingLevel::Minimal, ModelThinkingLevel::Minimal),
+            (ThinkingLevel::Low, ModelThinkingLevel::Low),
+            (ThinkingLevel::Medium, ModelThinkingLevel::Medium),
+            (ThinkingLevel::High, ModelThinkingLevel::High),
+            (ThinkingLevel::XHigh, ModelThinkingLevel::XHigh),
+            (ThinkingLevel::Max, ModelThinkingLevel::Max),
+        ] {
+            assert_eq!(ModelThinkingLevel::from(level), expected);
+        }
+    }
+
+    #[test]
+    fn stream_options_debug_redacts_api_keys_and_jwts() {
+        for secret in [
+            "sk-test-secret-key",
+            "eyJhbGciOiJIUzI1NiJ9.payload.signature",
+        ] {
+            let options = StreamOptions {
+                api_key: Some(secret.to_string()),
+                max_tokens: Some(8192),
+                reasoning: Some(ThinkingLevel::High),
+                ..StreamOptions::default()
+            };
+            for rendered in [format!("{options:?}"), format!("{options:#?}")] {
+                assert!(!rendered.contains(secret), "API key leaked: {rendered}");
+                assert!(rendered.contains("[redacted]"), "{rendered}");
+                assert!(rendered.contains("max_tokens") && rendered.contains("8192"));
+                assert!(rendered.contains("reasoning") && rendered.contains("High"));
+            }
+            assert_eq!(options.api_key.as_deref(), Some(secret));
+        }
+    }
+
+    #[test]
+    fn stream_options_debug_distinguishes_absent_and_empty_api_keys() {
+        let mut options = StreamOptions::default();
+        assert!(format!("{options:?}").contains("api_key: None"));
+
+        options.api_key = Some(String::new());
+        assert!(format!("{options:?}").contains("api_key: Some(\"[redacted]\")"));
+    }
 }

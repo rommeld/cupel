@@ -357,6 +357,7 @@ mod tests {
             usage: Usage::default(),
             stop_reason,
             error_message: None,
+            error_kind: None,
             timestamp: 0,
         })
     }

@@ -54,6 +54,7 @@ mod tests {
                     usage: Usage::default(),
                     stop_reason: StopReason::ToolUse,
                     error_message: None,
+                    error_kind: None,
                     timestamp: now_ms(),
                 },
             );

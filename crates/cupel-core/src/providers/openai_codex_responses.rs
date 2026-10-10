@@ -23,22 +23,18 @@ use serde_json::{Value, json};
 
 use crate::{
     error::{InferenceError, Result},
-    event_stream::{AssistantMessageStream, assistant_message_channel},
-    model::clamp_thinking_level,
+    event_stream::AssistantMessageStream,
     oauth::openai_codex::{ORIGINATOR, account_id_from_access_token},
     provider::Provider,
     providers::{
-        apply_custom_headers, error_message,
+        EffortStyle, apply_custom_headers,
         openai_responses::{
             convert_items, normalize_id_part, process_response_stream, short_hash,
             supports_temperature,
         },
-        with_cancel,
+        send_request, spawn_provider_stream, thinking_effort,
     },
-    types::{
-        Api, AssistantMessage, Context, Model, ModelThinkingLevel, StopReason, StreamOptions,
-        ThinkingLevel,
-    },
+    types::{Api, AssistantMessage, Context, Model, StreamOptions},
 };
 
 pub struct OpenAiCodexResponsesProvider {
@@ -71,23 +67,10 @@ impl Provider for OpenAiCodexResponsesProvider {
         context: Context,
         options: StreamOptions,
     ) -> AssistantMessageStream {
-        let (stream, sink) = assistant_message_channel();
-        let model = model.clone();
         let http = self.http.clone();
-
-        tokio::spawn(async move {
-            if let Err(err) = run(&http, &model, &context, &options, &sink).await {
-                let reason = if matches!(err, InferenceError::Aborted) {
-                    StopReason::Aborted
-                } else {
-                    StopReason::Error
-                };
-                tracing::warn!(error = %err, "provider request failed");
-                let msg = error_message(&model, reason, err.to_string());
-                let _ = sink.error(reason, msg);
-            }
-        });
-        stream
+        spawn_provider_stream(model, move |model, sink| async move {
+            run(&http, &model, &context, &options, &sink).await
+        })
     }
 }
 
@@ -126,16 +109,7 @@ async fn run(
         req = req.timeout(core::time::Duration::from_millis(timeout));
     }
 
-    let response = with_cancel(options, req.json(&body).send()).await??;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(InferenceError::ApiStatus {
-            status: status.as_u16(),
-            body,
-        });
-    }
+    let response = send_request(req.json(&body), options).await?;
 
     // Same stream, same decoder as api.openai.com.
     process_response_stream(response, model, options, sink).await
@@ -251,26 +225,10 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
         );
     }
 
-    if model.reasoning {
-        let requested = options.reasoning.map(|level| match level {
-            ThinkingLevel::Minimal => ModelThinkingLevel::Minimal,
-            ThinkingLevel::Low => ModelThinkingLevel::Low,
-            ThinkingLevel::Medium => ModelThinkingLevel::Medium,
-            ThinkingLevel::High => ModelThinkingLevel::High,
-            ThinkingLevel::XHigh => ModelThinkingLevel::XHigh,
-            ThinkingLevel::Max => ModelThinkingLevel::Max,
-        });
-        let clamped = requested.map(|level| clamp_thinking_level(model, level));
-        if let Some(level) = clamped
-            && level != ModelThinkingLevel::Off
-        {
-            let effort = model
-                .thinking_level_map
-                .as_ref()
-                .and_then(|m| m.get(level.as_str()).cloned().flatten())
-                .unwrap_or_else(|| level.as_str().to_string());
-            body["reasoning"] = json!({"effort": effort, "summary": "auto"});
-        }
+    // The subscription backend omits reasoning when off; it does not share
+    // the plain Responses API's default off effort "none".
+    if let Some(effort) = thinking_effort(model, options.reasoning, EffortStyle::OpenAi) {
+        body["reasoning"] = json!({"effort": effort, "summary": "auto"});
     }
     body
 }
@@ -301,8 +259,8 @@ fn normalize_tool_call_id_codex(id: &str, _model: &Model, source: &AssistantMess
 mod tests {
     use super::*;
     use crate::types::{
-        AssistantContent, InputModality, Message, ModelCost, Provider, TextContent,
-        ThinkingLevelMap, Tool, Usage, UserContentBody, UserMessage, now_ms,
+        AssistantContent, InputModality, Message, ModelCost, Provider, StopReason, TextContent,
+        ThinkingLevel, ThinkingLevelMap, Tool, Usage, UserContentBody, UserMessage, now_ms,
     };
 
     /// A Codex catalog row as M4 will generate it: reasoning on, the
@@ -519,6 +477,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn missing_access_token_emits_login_guidance() {
+        use crate::error::MessageStreamError;
+        use crate::provider::Provider as _;
+        use crate::types::ErrorKind;
+
+        let error = OpenAiCodexResponsesProvider::new()
+            .stream(
+                &codex_model(),
+                context_with_prompt(),
+                StreamOptions::default(),
+            )
+            .result()
+            .await
+            .unwrap_err();
+        let MessageStreamError::ProviderError { reason, message } = error else {
+            panic!("expected a missing-credential error");
+        };
+        assert_eq!(reason, StopReason::Error);
+        assert_eq!(message.error_kind, Some(ErrorKind::Config));
+        assert!(
+            message
+                .error_message
+                .as_deref()
+                .is_some_and(|text| text.contains("/login openai-codex"))
+        );
+    }
+
     #[test]
     fn tool_call_ids_from_the_openai_family_stay_usable() {
         let model = codex_model();
@@ -532,6 +518,7 @@ mod tests {
             usage: Usage::default(),
             stop_reason: StopReason::Stop,
             error_message: None,
+            error_kind: None,
             timestamp: now_ms(),
         };
 

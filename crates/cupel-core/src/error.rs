@@ -4,7 +4,7 @@
 
 use thiserror::Error;
 
-use crate::types::{AssistantMessage, StopReason};
+use crate::types::{AssistantMessage, ErrorKind, Provider, StopReason};
 
 pub type Result<T> = core::result::Result<T, InferenceError>;
 
@@ -30,7 +30,7 @@ pub enum InferenceError {
     NoProvider(String),
 
     /// A provider needed an API key but none was supplied.
-    #[error("no API key for provider: {0}")]
+    #[error("no API key for provider: {0}{hint}", hint = missing_api_key_hint(.0))]
     MissingApiKey(String),
 
     /// The upstream HTTP API returned a non-2xx status. We keep the body
@@ -56,6 +56,38 @@ pub enum InferenceError {
     Other(String),
 }
 
+impl InferenceError {
+    /// Preserve actionable information before the display text crosses a stream boundary.
+    #[must_use]
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::NoProvider(_) | Self::MissingApiKey(_) => ErrorKind::Config,
+            Self::ApiStatus { status, .. } => ErrorKind::HttpStatus { status: *status },
+            Self::Aborted => ErrorKind::Aborted,
+            Self::Http(error) if error.is_builder() => ErrorKind::Config,
+            Self::Http(_) | Self::Stream(MessageStreamError::ClosedBeforeTerminalEvent) => {
+                ErrorKind::Transport
+            }
+            Self::Stream(MessageStreamError::ProviderError { reason, message }) => message
+                .error_kind
+                .unwrap_or(if *reason == StopReason::Aborted {
+                    ErrorKind::Aborted
+                } else {
+                    ErrorKind::Provider
+                }),
+            Self::Other(_) => ErrorKind::Provider,
+        }
+    }
+}
+
+fn missing_api_key_hint(provider: &str) -> &'static str {
+    if provider == Provider::OPENAI_CODEX {
+        " - run /login openai-codex to log in with ChatGPT again"
+    } else {
+        ""
+    }
+}
+
 /// `err`, then each error in its `source()` chain, joined by `: `.
 ///
 /// `successors` walks the linked list: start at the first cause, and keep
@@ -73,6 +105,18 @@ fn with_causes(err: &reqwest::Error) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn missing_codex_credentials_point_to_login_without_changing_the_category() {
+        let error = InferenceError::MissingApiKey(Provider::OPENAI_CODEX.to_string());
+        assert!(error.to_string().contains("/login openai-codex"));
+        assert_eq!(error.kind(), ErrorKind::Config);
+
+        assert_eq!(
+            InferenceError::MissingApiKey(Provider::ANTHROPIC.to_string()).to_string(),
+            "no API key for provider: anthropic"
+        );
+    }
+
     #[tokio::test]
     async fn transport_errors_name_their_cause() {
         // Bind a free port, then close it: connecting there is refused.
@@ -81,8 +125,56 @@ mod tests {
         drop(listener);
 
         let err = reqwest::get(format!("http://{addr}")).await.unwrap_err();
-        let text = InferenceError::from(err).to_string();
+        let error = InferenceError::from(err);
+        assert_eq!(error.kind(), ErrorKind::Transport);
+        let text = error.to_string();
         // Without the chain this was only "... error sending request for url (...)".
         assert!(text.contains("Connection refused"), "{text}");
+    }
+
+    #[test]
+    fn inference_variants_retain_their_categories() {
+        for (error, expected) in [
+            (InferenceError::NoProvider("api".into()), ErrorKind::Config),
+            (
+                InferenceError::MissingApiKey("provider".into()),
+                ErrorKind::Config,
+            ),
+            (
+                InferenceError::ApiStatus {
+                    status: 429,
+                    body: "opaque".into(),
+                },
+                ErrorKind::HttpStatus { status: 429 },
+            ),
+            (InferenceError::Aborted, ErrorKind::Aborted),
+            (InferenceError::Other("opaque".into()), ErrorKind::Provider),
+            (
+                InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
+                ErrorKind::Transport,
+            ),
+        ] {
+            assert_eq!(error.kind(), expected);
+        }
+        let error = reqwest::Client::new()
+            .get("://invalid-url")
+            .build()
+            .unwrap_err();
+        assert_eq!(InferenceError::from(error).kind(), ErrorKind::Config);
+    }
+
+    #[test]
+    fn collecting_a_failed_message_keeps_the_original_category() {
+        let model = crate::catalog::builtin_models().remove(0);
+        let error = InferenceError::ApiStatus {
+            status: 403,
+            body: "denied".into(),
+        };
+        let message = crate::providers::error_message(&model, &error);
+        let collected = InferenceError::Stream(MessageStreamError::ProviderError {
+            reason: message.stop_reason,
+            message: Box::new(message),
+        });
+        assert_eq!(collected.kind(), error.kind());
     }
 }

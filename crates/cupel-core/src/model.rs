@@ -87,7 +87,18 @@ pub(crate) fn supported_thinking_levels(model: &Model) -> Vec<ModelThinkingLevel
 /// level, then walk upward, then downward.
 #[must_use]
 pub(crate) fn clamp_thinking_level(model: &Model, level: ModelThinkingLevel) -> ModelThinkingLevel {
-    let available = supported_thinking_levels(model);
+    clamp_thinking_level_with(model, level, |_| true)
+}
+
+/// Clamp against model metadata and additional constraints of the wire protocol.
+#[must_use]
+pub(crate) fn clamp_thinking_level_with(
+    model: &Model,
+    level: ModelThinkingLevel,
+    supported: impl Fn(ModelThinkingLevel) -> bool,
+) -> ModelThinkingLevel {
+    let mut available = supported_thinking_levels(model);
+    available.retain(|level| supported(*level));
     if available.contains(&level) {
         return level;
     }
@@ -253,11 +264,22 @@ mod tests {
     }
 
     #[test]
-    fn haiku55_prices_the_whole_request_by_prompt_length() {
-        let model = crate::catalog::builtin_models()
-            .into_iter()
-            .find(|m| m.id == "claude-haiku-5-5")
-            .expect("Haiku 5.5 in catalog");
+    fn long_cache_writes_follow_prompt_tier_rates() {
+        // Controlled rates: runtime cost math must not pin upstream catalog prices.
+        let mut model = tiered_model();
+        model.cost = ModelCost {
+            input: 0.1,
+            output: 0.5,
+            cached_read: 0.01,
+            cached_write: 0.125,
+            tiers: Some(vec![CostTier {
+                context_over: 100_000,
+                input: 0.5,
+                output: 2.5,
+                cached_read: 0.05,
+                cached_write: 0.625,
+            }]),
+        };
         for (prompt_tokens, multiplier) in [(99_999, 1.0), (100_000, 1.0), (100_001, 5.0)] {
             // Cache reads and both write durations count as prompt tokens;
             // output tokens do not push an otherwise cheap prompt over 100k.

@@ -53,6 +53,7 @@ fn message(model: &Model, content: Vec<AssistantContent>, stop: StopReason) -> A
         usage: Usage::default(),
         stop_reason: stop,
         error_message: (stop == StopReason::Aborted).then(|| "request was aborted".to_string()),
+        error_kind: None,
         timestamp: now_ms(),
     }
 }

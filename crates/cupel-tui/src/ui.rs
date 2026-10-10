@@ -1630,6 +1630,7 @@ mod tests {
             usage: Usage::default(),
             stop_reason: StopReason::Stop,
             error_message: None,
+            error_kind: None,
             timestamp: now_ms(),
         };
         let patch_main = ToolResultMessage {
@@ -1806,6 +1807,7 @@ mod tests {
                 },
                 stop_reason,
                 error_message: None,
+                error_kind: None,
                 timestamp: now_ms(),
             },
         ))
@@ -3408,6 +3410,117 @@ mod tests {
         }
         assert_eq!(sessions.list[1].app.status(), Status::Failed);
         assert_eq!(sessions.active, 0, "reading events never switches");
+    }
+
+    #[tokio::test]
+    async fn ready_events_share_one_render_even_beyond_tokios_receive_budget() {
+        use crate::sessions::{Session, Sessions};
+        use cupel_agent::agent_loop::agent_event_channel;
+        use cupel_core::types::AssistantMessageEvent;
+
+        let mut sessions = Sessions::new(test_app());
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app: test_app(),
+        });
+        let mut expected = Vec::new();
+        for (index, session) in sessions.list.iter_mut().enumerate() {
+            let (events, sink) = agent_event_channel();
+            session.app.run_events = Some(events);
+            sink.emit(AgentEvent::MessageUpdate {
+                event: AssistantMessageEvent::ThinkingDelta {
+                    content_index: 0,
+                    delta: "planning".to_string(),
+                },
+            });
+            let mut text = String::new();
+            for delta_index in 0..256 {
+                let delta = format!("{index}:{delta_index} ");
+                text.push_str(&delta);
+                sink.emit(AgentEvent::MessageUpdate {
+                    event: AssistantMessageEvent::TextDelta {
+                        content_index: 1,
+                        delta,
+                    },
+                });
+            }
+            let ending = format!("batch complete {index}");
+            text.push_str(&ending);
+            sink.emit(AgentEvent::MessageUpdate {
+                event: AssistantMessageEvent::TextDelta {
+                    content_index: 1,
+                    delta: ending,
+                },
+            });
+            if index == 0 {
+                sink.emit(AgentEvent::AgentEnd {
+                    messages: Vec::new(),
+                });
+            }
+            // The second stream closes without AgentEnd; both endings must be handled.
+            expected.push(text);
+        }
+
+        // The normal wakeup handles one event; the rest must precede the next draw.
+        let (index, event) = sessions.next_event().await;
+        sessions.list[index].app.on_event(event).await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            sessions.drain_ready_events(),
+        )
+        .await
+        .expect("draining must stop when all sessions are idle");
+
+        assert!(!sessions.any_running());
+        assert_eq!(sessions.active, 0, "draining never switches sessions");
+        for (session, text) in sessions.list.iter().zip(&expected) {
+            assert!(matches!(
+                session.app.transcript.cells.as_slice(),
+                [Cell::Thinking { text: thinking }, Cell::Answer { text: answer }]
+                    if thinking == "planning" && answer == text
+            ));
+            assert!(session.app.run_finished);
+        }
+        assert!(sessions.take_finished_runs());
+        assert!(!sessions.take_finished_runs());
+        let screen = draw_sessions(&mut sessions, 100, 20);
+        assert!(screen.contains("batch complete 0"), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn draining_ready_events_leaves_open_and_idle_sources_usable() {
+        use crate::sessions::{Session, Sessions};
+        use cupel_agent::agent_loop::agent_event_channel;
+        use cupel_core::types::AssistantMessageEvent;
+
+        let mut sessions = Sessions::new(test_app());
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app: test_app(),
+        });
+        let (events, sink) = agent_event_channel();
+        sessions.list[1].app.run_events = Some(events);
+
+        for delta in ["first ", "second", " third"] {
+            sink.emit(AgentEvent::MessageUpdate {
+                event: AssistantMessageEvent::TextDelta {
+                    content_index: 0,
+                    delta: delta.to_string(),
+                },
+            });
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                sessions.drain_ready_events(),
+            )
+            .await
+            .expect("draining must not wait for an open, empty stream");
+            assert!(sessions.any_running());
+        }
+        assert!(sessions.list[0].app.transcript.cells.is_empty());
+        assert_eq!(
+            sessions.list[1].app.transcript.copy_text(0),
+            Some("first second third")
+        );
     }
 
     #[test]

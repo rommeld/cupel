@@ -19,19 +19,20 @@ use serde_json::{Value, json};
 
 use crate::{
     error::{InferenceError, Result},
-    event_stream::{AssistantMessageStream, EventSink, assistant_message_channel},
+    event_stream::{AssistantMessageStream, EventSink},
     json_util::parse_streaming_json,
     model::calculate_cost,
     options_util::{adjust_max_tokens_for_thinking, clamp_max_tokens_to_context},
     provider::Provider,
     providers::{
-        CONTENT_FILTER_MESSAGE, error_message, finish_output, new_output_message, with_cancel,
+        CONTENT_FILTER_MESSAGE, EffortStyle, finish_output, new_output_message,
+        normalize_anthropic_tool_call_id, off_effort, spawn_provider_stream, thinking_effort,
+        with_cancel,
     },
     transform::transform_messages,
     types::{
-        Api, AssistantContent, AssistantMessage, CacheRetention, Context, Message, Model,
-        StopReason, StreamOptions, TextContent, ThinkingContent, ThinkingLevel, ToolResultContent,
-        UserContent, UserContentBody,
+        Api, AssistantContent, CacheRetention, Context, Message, Model, StopReason, StreamOptions,
+        TextContent, ThinkingContent, ToolResultContent, UserContent, UserContentBody,
     },
 };
 
@@ -64,23 +65,9 @@ impl Provider for BedrockProvider {
         context: Context,
         options: StreamOptions,
     ) -> AssistantMessageStream {
-        let (stream, sink) = assistant_message_channel();
-        let model = model.clone();
-
-        tokio::spawn(async move {
-            if let Err(err) = run(&model, &context, &options, &sink).await {
-                let reason = if matches!(err, InferenceError::Aborted) {
-                    StopReason::Aborted
-                } else {
-                    StopReason::Error
-                };
-                tracing::warn!(error = %err, "provider request failed");
-                let msg = error_message(&model, reason, err.to_string());
-                let _ = sink.error(reason, msg);
-            }
-        });
-
-        stream
+        spawn_provider_stream(model, move |model, sink| async move {
+            run(&model, &context, &options, &sink).await
+        })
     }
 }
 
@@ -109,47 +96,105 @@ fn match_candidates(model: &Model) -> Vec<String> {
         .collect()
 }
 
+/// The catalog knob Bedrock reads from `model.compat`. It has the same key and
+/// meaning as in the Anthropic adapter, so one curated template describes a
+/// Claude model on both APIs. Rows without it (a user's models.json row, an
+/// application inference profile) fall back to the id tables below.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct BedrockCompat {
+    /// Claude 4.7+ generation: adaptive thinking with native `xhigh` and
+    /// prompt caching. `Some(false)` forces token-budget thinking.
+    force_adaptive_thinking: Option<bool>,
+}
+
+/// Parsed several times per request, so it stays silent here; [`run`] warns
+/// once per request when the compat value is malformed.
+fn bedrock_compat(model: &Model) -> BedrockCompat {
+    model
+        .compat
+        .clone()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default()
+}
+
+fn warn_on_invalid_compat(model: &Model) {
+    if let Some(Err(error)) = model
+        .compat
+        .clone()
+        .map(serde_json::from_value::<BedrockCompat>)
+    {
+        tracing::warn!(
+            model = %model.id,
+            provider = %model.provider.as_str(),
+            error = %error,
+            "invalid Bedrock compat settings; using defaults"
+        );
+    }
+}
+
+/// Catalog compat marks a Claude row even when its id is an ARN and its name
+/// says nothing.
 fn is_claude_model(model: &Model) -> bool {
+    if bedrock_compat(model).force_adaptive_thinking.is_some() {
+        return true;
+    }
     let id = model.id.to_lowercase();
     let name = model.name.to_lowercase();
     id.contains("anthropic.claude") || id.contains("anthropic/claude") || name.contains("claude")
 }
 
-/// Opus 4.6+/Sonnet 4.6+/Fable 5 use adaptive thinking (effort) instead of
-/// token budgets.
+/// Claude 4.6+ use adaptive thinking (effort) instead of token budgets.
 fn supports_adaptive_thinking(model: &Model) -> bool {
-    match_candidates(model).iter().any(|s| {
-        s.contains("opus-4-6")
-            || s.contains("opus-4-7")
-            || s.contains("opus-4-8")
-            || s.contains("sonnet-4-6")
-            || s.contains("sonnet-5")
-            || s.contains("fable-5")
-    })
+    bedrock_compat(model)
+        .force_adaptive_thinking
+        .unwrap_or_else(|| {
+            match_candidates(model).iter().any(|s| {
+                s.contains("opus-4-6")
+                    || s.contains("opus-4-7")
+                    || s.contains("opus-4-8")
+                    || s.contains("sonnet-4-6")
+                    || s.contains("opus-5")
+                    || s.contains("sonnet-5")
+                    || s.contains("haiku-5")
+                    || s.contains("fable-5")
+            })
+        })
 }
 
 /// The xhigh effort arrived with Opus 4.7; the 4.6 models stop at high.
-/// "sonnet-5" also matches Sonnet 5.5.
+/// "opus-5" also matches Opus 5.5, "sonnet-5" Sonnet 5.5.
 fn supports_native_xhigh(model: &Model) -> bool {
-    match_candidates(model).iter().any(|s| {
-        s.contains("opus-4-7")
-            || s.contains("opus-4-8")
-            || s.contains("fable-5")
-            || s.contains("sonnet-5")
-    })
+    bedrock_compat(model)
+        .force_adaptive_thinking
+        .unwrap_or_else(|| {
+            match_candidates(model).iter().any(|s| {
+                s.contains("opus-4-7")
+                    || s.contains("opus-4-8")
+                    || s.contains("opus-5")
+                    || s.contains("sonnet-5")
+                    || s.contains("haiku-5")
+                    || s.contains("fable-5")
+            })
+        })
 }
 
 /// Prompt caching is only available on newer Claude models. Application
-/// inference profiles hide the model name in the ARN. There the model's
-/// display name (user-controlled) is the only signal.
+/// inference profiles hide the model name in the ARN. There the catalog
+/// compat or the model's display name (user-controlled) is the only signal.
 fn supports_prompt_caching(model: &Model) -> bool {
+    if bedrock_compat(model).force_adaptive_thinking == Some(true) {
+        return true;
+    }
     let candidates = match_candidates(model);
     if !candidates.iter().any(|s| s.contains("claude")) {
         return false;
     }
     candidates.iter().any(|s| {
         s.contains("fable-5")
+            || s.contains("opus-5")
             || s.contains("sonnet-5")
+            || s.contains("haiku-5")
             || s.contains("-4-") // any Claude 4.x
             || s.contains("claude-3-7-sonnet")
             || s.contains("claude-3-5-haiku")
@@ -163,6 +208,7 @@ async fn run(
     options: &StreamOptions,
     sink: &EventSink,
 ) -> Result<()> {
+    warn_on_invalid_compat(model);
     let client = build_client(model, options).await;
     let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
 
@@ -225,7 +271,7 @@ async fn run(
         let item = stream
             .recv()
             .await
-            .map_err(|e| InferenceError::Other(format!("Bedrock stream error: {e}")))?;
+            .map_err(|e| InferenceError::Other(format_sdk_error(&e)))?;
         Ok(item.map(|item| (item, stream)))
     });
     consume_stream(model, options, sink, stream).await
@@ -583,20 +629,6 @@ fn build_system_prompt(
     Some(blocks)
 }
 
-fn normalize_tool_call_id(id: &str, _model: &Model, _source: &AssistantMessage) -> String {
-    let sanitized: String = id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    sanitized.chars().take(64).collect()
-}
-
 /// A text block, or `None` when the text is blank (Bedrock rejects blanks).
 fn non_blank_text_block(text: &str) -> Option<bedrock::ContentBlock> {
     (!text.trim().is_empty()).then(|| bedrock::ContentBlock::Text(text.to_string()))
@@ -666,7 +698,11 @@ fn convert_messages(
     model: &Model,
     cache_retention: CacheRetention,
 ) -> Result<Vec<bedrock::Message>> {
-    let transformed = transform_messages(&context.messages, model, Some(normalize_tool_call_id));
+    let transformed = transform_messages(
+        &context.messages,
+        model,
+        Some(normalize_anthropic_tool_call_id),
+    );
     let supports_signature = is_claude_model(model);
     let mut result: Vec<bedrock::Message> = Vec::new();
 
@@ -867,38 +903,37 @@ fn build_additional_model_request_fields(
         // Match Anthropic's off convention: no entry explicitly disables
         // thinking, a named entry sends that type alone (Sonnet 5.5:
         // `between_tools`), and null means thinking cannot be switched off.
-        let off = model.thinking_level_map.as_ref().and_then(|m| m.get("off"));
-        return match off {
-            None => Some(json!({"thinking": {"type": "disabled"}})),
-            Some(Some(off_type)) => Some(json!({"thinking": {"type": off_type}})),
-            Some(None) => None,
-        };
+        return off_effort(model, Some("disabled"))
+            .map(|off_type| json!({"thinking": {"type": off_type}}));
     };
 
     if supports_adaptive_thinking(model) {
+        let Some(effort) = thinking_effort(
+            model,
+            Some(level),
+            EffortStyle::Claude {
+                native_xhigh: supports_native_xhigh(model),
+            },
+        ) else {
+            return off_effort(model, Some("disabled"))
+                .map(|off_type| json!({"thinking": {"type": off_type}}));
+        };
         return Some(json!({
             "thinking": {"type": "adaptive", "display": "summarized"},
-            "output_config": {"effort": map_thinking_level_to_effort(model, level)},
+            "output_config": {"effort": effort},
         }));
     }
 
     // Budget-based thinking for older Claude models.
-    let default_budget = match level {
-        ThinkingLevel::Minimal => 1024,
-        ThinkingLevel::Low => 2048,
-        ThinkingLevel::Medium => 8192,
-        // Claude budget models don't support xhigh; clamp to high.
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => 16384,
-    };
-    let custom_budget = options.thinking_budgets.and_then(|b| match level {
-        ThinkingLevel::Minimal => b.minimal,
-        ThinkingLevel::Low => b.low,
-        ThinkingLevel::Medium => b.medium,
-        ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max => b.high,
+    let budget = thinking_budget_override.unwrap_or_else(|| {
+        adjust_max_tokens_for_thinking(
+            options.max_tokens,
+            model.max_tokens,
+            level,
+            options.thinking_budgets,
+        )
+        .thinking_budget
     });
-    let budget = thinking_budget_override
-        .or(custom_budget)
-        .unwrap_or(default_budget);
 
     Some(json!({
         "thinking": {
@@ -910,32 +945,6 @@ fn build_additional_model_request_fields(
         // beta flag on budget models; adaptive models have it built in.
         "anthropic_beta": ["interleaved-thinking-2025-05-14"],
     }))
-}
-
-fn map_thinking_level_to_effort(model: &Model, level: ThinkingLevel) -> String {
-    if level == ThinkingLevel::XHigh && supports_native_xhigh(model) {
-        return "xhigh".to_string();
-    }
-    let key = match level {
-        ThinkingLevel::Minimal => "minimal",
-        ThinkingLevel::Low => "low",
-        ThinkingLevel::Medium => "medium",
-        ThinkingLevel::High => "high",
-        ThinkingLevel::XHigh => "xhigh",
-        ThinkingLevel::Max => "max",
-    };
-    if let Some(Some(mapped)) = model.thinking_level_map.as_ref().and_then(|m| m.get(key)) {
-        return mapped.clone();
-    }
-    match level {
-        ThinkingLevel::Minimal | ThinkingLevel::Low => "low",
-        ThinkingLevel::Medium => "medium",
-        // Only reached without native xhigh (see supports_native_xhigh).
-        ThinkingLevel::High | ThinkingLevel::XHigh => "high",
-        // Every adaptive model has max, the 4.6 ones included.
-        ThinkingLevel::Max => "max",
-    }
-    .to_string()
 }
 
 /// Convert `serde_json::Value` into the AWS SDK's `Document` type. The two
@@ -969,9 +978,12 @@ mod tests {
     use futures_util::StreamExt as _;
     use serde_json::{Value, json};
 
-    use crate::error::Result;
+    use crate::error::{InferenceError, Result};
     use crate::event_stream::assistant_message_channel;
-    use crate::providers::bedrock::{build_additional_model_request_fields, consume_stream};
+    use crate::providers::bedrock::{
+        build_additional_model_request_fields, consume_stream, format_sdk_error, is_claude_model,
+        supports_prompt_caching,
+    };
     use crate::providers::error_message;
     use crate::retry::is_retryable_assistant_error;
     use crate::types::{AssistantMessageEvent, Model, StopReason, StreamOptions, ThinkingLevel};
@@ -1045,8 +1057,68 @@ mod tests {
                     .any(|e| matches!(e, AssistantMessageEvent::Done { .. }))
             );
             let model = catalog_model("global.anthropic.claude-sonnet-5-5");
-            let message = error_message(&model, StopReason::Error, error.to_string());
+            let message = error_message(&model, &error);
             assert!(is_retryable_assistant_error(&message));
+        }
+    }
+
+    #[test]
+    fn sdk_stream_errors_keep_exception_details_for_classification() {
+        use aws_sdk_bedrockruntime::error::SdkError;
+        use bedrock::error::{
+            ConverseStreamOutputError, InternalServerException, ModelStreamErrorException,
+            ThrottlingException, ValidationException,
+        };
+
+        let model = catalog_model("global.anthropic.claude-sonnet-5-5");
+        for (service_error, retryable, overflow) in [
+            (
+                ConverseStreamOutputError::ThrottlingException(
+                    ThrottlingException::builder()
+                        .message("Too many tokens, please wait before trying again")
+                        .build(),
+                ),
+                true,
+                false,
+            ),
+            (
+                ConverseStreamOutputError::InternalServerException(
+                    InternalServerException::builder()
+                        .message("opaque failure")
+                        .build(),
+                ),
+                true,
+                false,
+            ),
+            (
+                ConverseStreamOutputError::ModelStreamErrorException(
+                    ModelStreamErrorException::builder()
+                        .message("opaque failure")
+                        .build(),
+                ),
+                true,
+                false,
+            ),
+            (
+                ConverseStreamOutputError::ValidationException(
+                    ValidationException::builder()
+                        .message("Input is too long for requested model")
+                        .build(),
+                ),
+                false,
+                true,
+            ),
+        ] {
+            let sdk_error = SdkError::service_error(service_error, ());
+            assert_eq!(sdk_error.to_string(), "service error");
+            let error = InferenceError::Other(format_sdk_error(&sdk_error));
+            let message = error_message(&model, &error);
+            assert_eq!(is_retryable_assistant_error(&message), retryable, "{error}");
+            assert_eq!(
+                crate::overflow::is_context_overflow(&message, 200_000),
+                overflow,
+                "{error}"
+            );
         }
     }
 
@@ -1182,6 +1254,31 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_effort_clamps_metadata_and_legacy_wire_limits_together() {
+        let mut model = catalog_model("global.anthropic.claude-sonnet-5-5");
+        let map = model
+            .thinking_level_map
+            .get_or_insert_with(Default::default);
+        map.insert("low".to_string(), None);
+        map.insert("medium".to_string(), Some("balanced".to_string()));
+        map.insert("high".to_string(), None);
+        map.insert("max".to_string(), None);
+        let minimal = fields(&model, Some(ThinkingLevel::Minimal)).unwrap();
+        assert_eq!(minimal["output_config"]["effort"], "balanced");
+
+        // Older adaptive Claude models cannot send xhigh even if metadata omits
+        // that key. With max/high disabled, the nearest sendable level is medium.
+        model.id = "us.anthropic.claude-sonnet-4-6".to_string();
+        model.name = "Claude Sonnet 4.6".to_string();
+        // A 4.6 row carries no 4.7+ compat; the id tables decide.
+        model.compat = None;
+        for level in [ThinkingLevel::XHigh, ThinkingLevel::Max] {
+            let fields = fields(&model, Some(level)).unwrap();
+            assert_eq!(fields["output_config"]["effort"], "balanced");
+        }
+    }
+
+    #[test]
     fn fable5_and_51_use_adaptive_effort() {
         for id in [
             "us.anthropic.claude-fable-5",
@@ -1189,6 +1286,55 @@ mod tests {
         ] {
             let model = catalog_model(id);
             assert_eq!(fields(&model, None), None, "{id}");
+            assert_eq!(
+                fields(&model, Some(ThinkingLevel::XHigh)),
+                Some(json!({
+                    "thinking": {"type": "adaptive", "display": "summarized"},
+                    "output_config": {"effort": "xhigh"},
+                })),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn compat_decides_capabilities_where_the_id_says_nothing() {
+        // An application inference profile hides the model in its ARN and
+        // carries a user-chosen name; the curated compat is the only signal.
+        let mut profile = catalog_model("us.anthropic.claude-sonnet-5");
+        profile.id =
+            "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123".into();
+        profile.name = "Team profile".into();
+        profile.compat = Some(json!({"forceAdaptiveThinking": true}));
+        assert!(is_claude_model(&profile));
+        assert!(supports_prompt_caching(&profile));
+        assert_eq!(
+            fields(&profile, Some(ThinkingLevel::XHigh)),
+            Some(json!({
+                "thinking": {"type": "adaptive", "display": "summarized"},
+                "output_config": {"effort": "xhigh"},
+            }))
+        );
+
+        // An explicit `false` wins over the id tables: token-budget thinking.
+        let mut budget = catalog_model("us.anthropic.claude-sonnet-5");
+        budget.compat = Some(json!({"forceAdaptiveThinking": false}));
+        let thinking = fields(&budget, Some(ThinkingLevel::High)).unwrap();
+        assert_eq!(thinking["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn opus_and_haiku_5_ids_without_compat_use_adaptive_effort() {
+        // A user's models.json row without compat: the id tables decide.
+        let mut model = catalog_model("us.anthropic.claude-sonnet-5");
+        model.compat = None;
+        for id in [
+            "global.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-haiku-5-5",
+        ] {
+            model.id = id.to_string();
+            model.name = id.to_string();
+            assert!(supports_prompt_caching(&model), "{id}");
             assert_eq!(
                 fields(&model, Some(ThinkingLevel::XHigh)),
                 Some(json!({

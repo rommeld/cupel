@@ -2,8 +2,10 @@
 //!
 //! `catalog.json` is produced by the dev-time generator
 //! (`cargo run -p cupel-coding-agent --bin generate-catalog`), which
-//! fetches models.dev and applies the curation tables in
+//! uses a checked-in models.dev snapshot and applies the curation tables in
 //! crates/cupel-coding-agent/src/bin/generate_catalog/curation.rs
+//! Add `-- --fetch` to update the snapshot. Generator tests verify that
+//! snapshot plus curation produces the exact checked-in catalog bytes.
 //! The JSON uses the exact same schema as a user `model.json`(a flat
 //! array of camelCase [`Model`]s), so one serde derive covers both.
 //! Prices are USD per million tokens; users can stll layer their own
@@ -127,37 +129,23 @@ mod tests {
     }
 
     #[test]
-    fn fable_51_catalog_rows_match_models_dev() {
+    fn fable_51_catalog_rows_keep_the_native_effort_scale() {
         let models = builtin_models();
-        for (id, provider, api, input, output, cached_read) in [
+        for (id, provider, api) in [
             (
                 "claude-fable-5-1",
                 Provider::ANTHROPIC,
                 Api::ANTHROPIC_MESSAGES,
-                10.0,
-                50.0,
-                0.25,
             ),
             (
                 "us.anthropic.claude-fable-5-1",
                 Provider::AMAZON_BEDROCK,
                 Api::BEDROCK_CONVERSE_STREAM,
-                11.0,
-                55.0,
-                0.275,
             ),
         ] {
             let model = models.iter().find(|m| m.id == id).expect("Fable 5.1 row");
             assert_eq!(model.provider.as_str(), provider, "{id}");
             assert_eq!(model.api.as_str(), api, "{id}");
-            assert!((model.cost.input - input).abs() < f64::EPSILON, "{id}");
-            assert!((model.cost.output - output).abs() < f64::EPSILON, "{id}");
-            assert!(
-                (model.cost.cached_read - cached_read).abs() < f64::EPSILON,
-                "{id}"
-            );
-            assert_eq!(model.context_window, 1_000_000, "{id}");
-            assert_eq!(model.max_tokens, 128_000, "{id}");
             let levels = model.thinking_level_map.as_ref().expect("effort map");
             assert_eq!(levels.get("off"), Some(&None), "{id}");
             assert_eq!(levels.get("minimal"), Some(&None), "{id}");
@@ -283,37 +271,24 @@ mod tests {
                 "{id}: xhigh key would DISABLE it"
             );
             assert!(!map.contains_key("max"), "{id}: max key would DISABLE it");
-            assert_eq!(model.context_window, 272_000, "{id}");
         }
     }
 
     #[test]
-    fn gpt_61_sol_rows_match_the_model_card_and_cannot_switch_off() {
-        // GPT-6.1 Sol keeps Sol's prices and window but halves the cached
-        // input price. Unlike Sol, its effort scale has no "none" (OpenAI's
+    fn gpt_61_sol_rows_cannot_switch_off() {
+        // Unlike Sol, its effort scale has no "none" (OpenAI's
         // model page: "none" and "minimal" are not supported). So off ->
         // null in every dialect: the provider leaves `reasoning` out and
         // never sends the unsupported effort "none".
         let models = builtin_models();
-        // Each tuple is one dialect: (catalog id, wire API, opt-in ceiling).
-        // Only Codex has a lower ceiling, pinned from Codex CLI's models.json.
-        for (id, api, ceiling) in [
-            ("gpt-6.1-sol", Api::OPENAI_RESPONSES, 922_000),
-            ("openai/gpt-6.1-sol", Api::OPENAI_COMPLETIONS, 922_000),
-            ("codex/gpt-6.1-sol", Api::OPENAI_CODEX_RESPONSES, 872_000),
+        for (id, api) in [
+            ("gpt-6.1-sol", Api::OPENAI_RESPONSES),
+            ("openai/gpt-6.1-sol", Api::OPENAI_COMPLETIONS),
+            ("codex/gpt-6.1-sol", Api::OPENAI_CODEX_RESPONSES),
         ] {
             let model = models.iter().find(|m| m.id == id).expect(id);
             assert_eq!(model.name, "GPT-6.1 Sol");
             assert_eq!(model.api.as_str(), api);
-            assert_eq!(model.context_window, 272_000);
-            assert_eq!(model.max_context_window, Some(ceiling));
-            assert_eq!(model.max_tokens, 128_000);
-            assert!((model.cost.input - 2.0).abs() < f64::EPSILON);
-            assert!((model.cost.output - 10.0).abs() < f64::EPSILON);
-            assert!((model.cost.cached_read - 0.1).abs() < f64::EPSILON);
-            let tier = &model.cost.tiers.as_ref().expect("long-context tier")[0];
-            assert_eq!(tier.context_over, 272_000);
-            assert!((tier.cached_read - 0.2).abs() < f64::EPSILON);
             let map = model.thinking_level_map.as_ref().expect("effort map");
             // `Some(&None)` = the key exists with a JSON null: "off" is
             // unsupported. `Some(&Some("none"))` would send effort "none".
@@ -338,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn astra_rows_carry_the_documented_limits() {
+    fn astra_rows_keep_the_documented_effort_scale() {
         // GPT-6 Astra in all three dialects: no temperature, no off, no
         // minimal, and both top levels selectable (keys absent).
         let models = builtin_models();
@@ -359,7 +334,6 @@ mod tests {
                 "{id}: xhigh key would DISABLE it"
             );
             assert!(!map.contains_key("max"), "{id}: max key would DISABLE it");
-            assert_eq!(model.context_window, 272_000, "{id}");
         }
         // minimal: unsupported on the API (clamps up to low), pinned to
         // "low" on Codex like every other Codex row. The wire result is the same.
@@ -370,20 +344,6 @@ mod tests {
         assert_eq!(
             api.thinking_level_map.as_ref().expect("map").get("minimal"),
             Some(&None)
-        );
-        assert_eq!(
-            api.max_context_window,
-            Some(922_000),
-            "OpenAI's documented max input"
-        );
-        let codex = models
-            .iter()
-            .find(|m| m.id == "codex/gpt-6-astra")
-            .expect("codex row");
-        assert_eq!(
-            codex.max_context_window,
-            Some(872_000),
-            "Codex CLI's ceiling"
         );
     }
 
@@ -413,8 +373,6 @@ mod tests {
         assert_eq!(map.get("minimal"), Some(&None));
         assert!(!map.contains_key("xhigh"), "xhigh key would DISABLE it");
         assert!(!map.contains_key("max"), "max key would DISABLE it");
-        assert_eq!(model.context_window, 1_000_000);
-        assert_eq!(model.max_tokens, 128_000);
     }
 
     #[test]
@@ -477,12 +435,10 @@ mod tests {
             serde_json::to_value(map).expect("map serializes"),
             serde_json::json!({"minimal": null, "off": "between_tools"})
         );
-        assert_eq!(model.context_window, 1_000_000);
-        assert_eq!(model.max_tokens, 128_000);
     }
 
     #[test]
-    fn haiku55_row_is_adaptive_and_plans_against_the_100k_price_tier() {
+    fn haiku55_row_is_adaptive_and_keeps_its_native_toggle() {
         let models = builtin_models();
         assert!(!models.iter().any(|m| m.id == "claude-haiku-4-5"));
         let model = models
@@ -505,25 +461,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
             serde_json::json!({"minimal": null})
-        );
-        assert_eq!(model.context_window, 100_000);
-        assert_eq!(model.max_context_window, Some(1_000_000));
-        assert_eq!(model.max_tokens, 128_000);
-        assert_eq!(
-            model.cost,
-            crate::types::ModelCost {
-                input: 0.1,
-                output: 0.5,
-                cached_read: 0.01,
-                cached_write: 0.125,
-                tiers: Some(vec![crate::types::CostTier {
-                    context_over: 100_000,
-                    input: 0.5,
-                    output: 2.5,
-                    cached_read: 0.05,
-                    cached_write: 0.625,
-                }]),
-            }
         );
     }
 
@@ -654,5 +591,45 @@ mod tests {
             );
         }
         assert_eq!(seen, 8, "only supported Codex models belong in the catalog");
+    }
+
+    #[test]
+    fn bedrock_claude_rows_share_the_anthropic_twins_thinking_compat() {
+        // Both adapters read `forceAdaptiveThinking` from the row. A Bedrock
+        // twin that drifted would think differently from the same model on
+        // the Anthropic API (budget_tokens where only adaptive is accepted).
+        let models = builtin_models();
+        let forced = |model: &Model| {
+            model
+                .compat
+                .as_ref()
+                .and_then(|compat| compat.get("forceAdaptiveThinking"))
+                .and_then(serde_json::Value::as_bool)
+        };
+        let mut twins = 0;
+        for bedrock in models
+            .iter()
+            .filter(|m| m.api.as_str() == Api::BEDROCK_CONVERSE_STREAM)
+        {
+            let Some((_, base)) = bedrock.id.split_once("anthropic.") else {
+                continue;
+            };
+            let Some(anthropic) = models.iter().find(|m| {
+                m.provider.as_str() == Provider::ANTHROPIC
+                    && m.api.as_str() == Api::ANTHROPIC_MESSAGES
+                    && m.id == base
+            }) else {
+                continue;
+            };
+            assert_eq!(
+                forced(bedrock),
+                forced(anthropic),
+                "{} vs {}",
+                bedrock.id,
+                anthropic.id
+            );
+            twins += 1;
+        }
+        assert!(twins > 0, "Claude rows exist on both Bedrock and Anthropic");
     }
 }

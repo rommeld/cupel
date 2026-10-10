@@ -24,6 +24,7 @@ pub struct AssistantMessageStream {
 }
 
 /// Producer handle held by a provider's background task.
+#[derive(Clone)]
 pub struct EventSink {
     tx: mpsc::UnboundedSender<AssistantMessageEvent>,
 }
