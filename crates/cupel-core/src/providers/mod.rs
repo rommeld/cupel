@@ -34,6 +34,65 @@ use crate::types::{
 pub(crate) const CONTENT_FILTER_MESSAGE: &str =
     "The provider's content filter stopped the response. Partial output may be incomplete.";
 
+/// Parse `model.compat` into an adapter's knob struct one key at a time.
+///
+/// A key whose value has the wrong type costs only that knob, which keeps its
+/// default; every other key still applies. Parsing the whole object at once
+/// would reset all knobs for one typo. `T` needs `#[serde(default)]` so a
+/// single key parses on its own; unknown keys are ignored as before.
+/// Returns the knobs and one problem line per rejected key.
+pub(crate) fn parse_compat<T>(model: &Model) -> (T, Vec<String>)
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    let Some(compat) = &model.compat else {
+        return (T::default(), Vec::new());
+    };
+    let Some(entries) = compat.as_object() else {
+        return (
+            T::default(),
+            vec!["compat must be a JSON object".to_string()],
+        );
+    };
+    let mut accepted = serde_json::Map::new();
+    let mut problems = Vec::new();
+    for (key, value) in entries {
+        let single: serde_json::Map<String, serde_json::Value> =
+            [(key.clone(), value.clone())].into_iter().collect();
+        match serde_json::from_value::<T>(serde_json::Value::Object(single)) {
+            Ok(_) => {
+                accepted.insert(key.clone(), value.clone());
+            }
+            Err(error) => problems.push(format!("{key}: {error}")),
+        }
+    }
+    // Every accepted key parsed on its own, so together they parse too.
+    let knobs = serde_json::from_value(serde_json::Value::Object(accepted)).unwrap_or_default();
+    (knobs, problems)
+}
+
+/// [`parse_compat`] for a request. The catalog loader already showed the
+/// problems to the user (see [`Provider::compat_problems`](crate::provider::Provider::compat_problems)),
+/// so here they only reach the log.
+pub(crate) fn compat<T>(model: &Model) -> T
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    let (knobs, problems) = parse_compat(model);
+    log_compat_problems(model, &problems);
+    knobs
+}
+
+pub(crate) fn log_compat_problems(model: &Model, problems: &[String]) {
+    for problem in problems {
+        tracing::warn!(
+            model = %model.id,
+            provider = %model.provider.as_str(),
+            "ignoring compat setting {problem}"
+        );
+    }
+}
+
 /// Shared producer/consumer split and in-band worker error contract.
 pub(crate) fn spawn_provider_stream<F>(
     model: &Model,
@@ -530,6 +589,40 @@ mod tests {
         assert!(crate::retry::is_retryable_assistant_error(&error_message(
             &model, &error
         )));
+    }
+
+    #[derive(Debug, Default, PartialEq, serde::Deserialize)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Knobs {
+        requires_api_key: Option<bool>,
+        supports_store: Option<bool>,
+    }
+
+    #[test]
+    fn compat_parsing_keeps_every_key_that_fits() {
+        let mut model = reasoning_model();
+        model.compat = Some(serde_json::json!({
+            "requiresApiKey": false,
+            "supportsStore": "false",
+            "somethingElse": 1,
+        }));
+        let (knobs, problems) = crate::providers::parse_compat::<Knobs>(&model);
+        // One typo costs only its own knob; unknown keys stay ignored.
+        assert_eq!(knobs.requires_api_key, Some(false));
+        assert_eq!(knobs.supports_store, None);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].starts_with("supportsStore: "), "{problems:?}");
+
+        model.compat = Some(serde_json::json!(["not", "an", "object"]));
+        let (knobs, problems) = crate::providers::parse_compat::<Knobs>(&model);
+        assert_eq!(knobs, Knobs::default());
+        assert_eq!(problems, ["compat must be a JSON object"]);
+
+        model.compat = None;
+        assert_eq!(
+            crate::providers::parse_compat::<Knobs>(&model),
+            (Knobs::default(), Vec::new())
+        );
     }
 
     #[tokio::test]

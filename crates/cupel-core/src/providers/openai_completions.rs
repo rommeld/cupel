@@ -24,9 +24,9 @@ use crate::{
     options_util::clamp_max_tokens_to_context,
     provider::Provider,
     providers::{
-        CONTENT_FILTER_MESSAGE, EffortStyle, apply_custom_headers, finish_output,
-        new_output_message, off_effort, send_request, spawn_provider_stream, thinking_effort,
-        with_cancel,
+        CONTENT_FILTER_MESSAGE, EffortStyle, apply_custom_headers, compat, finish_output,
+        new_output_message, off_effort, parse_compat, send_request, spawn_provider_stream,
+        thinking_effort, with_cancel,
     },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
@@ -108,21 +108,7 @@ impl Default for CompletionsCompat {
 }
 
 fn completions_compat(model: &Model) -> CompletionsCompat {
-    model
-        .compat
-        .clone()
-        .map(|value| {
-            serde_json::from_value(value).unwrap_or_else(|error| {
-                tracing::warn!(
-                    model = %model.id,
-                    provider = %model.provider.as_str(),
-                    error = %error,
-                    "invalid OpenAI Completions compat settings; using defaults"
-                );
-                CompletionsCompat::default()
-            })
-        })
-        .unwrap_or_default()
+    compat(model)
 }
 
 pub struct OpenAiCompletionsProvider {
@@ -159,6 +145,10 @@ impl Provider for OpenAiCompletionsProvider {
         spawn_provider_stream(model, move |model, sink| async move {
             run(&http, &model, &context, &options, &sink).await
         })
+    }
+
+    fn compat_problems(&self, model: &Model) -> Vec<String> {
+        parse_compat::<CompletionsCompat>(model).1
     }
 }
 
@@ -896,6 +886,23 @@ mod tests {
     }
 
     #[test]
+    fn a_wrong_compat_value_does_not_reset_the_other_knobs() {
+        // The local llama-server row stays keyless although another knob
+        // has a typo; before, the whole blob fell back to defaults and every
+        // request failed with "no API key".
+        let model = model_with_compat(Some(serde_json::json!({
+            "requiresApiKey": false,
+            "supportsStore": "false",
+        })));
+        let compat = completions_compat(&model);
+        assert!(!compat.requires_api_key);
+        assert!(compat.supports_store, "the bad value keeps its default");
+        let problems = OpenAiCompletionsProvider::new().compat_problems(&model);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].starts_with("supportsStore: "), "{problems:?}");
+    }
+
+    #[test]
     fn malformed_compat_warns_before_falling_back_to_defaults() {
         use std::sync::{Arc, Mutex};
 
@@ -927,11 +934,10 @@ mod tests {
         let output = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
         assert!(output.contains(&model.id), "{output}");
         assert!(
-            output.contains("invalid OpenAI Completions compat settings"),
+            output.contains("ignoring compat setting requiresApiKey"),
             "{output}"
         );
         assert!(output.contains("expected a boolean"), "{output}");
-        assert!(output.contains("using defaults"), "{output}");
     }
 
     /// A reasoning model pinned to the OpenRouter thinking format, with an

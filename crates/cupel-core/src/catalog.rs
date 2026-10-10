@@ -632,4 +632,20 @@ mod tests {
         }
         assert!(twins > 0, "Claude rows exist on both Bedrock and Anthropic");
     }
+
+    #[test]
+    fn every_builtin_compat_blob_parses_cleanly() {
+        // A shipped row with a mistyped knob would quietly run on that knob's
+        // default; users would see a load warning for something they never wrote.
+        let registry = crate::default_registry();
+        for model in builtin_models() {
+            let provider = registry.get(model.api.as_str()).expect("registered");
+            assert_eq!(
+                provider.compat_problems(&model),
+                Vec::<String>::new(),
+                "{}",
+                model.id
+            );
+        }
+    }
 }

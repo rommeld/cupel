@@ -508,6 +508,8 @@ mod tests {
     /// keeping the tests environment-independent.
     fn keyless_model(id: &str) -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
+        // Local servers speak Chat Completions, the API that honors requiresApiKey.
+        model.api = cupel_core::types::Api::from(cupel_core::types::Api::OPENAI_COMPLETIONS);
         model.id = id.to_string();
         model.provider = cupel_core::types::Provider::from("ollama");
         model.compat = Some(serde_json::json!({"requiresApiKey": false}));

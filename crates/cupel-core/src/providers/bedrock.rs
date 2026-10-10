@@ -25,9 +25,9 @@ use crate::{
     options_util::{adjust_max_tokens_for_thinking, clamp_max_tokens_to_context},
     provider::Provider,
     providers::{
-        CONTENT_FILTER_MESSAGE, EffortStyle, finish_output, new_output_message,
-        normalize_anthropic_tool_call_id, off_effort, spawn_provider_stream, thinking_effort,
-        with_cancel,
+        CONTENT_FILTER_MESSAGE, EffortStyle, finish_output, log_compat_problems,
+        new_output_message, normalize_anthropic_tool_call_id, off_effort, parse_compat,
+        spawn_provider_stream, thinking_effort, with_cancel,
     },
     transform::transform_messages,
     types::{
@@ -69,6 +69,10 @@ impl Provider for BedrockProvider {
             run(&model, &context, &options, &sink).await
         })
     }
+
+    fn compat_problems(&self, model: &Model) -> Vec<String> {
+        parse_compat::<BedrockCompat>(model).1
+    }
 }
 
 // Bedrock hosts many model families behind one API; Claude-specific features
@@ -108,29 +112,10 @@ struct BedrockCompat {
     force_adaptive_thinking: Option<bool>,
 }
 
-/// Parsed several times per request, so it stays silent here; [`run`] warns
-/// once per request when the compat value is malformed.
+/// Parsed several times per request, so it stays silent here; [`run`] logs
+/// the problems once per request.
 fn bedrock_compat(model: &Model) -> BedrockCompat {
-    model
-        .compat
-        .clone()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default()
-}
-
-fn warn_on_invalid_compat(model: &Model) {
-    if let Some(Err(error)) = model
-        .compat
-        .clone()
-        .map(serde_json::from_value::<BedrockCompat>)
-    {
-        tracing::warn!(
-            model = %model.id,
-            provider = %model.provider.as_str(),
-            error = %error,
-            "invalid Bedrock compat settings; using defaults"
-        );
-    }
+    parse_compat(model).0
 }
 
 /// Catalog compat marks a Claude row even when its id is an ARN and its name
@@ -208,7 +193,7 @@ async fn run(
     options: &StreamOptions,
     sink: &EventSink,
 ) -> Result<()> {
-    warn_on_invalid_compat(model);
+    log_compat_problems(model, &parse_compat::<BedrockCompat>(model).1);
     let client = build_client(model, options).await;
     let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
 

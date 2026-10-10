@@ -27,7 +27,7 @@ use crate::{
     oauth::openai_codex::{ORIGINATOR, account_id_from_access_token},
     provider::Provider,
     providers::{
-        EffortStyle, apply_custom_headers,
+        EffortStyle, apply_custom_headers, compat,
         openai_responses::{
             convert_items, normalize_id_part, process_response_stream, short_hash,
             supports_temperature,
@@ -71,6 +71,12 @@ impl Provider for OpenAiCodexResponsesProvider {
         spawn_provider_stream(model, move |model, sink| async move {
             run(&http, &model, &context, &options, &sink).await
         })
+    }
+
+    fn compat_problems(&self, model: &Model) -> Vec<String> {
+        let mut problems = crate::providers::parse_compat::<CodexCompat>(model).1;
+        problems.extend(crate::providers::openai_responses::compat_problems(model));
+        problems
     }
 }
 
@@ -158,17 +164,23 @@ fn clamp_cache_key(session_id: &str) -> String {
     session_id.chars().take(64).collect()
 }
 
+/// The Codex rows' own compat key. `supportsTemperature` is read through
+/// the Responses dialect's knobs.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct CodexCompat {
+    /// The backend's real model name (see [`wire_model`]).
+    request_model: Option<String>,
+}
+
 /// The model name the wire wants. Catalog ids are namespaced
 /// ("codex/gpt-5.5") because cupel's catalog is one flat id namespace.
 /// The openai provider already owns "gpt-5.6-sol" etc., and merge_models
 /// replaces by id. The compat blob carries the backend's real name.
 fn wire_model(model: &Model) -> String {
-    model
-        .compat
-        .as_ref()
-        .and_then(|compat| compat.get("requestModel"))
-        .and_then(Value::as_str)
-        .map_or_else(|| model.id.clone(), str::to_string)
+    compat::<CodexCompat>(model)
+        .request_model
+        .unwrap_or_else(|| model.id.clone())
 }
 
 fn build_request_body(model: &Model, context: &Context, options: &StreamOptions) -> Value {
