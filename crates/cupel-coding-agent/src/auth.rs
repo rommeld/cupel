@@ -109,6 +109,29 @@ pub fn save_credential(
     })
 }
 
+/// Store a refreshed Codex pair only while auth.json still holds the pair it
+/// replaces. A refresh that finishes after `/logout`, a new `/login` or
+/// another session's refresh must never write an older login back.
+/// Ok(false) = the stored login changed meanwhile, so nothing was stored.
+fn save_refreshed_credential(
+    home: Option<&Path>,
+    replaced: &OAuthCredential,
+    fresh: &OAuthCredential,
+) -> Result<bool, crate::settings::SaveError> {
+    let provider = cupel_core::types::Provider::OPENAI_CODEX;
+    let mut saved = false;
+    modify_auth(home, |auth| {
+        if matches!(
+            auth.get(provider),
+            Some(StoredCredential::Oauth(current)) if current.refresh == replaced.refresh
+        ) {
+            auth.insert(provider.to_string(), StoredCredential::Oauth(fresh.clone()));
+            saved = true;
+        }
+    })?;
+    Ok(saved)
+}
+
 /// Remove a credential (logout). Ok(false) = nothing was stored.
 pub fn delete_credential(
     home: Option<&Path>,
@@ -227,9 +250,12 @@ fn token_after_refresh(
             // file and refreshes again with the old refresh token, which the
             // server may already have rotated away. Then the stored token
             // serves until it expires, and /login is needed after that.
-            if let Err(e) = save_credential(home, cupel_core::types::Provider::OPENAI_CODEX, &fresh)
-            {
-                tracing::warn!("could not persist refreshed codex credential: {e}");
+            match save_refreshed_credential(home, &stored, &fresh) {
+                Ok(true) => {}
+                Ok(false) => tracing::debug!(
+                    "codex login changed during the refresh; keeping the stored one"
+                ),
+                Err(e) => tracing::warn!("could not persist refreshed codex credential: {e}"),
             }
             Some(fresh.access)
         }
@@ -412,6 +438,40 @@ mod tests {
         let token = token_after_refresh(Some(&home), stored, Ok(fresh.clone()), now);
         assert_eq!(token.as_deref(), Some("access-2"));
         assert_eq!(credential(Some(&home), "openai-codex"), Some(fresh));
+    }
+
+    #[test]
+    fn a_refresh_never_writes_an_older_login_back() {
+        let home = temp_home("refresh-after-logout");
+        let now = 1_000_000_000;
+        let stored = credential_fixture(now);
+        let mut fresh = credential_fixture(now + 60 * 60 * 1000);
+        fresh.access = "access-2".to_string();
+        fresh.refresh = "refresh-2".to_string();
+
+        // The user logs out while the refresh is in flight.
+        save_credential(Some(&home), "openai-codex", &stored).unwrap();
+        assert!(delete_credential(Some(&home), "openai-codex").unwrap());
+        let token = token_after_refresh(Some(&home), stored.clone(), Ok(fresh.clone()), now);
+        assert_eq!(
+            token.as_deref(),
+            Some("access-2"),
+            "this request still runs"
+        );
+        assert!(
+            credential(Some(&home), "openai-codex").is_none(),
+            "no resurrection"
+        );
+
+        // A new /login replaced the pair meanwhile: it stays.
+        let mut relogin = credential_fixture(now + 2 * 60 * 60 * 1000);
+        relogin.refresh = "refresh-new-login".to_string();
+        save_credential(Some(&home), "openai-codex", &relogin).unwrap();
+        token_after_refresh(Some(&home), stored, Ok(fresh), now);
+        assert_eq!(
+            credential(Some(&home), "openai-codex").map(|c| c.refresh),
+            Some("refresh-new-login".to_string())
+        );
     }
 
     #[test]
