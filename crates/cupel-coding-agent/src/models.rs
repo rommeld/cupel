@@ -166,6 +166,10 @@ fn with_context_ceiling(existing: &Model, mut replacement: Model) -> Model {
 /// they would only fail at request time. Guards the same invariant the
 /// built-in catalog tests enforce ("every model has a registered
 /// provider"), extended to user input: warn and skip, never abort.
+///
+/// Kept rows are also checked against their provider's compat knobs: a key
+/// with the wrong type falls back to its default at request time, so the
+/// user sees a warning here instead of a mysterious behavior change.
 #[must_use]
 pub fn filter_registered(
     models: Vec<Model>,
@@ -175,8 +179,7 @@ pub fn filter_registered(
     models
         .into_iter()
         .filter(|model| {
-            let registered = registry.get(model.api.as_str()).is_some();
-            if !registered {
+            let Some(provider) = registry.get(model.api.as_str()) else {
                 tracing::warn!(
                     model = %model.id,
                     api = %model.api.as_str(),
@@ -187,8 +190,15 @@ pub fn filter_registered(
                     model.id,
                     model.api.as_str()
                 ));
+                return false;
+            };
+            for problem in provider.compat_problems(model) {
+                warnings.push(format!(
+                    "warning: model {} ignores compat setting {problem}",
+                    model.id
+                ));
             }
-            registered
+            true
         })
         .collect()
 }
@@ -365,6 +375,22 @@ mod tests {
         warnings.clear();
         assert_eq!(filter_registered(ok, &registry, &mut warnings).len(), 1);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn compat_problems_are_reported_but_the_row_is_kept() {
+        let mut entry = entry_json("llama", 8192);
+        entry["compat"] = serde_json::json!({"requiresApiKey": "false", "supportsStore": false});
+        let models: Vec<Model> = serde_json::from_value(serde_json::json!([entry])).unwrap();
+
+        let registry = cupel_core::default_registry();
+        let mut warnings = Vec::new();
+        assert_eq!(filter_registered(models, &registry, &mut warnings).len(), 1);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("llama") && warnings[0].contains("requiresApiKey"),
+            "{warnings:?}"
+        );
     }
 
     #[test]

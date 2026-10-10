@@ -12,8 +12,13 @@ pub type Result<T> = core::result::Result<T, InferenceError>;
 /// [`AssistantMessageStream`](crate::event_stream::AssistantMessageStream).
 #[derive(Debug, Clone, Error)]
 pub enum MessageStreamError {
-    /// Provider emitted an `Error` event.
-    #[error("provider reported error: {reason:?}")]
+    /// Provider emitted an `Error` event. The text carries the provider's own
+    /// message, so a caller that only keeps this error (compaction's
+    /// summarization call) still says what went wrong.
+    #[error(
+        "provider reported error: {}",
+        .message.error_message.as_deref().unwrap_or("no details")
+    )]
     ProviderError {
         reason: StopReason,
         message: Box<AssistantMessage>,
@@ -52,6 +57,17 @@ pub enum InferenceError {
     #[error("message stream error: {0}")]
     Stream(#[from] MessageStreamError),
 
+    /// The connection failed or broke before the response was complete,
+    /// outside reqwest (the AWS SDK) or as a stream that ended without its
+    /// terminal event. Sending the request again may succeed.
+    #[error("{0}")]
+    Transport(String),
+
+    /// The request cannot be built from the configuration (credentials,
+    /// region, endpoint). Sending it again cannot help.
+    #[error("{0}")]
+    Config(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -61,13 +77,11 @@ impl InferenceError {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::NoProvider(_) | Self::MissingApiKey(_) => ErrorKind::Config,
+            Self::NoProvider(_) | Self::MissingApiKey(_) | Self::Config(_) => ErrorKind::Config,
             Self::ApiStatus { status, .. } => ErrorKind::HttpStatus { status: *status },
             Self::Aborted => ErrorKind::Aborted,
             Self::Http(error) if error.is_builder() => ErrorKind::Config,
-            Self::Http(_) | Self::Stream(MessageStreamError::ClosedBeforeTerminalEvent) => {
-                ErrorKind::Transport
-            }
+            Self::Http(_) | Self::Transport(_) => ErrorKind::Transport,
             Self::Stream(MessageStreamError::ProviderError { reason, message }) => message
                 .error_kind
                 .unwrap_or(if *reason == StopReason::Aborted {
@@ -75,14 +89,20 @@ impl InferenceError {
                 } else {
                     ErrorKind::Provider
                 }),
-            Self::Other(_) => ErrorKind::Provider,
+            // Every provider ends its stream with a terminal event, even on
+            // failure, so a channel that closes without one means the provider
+            // task died (a panic). Resending the same request repeats the bug.
+            Self::Stream(MessageStreamError::ClosedBeforeTerminalEvent) | Self::Other(_) => {
+                ErrorKind::Provider
+            }
         }
     }
 }
 
 fn missing_api_key_hint(provider: &str) -> &'static str {
     if provider == Provider::OPENAI_CODEX {
-        " - run /login openai-codex to log in with ChatGPT again"
+        " - no usable ChatGPT login: retry if the network was down, \
+         otherwise run /login openai-codex in the TUI"
     } else {
         ""
     }
@@ -95,8 +115,7 @@ fn missing_api_key_hint(provider: &str) -> &'static str {
 /// gets `&&dyn Error`; the `&cause` pattern copies the inner reference out,
 /// so the next cause borrows from the error itself, not from the closure's
 /// short-lived argument (without it: "lifetime may not live long enough").
-fn with_causes(err: &reqwest::Error) -> String {
-    use core::error::Error as _;
+pub(crate) fn with_causes(err: &dyn core::error::Error) -> String {
     core::iter::successors(err.source(), |&cause| cause.source())
         .fold(err.to_string(), |text, cause| format!("{text}: {cause}"))
 }
@@ -150,8 +169,16 @@ mod tests {
             (InferenceError::Aborted, ErrorKind::Aborted),
             (InferenceError::Other("opaque".into()), ErrorKind::Provider),
             (
-                InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
+                InferenceError::Transport("stream ended early".into()),
                 ErrorKind::Transport,
+            ),
+            (
+                InferenceError::Config("no region".into()),
+                ErrorKind::Config,
+            ),
+            (
+                InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
+                ErrorKind::Provider,
             ),
         ] {
             assert_eq!(error.kind(), expected);
@@ -161,6 +188,31 @@ mod tests {
             .build()
             .unwrap_err();
         assert_eq!(InferenceError::from(error).kind(), ErrorKind::Config);
+    }
+
+    #[test]
+    fn collected_provider_errors_say_what_went_wrong() {
+        let model = crate::catalog::builtin_models().remove(0);
+        let failed = crate::providers::error_message(
+            &model,
+            &InferenceError::Other("model is overloaded".into()),
+        );
+        let collected = InferenceError::Stream(MessageStreamError::ProviderError {
+            reason: failed.stop_reason,
+            message: Box::new(failed),
+        });
+        assert_eq!(
+            collected.to_string(),
+            "message stream error: provider reported error: model is overloaded"
+        );
+
+        // A provider task that died without a terminal event is a bug, so
+        // resending the same request would only repeat it.
+        let closed = crate::providers::error_message(
+            &model,
+            &InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
+        );
+        assert!(!crate::retry::is_retryable_assistant_error(&closed));
     }
 
     #[test]

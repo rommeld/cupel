@@ -27,7 +27,7 @@ use crate::{
     oauth::openai_codex::{ORIGINATOR, account_id_from_access_token},
     provider::Provider,
     providers::{
-        EffortStyle, apply_custom_headers,
+        EffortStyle, apply_custom_headers, compat,
         openai_responses::{
             convert_items, normalize_id_part, process_response_stream, short_hash,
             supports_temperature,
@@ -72,6 +72,12 @@ impl Provider for OpenAiCodexResponsesProvider {
             run(&http, &model, &context, &options, &sink).await
         })
     }
+
+    fn compat_problems(&self, model: &Model) -> Vec<String> {
+        let mut problems = crate::providers::parse_compat::<CodexCompat>(model).1;
+        problems.extend(crate::providers::openai_responses::compat_problems(model));
+        problems
+    }
 }
 
 #[tracing::instrument(name = "openai_codex_request", skip_all, fields(model = %model.id))]
@@ -109,7 +115,9 @@ async fn run(
         req = req.timeout(core::time::Duration::from_millis(timeout));
     }
 
-    let response = send_request(req.json(&body), options).await?;
+    let response = send_request(req.json(&body), options)
+        .await
+        .map_err(with_login_hint)?;
 
     // Same stream, same decoder as api.openai.com.
     process_response_stream(response, model, options, sink).await
@@ -153,9 +161,33 @@ fn codex_headers(
     headers
 }
 
+/// The backend answers 401 when the ChatGPT login behind the token was
+/// revoked or ran out early, so say what fixes it. The kind stays HTTP 401,
+/// so the turn is still not retried.
+fn with_login_hint(error: InferenceError) -> InferenceError {
+    match error {
+        InferenceError::ApiStatus { status: 401, body } => InferenceError::ApiStatus {
+            status: 401,
+            body: format!(
+                "{body} (the ChatGPT login was rejected; run /login openai-codex in the TUI)"
+            ),
+        },
+        other => other,
+    }
+}
+
 /// The API caps cache keys at 64 chars (same clamp as openai_responses).
 fn clamp_cache_key(session_id: &str) -> String {
     session_id.chars().take(64).collect()
+}
+
+/// The Codex rows' own compat key. `supportsTemperature` is read through
+/// the Responses dialect's knobs.
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct CodexCompat {
+    /// The backend's real model name (see [`wire_model`]).
+    request_model: Option<String>,
 }
 
 /// The model name the wire wants. Catalog ids are namespaced
@@ -163,12 +195,9 @@ fn clamp_cache_key(session_id: &str) -> String {
 /// The openai provider already owns "gpt-5.6-sol" etc., and merge_models
 /// replaces by id. The compat blob carries the backend's real name.
 fn wire_model(model: &Model) -> String {
-    model
-        .compat
-        .as_ref()
-        .and_then(|compat| compat.get("requestModel"))
-        .and_then(Value::as_str)
-        .map_or_else(|| model.id.clone(), str::to_string)
+    compat::<CodexCompat>(model)
+        .request_model
+        .unwrap_or_else(|| model.id.clone())
 }
 
 fn build_request_body(model: &Model, context: &Context, options: &StreamOptions) -> Value {
@@ -262,6 +291,25 @@ mod tests {
         AssistantContent, InputModality, Message, ModelCost, Provider, StopReason, TextContent,
         ThinkingLevel, ThinkingLevelMap, Tool, Usage, UserContentBody, UserMessage, now_ms,
     };
+
+    #[test]
+    fn a_rejected_login_points_at_login_without_becoming_retryable() {
+        let error = with_login_hint(InferenceError::ApiStatus {
+            status: 401,
+            body: "unauthorized".to_string(),
+        });
+        assert_eq!(
+            error.kind(),
+            crate::types::ErrorKind::HttpStatus { status: 401 }
+        );
+        assert!(error.to_string().contains("/login openai-codex"), "{error}");
+
+        let other = with_login_hint(InferenceError::ApiStatus {
+            status: 403,
+            body: "forbidden".to_string(),
+        });
+        assert_eq!(other.to_string(), "provider returned HTTP 403: forbidden");
+    }
 
     /// A Codex catalog row as M4 will generate it: reasoning on, the
     /// minimal->low rename pinned, ChatGPT backend base URL.

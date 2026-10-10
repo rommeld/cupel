@@ -18,9 +18,9 @@ use crate::{
     options_util::{adjust_max_tokens_for_thinking, clamp_max_tokens_to_context},
     provider::Provider,
     providers::{
-        CONTENT_FILTER_MESSAGE, EffortStyle, apply_custom_headers, finish_output,
-        new_output_message, normalize_anthropic_tool_call_id, off_effort, send_request,
-        spawn_provider_stream, thinking_effort, with_cancel,
+        CONTENT_FILTER_MESSAGE, EffortStyle, apply_custom_headers, compat, finish_output,
+        new_output_message, normalize_anthropic_tool_call_id, off_effort, parse_compat,
+        send_request, spawn_provider_stream, thinking_effort, with_cancel,
     },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
@@ -86,11 +86,7 @@ impl Default for AnthropicCompat {
 }
 
 fn anthropic_compat(model: &Model) -> AnthropicCompat {
-    model
-        .compat
-        .clone()
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
+    compat(model)
 }
 
 /// Claude Code subscription tokens only allow the Claude Code tool names.
@@ -167,6 +163,10 @@ impl Provider for AnthropicProvider {
         spawn_provider_stream(model, move |model, sink| async move {
             run(&http, &model, &context, &options, &sink).await
         })
+    }
+
+    fn compat_problems(&self, model: &Model) -> Vec<String> {
+        parse_compat::<AnthropicCompat>(model).1
     }
 }
 
@@ -562,12 +562,12 @@ async fn run(
     // A 200 response may still be a non-streaming JSON body or gateway HTML.
     // Neither is a completed assistant turn, even when the body closes cleanly.
     if !saw_message_start {
-        return Err(InferenceError::Other(
+        return Err(InferenceError::Transport(
             "Anthropic stream ended without message_start".to_string(),
         ));
     }
     if !saw_message_stop {
-        return Err(InferenceError::Other(
+        return Err(InferenceError::Transport(
             "Anthropic stream ended before message_stop".to_string(),
         ));
     }

@@ -24,6 +24,14 @@ pub trait Provider: Send + Sync {
         context: Context,
         options: StreamOptions,
     ) -> AssistantMessageStream;
+
+    /// Problems in `model.compat` for this API, one line per rejected key
+    /// (empty when the knobs parse). The catalog loader shows them, so a
+    /// typo in a hand-written models.json row is visible instead of quietly
+    /// leaving that knob at its default.
+    fn compat_problems(&self, _model: &Model) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Maps API strings to providers. No global state and tests are isolated.

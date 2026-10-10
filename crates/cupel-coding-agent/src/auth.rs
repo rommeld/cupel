@@ -19,8 +19,9 @@
 //! refuse malformed files, 0600 temp file, fsync, atomic rename. There is
 //! no cross-process file lock. Two instances refreshing at once both write
 //! a complete valid file and the last rename wins. This is the same
-//! accepted caveat settings.rs documents for keys. The refresh endpoint
-//! tolerates that: each grant returns a fresh, complete token pair.
+//! accepted caveat settings.rs documents for keys. Refresh tokens rotate,
+//! so the slower of two concurrent refreshes may be rejected; it then
+//! adopts the pair the faster one already saved (see `token_after_refresh`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -106,6 +107,29 @@ pub fn save_credential(
             StoredCredential::Oauth(credential.clone()),
         );
     })
+}
+
+/// Store a refreshed Codex pair only while auth.json still holds the pair it
+/// replaces. A refresh that finishes after `/logout`, a new `/login` or
+/// another session's refresh must never write an older login back.
+/// Ok(false) = the stored login changed meanwhile, so nothing was stored.
+fn save_refreshed_credential(
+    home: Option<&Path>,
+    replaced: &OAuthCredential,
+    fresh: &OAuthCredential,
+) -> Result<bool, crate::settings::SaveError> {
+    let provider = cupel_core::types::Provider::OPENAI_CODEX;
+    let mut saved = false;
+    modify_auth(home, |auth| {
+        if matches!(
+            auth.get(provider),
+            Some(StoredCredential::Oauth(current)) if current.refresh == replaced.refresh
+        ) {
+            auth.insert(provider.to_string(), StoredCredential::Oauth(fresh.clone()));
+            saved = true;
+        }
+    })?;
+    Ok(saved)
 }
 
 /// Remove a credential (logout). Ok(false) = nothing was stored.
@@ -221,16 +245,30 @@ fn token_after_refresh(
 ) -> Option<String> {
     match refreshed {
         Ok(fresh) => {
-            // Persist the rotated pair. A failed save is only a warning:
-            // the fresh token still serves this session; the next start
-            // refreshes again from the old (still valid) refresh token.
-            if let Err(e) = save_credential(home, cupel_core::types::Provider::OPENAI_CODEX, &fresh)
-            {
-                tracing::warn!("could not persist refreshed codex credential: {e}");
+            // Persist the rotated pair. A failed save is only a warning: the
+            // fresh token serves this request, but the next one re-reads the
+            // file and refreshes again with the old refresh token, which the
+            // server may already have rotated away. Then the stored token
+            // serves until it expires, and /login is needed after that.
+            match save_refreshed_credential(home, &stored, &fresh) {
+                Ok(true) => {}
+                Ok(false) => tracing::debug!(
+                    "codex login changed during the refresh; keeping the stored one"
+                ),
+                Err(e) => tracing::warn!("could not persist refreshed codex credential: {e}"),
             }
             Some(fresh.access)
         }
         Err(e) => {
+            // Another session (a spinoff, a second cupel) may have rotated the
+            // pair while this refresh was in flight. The server then rejects
+            // the old refresh token, but the new pair is already on disk.
+            if let Some(current) = credential(home, cupel_core::types::Provider::OPENAI_CODEX)
+                && current.refresh != stored.refresh
+                && current.expires > now_ms
+            {
+                return Some(current.access);
+            }
             let still_valid = stored.expires > now_ms;
             tracing::warn!(
                 error = %e,
@@ -403,7 +441,71 @@ mod tests {
     }
 
     #[test]
-    fn refreshed_token_remains_usable_when_persistence_fails() {
+    fn a_refresh_never_writes_an_older_login_back() {
+        let home = temp_home("refresh-after-logout");
+        let now = 1_000_000_000;
+        let stored = credential_fixture(now);
+        let mut fresh = credential_fixture(now + 60 * 60 * 1000);
+        fresh.access = "access-2".to_string();
+        fresh.refresh = "refresh-2".to_string();
+
+        // The user logs out while the refresh is in flight.
+        save_credential(Some(&home), "openai-codex", &stored).unwrap();
+        assert!(delete_credential(Some(&home), "openai-codex").unwrap());
+        let token = token_after_refresh(Some(&home), stored.clone(), Ok(fresh.clone()), now);
+        assert_eq!(
+            token.as_deref(),
+            Some("access-2"),
+            "this request still runs"
+        );
+        assert!(
+            credential(Some(&home), "openai-codex").is_none(),
+            "no resurrection"
+        );
+
+        // A new /login replaced the pair meanwhile: it stays.
+        let mut relogin = credential_fixture(now + 2 * 60 * 60 * 1000);
+        relogin.refresh = "refresh-new-login".to_string();
+        save_credential(Some(&home), "openai-codex", &relogin).unwrap();
+        token_after_refresh(Some(&home), stored, Ok(fresh), now);
+        assert_eq!(
+            credential(Some(&home), "openai-codex").map(|c| c.refresh),
+            Some("refresh-new-login".to_string())
+        );
+    }
+
+    #[test]
+    fn failed_refresh_adopts_a_pair_another_session_rotated() {
+        let home = temp_home("rotated-elsewhere");
+        let now = 1_000_000_000;
+        // This session still holds refresh-1, which expired meanwhile...
+        let stored = credential_fixture(now - 1);
+        // ...while another session already saved the rotated pair.
+        let mut rotated = credential_fixture(now + 60 * 60 * 1000);
+        rotated.access = "access-2".to_string();
+        rotated.refresh = "refresh-2".to_string();
+        save_credential(Some(&home), "openai-codex", &rotated).unwrap();
+
+        let rejected = || OAuthError::TokenStatus {
+            operation: "refresh",
+            status: 400,
+            body: "refresh_token_reused".to_string(),
+        };
+        let token = token_after_refresh(Some(&home), stored.clone(), Err(rejected()), now);
+        assert_eq!(token.as_deref(), Some("access-2"));
+
+        // An expired pair on disk is no rescue: back to the stored rules.
+        let mut stale = rotated.clone();
+        stale.expires = now - 1;
+        save_credential(Some(&home), "openai-codex", &stale).unwrap();
+        assert_eq!(
+            token_after_refresh(Some(&home), stored, Err(rejected()), now),
+            None
+        );
+    }
+
+    #[test]
+    fn refreshed_token_serves_the_request_even_when_persistence_fails() {
         let home = temp_home("refresh-save-failure");
         // A hand edit while the refresh was in flight must not be overwritten.
         std::fs::write(auth_path(&home), "{broken").unwrap();

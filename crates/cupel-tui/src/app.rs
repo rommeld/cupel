@@ -1080,7 +1080,8 @@ impl App {
                         self.meta.home.as_deref(),
                         &provider,
                     ) {
-                        "logged in with ChatGPT (/logout openai-codex)".to_string()
+                        // A stored login, not proof that its refresh still works.
+                        "ChatGPT login stored (/logout openai-codex)".to_string()
                     } else {
                         "not logged in - /login openai-codex".to_string()
                     }

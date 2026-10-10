@@ -35,6 +35,12 @@ pub struct Settings {
     /// Every unknown top-level field, round-tripped through save.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+    /// Why this file's [`DEFAULT_PRESET`] was skipped, when it was. The
+    /// default preset is explicit configuration, so startup refuses to run
+    /// instead of quietly picking another model. Runtime only: never read
+    /// from or written to the file.
+    #[serde(skip)]
+    pub invalid_default_preset: Option<String>,
 }
 
 /// The preset `cupel` applies at startup. `--model` and `--thinking`
@@ -152,11 +158,20 @@ impl Settings {
     pub fn layered(home: Settings, project: Settings) -> Settings {
         let mut presets = home.presets;
         presets.extend(project.presets);
+        // A valid default preset from either layer wins over an invalid one.
+        let invalid_default_preset = if presets.contains_key(DEFAULT_PRESET) {
+            None
+        } else {
+            project
+                .invalid_default_preset
+                .or(home.invalid_default_preset)
+        };
         Settings {
             providers: home.providers,
             loop_killer: project.loop_killer.or(home.loop_killer),
             presets,
             extra: home.extra,
+            invalid_default_preset,
         }
     }
 }
@@ -210,11 +225,16 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
     };
     let mut value: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("{} has invalid JSON syntax: {e}", path.display()))?;
-    let presets = value
-        .as_object_mut()
-        .and_then(|object| object.remove("model"));
+    // Each section is parsed on its own, so one wrong entry never discards
+    // the others: a preset, a provider key or the loopKiller section that
+    // does not fit is skipped with a warning that names it. Warnings never
+    // quote a provider entry's value, which may be a key.
+    let presets = take_section(&mut value, "model");
+    let providers = take_section(&mut value, "providers");
+    let loop_killer = take_section(&mut value, "loopKiller");
     let mut settings: Settings = serde_json::from_value(value)
         .map_err(|e| format!("{} has invalid settings data: {e}", path.display()))?;
+    let file = path.display();
     let mut warnings = Vec::new();
     match presets {
         Some(serde_json::Value::Object(presets)) => {
@@ -223,20 +243,55 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
                     Ok(preset) => {
                         settings.presets.insert(name, preset);
                     }
-                    Err(error) => warnings.push(format!(
-                        "warning: ignoring preset {name:?} in {}: {error}",
-                        path.display()
+                    Err(error) => {
+                        if name == DEFAULT_PRESET {
+                            settings.invalid_default_preset = Some(format!("{file}: {error}"));
+                        }
+                        warnings.push(format!(
+                            "warning: ignoring preset {name:?} in {file}: {error}"
+                        ));
+                    }
+                }
+            }
+        }
+        Some(_) => warnings.push(format!(
+            "warning: ignoring model presets in {file}: expected an object"
+        )),
+        None => {}
+    }
+    match providers {
+        Some(serde_json::Value::Object(providers)) => {
+            for (name, value) in providers {
+                match value {
+                    serde_json::Value::String(key) => {
+                        settings.providers.insert(name, key);
+                    }
+                    _ => warnings.push(format!(
+                        "warning: ignoring provider {name:?} in {file}: the API key must be a string"
                     )),
                 }
             }
         }
         Some(_) => warnings.push(format!(
-            "warning: ignoring model presets in {}: expected an object",
-            path.display()
+            "warning: ignoring providers in {file}: expected an object"
         )),
         None => {}
     }
+    match loop_killer {
+        None | Some(serde_json::Value::Null) => {}
+        Some(value) => match serde_json::from_value(value) {
+            Ok(loop_killer) => settings.loop_killer = Some(loop_killer),
+            Err(error) => {
+                warnings.push(format!("warning: ignoring loopKiller in {file}: {error}"));
+            }
+        },
+    }
     Ok((settings, warnings))
+}
+
+/// Remove one top-level section from the parsed file, if the file is an object.
+fn take_section(value: &mut serde_json::Value, key: &str) -> Option<serde_json::Value> {
+    value.as_object_mut()?.remove(key)
 }
 
 /// Load the home layer, returning defaults and a warning on failure.
@@ -463,13 +518,11 @@ mod tests {
     fn malformed_files_are_errors_and_the_wrapper_defaults() {
         let root = temp_root("malformed");
         let path = root.join("settings.json");
+        // A wrong provider entry is no longer a file error: it costs only
+        // itself (see a_bad_provider_entry_or_loop_killer_section_costs_only_itself).
         for (bad, category) in [
             ("{not json", "invalid JSON syntax"),
             ("[]", "invalid settings data"),
-            (
-                r#"{"providers": {"anthropic": 42}}"#,
-                "invalid settings data",
-            ),
         ] {
             std::fs::write(&path, bad).unwrap();
             assert!(load_settings(&path).is_err(), "should reject: {bad}");
@@ -561,11 +614,72 @@ mod tests {
             warnings[0].contains("default")
                 && warnings[0].contains(&project_path.display().to_string())
         );
+        assert!(project.invalid_default_preset.is_some());
         let merged = Settings::layered(home, project);
+        // The valid home default stands in for the broken project one.
+        assert!(merged.invalid_default_preset.is_none());
         assert_eq!(merged.api_key("anthropic"), Some("home-key"));
         assert_eq!(merged.loop_killer_max_repeats(), Some(2));
         assert_eq!(merged.presets["default"].model, "home-model");
         assert_eq!(merged.presets["fast"].model, "project-model");
+    }
+
+    #[test]
+    fn a_bad_provider_entry_or_loop_killer_section_costs_only_itself() {
+        let home = temp_root("isolated-sections");
+        std::fs::write(settings_path(&home), r#"{
+            "providers": {"anthropic": "keep-this-key", "openrouter": null, "fireworks": 12345},
+            "loopKiller": {"maxRepeat": 3},
+            "model": {"fast": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "off"}}
+        }"#).unwrap();
+
+        let (settings, warnings) = load_home_settings(Some(&home));
+        assert_eq!(settings.api_key("anthropic"), Some("keep-this-key"));
+        assert_eq!(settings.api_key("openrouter"), None);
+        assert_eq!(settings.api_key("fireworks"), None);
+        assert_eq!(settings.loop_killer_max_repeats(), None);
+        assert_eq!(settings.presets.len(), 1);
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        for name in ["openrouter", "fireworks", "loopKiller"] {
+            assert!(warnings.iter().any(|w| w.contains(name)), "{warnings:?}");
+        }
+        // A provider entry's value may be a key, so warnings never quote it.
+        assert!(
+            warnings
+                .iter()
+                .all(|w| !w.contains("12345") && !w.contains("keep-this-key")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_default_preset_is_remembered_until_a_valid_one_replaces_it() {
+        let root = temp_root("invalid-default");
+        std::fs::create_dir_all(root.join(".cupel")).unwrap();
+        std::fs::write(
+            settings_path(&root),
+            r#"{"model": {"default": {"provider": "anthropic", "model": "m", "thinkingLevel": "High"}}}"#,
+        )
+        .unwrap();
+        let (home, warnings) = load_home_settings(Some(&root));
+        assert_eq!(warnings.len(), 1);
+        let reason = home.invalid_default_preset.clone().expect("recorded");
+        assert!(reason.contains("High"), "{reason}");
+
+        // No other default: the problem survives layering.
+        let merged = Settings::layered(home.clone(), Settings::default());
+        assert_eq!(merged.invalid_default_preset, Some(reason));
+
+        // A valid project default replaces it.
+        std::fs::write(
+            project_settings_path(&root),
+            r#"{"model": {"default": {"provider": "anthropic", "model": "p", "thinkingLevel": "low"}}}"#,
+        )
+        .unwrap();
+        let (project, _) = load_project_settings(&root);
+        let merged = Settings::layered(home, project);
+        assert!(merged.invalid_default_preset.is_none());
+        assert_eq!(merged.presets["default"].model, "p");
     }
 
     #[test]

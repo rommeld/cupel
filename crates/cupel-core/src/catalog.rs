@@ -209,13 +209,19 @@ mod tests {
     }
 
     #[test]
-    fn openai_rows_plan_against_the_price_tier() {
+    fn price_tier_rows_plan_against_the_threshold() {
         // The long-context family: the planning window is the price-tier
         // threshold (requests never drift into 2x pricing unnoticed), the
-        // documented max input is the opt-in ceiling above it.
+        // documented max input is the opt-in ceiling above it. Named rows,
+        // not numbers: curation.rs gives these `Window::PriceTier`, and a row
+        // that lost it would plan against its full window again.
         let mut seen = 0;
         for model in builtin_models() {
-            if model.provider.as_str() != Provider::OPENAI {
+            let plans_on_tier = model.provider.as_str() == Provider::OPENAI
+                || (model.provider.as_str() == Provider::OPENROUTER
+                    && model.id.starts_with("openai/"))
+                || model.id == "claude-haiku-5-5";
+            if !plans_on_tier {
                 continue;
             }
             seen += 1;
@@ -232,7 +238,7 @@ mod tests {
                 model.id
             );
         }
-        assert!(seen > 0, "no openai models in the catalog");
+        assert!(seen > 0, "no price-tier rows in the catalog");
     }
 
     #[test]
@@ -631,5 +637,21 @@ mod tests {
             twins += 1;
         }
         assert!(twins > 0, "Claude rows exist on both Bedrock and Anthropic");
+    }
+
+    #[test]
+    fn every_builtin_compat_blob_parses_cleanly() {
+        // A shipped row with a mistyped knob would quietly run on that knob's
+        // default; users would see a load warning for something they never wrote.
+        let registry = crate::default_registry();
+        for model in builtin_models() {
+            let provider = registry.get(model.api.as_str()).expect("registered");
+            assert_eq!(
+                provider.compat_problems(&model),
+                Vec::<String>::new(),
+                "{}",
+                model.id
+            );
+        }
     }
 }

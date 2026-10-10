@@ -28,9 +28,9 @@ use crate::{
     options_util::clamp_max_tokens_to_context,
     provider::Provider,
     providers::{
-        CONTENT_FILTER_MESSAGE, EffortStyle, apply_custom_headers, finish_output,
-        new_output_message, off_effort, send_request, spawn_provider_stream, thinking_effort,
-        with_cancel,
+        CONTENT_FILTER_MESSAGE, EffortStyle, apply_custom_headers, compat, finish_output,
+        new_output_message, off_effort, parse_compat, send_request, spawn_provider_stream,
+        thinking_effort, with_cancel,
     },
     sse::{ServerSentEvent, SseDecoder},
     transform::transform_messages,
@@ -75,6 +75,10 @@ impl Provider for OpenAiResponsesProvider {
         spawn_provider_stream(model, move |model, sink| async move {
             run(&http, &model, &context, &options, &sink).await
         })
+    }
+
+    fn compat_problems(&self, model: &Model) -> Vec<String> {
+        compat_problems(model)
     }
 }
 
@@ -553,7 +557,7 @@ pub(crate) async fn process_response_stream(
     }
 
     if !saw_terminal_response {
-        return Err(InferenceError::Other(
+        return Err(InferenceError::Transport(
             "OpenAI Responses stream ended before a terminal response event".to_string(),
         ));
     }
@@ -660,11 +664,12 @@ impl Default for OpenAiCompat {
 }
 
 fn openai_compat(model: &Model) -> OpenAiCompat {
-    model
-        .compat
-        .clone()
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
+    compat(model)
+}
+
+/// Problems in the knobs this dialect reads; the Codex provider shares them.
+pub(crate) fn compat_problems(model: &Model) -> Vec<String> {
+    parse_compat::<OpenAiCompat>(model).1
 }
 
 /// The one knob the Codex provider shares with this dialect.

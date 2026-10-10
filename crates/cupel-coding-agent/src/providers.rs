@@ -74,15 +74,18 @@ pub fn catalog_providers(models: &[Model]) -> Vec<(String, Model)> {
 
 /// Whether a model's endpoint takes no API key at all (compat
 /// `requiresApiKey: false` for local servers like ollama/llama-server).
-/// See cupel-core's CompletionsCompat.
+/// Only the Chat Completions provider honors that knob (see cupel-core's
+/// CompletionsCompat), so on any other API a row still needs its key.
+/// A non-boolean value is rejected there too, so both agree.
 #[must_use]
 pub fn is_keyless(model: &Model) -> bool {
-    model
-        .compat
-        .as_ref()
-        .and_then(|compat| compat.get("requiresApiKey"))
-        .and_then(serde_json::Value::as_bool)
-        == Some(false)
+    model.api.as_str() == cupel_core::types::Api::OPENAI_COMPLETIONS
+        && model
+            .compat
+            .as_ref()
+            .and_then(|compat| compat.get("requiresApiKey"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
 }
 
 /// A provider counts as keyless when every one of its models is. This drives
@@ -145,17 +148,32 @@ mod tests {
         }
     }
 
+    /// A local OpenAI-compatible row, the only API that honors `requiresApiKey`.
+    fn completions_row() -> Model {
+        let mut model = cupel_core::catalog::builtin_models().remove(0);
+        model.api = cupel_core::types::Api::from(cupel_core::types::Api::OPENAI_COMPLETIONS);
+        model
+    }
+
     #[test]
     fn keyless_detection_reads_the_compat_flag() {
-        let mut model = cupel_core::catalog::builtin_models().remove(0);
+        let mut model = completions_row();
         assert!(!is_keyless(&model), "no requiresApiKey = key required");
         model.compat = Some(serde_json::json!({"requiresApiKey": false}));
         assert!(is_keyless(&model));
         model.compat = Some(serde_json::json!({"requiresApiKey": true}));
         assert!(!is_keyless(&model));
+        // The adapter rejects a non-boolean value, so this is not keyless either.
+        model.compat = Some(serde_json::json!({"requiresApiKey": "false"}));
+        assert!(!is_keyless(&model));
+
+        // Other adapters never skip the key, so the flag means nothing there.
+        let mut anthropic = cupel_core::catalog::builtin_models().remove(0);
+        anthropic.compat = Some(serde_json::json!({"requiresApiKey": false}));
+        assert!(!is_keyless(&anthropic));
 
         // A provider is keyless only when all of its models are.
-        let mut keyless = cupel_core::catalog::builtin_models().remove(0);
+        let mut keyless = completions_row();
         keyless.id = "local".into();
         keyless.provider = cupel_core::types::Provider::from("ollama");
         keyless.compat = Some(serde_json::json!({"requiresApiKey": false}));
@@ -198,7 +216,7 @@ mod tests {
         assert!(!takes_api_key(&models, "amazon-bedrock"));
         assert!(!takes_api_key(&models, "openai-codex"), "/login, not keys");
 
-        let mut keyless = cupel_core::catalog::builtin_models().remove(0);
+        let mut keyless = completions_row();
         keyless.provider = cupel_core::types::Provider::from("ollama");
         keyless.compat = Some(serde_json::json!({"requiresApiKey": false}));
         assert!(!takes_api_key(&[keyless], "ollama"));

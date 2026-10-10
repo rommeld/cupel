@@ -187,6 +187,12 @@ fn select_model(
 
     // The default preset is explicit configuration: an unknown model is an
     // error like a mistyped --model, never a silent start on something else.
+    // A default preset that does not even parse is the same mistake.
+    if let Some(reason) = &settings.invalid_default_preset {
+        return Err(format!(
+            "invalid default preset in {reason} (fix \"model\" in settings.json)"
+        ));
+    }
     if let Some(preset) = settings.presets.get(DEFAULT_PRESET) {
         let model = preset.find_model(catalog).cloned().ok_or_else(|| {
             format!(
@@ -337,6 +343,8 @@ async fn run() -> Result<(), AppError> {
     // should not silently start something else. The same goes for the
     // default preset's model.
     let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
+    let explicit_default =
+        preset.is_some() || ingredients.settings.invalid_default_preset.is_some();
     let (model, api_key, startup_warning) = match select_model(
         &args,
         &ingredients.models,
@@ -344,7 +352,7 @@ async fn run() -> Result<(), AppError> {
         home.as_deref(),
     ) {
         Ok((model, key)) => (model, key, None),
-        Err(e) if !use_plain && args.model.is_none() && preset.is_none() => {
+        Err(e) if !use_plain && args.model.is_none() && !explicit_default => {
             let fallback = ingredients
                 .models
                 .iter()
@@ -500,6 +508,8 @@ mod tests {
     /// keeping the tests environment-independent.
     fn keyless_model(id: &str) -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
+        // Local servers speak Chat Completions, the API that honors requiresApiKey.
+        model.api = cupel_core::types::Api::from(cupel_core::types::Api::OPENAI_COMPLETIONS);
         model.id = id.to_string();
         model.provider = cupel_core::types::Provider::from("ollama");
         model.compat = Some(serde_json::json!({"requiresApiKey": false}));
@@ -687,6 +697,29 @@ mod tests {
         let settings = with_default_preset("anthropic", "llama3:8b");
         let err = select_model(&parse(&[]).unwrap(), &catalog, &settings, None).unwrap_err();
         assert!(err.contains("default preset: anthropic/llama3:8b"), "{err}");
+    }
+
+    #[test]
+    fn an_invalid_default_preset_stops_startup_like_an_unknown_model() {
+        let catalog = vec![keyless_model("qwen3:8b")];
+        let settings = Settings {
+            invalid_default_preset: Some(
+                "settings.json: unknown variant `High`, expected one of `off`, `low`".into(),
+            ),
+            ..Settings::default()
+        };
+
+        // Not a silent start on the keyless auto-pick.
+        let err = select_model(&parse(&[]).unwrap(), &catalog, &settings, None).unwrap_err();
+        assert!(
+            err.contains("invalid default preset") && err.contains("High"),
+            "{err}"
+        );
+
+        // An explicit --model still beats the broken preset.
+        let args = parse(&["--model", "qwen3:8b"]).unwrap();
+        let (model, _) = select_model(&args, &catalog, &settings, None).unwrap();
+        assert_eq!(model.id, "qwen3:8b");
     }
 
     #[test]
