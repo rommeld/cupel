@@ -3,6 +3,29 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.27.0] - 2026-10-10
+
+- fix(auth): never write an older codex login back, explain a rejected one
+- test(catalog): check relations instead of models.dev numbers, and the snapshot itself
+- fix(auth): adopt rotated codex tokens and bound the refresh
+- fix(compat): parse compat per key and report problems at catalog load
+- fix(config): isolate providers and loopKiller, refuse an invalid default preset
+- fix(core): align retry and overflow decisions on status and panics
+- fix(core): classify transport failures and early stream ends by kind
+- fix(gitignore): track every path under crates/
+- fix(agent): estimate seeded history from content until a fresh reply
+- fix(bedrock): read Claude capabilities from catalog compat
+- refactor(providers): share stream, status, effort and tool-id plumbing
+- fix(catalog): generate from a versioned models.dev snapshot
+- fix(auth): retain valid access tokens after refresh failures
+- fix(config): isolate invalid presets and warn on compat errors
+- fix(core): preserve inference error kinds for retry classification
+- fix(core): redact StreamOptions API key in Debug output
+- fix(tui): batch ready background events before redrawing
+- fix(tui): initialize warnings in signal test fixture
+- version: sync to v0.26.0 from CHANGELOG.md
+- feat: add active-run steering and refresh TUI user messages
+
 ## [v0.26.0] - 2026-10-08
 
 - feat(tui): use white italics and double-chevron task prompts
