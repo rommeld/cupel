@@ -101,7 +101,8 @@ impl InferenceError {
 
 fn missing_api_key_hint(provider: &str) -> &'static str {
     if provider == Provider::OPENAI_CODEX {
-        " - run /login openai-codex to log in with ChatGPT again"
+        " - no usable ChatGPT login: retry if the network was down, \
+         otherwise run /login openai-codex in the TUI"
     } else {
         ""
     }

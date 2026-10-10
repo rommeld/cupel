@@ -147,6 +147,11 @@ pub async fn exchange_code(
     read_token_response(response, "exchange").await
 }
 
+/// Upper bound for a token refresh. It runs before every request inside the
+/// refresh margin, so a hanging auth server must not stall each turn; the
+/// stored token covers the failure until it expires.
+const REFRESH_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(15);
+
 /// Mint a fresh access token from the refresh token. The response rotates both
 /// tokens.
 pub async fn refresh(
@@ -158,7 +163,12 @@ pub async fn refresh(
         ("client_id", CLIENT_ID),
         ("refresh_token", refresh_token),
     ];
-    let response = http.post(TOKEN_URL).form(&form).send().await?;
+    let response = http
+        .post(TOKEN_URL)
+        .timeout(REFRESH_TIMEOUT)
+        .form(&form)
+        .send()
+        .await?;
     read_token_response(response, "refresh").await
 }
 
