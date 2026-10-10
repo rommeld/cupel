@@ -1850,24 +1850,39 @@ mod tests {
     fn footer_distinguishes_planning_window_from_maximum_after_model_switches() {
         let mut app = test_app();
         app.context_tokens = 48_000;
+        // The windows come from models.dev through the catalog, so they are
+        // read from the rows here, never pinned: a `--fetch` that corrects
+        // one must not break this test.
+        let catalog = cupel_core::catalog::builtin_models();
+        let row = |id: &str| catalog.iter().find(|m| m.id == id).expect(id).clone();
 
-        run_command(&mut app, "/model gpt-6.1-sol");
-        let screen = draw(&mut app, 240, 20);
-        assert!(
-            screen.contains("ctx 48k/272k plan (17%) · max 922k"),
-            "{screen}"
-        );
+        for id in ["gpt-6.1-sol", "codex/gpt-6.1-sol"] {
+            let model = row(id);
+            let max = model
+                .max_context_window
+                .expect("a planning row has a ceiling");
+            assert!(max > model.context_window, "{id}");
+            run_command(&mut app, &format!("/model {id}"));
+            let screen = draw(&mut app, 240, 20);
+            let expected = format!(
+                "ctx 48k/{}k plan ({}%) · max {}k",
+                model.context_window / 1000,
+                48_000 * 100 / model.context_window,
+                max / 1000
+            );
+            assert!(screen.contains(&expected), "{id}: {screen}");
+        }
 
-        run_command(&mut app, "/model codex/gpt-6.1-sol");
-        let screen = draw(&mut app, 240, 20);
-        assert!(
-            screen.contains("ctx 48k/272k plan (17%) · max 872k"),
-            "{screen}"
-        );
-
+        let sonnet = row("claude-sonnet-5");
+        assert!(sonnet.max_context_window <= Some(sonnet.context_window));
         run_command(&mut app, "/model claude-sonnet-5");
         let screen = draw(&mut app, 240, 20);
-        assert!(screen.contains("ctx 48k/1000k (4%)"), "{screen}");
+        let expected = format!(
+            "ctx 48k/{}k ({}%)",
+            sonnet.context_window / 1000,
+            48_000 * 100 / sonnet.context_window
+        );
+        assert!(screen.contains(&expected), "{screen}");
         assert!(!screen.contains(" · max "), "{screen}");
     }
 

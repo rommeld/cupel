@@ -71,7 +71,18 @@ async fn run() -> Result<(), String> {
         std::fs::read_to_string(&snapshot_path)
             .map_err(|error| format!("read {}: {error}", snapshot_path.display()))?
     };
-    let (models, json) = generate(&raw)?;
+    // Offline, "models.dev no longer lists ..." means the checked-in snapshot
+    // lacks a row that curation.rs now wants, not that models.dev dropped it.
+    let (models, json) = generate(&raw).map_err(|error| {
+        if use_fetch {
+            error
+        } else {
+            format!(
+                "{error} (read from the checked-in snapshot {}; run with --fetch to refresh it)",
+                snapshot_path.display()
+            )
+        }
+    })?;
     print_summary(&models);
     // Validate everything before updating either checked-in artifact.
     if use_fetch {
@@ -463,6 +474,18 @@ mod tests {
         assert!(
             (actual - expected).abs() < f64::EPSILON,
             "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn checked_in_snapshot_holds_exactly_the_curated_subset() {
+        // A row removed from curation.rs, or a hand-edited field, would
+        // otherwise linger in the snapshot until the next --fetch diff.
+        let source = include_str!("models_dev.json");
+        assert_eq!(
+            curated_snapshot(source).expect("the snapshot covers every curated row"),
+            source,
+            "stale snapshot: run cargo run -p cupel-coding-agent --bin generate-catalog -- --fetch"
         );
     }
 
