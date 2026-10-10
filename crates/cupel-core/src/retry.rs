@@ -86,20 +86,23 @@ const RETRYABLE_PATTERNS: &[&str] = &[
 ];
 
 /// Lowercase and strip everything but letters and digits, so word
-/// separators never defeat a match.
-fn compress(text: &str) -> String {
+/// separators never defeat a match. Shared with [`crate::overflow`].
+pub(crate) fn compress(text: &str) -> String {
     text.chars()
         .filter(char::is_ascii_alphanumeric)
         .map(|c| c.to_ascii_lowercase())
         .collect()
 }
 
+/// 408 (request timeout, e.g. OpenRouter) and 429 are worth another attempt,
+/// as is any 5xx. Every other status describes the request itself.
 fn retryable_status(status: u16) -> bool {
-    status == 429 || (500..600).contains(&status)
+    matches!(status, 408 | 429) || (500..600).contains(&status)
 }
 
 /// Recognize only explicit status wrappers, never numbers inside arbitrary bodies.
-fn legacy_http_status(text: &str) -> Option<u16> {
+/// Shared with [`crate::overflow`] so both classifiers read the same status.
+pub(crate) fn legacy_http_status(text: &str) -> Option<u16> {
     let status = if let Some(rest) = text.strip_prefix("Error Code ") {
         rest.split_once(':')?.0.trim().parse().ok()?
     } else {
@@ -245,6 +248,7 @@ mod tests {
             (ErrorKind::HttpStatus { status: 400 }, false),
             (ErrorKind::HttpStatus { status: 401 }, false),
             (ErrorKind::HttpStatus { status: 403 }, false),
+            (ErrorKind::HttpStatus { status: 408 }, true),
             (ErrorKind::HttpStatus { status: 429 }, true),
             (ErrorKind::HttpStatus { status: 500 }, true),
             (ErrorKind::HttpStatus { status: 502 }, true),
@@ -287,14 +291,14 @@ mod tests {
 
     #[test]
     fn explicit_stream_client_errors_override_transient_wrapper_text() {
-        for code in [400, 401, 402, 403, 404, 408, 409, 422] {
+        for code in [400, 401, 402, 403, 404, 409, 422] {
             let error = format!("Error Code {code}: Provider returned error");
             assert!(
                 !is_retryable_assistant_error(&message(StopReason::Error, Some(&error))),
                 "expected non-retryable: {error}"
             );
         }
-        for code in [429, 500, 502, 503, 504] {
+        for code in [408, 429, 500, 502, 503, 504] {
             let error = format!("Error Code {code}: Provider returned error");
             assert!(is_retryable_assistant_error(&message(
                 StopReason::Error,

@@ -12,8 +12,13 @@ pub type Result<T> = core::result::Result<T, InferenceError>;
 /// [`AssistantMessageStream`](crate::event_stream::AssistantMessageStream).
 #[derive(Debug, Clone, Error)]
 pub enum MessageStreamError {
-    /// Provider emitted an `Error` event.
-    #[error("provider reported error: {reason:?}")]
+    /// Provider emitted an `Error` event. The text carries the provider's own
+    /// message, so a caller that only keeps this error (compaction's
+    /// summarization call) still says what went wrong.
+    #[error(
+        "provider reported error: {}",
+        .message.error_message.as_deref().unwrap_or("no details")
+    )]
     ProviderError {
         reason: StopReason,
         message: Box<AssistantMessage>,
@@ -76,9 +81,7 @@ impl InferenceError {
             Self::ApiStatus { status, .. } => ErrorKind::HttpStatus { status: *status },
             Self::Aborted => ErrorKind::Aborted,
             Self::Http(error) if error.is_builder() => ErrorKind::Config,
-            Self::Http(_)
-            | Self::Transport(_)
-            | Self::Stream(MessageStreamError::ClosedBeforeTerminalEvent) => ErrorKind::Transport,
+            Self::Http(_) | Self::Transport(_) => ErrorKind::Transport,
             Self::Stream(MessageStreamError::ProviderError { reason, message }) => message
                 .error_kind
                 .unwrap_or(if *reason == StopReason::Aborted {
@@ -86,7 +89,12 @@ impl InferenceError {
                 } else {
                     ErrorKind::Provider
                 }),
-            Self::Other(_) => ErrorKind::Provider,
+            // Every provider ends its stream with a terminal event, even on
+            // failure, so a channel that closes without one means the provider
+            // task died (a panic). Resending the same request repeats the bug.
+            Self::Stream(MessageStreamError::ClosedBeforeTerminalEvent) | Self::Other(_) => {
+                ErrorKind::Provider
+            }
         }
     }
 }
@@ -169,7 +177,7 @@ mod tests {
             ),
             (
                 InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
-                ErrorKind::Transport,
+                ErrorKind::Provider,
             ),
         ] {
             assert_eq!(error.kind(), expected);
@@ -179,6 +187,31 @@ mod tests {
             .build()
             .unwrap_err();
         assert_eq!(InferenceError::from(error).kind(), ErrorKind::Config);
+    }
+
+    #[test]
+    fn collected_provider_errors_say_what_went_wrong() {
+        let model = crate::catalog::builtin_models().remove(0);
+        let failed = crate::providers::error_message(
+            &model,
+            &InferenceError::Other("model is overloaded".into()),
+        );
+        let collected = InferenceError::Stream(MessageStreamError::ProviderError {
+            reason: failed.stop_reason,
+            message: Box::new(failed),
+        });
+        assert_eq!(
+            collected.to_string(),
+            "message stream error: provider reported error: model is overloaded"
+        );
+
+        // A provider task that died without a terminal event is a bug, so
+        // resending the same request would only repeat it.
+        let closed = crate::providers::error_message(
+            &model,
+            &InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
+        );
+        assert!(!crate::retry::is_retryable_assistant_error(&closed));
     }
 
     #[test]

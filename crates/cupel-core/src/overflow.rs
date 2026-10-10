@@ -16,6 +16,7 @@
 //! Pattern matching uses the same compression trick as [`crate::retry`]
 //! (lowercase, alphanumerics only) instead of regexes.
 
+use crate::retry::{compress, legacy_http_status};
 use crate::types::{AssistantMessage, ErrorKind, StopReason};
 
 /// Overflow indicators. Multi-part entries require all parts present.
@@ -55,11 +56,18 @@ const NON_OVERFLOW_PATTERNS: &[&str] = &[
     "toomanyrequests",
 ];
 
-fn compress(text: &str) -> String {
-    text.chars()
-        .filter(char::is_ascii_alphanumeric)
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
+/// Overflow errors arrive as provider text or as HTTP 400, 413 or 422. A
+/// rate limit can use the same words ("too many tokens"), so an explicit
+/// status outside that set rules overflow out, whether it comes from the
+/// error kind or from a status wrapper in the text ("Error Code 429: ...").
+/// The retry check reads the status the same way.
+fn may_report_overflow(kind: Option<ErrorKind>, error_message: &str) -> bool {
+    let status = match kind {
+        Some(ErrorKind::HttpStatus { status }) => Some(status),
+        Some(ErrorKind::Provider) | None => legacy_http_status(error_message),
+        Some(ErrorKind::Transport | ErrorKind::Aborted | ErrorKind::Config) => return false,
+    };
+    status.is_none_or(|status| matches!(status, 400 | 413 | 422))
 }
 
 /// Does this assistant message indicate the request overflowed the model's
@@ -69,16 +77,8 @@ fn compress(text: &str) -> String {
 pub fn is_context_overflow(message: &AssistantMessage, context_window: u64) -> bool {
     // Case 1: explicit overflow error.
     if message.stop_reason == StopReason::Error
-        && matches!(
-            message.error_kind,
-            None | Some(
-                ErrorKind::Provider
-                    | ErrorKind::HttpStatus {
-                        status: 400 | 413 | 422
-                    }
-            )
-        )
         && let Some(error_message) = &message.error_message
+        && may_report_overflow(message.error_kind, error_message)
     {
         let compressed = compress(error_message);
         let is_non_overflow = NON_OVERFLOW_PATTERNS
@@ -179,6 +179,32 @@ mod tests {
             ),
             200_000
         ));
+    }
+
+    #[test]
+    fn status_wrappers_in_the_text_decide_like_error_kinds() {
+        // A gateway reports a rate limit mid-stream with overflow-like words:
+        // the 429 makes it a retry, not a compaction.
+        let rate_limit = message(
+            StopReason::Error,
+            Some("Error Code 429: Too many tokens, please wait before trying again."),
+            Usage::default(),
+        );
+        assert!(!is_context_overflow(&rate_limit, 200_000));
+        assert!(crate::retry::is_retryable_assistant_error(&rate_limit));
+
+        for wrapped in [
+            "Error Code 400: prompt is too long: 250000 tokens > 200000 maximum",
+            "provider returned HTTP 413: request too large",
+        ] {
+            assert!(
+                is_context_overflow(
+                    &message(StopReason::Error, Some(wrapped), Usage::default()),
+                    200_000
+                ),
+                "{wrapped}"
+            );
+        }
     }
 
     #[test]
