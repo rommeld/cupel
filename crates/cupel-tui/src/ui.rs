@@ -416,6 +416,8 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         app.context_tokens / 1000,
         window / 1000,
     );
+    // Add current `cupel` version to footer.
+    let version_label = format!("version: {}", env!("CARGO_PKG_VERSION"));
     // The mouse hint tracks selection mode, so it never lies about what
     // the wheel currently does. It shares the status row's left margin because
     // a right-aligned hint row would sit staggered against it.
@@ -431,9 +433,18 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Paragraph::new(Span::styled(left, theme::CHROME)),
         status_row,
     );
+    let [hints_area, version_area] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(version_label.len() as u16 + 1),
+    ])
+    .areas(hints_row);
     frame.render_widget(
         Paragraph::new(Span::styled(hints, theme::CHROME)),
-        hints_row,
+        hints_area,
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(version_label, theme::CHROME)).left_aligned(),
+        version_area,
     );
 }
 
@@ -802,6 +813,29 @@ mod tests {
             screen.contains("cupel-test"),
             "session id missing from footer:\n{screen}"
         );
+    }
+
+    #[test]
+    fn footer_left_aligns_the_version_in_its_hints_row_area() {
+        let mut app = test_app();
+        let version_suffix = format!("version: {} ", env!("CARGO_PKG_VERSION"));
+        for mouse_captured in [true, false] {
+            app.mouse_captured = mouse_captured;
+            for width in [80, 200] {
+                let screen = draw(&mut app, width, 20);
+                let hints_row = screen.lines().last().expect("hints row");
+                assert!(hints_row.starts_with(" enter send"), "{screen}");
+                assert!(hints_row.ends_with(&version_suffix), "{screen}");
+                if width == 200 {
+                    let mouse_hint = if mouse_captured {
+                        "ctrl+y select"
+                    } else {
+                        "ctrl+y scroll"
+                    };
+                    assert!(hints_row.contains(mouse_hint), "{screen}");
+                }
+            }
+        }
     }
 
     #[test]
