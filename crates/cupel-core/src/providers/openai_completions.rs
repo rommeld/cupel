@@ -468,7 +468,7 @@ async fn run(
     }
 
     if !saw_finish_reason {
-        return Err(InferenceError::Other(
+        return Err(InferenceError::Transport(
             "Stream ended without finish_reason".to_string(),
         ));
     }

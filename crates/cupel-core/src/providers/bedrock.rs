@@ -18,7 +18,7 @@ use base64::Engine as _;
 use serde_json::{Value, json};
 
 use crate::{
-    error::{InferenceError, Result},
+    error::{InferenceError, Result, with_causes},
     event_stream::{AssistantMessageStream, EventSink},
     json_util::parse_streaming_json,
     model::calculate_cost,
@@ -265,13 +265,10 @@ async fn run(
     // Send + stream
     let response = with_cancel(options, request.send())
         .await?
-        .map_err(|e| InferenceError::Other(format_sdk_error(&e)))?;
+        .map_err(|e| sdk_error(&e))?;
 
     let stream = futures_util::stream::try_unfold(response.stream, |mut stream| async move {
-        let item = stream
-            .recv()
-            .await
-            .map_err(|e| InferenceError::Other(format_sdk_error(&e)))?;
+        let item = stream.recv().await.map_err(|e| sdk_error(&e))?;
         Ok(item.map(|item| (item, stream)))
     });
     consume_stream(model, options, sink, stream).await
@@ -500,7 +497,7 @@ async fn consume_stream(
     }
 
     if !saw_message_stop {
-        return Err(InferenceError::Other(
+        return Err(InferenceError::Transport(
             "Bedrock stream ended before MessageStop".to_string(),
         ));
     }
@@ -566,17 +563,37 @@ fn is_standard_bedrock_endpoint(base_url: &str) -> bool {
         && (host.ends_with(".amazonaws.com") || host.ends_with(".amazonaws.com.cn"))
 }
 
-fn format_sdk_error<E, R>(err: &aws_sdk_bedrockruntime::error::SdkError<E, R>) -> String
+/// Classify an AWS SDK failure by what a retry can do about it, the same way
+/// `InferenceError::kind` does for the reqwest-based providers.
+///
+/// - A service exception (throttling, validation, a model error) keeps its
+///   API message, where the retry and overflow tables read it. The SDK's own
+///   `Display` would only say "service error".
+/// - A connection that failed or broke, or timed out, is a transport error,
+///   so the turn is retried like the same failure on the other providers.
+///   The text keeps the cause chain ("dispatch failure: io error: connection
+///   reset by peer") instead of the bare "dispatch failure".
+/// - A request that could not be built is configuration; resending it
+///   cannot help.
+fn sdk_error<E, R>(err: &aws_sdk_bedrockruntime::error::SdkError<E, R>) -> InferenceError
 where
-    E: core::fmt::Display,
+    E: core::error::Error + 'static,
     R: core::fmt::Debug,
 {
     use aws_sdk_bedrockruntime::error::SdkError;
     match err {
-        // The service error carries the actual API message (validation,
-        // throttling, ...); the generic Display for SdkError hides it.
-        SdkError::ServiceError(service_err) => format!("Bedrock error: {}", service_err.err()),
-        other => format!("Bedrock transport error: {other}"),
+        SdkError::ServiceError(service_err) => {
+            InferenceError::Other(format!("Bedrock error: {}", service_err.err()))
+        }
+        SdkError::DispatchFailure(_) | SdkError::ResponseError(_) | SdkError::TimeoutError(_) => {
+            InferenceError::Transport(format!("Bedrock transport error: {}", with_causes(err)))
+        }
+        SdkError::ConstructionFailure(_) => InferenceError::Config(format!(
+            "Bedrock request could not be built: {}",
+            with_causes(err)
+        )),
+        // `SdkError` is non-exhaustive; a future variant stays a provider error.
+        _ => InferenceError::Other(format!("Bedrock error: {}", with_causes(err))),
     }
 }
 
@@ -978,15 +995,17 @@ mod tests {
     use futures_util::StreamExt as _;
     use serde_json::{Value, json};
 
-    use crate::error::{InferenceError, Result};
+    use crate::error::Result;
     use crate::event_stream::assistant_message_channel;
     use crate::providers::bedrock::{
-        build_additional_model_request_fields, consume_stream, format_sdk_error, is_claude_model,
+        build_additional_model_request_fields, consume_stream, is_claude_model, sdk_error,
         supports_prompt_caching,
     };
     use crate::providers::error_message;
     use crate::retry::is_retryable_assistant_error;
-    use crate::types::{AssistantMessageEvent, Model, StopReason, StreamOptions, ThinkingLevel};
+    use crate::types::{
+        AssistantMessageEvent, ErrorKind, Model, StopReason, StreamOptions, ThinkingLevel,
+    };
 
     /// A row from the shipped catalog, not a hand-built fixture: these
     /// tests break if catalog.json and this provider drift apart.
@@ -1051,6 +1070,7 @@ mod tests {
             let (result, emitted) = collect_stream(events).await;
             let error = result.expect_err("a stream without MessageStop must not succeed");
             assert_eq!(error.to_string(), "Bedrock stream ended before MessageStop");
+            assert_eq!(error.kind(), ErrorKind::Transport);
             assert!(
                 !emitted
                     .iter()
@@ -1059,6 +1079,45 @@ mod tests {
             let model = catalog_model("global.anthropic.claude-sonnet-5-5");
             let message = error_message(&model, &error);
             assert!(is_retryable_assistant_error(&message));
+        }
+    }
+
+    #[test]
+    fn sdk_connection_failures_are_retried_and_build_failures_are_not() {
+        use aws_sdk_bedrockruntime::error::{BoxError, ConnectorError, SdkError};
+        use bedrock::error::ConverseStreamOutputError;
+
+        let model = catalog_model("global.anthropic.claude-sonnet-5-5");
+        let reset = || -> BoxError {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset by peer",
+            ))
+        };
+        for (sdk_failure, kind) in [
+            (
+                SdkError::<ConverseStreamOutputError, ()>::dispatch_failure(ConnectorError::io(
+                    reset(),
+                )),
+                ErrorKind::Transport,
+            ),
+            (SdkError::response_error(reset(), ()), ErrorKind::Transport),
+            (SdkError::timeout_error(reset()), ErrorKind::Transport),
+            (SdkError::construction_failure(reset()), ErrorKind::Config),
+        ] {
+            let error = sdk_error(&sdk_failure);
+            assert_eq!(error.kind(), kind, "{error}");
+            // The cause survives instead of the SDK's bare "dispatch failure".
+            assert!(
+                error.to_string().contains("connection reset by peer"),
+                "{error}"
+            );
+            let message = error_message(&model, &error);
+            assert_eq!(
+                is_retryable_assistant_error(&message),
+                kind == ErrorKind::Transport,
+                "{error}"
+            );
         }
     }
 
@@ -1109,9 +1168,10 @@ mod tests {
                 true,
             ),
         ] {
-            let sdk_error = SdkError::service_error(service_error, ());
-            assert_eq!(sdk_error.to_string(), "service error");
-            let error = InferenceError::Other(format_sdk_error(&sdk_error));
+            let sdk_failure = SdkError::service_error(service_error, ());
+            assert_eq!(sdk_failure.to_string(), "service error");
+            let error = sdk_error(&sdk_failure);
+            assert_eq!(error.kind(), ErrorKind::Provider, "{error}");
             let message = error_message(&model, &error);
             assert_eq!(is_retryable_assistant_error(&message), retryable, "{error}");
             assert_eq!(

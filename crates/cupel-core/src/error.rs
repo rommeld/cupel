@@ -52,6 +52,17 @@ pub enum InferenceError {
     #[error("message stream error: {0}")]
     Stream(#[from] MessageStreamError),
 
+    /// The connection failed or broke before the response was complete,
+    /// outside reqwest (the AWS SDK) or as a stream that ended without its
+    /// terminal event. Sending the request again may succeed.
+    #[error("{0}")]
+    Transport(String),
+
+    /// The request cannot be built from the configuration (credentials,
+    /// region, endpoint). Sending it again cannot help.
+    #[error("{0}")]
+    Config(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -61,13 +72,13 @@ impl InferenceError {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::NoProvider(_) | Self::MissingApiKey(_) => ErrorKind::Config,
+            Self::NoProvider(_) | Self::MissingApiKey(_) | Self::Config(_) => ErrorKind::Config,
             Self::ApiStatus { status, .. } => ErrorKind::HttpStatus { status: *status },
             Self::Aborted => ErrorKind::Aborted,
             Self::Http(error) if error.is_builder() => ErrorKind::Config,
-            Self::Http(_) | Self::Stream(MessageStreamError::ClosedBeforeTerminalEvent) => {
-                ErrorKind::Transport
-            }
+            Self::Http(_)
+            | Self::Transport(_)
+            | Self::Stream(MessageStreamError::ClosedBeforeTerminalEvent) => ErrorKind::Transport,
             Self::Stream(MessageStreamError::ProviderError { reason, message }) => message
                 .error_kind
                 .unwrap_or(if *reason == StopReason::Aborted {
@@ -95,8 +106,7 @@ fn missing_api_key_hint(provider: &str) -> &'static str {
 /// gets `&&dyn Error`; the `&cause` pattern copies the inner reference out,
 /// so the next cause borrows from the error itself, not from the closure's
 /// short-lived argument (without it: "lifetime may not live long enough").
-fn with_causes(err: &reqwest::Error) -> String {
-    use core::error::Error as _;
+pub(crate) fn with_causes(err: &dyn core::error::Error) -> String {
     core::iter::successors(err.source(), |&cause| cause.source())
         .fold(err.to_string(), |text, cause| format!("{text}: {cause}"))
 }
@@ -149,6 +159,14 @@ mod tests {
             ),
             (InferenceError::Aborted, ErrorKind::Aborted),
             (InferenceError::Other("opaque".into()), ErrorKind::Provider),
+            (
+                InferenceError::Transport("stream ended early".into()),
+                ErrorKind::Transport,
+            ),
+            (
+                InferenceError::Config("no region".into()),
+                ErrorKind::Config,
+            ),
             (
                 InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
                 ErrorKind::Transport,

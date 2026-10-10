@@ -562,12 +562,12 @@ async fn run(
     // A 200 response may still be a non-streaming JSON body or gateway HTML.
     // Neither is a completed assistant turn, even when the body closes cleanly.
     if !saw_message_start {
-        return Err(InferenceError::Other(
+        return Err(InferenceError::Transport(
             "Anthropic stream ended without message_start".to_string(),
         ));
     }
     if !saw_message_stop {
-        return Err(InferenceError::Other(
+        return Err(InferenceError::Transport(
             "Anthropic stream ended before message_stop".to_string(),
         ));
     }

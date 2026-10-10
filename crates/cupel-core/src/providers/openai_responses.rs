@@ -553,7 +553,7 @@ pub(crate) async fn process_response_stream(
     }
 
     if !saw_terminal_response {
-        return Err(InferenceError::Other(
+        return Err(InferenceError::Transport(
             "OpenAI Responses stream ended before a terminal response event".to_string(),
         ));
     }

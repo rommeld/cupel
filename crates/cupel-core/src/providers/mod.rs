@@ -506,6 +506,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_streams_that_end_early_are_retryable_transport_errors() {
+        // A 200 whose event stream stops before `response.completed`: the
+        // connection broke, so the turn is worth sending again.
+        let body = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n";
+        let request = request_for_response(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ))
+        .await;
+        let response = request.send().await.unwrap();
+        let model = reasoning_model();
+        let (_stream, sink) = assistant_message_channel();
+        let error = crate::providers::openai_responses::process_response_stream(
+            response,
+            &model,
+            &StreamOptions::default(),
+            &sink,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Transport, "{error}");
+        assert!(crate::retry::is_retryable_assistant_error(&error_message(
+            &model, &error
+        )));
+    }
+
+    #[tokio::test]
     async fn truncated_http_error_bodies_do_not_hide_the_status() {
         let request = request_for_response(
             "HTTP/1.1 400 Bad Request\r\nContent-Length: 100\r\nConnection: close\r\n\r\nshort"
