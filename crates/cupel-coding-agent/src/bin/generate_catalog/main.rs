@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use cupel_core::types::{Api, CostTier, InputModality, Model, ModelCost, Provider};
 
 use crate::curation::{
-    Curated, CuratedProvider, MODELS_DEV_URL, OPENAI_CODEX_MODELS, PROVIDERS, Thinking, Window,
+    Curated, CuratedProvider, MODELS_DEV_URL, OPENAI_CODEX_MODELS, PROVIDERS, Thinking,
+    ULTRAFAST_BASES, ULTRAFAST_PRICE_FACTOR, Window,
 };
 use crate::models_dev::ProviderEntry;
 
@@ -104,6 +105,7 @@ fn generate(raw: &str) -> Result<(Vec<Model>, String), String> {
     // (not inside build_models) so the join stays a pure function of the
     // curation table.
     models.extend(openai_codex_models());
+    let models = with_ultrafast_twins(models, ULTRAFAST_BASES)?;
     validate(&models)?;
 
     let json = to_pretty_json(&models)?;
@@ -245,6 +247,74 @@ fn openai_codex_models() -> Vec<Model> {
             }
         })
         .collect()
+}
+
+/// Put an Ultrafast twin right behind every row named in `bases`, so /model lists both
+/// speeds of a model next to each other.
+fn with_ultrafast_twins(models: Vec<Model>, bases: &[&str]) -> Result<Vec<Model>, String> {
+    if let Some(missing) = bases
+        .iter()
+        .find(|&&id| !models.iter().any(|model| model.id == id))
+    {
+        return Err(format!("Ultrafast base {missing} is not in the catalog."));
+    }
+    Ok(models
+        .into_iter()
+        // flat_map turns each row into one or two rows: the row itself, then its twin
+        // when `then` produced one (`Option` iterates as zero or one items, so `chain`
+        // appends nothing for None).
+        .flat_map(|model| {
+            let twin = bases
+                .contains(&model.id.as_str())
+                .then(|| ultrafast_twin(&model));
+            std::iter::once(model).chain(twin)
+        })
+        .collect())
+}
+
+/// The base row on the Ultrafast tier: the same model on the wire with the same limits
+/// and effort scale, under its own id, name and prices.
+fn ultrafast_twin(base: &Model) -> Model {
+    let mut compat = base.compat.clone().unwrap_or_else(|| serde_json::json!({}));
+    // Codex rows already carry the backend name ("gpt-6.1-sol" for
+    // "codex/gpt-6.1-sol"); a plain openai row's id is its API name.
+    if compat.get("requestModel").is_none() {
+        compat["requestModel"] = serde_json::json!(base.id);
+    }
+    compat["serviceTier"] = serde_json::json!("ultrafast");
+    Model {
+        id: format!("{}-ultrafast", base.id),
+        name: format!("{} Ultrafast", base.name),
+        cost: scaled_cost(&base.cost, ULTRAFAST_PRICE_FACTOR),
+        compat: Some(compat),
+        ..base.clone()
+    }
+}
+
+/// Every price times `factor`, long-context tiers included.
+fn scaled_cost(cost: &ModelCost, factor: f64) -> ModelCost {
+    // f64 is binary, so 0.1 has no exact representation and
+    // 0.1 * 6.0 == 0.6000000000000001. Rounding to a millionth of a
+    // dollar keeps catalog.json at 0.6 without changing any real price.
+    let price = |usd: f64| (usd * factor * 1e6).round() / 1e6;
+    ModelCost {
+        input: price(cost.input),
+        output: price(cost.output),
+        cached_read: price(cost.cached_read),
+        cached_write: price(cost.cached_write),
+        tiers: cost.tiers.as_ref().map(|tiers| {
+            tiers
+                .iter()
+                .map(|tier| CostTier {
+                    context_over: tier.context_over,
+                    input: price(tier.input),
+                    output: price(tier.output),
+                    cached_read: price(tier.cached_read),
+                    cached_write: price(tier.cached_write),
+                })
+                .collect()
+        }),
+    }
 }
 
 /// Merge on curation row with its model.dev entry into a cupel Model.
@@ -495,7 +565,9 @@ mod tests {
             .expect("snapshot must contain all curated models; refresh with --fetch if needed");
         assert_eq!(
             models.len(),
-            PROVIDERS.iter().map(|p| p.models.len()).sum::<usize>() + OPENAI_CODEX_MODELS.len()
+            PROVIDERS.iter().map(|p| p.models.len()).sum::<usize>()
+                + OPENAI_CODEX_MODELS.len()
+                + ULTRAFAST_BASES.len()
         );
         assert_eq!(
             json,
@@ -800,5 +872,80 @@ mod tests {
                 .is_none()
         );
         assert!(gpt55.max_context_window.is_none());
+    }
+
+    #[test]
+    fn ultrafast_twins_follow_their_base_rows() {
+        // A small catalog: the Astra fixture stands in for a plain openai
+        // row (no requestModel yet), the pinned rows for Codex.
+        let mut models =
+            vec![to_model(&OPENAI_PROVIDER, &ASTRA_ROW, &astra_entry()).expect("maps")];
+        models.extend(openai_codex_models());
+        let models =
+            with_ultrafast_twins(models, &["gpt-6-astra", "codex/gpt-6.1-sol"]).expect("bases");
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids[..5],
+            [
+                "gpt-6-astra",
+                "gpt-6-astra-ultrafast",
+                "codex/gpt-6-sol",
+                "codex/gpt-6.1-sol",
+                "codex/gpt-6.1-sol-ultrafast",
+            ]
+        );
+
+        // The openai twin gets requestModel from the base id.
+        assert_eq!(models[1].name, "GPT-6 Astra Ultrafast");
+        assert_eq!(
+            models[1].compat,
+            Some(serde_json::json!({
+                "supportsTemperature": false,
+                "requestModel": "gpt-6-astra",
+                "serviceTier": "ultrafast",
+            }))
+        );
+
+        // The Codex twin keeps the backend name, not its namespaced id.
+        let (base, twin) = (&models[3], &models[4]);
+        assert_eq!(
+            twin.compat,
+            Some(serde_json::json!({
+                "requestModel": "gpt-6.1-sol",
+                "serviceTier": "ultrafast",
+                "supportsTemperature": false,
+            }))
+        );
+        // OpenAI's Ultrafast table, both context tiers. Comparing whole
+        // structs works because scaled_cost rounds: 0.1 * 6.0 alone
+        // would be 0.6000000000000001, not the 0.6 written here.
+        assert_eq!(
+            twin.cost,
+            ModelCost {
+                input: 12.0,
+                output: 60.0,
+                cached_read: 0.6,
+                cached_write: 15.0,
+                tiers: Some(vec![CostTier {
+                    context_over: 272_000,
+                    input: 24.0,
+                    output: 90.0,
+                    cached_read: 1.2,
+                    cached_write: 30.0,
+                }]),
+            }
+        );
+        // Everything else is the base row.
+        assert_eq!(twin.api, base.api);
+        assert_eq!(twin.provider, base.provider);
+        assert_eq!(twin.base_url, base.base_url);
+        assert_eq!(twin.thinking_level_map, base.thinking_level_map);
+        assert_eq!(twin.context_window, base.context_window);
+        assert_eq!(twin.max_context_window, base.max_context_window);
+
+        // A base that is not in the catalog is a named error.
+        let error = with_ultrafast_twins(Vec::new(), &["gpt-6.1-sol"]).unwrap_err();
+        assert!(error.contains("gpt-6.1-sol"), "{error}");
+        assert!(error.contains("not in the catalog"), "{error}");
     }
 }

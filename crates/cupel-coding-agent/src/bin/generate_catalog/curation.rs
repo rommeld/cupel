@@ -541,3 +541,18 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         temperature: true,
     },
 ];
+
+/// Catalog rows that also ship an Ultrafast twin `<id>-ultrafast`.
+/// Ultrafast is not a separate model: it is the same model on OpenAI's
+/// fastest serving tier, chosen per request with the body field
+/// `service_tier: "ultrafast"`. A twin row turns that tier into
+/// something `/model` can switch to (main.rs `with_ultrafast_twins`).
+/// Codex access depends on the ChatGPT plan (Pro 500, Enterprise, Edu at
+/// launch); the backend, not cupel, enforces that.
+/// https://developers.openai.com/api/docs/guides/ultrafast-mode
+pub const ULTRAFAST_BASES: &[&str] = &["gpt-6.1-sol", "codex/gpt-6.1-sol"];
+
+/// Every Ultrafast price is 6x the Standard price, including the >272k long-context
+/// tier. models.dev lists only the short-context half, so the generator scales the
+/// Standard row instead.
+pub const ULTRAFAST_PRICE_FACTOR: f64 = 6.0;

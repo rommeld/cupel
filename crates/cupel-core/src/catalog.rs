@@ -319,6 +319,50 @@ mod tests {
     }
 
     #[test]
+    fn gpt_61_sol_ultrafast_rows_follow_sol_at_six_times_the_price() {
+        use crate::types::{CostTier, ModelCost};
+
+        let models = builtin_models();
+        for base_id in ["gpt-6.1-sol", "codex/gpt-6.1-sol"] {
+            // The twin sits directly behind its base row, so /model lists
+            // the two speeds next to each other.
+            let at = models.iter().position(|m| m.id == base_id).expect(base_id);
+            let (base, twin) = (&models[at], &models[at + 1]);
+            assert_eq!(twin.id, format!("{base_id}-ultrafast"));
+            assert_eq!(twin.name, "GPT-6.1 Sol Ultrafast");
+            // Same model on the wire; only the tier field is new.
+            let compat = twin.compat.as_ref().expect("compat");
+            assert_eq!(compat["requestModel"], "gpt-6.1-sol", "{base_id}");
+            assert_eq!(compat["serviceTier"], "ultrafast", "{base_id}");
+            assert_eq!(compat["supportsTemperature"], false, "{base_id}");
+            // OpenAI's Ultrafast price table (checked 2026-10-09).
+            assert_eq!(
+                twin.cost,
+                ModelCost {
+                    input: 12.0,
+                    output: 60.0,
+                    cached_read: 0.6,
+                    cached_write: 15.0,
+                    tiers: Some(vec![CostTier {
+                        context_over: 272_000,
+                        input: 24.0,
+                        output: 90.0,
+                        cached_read: 1.2,
+                        cached_write: 30.0,
+                    }]),
+                },
+                "{base_id}"
+            );
+            // Limits and the effort scale are the base model's.
+            assert_eq!(twin.api, base.api);
+            assert_eq!(twin.provider, base.provider);
+            assert_eq!(twin.context_window, base.context_window);
+            assert_eq!(twin.max_context_window, base.max_context_window);
+            assert_eq!(twin.thinking_level_map, base.thinking_level_map);
+        }
+    }
+
+    #[test]
     fn astra_rows_keep_the_documented_effort_scale() {
         // GPT-6 Astra in all three dialects: no temperature, no off, no
         // minimal, and both top levels selectable (keys absent).
@@ -575,10 +619,11 @@ mod tests {
                 .as_ref()
                 .and_then(|compat| compat.get("requestModel"))
                 .and_then(serde_json::Value::as_str);
+            let id = model.id.strip_suffix("-ultrafast").unwrap_or(&model.id);
             assert_eq!(
-                model.id.strip_prefix("codex/"),
+                id.strip_prefix("codex/"),
                 request_model,
-                "{}: id must be codex/<requestModel>",
+                "{}: id must be codex/<requestModel>[-ultrafast]",
                 model.id
             );
             // The minimal -> "low" pin survives. `xhigh` stays absent so
@@ -596,7 +641,7 @@ mod tests {
                 model.id
             );
         }
-        assert_eq!(seen, 8, "only supported Codex models belong in the catalog");
+        assert_eq!(seen, 9, "only supported Codex models belong in the catalog");
     }
 
     #[test]

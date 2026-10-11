@@ -358,6 +358,45 @@
     }
   },
   {
+    "id": "gpt-6.1-sol-ultrafast",
+    "name": "GPT-6.1 Sol Ultrafast",
+    "api": "openai-responses",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 12.0,
+      "output": 60.0,
+      "cachedRead": 0.6,
+      "cachedWrite": 15.0,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 24.0,
+          "output": 90.0,
+          "cachedRead": 1.2,
+          "cachedWrite": 30.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 922000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6.1-sol",
+      "serviceTier": "ultrafast",
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "gpt-6-luna",
     "name": "GPT-6 Luna",
     "api": "openai-responses",
@@ -1682,6 +1721,45 @@
     "maxTokens": 128000,
     "compat": {
       "requestModel": "gpt-6.1-sol",
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "codex/gpt-6.1-sol-ultrafast",
+    "name": "GPT-6.1 Sol Ultrafast",
+    "api": "openai-codex-responses",
+    "provider": "openai-codex",
+    "baseUrl": "https://chatgpt.com/backend-api",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": "low",
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 12.0,
+      "output": 60.0,
+      "cachedRead": 0.6,
+      "cachedWrite": 15.0,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 24.0,
+          "output": 90.0,
+          "cachedRead": 1.2,
+          "cachedWrite": 30.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 872000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6.1-sol",
+      "serviceTier": "ultrafast",
       "supportsTemperature": false
     }
   },

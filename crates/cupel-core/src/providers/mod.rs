@@ -365,6 +365,37 @@ mod tests {
         model
     }
 
+    /// How many "ignoring compat setting" warnings `run` logs. Shared by the
+    /// provider modules' tests: a request should parse its compat blob once,
+    /// so each bad key shows up once per request.
+    pub(crate) fn compat_warnings_during(run: impl FnOnce()) -> usize {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for LogWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let log = LogWriter(Arc::new(Mutex::new(Vec::new())));
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let output = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        output.matches("ignoring compat setting").count()
+    }
+
     #[test]
     fn effort_scales_preserve_native_top_levels_and_legacy_claude_limits() {
         let model = reasoning_model();

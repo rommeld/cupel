@@ -643,11 +643,21 @@ fn finalize_response(response: &Value, model: &Model, output: &mut AssistantMess
 /// Compat knobs for the Responses API, read from `model.compat`.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-struct OpenAiCompat {
+pub(crate) struct OpenAiCompat {
+    /// Reasoning models take the system prompt in a `developer` role.
     supports_developer_role: bool,
+    /// Whether 24h prompt-cache retention is available.
     supports_long_cache_retention: bool,
+    /// Whether the model accepts the `temperature` request field. GPT-6
+    /// Astra rejects it.
     supports_temperature: bool,
+    /// The API's name for the model when the catalog id differs from it:
+    /// "codex/gpt-6.1-sol" and "gpt-6.1-sol-ultrafast" both go out as
+    /// "gpt-6.1-sol". None = the catalog id is the API name.
     request_model: Option<String>,
+    /// The `service_tier` request field. "ultrafast" runs the same model
+    /// on OpenAI's fastest (and 6x pricier) tier. None = leave the field
+    /// out, so the account's default tier applies.
     service_tier: Option<String>,
 }
 
@@ -663,7 +673,29 @@ impl Default for OpenAiCompat {
     }
 }
 
-fn openai_compat(model: &Model) -> OpenAiCompat {
+impl OpenAiCompat {
+    /// The model name the wire wants: compat's `requestModel`, or the catalog id when
+    /// there is none. cupel's catalog is one flat id namespace (merge_models replaces by
+    /// id, /model addresses by id), so two rows for the same API model need two ids; the
+    /// compat blob carries the real name.
+    pub(crate) fn wire_model(&self, model: &Model) -> String {
+        self.request_model
+            .clone()
+            .unwrap_or_else(|| model.id.clone())
+    }
+
+    pub(crate) fn supports_temperature(&self) -> bool {
+        self.supports_temperature
+    }
+
+    pub(crate) fn service_tier(&self) -> Option<&str> {
+        self.service_tier.as_deref()
+    }
+}
+
+/// Parse the knobs once per request: every parse logs the blob's problems, so
+/// the Codex provider calls this too instead of reading knob by knob.
+pub(crate) fn openai_compat(model: &Model) -> OpenAiCompat {
     compat(model)
 }
 
@@ -672,31 +704,12 @@ pub(crate) fn compat_problems(model: &Model) -> Vec<String> {
     parse_compat::<OpenAiCompat>(model).1
 }
 
-/// The one knob the Codex provider shares with this dialect.
-pub(crate) fn supports_temperature(model: &Model) -> bool {
-    openai_compat(model).supports_temperature
-}
-
-/// The model name the wire wants: compat's `requestModel`, or the catalog id when
-/// there is none. cupel's catalog is one flat id namespace (merge_models replaces by
-/// id, /model addresses by id), so two rows for the same API model need two ids; the
-/// compat blob carries the real name.
-pub(crate) fn wire_model(model: &Model) -> String {
-    openai_compat(model)
-        .request_model
-        .unwrap_or_else(|| model.id.clone())
-}
-
-pub(crate) fn service_tier(model: &Model) -> Option<String> {
-    openai_compat(model).service_tier
-}
-
 fn build_request_body(model: &Model, context: &Context, options: &StreamOptions) -> Value {
     let compat = openai_compat(model);
     let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
 
     let mut body = json!({
-        "model": wire_model(model),
+        "model": compat.wire_model(model),
         "input": convert_messages(model, context, &compat),
         "stream": true,
         // Stateless mode: nothing is persisted server-side; reasoning comes
@@ -1181,9 +1194,7 @@ mod tests {
         let body = build_request_body(&model, &context(), &with_reasoning(None));
         assert_eq!(body["model"], json!("gpt-6.1-sol"));
         assert_eq!(body["service_tier"], json!("ultrafast"));
-        // The old knob still applies, so the whole blob parsed: one field
-        // with a wrong type would make serde reject all of it, and
-        // openai_compat would fall back to the defaults.
+        // The old knob still applies next to the two new ones.
         assert!(body.get("temperature").is_none(), "{body}");
 
         // Rows without the knobs: the id goes out as-is, and no tier
@@ -1191,5 +1202,17 @@ mod tests {
         let body = build_request_body(&astra_model(), &context(), &with_reasoning(None));
         assert_eq!(body["model"], json!("gpt-6-astra"));
         assert!(body.get("service_tier").is_none(), "{body}");
+    }
+
+    #[test]
+    fn a_request_reports_each_compat_problem_once() {
+        // Every parse of the blob logs its problems, so build_request_body
+        // must read all knobs from one parse.
+        let mut model = astra_model();
+        model.compat = Some(json!({"supportsTemperature": "no", "serviceTier": "ultrafast"}));
+        let warnings = crate::providers::tests::compat_warnings_during(|| {
+            build_request_body(&model, &context(), &with_reasoning(None));
+        });
+        assert_eq!(warnings, 1);
     }
 }

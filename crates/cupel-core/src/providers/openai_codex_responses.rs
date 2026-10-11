@@ -30,8 +30,7 @@ use crate::{
     providers::{
         EffortStyle, apply_custom_headers,
         openai_responses::{
-            convert_items, normalize_id_part, process_response_stream, service_tier, short_hash,
-            supports_temperature, wire_model,
+            convert_items, normalize_id_part, openai_compat, process_response_stream, short_hash,
         },
         send_request, spawn_provider_stream, thinking_effort,
     },
@@ -75,9 +74,9 @@ impl Provider for OpenAiCodexResponsesProvider {
     }
 
     fn compat_problems(&self, model: &Model) -> Vec<String> {
-        let mut problems = crate::providers::parse_compat::<CodexCompat>(model).1;
-        problems.extend(crate::providers::openai_responses::compat_problems(model));
-        problems
+        // Every key this provider reads (requestModel, serviceTier,
+        // supportsTemperature) lives in the Responses dialect's knobs.
+        crate::providers::openai_responses::compat_problems(model)
     }
 }
 
@@ -182,20 +181,12 @@ fn clamp_cache_key(session_id: &str) -> String {
     session_id.chars().take(64).collect()
 }
 
-/// The Codex rows' own compat key. `supportsTemperature` is read through
-/// the Responses dialect's knobs.
-#[derive(Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-struct CodexCompat {
-    /// The backend's real model name (see [`wire_model`]).
-    request_model: Option<String>,
-}
-
 fn build_request_body(model: &Model, context: &Context, options: &StreamOptions) -> Value {
     use crate::types::CacheRetention;
 
+    let compat = openai_compat(model);
     let mut body = json!({
-        "model": wire_model(model),
+        "model": compat.wire_model(model),
     // The backend rejects store:true ("Store must be set to false").
         // Stateless mode is not a choice.
         "store": false,
@@ -221,11 +212,11 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
         body["prompt_cache_key"] = json!(clamp_cache_key(session_id));
     }
     if let Some(temperature) = options.temperature
-        && supports_temperature(model)
+        && compat.supports_temperature()
     {
         body["temperature"] = json!(temperature);
     }
-    if let Some(service_tier) = service_tier(model) {
+    if let Some(service_tier) = compat.service_tier() {
         body["service_tier"] = json!(service_tier);
     }
 
@@ -623,5 +614,35 @@ mod tests {
             &StreamOptions::default(),
         );
         assert!(body.get("service_tier").is_none(), "{body}");
+    }
+
+    #[test]
+    fn compat_problems_name_each_bad_key_once() {
+        // The catalog loader turns every problem into a startup warning,
+        // so a key read by two compat structs would be reported twice.
+        use crate::provider::Provider as _;
+
+        let mut model = codex_model();
+        model.compat = Some(json!({"requestModel": 5, "serviceTier": true}));
+        let problems = OpenAiCodexResponsesProvider::new().compat_problems(&model);
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems[0].starts_with("requestModel:"), "{problems:?}");
+        assert!(problems[1].starts_with("serviceTier:"), "{problems:?}");
+    }
+
+    #[test]
+    fn a_request_reports_each_compat_problem_once() {
+        // The Codex body reads three knobs (model name, temperature, tier);
+        // one shared parse means one warning per bad key and request.
+        let mut model = codex_model();
+        model.compat = Some(json!({"supportsTemperature": "no", "serviceTier": "ultrafast"}));
+        let options = StreamOptions {
+            temperature: Some(0.2),
+            ..StreamOptions::default()
+        };
+        let warnings = crate::providers::tests::compat_warnings_during(|| {
+            build_request_body(&model, &context_with_prompt(), &options);
+        });
+        assert_eq!(warnings, 1);
     }
 }
