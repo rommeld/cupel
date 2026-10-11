@@ -15,9 +15,10 @@
 //!   leading message item, and there is no `max_output_tokens` because the
 //!   backend manages the output budget itself.
 //!
-//! This implementation uses SSE (which the backend fully supports), not
-//! WebSocket transport. It also omits zstd request compression, service
-//! tiers, and the tool-search machinery.
+//! This implementation uses SSE (which the backend fully supports), not WebSocket
+//! transport. It also omits zstd request compression and the tool-search machinery.
+//! Service tiers come from the catalog: a row's compat `serviceTier` goes out as the
+//! `service_tier` body field (the Ultrafast rows).
 
 use serde_json::{Value, json};
 
@@ -27,10 +28,10 @@ use crate::{
     oauth::openai_codex::{ORIGINATOR, account_id_from_access_token},
     provider::Provider,
     providers::{
-        EffortStyle, apply_custom_headers, compat,
+        EffortStyle, apply_custom_headers,
         openai_responses::{
-            convert_items, normalize_id_part, process_response_stream, short_hash,
-            supports_temperature,
+            convert_items, normalize_id_part, process_response_stream, service_tier, short_hash,
+            supports_temperature, wire_model,
         },
         send_request, spawn_provider_stream, thinking_effort,
     },
@@ -190,16 +191,6 @@ struct CodexCompat {
     request_model: Option<String>,
 }
 
-/// The model name the wire wants. Catalog ids are namespaced
-/// ("codex/gpt-5.5") because cupel's catalog is one flat id namespace.
-/// The openai provider already owns "gpt-5.6-sol" etc., and merge_models
-/// replaces by id. The compat blob carries the backend's real name.
-fn wire_model(model: &Model) -> String {
-    compat::<CodexCompat>(model)
-        .request_model
-        .unwrap_or_else(|| model.id.clone())
-}
-
 fn build_request_body(model: &Model, context: &Context, options: &StreamOptions) -> Value {
     use crate::types::CacheRetention;
 
@@ -233,6 +224,9 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
         && supports_temperature(model)
     {
         body["temperature"] = json!(temperature);
+    }
+    if let Some(service_tier) = service_tier(model) {
+        body["service_tier"] = json!(service_tier);
     }
 
     if let Some(tools) = &context.tools
@@ -607,5 +601,27 @@ mod tests {
                 .is_some(),
             "lib.rs must register the codex provider"
         );
+    }
+
+    #[test]
+    fn ultrafast_row_sends_the_service_tier() {
+        let mut model = codex_model();
+        model.id = "codex/gpt-6.1-sol-ultrafast".to_string();
+        model.compat = Some(json!({
+            "requestModel": "gpt-6.1-sol",
+            "serviceTier": "ultrafast",
+            "supportsTemperature": false,
+        }));
+        let body = build_request_body(&model, &context_with_prompt(), &StreamOptions::default());
+        assert_eq!(body["model"], json!("gpt-6.1-sol"));
+        assert_eq!(body["service_tier"], json!("ultrafast"));
+        // Standard rows leave the field out; the backend then uses the
+        // account's default tier.
+        let body = build_request_body(
+            &codex_model(),
+            &context_with_prompt(),
+            &StreamOptions::default(),
+        );
+        assert!(body.get("service_tier").is_none(), "{body}");
     }
 }

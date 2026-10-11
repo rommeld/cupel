@@ -644,13 +644,11 @@ fn finalize_response(response: &Value, model: &Model, output: &mut AssistantMess
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct OpenAiCompat {
-    /// Reasoning models take the system prompt in a `developer` role.
     supports_developer_role: bool,
-    /// Whether 24h prompt-cache retention is available.
     supports_long_cache_retention: bool,
-    /// Whether the model accepts the `temperature` request field. GPT-6
-    /// Astra rejects it.
     supports_temperature: bool,
+    request_model: Option<String>,
+    service_tier: Option<String>,
 }
 
 impl Default for OpenAiCompat {
@@ -659,6 +657,8 @@ impl Default for OpenAiCompat {
             supports_developer_role: true,
             supports_long_cache_retention: true,
             supports_temperature: true,
+            request_model: None,
+            service_tier: None,
         }
     }
 }
@@ -677,12 +677,26 @@ pub(crate) fn supports_temperature(model: &Model) -> bool {
     openai_compat(model).supports_temperature
 }
 
+/// The model name the wire wants: compat's `requestModel`, or the catalog id when
+/// there is none. cupel's catalog is one flat id namespace (merge_models replaces by
+/// id, /model addresses by id), so two rows for the same API model need two ids; the
+/// compat blob carries the real name.
+pub(crate) fn wire_model(model: &Model) -> String {
+    openai_compat(model)
+        .request_model
+        .unwrap_or_else(|| model.id.clone())
+}
+
+pub(crate) fn service_tier(model: &Model) -> Option<String> {
+    openai_compat(model).service_tier
+}
+
 fn build_request_body(model: &Model, context: &Context, options: &StreamOptions) -> Value {
     let compat = openai_compat(model);
     let cache_retention = options.cache_retention.unwrap_or(CacheRetention::Short);
 
     let mut body = json!({
-        "model": model.id,
+        "model": wire_model(model),
         "input": convert_messages(model, context, &compat),
         "stream": true,
         // Stateless mode: nothing is persisted server-side; reasoning comes
@@ -709,6 +723,9 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
         && compat.supports_temperature
     {
         body["temperature"] = json!(temperature);
+    }
+    if let Some(service_tier) = &compat.service_tier {
+        body["service_tier"] = json!(service_tier);
     }
 
     if let Some(tools) = &context.tools
@@ -1148,5 +1165,31 @@ mod tests {
         gpt56.thinking_level_map = Some(map);
         let body = build_request_body(&gpt56, &context(), &with_reasoning(None));
         assert_eq!(body["reasoning"], json!({"effort": "none"}));
+    }
+
+    #[test]
+    fn ultrafast_rows_send_the_base_model_and_the_tier() {
+        // The catalog's Ultrafast row: its own id, the API's model name
+        // in requestModel, the tier in serviceTier.
+        let mut model = astra_model();
+        model.id = "gpt-6.1-sol-ultrafast".to_string();
+        model.compat = Some(json!({
+            "requestModel": "gpt-6.1-sol",
+            "serviceTier": "ultrafast",
+            "supportsTemperature": false,
+        }));
+        let body = build_request_body(&model, &context(), &with_reasoning(None));
+        assert_eq!(body["model"], json!("gpt-6.1-sol"));
+        assert_eq!(body["service_tier"], json!("ultrafast"));
+        // The old knob still applies, so the whole blob parsed: one field
+        // with a wrong type would make serde reject all of it, and
+        // openai_compat would fall back to the defaults.
+        assert!(body.get("temperature").is_none(), "{body}");
+
+        // Rows without the knobs: the id goes out as-is, and no tier
+        // field, so the account's default tier applies.
+        let body = build_request_body(&astra_model(), &context(), &with_reasoning(None));
+        assert_eq!(body["model"], json!("gpt-6-astra"));
+        assert!(body.get("service_tier").is_none(), "{body}");
     }
 }
