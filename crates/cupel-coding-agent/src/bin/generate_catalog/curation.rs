@@ -399,6 +399,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter_openai("openai/gpt-6.1-sol"),
             openrouter_openai("openai/gpt-6-luna"),
             openrouter("meta/muse-spark-1.3", Thinking::FromEffort),
+            openrouter("meta/muse-wonder", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling", Thinking::FromEffort),
             openrouter("poolside/laguna-s-2.1", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-pro", Thinking::FromEffort),

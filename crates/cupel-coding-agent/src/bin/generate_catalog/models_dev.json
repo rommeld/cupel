@@ -1517,6 +1517,45 @@
         ],
         "temperature": true
       },
+      "meta/muse-wonder": {
+        "cost": {
+          "cache_read": 0.2,
+          "cache_write": 0.0,
+          "input": 4.0,
+          "output": 20.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "pdf",
+            "audio"
+          ]
+        },
+        "name": "Muse Wonder",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "moonshotai/kimi-k2.7-code": {
         "cost": {
           "cache_read": 0.18,
