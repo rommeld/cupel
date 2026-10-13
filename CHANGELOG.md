@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.29.2] - 2026-10-13
+
+- feat(catalog): add Muse Wonder on OpenRouter
+
 ## [v0.29.1] - 2026-10-13
 
 - fix(release): add missing prefix v to handle version number
