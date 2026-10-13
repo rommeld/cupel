@@ -264,7 +264,10 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
             out.extend(crate::markdown::render(text, width, theme::ANSWER));
         }
         Cell::Thinking { text } => {
-            push_wrapped(&mut out, text, width, theme::REASONING);
+            // Thinking is markdown too. Reasoning summaries (Codex, GPT) open
+            // every section with a `**Title**` line that would otherwise show
+            // its asterisks.
+            out.extend(crate::markdown::render(text, width, theme::REASONING));
         }
         Cell::Error { text } => {
             push_wrapped(&mut out, &format!("error: {text}"), width, theme::ERROR);
@@ -953,6 +956,23 @@ mod tests {
             live: None,
             result: None,
         }
+    }
+
+    #[test]
+    fn thinking_renders_as_markdown() {
+        use ratatui::style::Modifier;
+        let mut t = Transcript::default();
+        t.append_thinking("**Reading the parser**\n\nThe `parse` function is long.");
+        let rendered = t.to_lines(60, None);
+        let texts: Vec<String> = rendered.lines.iter().map(line_text).collect();
+        assert_eq!(
+            texts,
+            vec!["Reading the parser", "", "The parse function is long."]
+        );
+        // The title is bold on top of the cell's italic reasoning style.
+        let title = &rendered.lines[0].spans[0];
+        assert!(title.style.add_modifier.contains(Modifier::BOLD));
+        assert!(title.style.add_modifier.contains(Modifier::ITALIC));
     }
 
     #[test]

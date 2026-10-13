@@ -1852,6 +1852,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_usage_line_counts_reasoning_tokens() {
+        let mut app = test_app();
+        let mut message = assistant_message("ok", cupel_core::types::StopReason::Stop, 0);
+        if let cupel_agent::AgentMessage::Llm(cupel_core::types::Message::Assistant(assistant)) =
+            &mut message
+        {
+            assistant.usage.output = 400;
+            assistant.usage.reasoning = Some(312);
+        }
+        app.on_agent_event(Some(AgentEvent::MessageEnd { message }))
+            .await;
+        assert!(matches!(
+            app.transcript.cells.last(),
+            Some(Cell::Usage { text }) if text == "[0 in / 400 out (312 reasoning) / 0 cached, $0.0000]"
+        ));
+    }
+
+    #[tokio::test]
     async fn footer_shows_context_usage_after_a_turn() {
         let mut app = test_app();
         assert!(
