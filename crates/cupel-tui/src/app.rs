@@ -5,6 +5,8 @@
 //! the `App` currently says. No state lives in the widgets that's the
 //! immediate-mode contract that keeps ratatui apps easy to reason about.
 
+use std::time::{Duration, Instant};
+
 use futures_util::StreamExt as _;
 
 use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
@@ -67,6 +69,40 @@ pub struct App {
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
     pub run_finished: bool,
+    pub activity: Activity,
+    pub run_started: Option<Instant>,
+}
+
+/// What a running agent does right now. The input box title shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Activity {
+    /// A request went out and nothing has come back yet.
+    Waiting,
+    Thinking,
+    Writing,
+    /// The model writes a tool call. Its name only arrives with the finished
+    /// call, so there is none to show yet.
+    CallingTool,
+    /// A tool runs; the tool's name.
+    Running(String),
+    Retrying,
+    Compacting,
+}
+
+/// `Display` gives every activity its label, so `format!("{activity}")` and
+/// `.to_string()` both work.
+impl core::fmt::Display for Activity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Waiting => f.write_str("waiting for the model"),
+            Self::Thinking => f.write_str("thinking"),
+            Self::Writing => f.write_str("writing"),
+            Self::CallingTool => f.write_str("writing a tool call"),
+            Self::Running(tool) => write!(f, "running {tool}"),
+            Self::Retrying => f.write_str("retrying"),
+            Self::Compacting => f.write_str("compacting"),
+        }
+    }
 }
 
 /// How a prompt sent while the agent works reaches it.
@@ -243,6 +279,8 @@ impl App {
             last_answer: Status::New,
             pending_spinoff: None,
             run_finished: false,
+            activity: Activity::Waiting,
+            run_started: None,
         };
         app.replay_history(&history);
         for warning in std::mem::take(&mut app.meta.warnings) {
@@ -973,11 +1011,31 @@ impl App {
             text: text.to_string(),
         });
         match self.agent.prompt_text(text) {
-            Ok(events) => self.run_events = Some(events),
+            Ok(events) => self.begin_run(events),
             Err(err) => self.transcript.cells.push(Cell::Error {
                 text: err.to_string(),
             }),
         }
+    }
+
+    /// A run started: keep its events, start its clock, and wait for the model.
+    fn begin_run(&mut self, events: AgentEventStream) {
+        self.run_events = Some(events);
+        self.run_started = Some(Instant::now());
+        self.activity = Activity::Waiting;
+    }
+
+    /// The title's words: the headline of the reasoning while the model
+    /// thinks (when it writes headlines), otherwise the activity.
+    #[must_use]
+    pub fn activity_label(&self) -> String {
+        if self.activity == Activity::Thinking
+            && let Some(Cell::Thinking { text }) = self.transcript.cells.last()
+            && let Some(headline) = reasoning_headline(text)
+        {
+            return headline.to_string();
+        }
+        self.activity.to_string()
     }
 
     fn account_assistant(&mut self, assistant: &cupel_core::types::AssistantMessage) {
@@ -1557,10 +1615,15 @@ impl App {
         match event {
             AgentEvent::MessageUpdate { event } => match event {
                 AssistantMessageEvent::TextDelta { delta, .. } => {
+                    self.activity = Activity::Writing;
                     self.transcript.append_assistant(&delta);
                 }
                 AssistantMessageEvent::ThinkingDelta { delta, .. } => {
+                    self.activity = Activity::Thinking;
                     self.transcript.append_thinking(&delta);
+                }
+                AssistantMessageEvent::ToolCallStart { .. } => {
+                    self.activity = Activity::CallingTool;
                 }
                 AssistantMessageEvent::ToolCallEnd { tool_call, .. } => {
                     let call = self
@@ -1610,7 +1673,11 @@ impl App {
                         .push(Cell::User { text: text.clone() });
                 }
             }
-            AgentEvent::ToolExecutionStart { tool_call_id, .. } => {
+            AgentEvent::ToolExecutionStart {
+                tool_call_id,
+                tool_name,
+            } => {
+                self.activity = Activity::Running(tool_name);
                 self.transcript.mark_tool_started(&tool_call_id);
             }
             AgentEvent::ToolExecutionUpdate {
@@ -1634,6 +1701,7 @@ impl App {
                 );
             }
             AgentEvent::CompactionStart { reason } => {
+                self.activity = Activity::Compacting;
                 let cause = match reason {
                     cupel_agent::CompactionReason::Threshold => "context filling up",
                     cupel_agent::CompactionReason::Overflow => "context overflow",
@@ -1671,6 +1739,7 @@ impl App {
                 delay_ms,
                 error_message,
             } => {
+                self.activity = Activity::Retrying;
                 self.transcript.cells.push(Cell::Notice {
                     text: format!(
                         "retrying in {:.1}s (attempt {attempt}/{max_attempts}): {error_message}",
@@ -1679,9 +1748,8 @@ impl App {
                 });
             }
             AgentEvent::AgentEnd { .. } => self.finish_run().await,
-            AgentEvent::TurnStart
-            | AgentEvent::TurnEnd { .. }
-            | AgentEvent::ThinkingBlocksRemoved { .. } => {}
+            AgentEvent::TurnStart => self.activity = Activity::Waiting,
+            AgentEvent::TurnEnd { .. } | AgentEvent::ThinkingBlocksRemoved { .. } => {}
         }
     }
 
@@ -1689,6 +1757,12 @@ impl App {
         // The trailing assistant prose was the run's fnal answer
         // promote it so the turn visibly ends with its results.
         self.transcript.promote_final_answer();
+        // How long the run took, below its last answer.
+        if let Some(started) = self.run_started.take() {
+            self.transcript.cells.push(Cell::Usage {
+                text: format!("worked for {}", format_elapsed(started.elapsed())),
+            });
+        }
         self.run_events = None;
         // Fire the `stop` hook without blocking the UI; the next prompt's
         // before_prompt (or session end) settles it.
@@ -1707,12 +1781,35 @@ impl App {
         };
         if let Some(messages) = next {
             match self.agent.prompt(messages) {
-                Ok(events) => self.run_events = Some(events),
+                Ok(events) => self.begin_run(events),
                 Err(err) => self.transcript.cells.push(Cell::Error {
                     text: err.to_string(),
                 }),
             }
         }
+    }
+}
+
+/// The last headline in a reasoning text: a line that is bold as a whole,
+/// `**Like this**`. Reasoning summaries open each section with one; raw
+/// thinking has none.
+#[must_use]
+pub fn reasoning_headline(text: &str) -> Option<&str> {
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("**")?.strip_suffix("**"))
+        .filter(|headline| !headline.is_empty())
+}
+
+/// A duration the way a clock reads it: `42s`, `1m 05s`.
+#[must_use]
+pub fn format_elapsed(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
     }
 }
 

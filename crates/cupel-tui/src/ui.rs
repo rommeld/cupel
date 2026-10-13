@@ -12,7 +12,7 @@ use ratatui::widgets::{
     Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::app::{App, Status};
+use crate::app::{App, Status, format_elapsed};
 use crate::sessions::Sessions;
 use crate::{theme, transcript};
 
@@ -340,7 +340,15 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
         theme::INPUT_BORDER_IDLE
     };
     let title = if app.is_running() {
-        format!(" {} working ", SPINNER[app.frame % SPINNER.len()])
+        let elapsed = app
+            .run_started
+            .map(|started| format!(" · {}", format_elapsed(started.elapsed())))
+            .unwrap_or_default();
+        format!(
+            " {} {}{elapsed} ",
+            SPINNER[app.frame % SPINNER.len()],
+            app.activity_label()
+        )
     } else {
         " prompt ".to_string()
     };
@@ -2295,14 +2303,94 @@ mod tests {
         // A run against the empty registry errors in the background; until
         // its events are pumped the app counts as running.
         app.start_run("spin");
-        assert!(draw(&mut app, 80, 20).contains("◓ working"));
+        assert!(draw(&mut app, 80, 20).contains("◓ waiting for the model · 0s"));
         app.tick();
-        assert!(draw(&mut app, 80, 20).contains("◑ working"));
+        assert!(draw(&mut app, 80, 20).contains("◑ waiting for the model · 0s"));
         while app.is_running() {
             let event = app.next_event().await;
             app.on_event(event).await;
         }
         assert!(draw(&mut app, 80, 20).contains(" prompt "));
+    }
+
+    #[tokio::test]
+    async fn the_title_follows_what_the_agent_does() {
+        use cupel_core::types::AssistantMessageEvent;
+        let mut app = test_app();
+        app.start_run("build it");
+        // Feed one event, then return the drawn screen.
+        async fn after(app: &mut App, event: AgentEvent) -> String {
+            app.on_agent_event(Some(event)).await;
+            draw(app, 100, 20)
+        }
+        let thinking = |delta: &str| AgentEvent::MessageUpdate {
+            event: AssistantMessageEvent::ThinkingDelta {
+                content_index: 0,
+                delta: delta.to_string(),
+            },
+        };
+
+        let screen = after(&mut app, thinking("let me look")).await;
+        assert!(screen.contains("◓ thinking · 0s"), "{screen}");
+        let screen = after(
+            &mut app,
+            thinking("\n\n**Reading the parser**\n\nIt is long."),
+        )
+        .await;
+        assert!(screen.contains("◓ Reading the parser · 0s"), "{screen}");
+        let text = AgentEvent::MessageUpdate {
+            event: AssistantMessageEvent::TextDelta {
+                content_index: 1,
+                delta: "Found it.".into(),
+            },
+        };
+        assert!(after(&mut app, text).await.contains("◓ writing · 0s"));
+        let call = AgentEvent::MessageUpdate {
+            event: AssistantMessageEvent::ToolCallStart { content_index: 2 },
+        };
+        assert!(
+            after(&mut app, call)
+                .await
+                .contains("◓ writing a tool call · 0s")
+        );
+        let run = AgentEvent::ToolExecutionStart {
+            tool_call_id: "call_1".into(),
+            tool_name: "bash".into(),
+        };
+        assert!(after(&mut app, run).await.contains("◓ running bash · 0s"));
+        let screen = after(&mut app, AgentEvent::TurnStart).await;
+        assert!(screen.contains("◓ waiting for the model · 0s"), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn a_finished_run_says_how_long_it_worked() {
+        let mut app = test_app();
+        app.start_run("build it");
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+        assert!(matches!(
+            app.transcript.cells.last(),
+            Some(Cell::Usage { text }) if text == "worked for 0s"
+        ));
+        assert!(app.run_started.is_none(), "the clock stops with the run");
+    }
+
+    #[test]
+    fn the_reasoning_headline_is_the_last_bold_line() {
+        use crate::app::reasoning_headline;
+        let summary = "**Reading the parser**\n\nIt is long.\n\n**Fixing the bug**\n\nNow.";
+        assert_eq!(reasoning_headline(summary), Some("Fixing the bug"));
+        assert_eq!(reasoning_headline("plain thinking, **bold** inside"), None);
+        assert_eq!(reasoning_headline("****"), None);
+    }
+
+    #[test]
+    fn elapsed_time_reads_like_a_clock() {
+        use std::time::Duration;
+        assert_eq!(format_elapsed(Duration::from_secs(42)), "42s");
+        assert_eq!(format_elapsed(Duration::from_secs(65)), "1m 05s");
     }
 
     #[tokio::test]
