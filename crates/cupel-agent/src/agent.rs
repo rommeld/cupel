@@ -305,14 +305,14 @@ impl Agent {
 
     /// Steer the active run. The message goes in before the model's next request, and
     /// a reply that is streaming right now is cut short so that request comes at once.
-    /// Tools that are already running finish first. Unlike a follow-up, every wait
+    /// Tools that are already running finish first. Unlike a follow-up, every waiting
     /// steering message is delivered at the same moment.
     pub fn steer(&self, message: AgentMessage) {
         self.steering
             .lock()
             .expect("steering queue lock poisoned")
             .push(message);
-        // notify_one stores a permit when nobody si waiting right now, so a message
+        // notify_one stores a permit when nobody is waiting right now, so a message
         // that arrives just before the next reply starts streaming still interrupts
         // it.
         self.steering_signal.notify_one();
@@ -576,7 +576,7 @@ impl AgentHooks for RunHooks {
                 let waiting = !self
                     .steering
                     .lock()
-                    .expect("steering queue is poisoned")
+                    .expect("steering queue lock poisoned")
                     .is_empty();
                 if waiting {
                     return;

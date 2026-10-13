@@ -460,9 +460,9 @@ impl App {
             }
 
             // Ctrl+Enter steers. A terminal reports it only with the keyboard
-            // enhancemetn lib.rs switches on. Without it, most end a plain Enter.
-            // Ctrl+j is the same key in every terhimal. It sends the line feed
-            // byte, which som terminals also send of Ctrl+Enter.
+            // enhancement lib.rs switches on. Without it, most send a plain Enter.
+            // Ctrl+J is the same key in every terminal. It sends the line feed
+            // byte, which some terminals also send for Ctrl+Enter.
             (KeyCode::Enter | KeyCode::Char('j'), true, _) => self.submit(Delivery::Steer),
             // Alt+Enter inserts a newline (Shift+Enter is indistinguishable
             // from Enter in most terminals, so Alt is the portable choice).
@@ -856,8 +856,8 @@ impl App {
         self.scroll_from_bottom = usize::try_from(next.max(0)).unwrap_or(0).min(max);
     }
 
-    /// Enter: dispatch commands locally, expand templates, or send
-    /// the text as a prompt (queued when a run is active).
+    /// Enter or Ctrl+Enter: dispatch commands locally, expand templates, or
+    /// send the text as a prompt (queued or steered when a run is active).
     fn submit(&mut self, delivery: Delivery) {
         // Enter is consumed by the popup while open, so this is normally a
         // no-op, so no code path can submit with a live session.
@@ -890,10 +890,10 @@ impl App {
         self.send(&trimmed, delivery);
     }
 
-    /// Esc or Ctrl-C while running. The queued prompts go back into the
-    /// input box first. An aborted run never reaches the point where it
-    /// would take them, so they would sit in the agent's queue until the
-    /// next run ends.
+    /// Esc or Ctrl-C while running. The queued and steered prompts go back
+    /// into the input box first. An aborted run never reaches the point
+    /// where it would take them, so they would sit in the agent's queues
+    /// until the next run ends.
     fn abort_run(&mut self) {
         self.restore_queued();
         self.agent.abort();
@@ -904,10 +904,10 @@ impl App {
     /// Returns how many came back.
     fn restore_queued(&mut self) -> usize {
         // Both copies go: a prompt that is back in the input box must not also reach
-        // the model from the agent's queue.
+        // the model from the agent's queues.
         self.agent.clear_steering();
         self.agent.clear_follow_ups();
-        // mem::take moves the list out and leaves an empty Vec behind.
+        // mem::take moves each list out and leaves an empty Vec behind.
         let queued: Vec<String> = core::mem::take(&mut self.steering)
             .into_iter()
             .chain(core::mem::take(&mut self.queued))
@@ -929,7 +929,8 @@ impl App {
         restored
     }
 
-    /// Route a prompt to the agent: new run when idle, queued when busy.
+    /// Route a prompt to the agent: new run when idle, queued or steered
+    /// when busy.
     pub fn send(&mut self, text: &str, delivery: Delivery) {
         // A prompt is headed for the agent the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately not at
@@ -1594,7 +1595,7 @@ impl App {
                     && let UserContentBody::Text(text) = &user.content
                     && let Some(index) = self.steering.iter().position(|steered| steered == text)
                 {
-                    // A steered prompt reached the model. Unlike a queue one it
+                    // A steered prompt reached the model. Unlike a queued one it
                     // arrives mid-task, so the prose before it is no final answer and
                     // stays as it is.
                     self.steering.remove(index);
@@ -1687,7 +1688,7 @@ impl App {
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
         self.run_finished = true;
-        // A waiting prompt can outlive its run. Submitted after loop's last look at
+        // A waiting prompt can outlive its run. Submitted after the loop's last look at
         // the queues, or waiting behind a run that failed. Steered prompts go first,
         // all together, as they would have in the run.
         let steering = self.agent.take_steering();

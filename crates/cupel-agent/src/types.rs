@@ -209,9 +209,9 @@ pub trait AgentHooks: Send + Sync {
         Vec::new()
     }
 
-    /// Resolves once steering message are waiting. The loop races every model reply
-    /// against it and cuts the reply short when it resolves. The default never:
-    /// without steering, nothing interrupts.
+    /// Resolves once steering messages are waiting. The loop races every model reply
+    /// against it and cuts the reply short when it resolves. The default never
+    /// resolves: without steering, nothing interrupts.
     async fn steering_arrived(&self) {
         std::future::pending::<()>().await;
     }

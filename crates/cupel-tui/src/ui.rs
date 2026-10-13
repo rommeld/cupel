@@ -442,8 +442,10 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Paragraph::new(Span::styled(hints, theme::CHROME)),
         hints_area,
     );
+    // Right-aligned, the area's spare column sits in front of the label. It is
+    // the gap that keeps cut-off hints from running into the version.
     frame.render_widget(
-        Paragraph::new(Span::styled(version_label, theme::CHROME)).left_aligned(),
+        Paragraph::new(Span::styled(version_label, theme::CHROME)).right_aligned(),
         version_area,
     );
 }
@@ -816,12 +818,14 @@ mod tests {
     }
 
     #[test]
-    fn footer_left_aligns_the_version_in_its_hints_row_area() {
+    fn footer_ends_the_hints_row_with_the_version_after_a_gap() {
         let mut app = test_app();
-        let version_suffix = format!("version: {} ", env!("CARGO_PKG_VERSION"));
+        // The leading space is the gap: at 80 and 140 columns the hints are cut
+        // off, and the cut must not touch the label.
+        let version_suffix = format!(" version: {}", env!("CARGO_PKG_VERSION"));
         for mouse_captured in [true, false] {
             app.mouse_captured = mouse_captured;
-            for width in [80, 200] {
+            for width in [80, 140, 200] {
                 let screen = draw(&mut app, width, 20);
                 let hints_row = screen.lines().last().expect("hints row");
                 assert!(hints_row.starts_with(" enter send"), "{screen}");

@@ -161,7 +161,7 @@ async fn run_loop(
                 .await;
             }
 
-            // THis reply's own token. A child token is cancelled with its parent (Esc
+            // This reply's own token. A child token is cancelled with its parent (Esc
             // still stops everything) but can also be cancelled alone. Steering does
             // that, and the run goes on.
             let turn = cancel.child_token();
@@ -185,7 +185,7 @@ async fn run_loop(
                 });
                 pending_messages = hooks.steering_messages().await;
                 // Request again even if the user took the message back in the
-                // meantime: the interrupted reply still needs answer
+                // meantime: the interrupted reply still needs an answer.
                 has_more_tool_calls = true;
                 continue;
             }
