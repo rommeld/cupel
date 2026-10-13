@@ -390,7 +390,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
     // reasoning models; "off" keeps the word "thinking" so a bare level
     // name never reads like part of the model name.
     let thinking_segment = if app.agent.model_supports_reasoning() {
-        match app.agent.thinking_level() {
+        match app.agent.effective_thinking_level() {
             None => " | thinking off".to_string(),
             Some(level) => format!(" | thinking {}", thinking_level_name(level)),
         }
@@ -1875,6 +1875,40 @@ mod tests {
             app.transcript.cells.last(),
             Some(Cell::Usage { text }) if text == "[0 in / 400 out (312 reasoning) / 0 cached, $0.0000]"
         ));
+    }
+
+    #[tokio::test]
+    async fn thinking_off_says_when_the_model_cannot_turn_it_off() {
+        // How many times the clamp was announced so far.
+        fn clamp_notices(app: &App) -> usize {
+            app.transcript
+                .cells
+                .iter()
+                .filter(|cell| {
+                    matches!(cell, Cell::Notice { text } if text.contains("cannot turn thinking off"))
+                })
+                .count()
+        }
+        // The test app starts with thinking off on Claude Sonnet 5, which can
+        // turn reasoning off: nothing to say.
+        let mut app = test_app();
+        assert_eq!(clamp_notices(&app), 0);
+
+        submit_command(&mut app, "/model codex/gpt-6.1-sol");
+        assert!(has_notice(
+            &app,
+            "GPT-6.1 Sol cannot turn thinking off, using minimal"
+        ));
+        // The footer shows the level that is really used.
+        assert!(draw(&mut app, 200, 20).contains("thinking minimal"));
+        // Asking for off again says it again.
+        submit_command(&mut app, "/thinking off");
+        assert_eq!(clamp_notices(&app), 2);
+
+        // Back on a model that can turn reasoning off, off is off again.
+        submit_command(&mut app, "/model claude-sonnet-5");
+        assert!(draw(&mut app, 200, 20).contains("thinking off"));
+        assert_eq!(clamp_notices(&app), 2);
     }
 
     #[tokio::test]
@@ -3461,8 +3495,9 @@ mod tests {
         submit_command(&mut app, "/provider openai-codex");
         assert_eq!(app.meta.provider, "openai-codex");
         assert_eq!(app.meta.model_name, "GPT-6 Sol");
-        let notice = last_notice(&app);
-        assert!(notice.contains("model codex/gpt-6-sol;"), "{notice}");
+        // Not the last notice: the test app runs with thinking off, which
+        // GPT-6 Sol cannot do, so the thinking notice follows this one.
+        assert!(has_notice(&app, "model codex/gpt-6-sol;"));
         // And the key path is closed: codex takes logins, not keys.
         submit_command(&mut app, "/provider openai-codex sk-pasted");
         let notice = app

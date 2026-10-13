@@ -1,6 +1,6 @@
 //! Model registry helpers and cost/thinking-level logic.
 
-use crate::types::{CostTier, Model, ModelThinkingLevel, Usage};
+use crate::types::{CostTier, Model, ModelThinkingLevel, ThinkingLevel, Usage};
 
 const PER_M: f64 = 1_000_000.0;
 
@@ -81,6 +81,31 @@ pub(crate) fn supported_thinking_levels(model: &Model) -> Vec<ModelThinkingLevel
             }
         })
         .collect()
+}
+
+/// The thinking level a request really uses (`None` = off). Only "off" can
+/// change: a model whose catalog row maps "off" to null cannot turn reasoning
+/// off, and leaving the setting out would let the server reason at its own
+/// default effort, unseen. Such a model gets its lowest level instead.
+#[must_use]
+pub fn effective_thinking_level(
+    model: &Model,
+    requested: Option<ThinkingLevel>,
+) -> Option<ThinkingLevel> {
+    if requested.is_some() || !model.reasoning {
+        return requested;
+    }
+    // The supported levels are sorted from off upwards: off itself when the
+    // model can turn reasoning off, otherwise its lowest real level.
+    match supported_thinking_levels(model).first().copied() {
+        Some(ModelThinkingLevel::Minimal) => Some(ThinkingLevel::Minimal),
+        Some(ModelThinkingLevel::Low) => Some(ThinkingLevel::Low),
+        Some(ModelThinkingLevel::Medium) => Some(ThinkingLevel::Medium),
+        Some(ModelThinkingLevel::High) => Some(ThinkingLevel::High),
+        Some(ModelThinkingLevel::XHigh) => Some(ThinkingLevel::XHigh),
+        Some(ModelThinkingLevel::Max) => Some(ThinkingLevel::Max),
+        Some(ModelThinkingLevel::Off) | None => None,
+    }
 }
 
 /// Snap a requested level to the nearest supported one: try the exact
@@ -165,6 +190,38 @@ mod tests {
             headers: None,
             compat: None,
         }
+    }
+
+    /// A catalog row by id.
+    fn catalog_row(id: &str) -> Model {
+        crate::catalog::builtin_models()
+            .into_iter()
+            .find(|model| model.id == id)
+            .unwrap()
+    }
+
+    #[test]
+    fn off_becomes_the_lowest_level_where_reasoning_cannot_be_turned_off() {
+        // "off" and "minimal" map to null: the lowest level is low.
+        let opus = catalog_row("claude-opus-5-5");
+        assert_eq!(
+            effective_thinking_level(&opus, None),
+            Some(ThinkingLevel::Low)
+        );
+        // Only "off" maps to null: minimal is left.
+        let codex = catalog_row("codex/gpt-6.1-sol");
+        assert_eq!(
+            effective_thinking_level(&codex, None),
+            Some(ThinkingLevel::Minimal)
+        );
+        // A model that can turn reasoning off keeps off.
+        let sonnet = catalog_row("claude-sonnet-5");
+        assert_eq!(effective_thinking_level(&sonnet, None), None);
+        // Every other level passes through unchanged.
+        assert_eq!(
+            effective_thinking_level(&codex, Some(ThinkingLevel::High)),
+            Some(ThinkingLevel::High)
+        );
     }
 
     fn assert_close(actual: f64, expected: f64) {

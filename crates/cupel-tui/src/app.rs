@@ -291,7 +291,24 @@ impl App {
         if let Some(warning) = app.meta.startup_warning.take() {
             app.notice(warning);
         }
+        app.note_thinking_level();
         app
+    }
+
+    /// Say so when the model cannot do the thinking level that was asked for.
+    /// Only "off" can differ (see `effective_thinking_level`); the footer
+    /// shows the level that is really used.
+    fn note_thinking_level(&mut self) {
+        if self.agent.thinking_level().is_none()
+            && let Some(level) = self.agent.effective_thinking_level()
+        {
+            let level = cupel_core::types::ModelThinkingLevel::from(level);
+            self.notice(format!(
+                "{} cannot turn thinking off, using {}",
+                self.meta.model_name,
+                level.as_str()
+            ));
+        }
     }
 
     /// Rebuild transcript cells from restored history so a resumed session
@@ -1261,6 +1278,7 @@ impl App {
         self.notice(format!(
             "provider switched to {provider} (model {model_id}; {key_source} {saved_note})"
         ));
+        self.note_thinking_level();
     }
 
     /// `/preset`, list the presets from settings.json, or switched to one:
@@ -1305,6 +1323,7 @@ impl App {
             "preset {name} activated: {} (takes effect next request)",
             preset_summary(&preset)
         ));
+        self.note_thinking_level();
     }
 
     /// Handle a built-in `/command`. Returns false when the name isn't a
@@ -1405,6 +1424,7 @@ impl App {
                     self.notice(format!(
                         "model switched to {args} (takes effect next request)"
                     ));
+                    self.note_thinking_level();
                 } else {
                     self.notice(format!("unknown model: {args} (/model lists them)"));
                 }
@@ -1443,6 +1463,7 @@ impl App {
                     Some(level) => {
                         self.agent.set_thinking_level(level);
                         self.notice(format!("thinking level set to {args}"));
+                        self.note_thinking_level();
                     }
                     None => self.notice(
                         "usage: /thinking off|minimal|low|medium|high|xhigh|max".to_string(),

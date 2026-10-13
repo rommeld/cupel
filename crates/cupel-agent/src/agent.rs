@@ -218,6 +218,15 @@ impl Agent {
             .thinking_level
     }
 
+    /// The thinking level the next request really uses: the requested one,
+    /// except "off" on a model that cannot turn reasoning off, which gets its
+    /// lowest level instead.
+    #[must_use]
+    pub fn effective_thinking_level(&self) -> Option<ThinkingLevel> {
+        let state = self.state.lock().expect("agent state lock poisoned");
+        cupel_core::model::effective_thinking_level(&state.model, state.thinking_level)
+    }
+
     /// The current model's context window.
     #[must_use]
     pub fn context_window(&self) -> u64 {
@@ -393,7 +402,12 @@ impl Agent {
                 },
                 AgentLoopConfig {
                     model: state.model.clone(),
-                    thinking_level: state.thinking_level,
+                    // The run uses what the model can do; the state keeps
+                    // what was asked for, so a later model switch can honour it.
+                    thinking_level: cupel_core::model::effective_thinking_level(
+                        &state.model,
+                        state.thinking_level,
+                    ),
                     api_key: self.api_key.clone(),
                     session_id: self.session_id.clone(),
                     temperature: self.temperature,
