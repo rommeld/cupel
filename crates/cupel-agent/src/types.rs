@@ -241,6 +241,10 @@ pub enum AgentEvent {
     AgentEnd {
         messages: Vec<AgentMessage>,
     },
+    /// A request to the model is about to go out. Every request opens with it,
+    /// retries included, and a `TurnEnd` closes it. Until the first streamed
+    /// event arrives, the agent is waiting for the model.
+    TurnStart,
     TurnEnd {
         message: Box<AgentMessage>,
         tool_results: Vec<ToolResultMessage>,

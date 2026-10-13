@@ -1679,7 +1679,9 @@ impl App {
                 });
             }
             AgentEvent::AgentEnd { .. } => self.finish_run().await,
-            AgentEvent::TurnEnd { .. } | AgentEvent::ThinkingBlocksRemoved { .. } => {}
+            AgentEvent::TurnStart
+            | AgentEvent::TurnEnd { .. }
+            | AgentEvent::ThinkingBlocksRemoved { .. } => {}
         }
     }
 

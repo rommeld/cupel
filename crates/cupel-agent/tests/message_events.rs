@@ -261,3 +261,21 @@ async fn every_message_of_a_run_arrives_as_message_end() {
         .count();
     assert_eq!(ends, 1);
 }
+
+#[tokio::test]
+async fn every_request_opens_with_turn_start_and_closes_with_turn_end() {
+    let (events, _) = two_turns().await;
+    let turns: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::TurnStart => Some("start"),
+            AgentEvent::MessageEnd {
+                message: AgentMessage::Llm(Message::Assistant(_)),
+            } => Some("reply"),
+            AgentEvent::TurnEnd { .. } => Some("end"),
+            _ => None,
+        })
+        .collect();
+    // Two requests: the tool call, then the answer after the tool result.
+    assert_eq!(turns, ["start", "reply", "end", "start", "reply", "end"]);
+}

@@ -161,6 +161,8 @@ async fn run_loop(
                 .await;
             }
 
+            sink.emit(AgentEvent::TurnStart);
+
             // This reply's own token. A child token is cancelled with its parent (Esc
             // still stops everything) but can also be cancelled alone. Steering does
             // that, and the run goes on.

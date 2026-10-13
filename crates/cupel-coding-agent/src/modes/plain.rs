@@ -433,7 +433,8 @@ async fn run_session(
                         delay_ms as f64 / 1000.0
                     ))?;
                 }
-                AgentEvent::ToolExecutionStart { .. }
+                AgentEvent::TurnStart
+                | AgentEvent::ToolExecutionStart { .. }
                 | AgentEvent::ToolExecutionUpdate { .. }
                 | AgentEvent::ThinkingBlocksRemoved { .. } => {}
                 AgentEvent::AgentEnd { .. } => {
