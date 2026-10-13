@@ -44,20 +44,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify release tag matches workspace version
+      - name: Set workspace version from release tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version=$(awk '
-            /^\[workspace\.package\]/ { inpkg = 1; next }
-            /^\[/ { inpkg = 0 }
-            inpkg && /^version = / { gsub(/"/, "", $3); print $3; exit }
-          ' Cargo.toml)
-          if [ -z "$version" ] || [ "$RELEASE_TAG" != "v$version" ]; then
-            echo "error: release tag $RELEASE_TAG does not match workspace version '$version'; bump Cargo.toml/Cargo.lock before tagging" >&2
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: release tag '$RELEASE_TAG' must be vX.Y.Z or vX.Y.Z-prerelease" >&2
             exit 1
           fi
+          version=${RELEASE_TAG#v}
+
+          # The tag is the source of truth for release binaries, including
+          # CARGO_PKG_VERSION. Only rewrite the inherited workspace version.
+          awk -v v="$version" '
+            /^\[workspace\.package\]/ { inpkg = 1 }
+            /^\[/ && !/^\[workspace\.package\]/ { inpkg = 0 }
+            inpkg && /^version = / && !done { print "version = \"" v "\""; done = 1; next }
+            { print }
+            END { if (!done) exit 1 }
+          ' Cargo.toml > Cargo.toml.tmp
+          mv Cargo.toml.tmp Cargo.toml
+
+          # Refresh workspace versions without upgrading locked dependencies.
+          cargo update --workspace
 
       - name: Install musl toolchain (Linux)
         if: runner.os == 'Linux'
