@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.29.1] - 2026-10-13
+
+- fix(release): add missing prefix v to handle version number
+
 ## [v0.27.0] - 2026-10-10
 
 - fix(auth): never write an older codex login back, explain a rejected one
