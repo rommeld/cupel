@@ -393,6 +393,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("x-ai/grok-4.7", Thinking::FromEffort),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
             openrouter("google/gemini-3.8-flash", Thinking::FromEffort),
+            openrouter("google/gemini-4-argon", Thinking::FromEffort),
             openrouter_openai("openai/gpt-6-astra"),
             openrouter_openai("openai/gpt-6-sol"),
             openrouter_openai("openai/gpt-6.1-sol"),
