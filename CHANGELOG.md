@@ -23,7 +23,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - fix(core): redact StreamOptions API key in Debug output
 - fix(tui): batch ready background events before redrawing
 - fix(tui): initialize warnings in signal test fixture
-- version: sync to v0.26.0 from CHANGELOG.md
 - feat: add active-run steering and refresh TUI user messages
 
 ## [v0.26.0] - 2026-10-08

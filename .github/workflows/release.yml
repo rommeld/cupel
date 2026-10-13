@@ -44,6 +44,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify release tag matches workspace version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$(awk '
+            /^\[workspace\.package\]/ { inpkg = 1; next }
+            /^\[/ { inpkg = 0 }
+            inpkg && /^version = / { gsub(/"/, "", $3); print $3; exit }
+          ' Cargo.toml)
+          if [ -z "$version" ] || [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "error: release tag $RELEASE_TAG does not match workspace version '$version'; bump Cargo.toml/Cargo.lock before tagging" >&2
+            exit 1
+          fi
+
       - name: Install musl toolchain (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
