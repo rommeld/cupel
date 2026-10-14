@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.29.3] - 2026-10-14
+
+- fix(version): release will now correctly updates version
+- fix(session): session --resume failes when provided anything other than valid session id
+- refact(tui): remove titles, left, and right borders from promp and coversation blocks
+
 ## [v0.29.2] - 2026-10-13
 
 - feat(catalog): add Muse Wonder on OpenRouter
