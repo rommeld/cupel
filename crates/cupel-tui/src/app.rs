@@ -1347,6 +1347,12 @@ impl App {
                 }
                 self.notice(lines.join("\n"));
             }
+            "session-id" if !args.is_empty() => {
+                self.notice(format!(
+                    "invalid argument for /session-id: {args:?}; this command takes no arguments.\n\
+                     Use /session-id to list valid session IDs, or /hot-reload <session-id> to resume one."
+                ));
+            }
             "session-id" => {
                 // Transcripts carry no stored summary (compaction output is
                 // never persisted), so each session's first prompt serves as
