@@ -227,7 +227,7 @@ impl Transcript {
     }
 
     /// The raw text a copy places on the clipboard. The unrendered cell
-    /// content (no surface padding, no wrapping, markdown source exactly as
+    /// content (no marker, no wrapping, markdown source exactly as
     /// the model wrote it). Tool cells return None: a click on them toggles
     /// the preview instead of selecting, so they stay out of the copy
     /// feature.
@@ -288,40 +288,29 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
 }
 
 /// A full-width user surface with a `>>` marker on the first content row.
-/// Render Markdown before adding the marker and padding so
+/// Render Markdown before adding the marker so
 /// headings and code fences are recognized at the start of source lines.
 fn user_lines(text: &str, width: usize) -> Vec<Line<'static>> {
-    let padding = theme::USER_MESSAGE_PADDING;
-    let left = usize::from(padding.left);
     let prefix = ">> ";
-    let inset = left + prefix.len();
-    let content_width = width
-        .saturating_sub(inset + usize::from(padding.right))
-        .max(1);
-    let blank = Line::from(" ".repeat(width)).style(theme::TASK);
-    let mut out: Vec<_> = std::iter::repeat_n(blank.clone(), usize::from(padding.top)).collect();
-    out.extend(
-        crate::markdown::render(text, content_width, theme::TASK)
-            .into_iter()
-            .enumerate()
-            .map(|(index, mut line)| {
-                let trailing = width.saturating_sub(inset + line.width());
-                line.style = theme::TASK.patch(line.style);
-                line.spans.insert(
-                    0,
-                    Span::raw(if index == 0 {
-                        prefix.to_string()
-                    } else {
-                        " ".repeat(prefix.len())
-                    }),
-                );
-                line.spans.insert(0, Span::raw(" ".repeat(left)));
-                line.spans.push(Span::raw(" ".repeat(trailing)));
-                line
-            }),
-    );
-    out.extend(std::iter::repeat_n(blank, usize::from(padding.bottom)));
-    out
+    let content_width = width.saturating_sub(prefix.len()).max(1);
+    crate::markdown::render(text, content_width, theme::TASK)
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut line)| {
+            let trailing = width.saturating_sub(prefix.len() + line.width());
+            line.style = theme::TASK.patch(line.style);
+            line.spans.insert(
+                0,
+                Span::raw(if index == 0 {
+                    prefix.to_string()
+                } else {
+                    " ".repeat(prefix.len())
+                }),
+            );
+            line.spans.push(Span::raw(" ".repeat(trailing)));
+            line
+        })
+        .collect()
 }
 
 /// Styled, wrapped lines for one tool cell: the call's header line, then
@@ -586,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn user_messages_render_markdown_with_a_padded_background() {
+    fn user_messages_render_markdown_without_surface_padding() {
         use ratatui::style::{Color, Modifier};
 
         let source = "plain **bold** and *italic* with `code`\n```rust\nfn main() {}\n```";
@@ -598,29 +587,24 @@ mod tests {
         let rendered = transcript.to_lines(48, None);
         assert_eq!(
             rendered.lines.len(),
-            4,
-            "two content rows plus two padding rows"
+            2,
+            "only content rows, with no padding rows"
         );
-        assert_eq!(
-            rendered.cell_at,
-            vec![Some(0); 4],
-            "padding belongs to the user cell"
-        );
+        assert_eq!(rendered.cell_at, vec![Some(0); 2]);
         for line in &rendered.lines {
             assert_eq!(line.width(), 48, "the surface fills the column");
             assert_eq!(line.style.fg, Some(Color::White));
             assert_eq!(line.style.bg, Some(Color::Indexed(240)));
         }
-        for index in [0, 3] {
-            assert_eq!(line_text(&rendered.lines[index]), " ".repeat(48));
-        }
-        let prose = &rendered.lines[1];
+        let prose = &rendered.lines[0];
         assert_eq!(
-            line_text(prose).trim(),
+            line_text(prose).trim_end(),
             ">> plain bold and italic with code"
         );
-        assert_eq!(prose.spans[0].content, " ", "one column of left padding");
-        assert_eq!(prose.spans[1].content, ">> ", "the user message marker");
+        assert_eq!(
+            prose.spans[0].content, ">> ",
+            "the marker has no left padding"
+        );
         for (word, modifier) in [("bold", Modifier::BOLD), ("italic", Modifier::ITALIC)] {
             let span = prose
                 .spans
@@ -640,7 +624,7 @@ mod tests {
             Some(Color::Cyan),
             "inline code retains its accent"
         );
-        let fenced = &rendered.lines[2];
+        let fenced = &rendered.lines[1];
         assert_eq!(line_text(fenced).trim(), "fn main() {}");
         let code = fenced
             .spans
@@ -657,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn user_messages_wrap_wide_characters_inside_the_padding() {
+    fn user_messages_wrap_wide_characters_without_surface_padding() {
         use ratatui::style::Modifier;
 
         let transcript = Transcript {
@@ -666,14 +650,26 @@ mod tests {
             }],
         };
         let rendered = transcript.to_lines(10, None);
-        assert_eq!(rendered.lines.len(), 5);
-        assert_eq!(line_text(&rendered.lines[1]), " >> 日本  ");
-        assert_eq!(line_text(&rendered.lines[2]), "    語日  ");
-        assert_eq!(line_text(&rendered.lines[3]), "    本語  ");
+        assert_eq!(rendered.lines.len(), 2);
+        assert_eq!(line_text(&rendered.lines[0]), ">> 日本語 ");
+        assert_eq!(line_text(&rendered.lines[1]), "   日本語 ");
         assert!(rendered.lines.iter().all(|line| line.width() == 10));
-        for line in &rendered.lines[1..4] {
-            assert!(line.spans[2].style.add_modifier.contains(Modifier::BOLD));
+        for line in &rendered.lines {
+            assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
         }
+    }
+
+    #[test]
+    fn user_messages_use_the_full_width_after_the_marker() {
+        let transcript = Transcript {
+            cells: vec![Cell::User {
+                text: "abcdefghijklm".into(),
+            }],
+        };
+        let rendered = transcript.to_lines(16, None);
+        assert_eq!(rendered.lines.len(), 1);
+        assert_eq!(line_text(&rendered.lines[0]), ">> abcdefghijklm");
+        assert_eq!(rendered.cell_at, vec![Some(0)]);
     }
 
     #[test]
@@ -692,22 +688,15 @@ mod tests {
             .collect();
         assert_eq!(
             lines,
-            vec![
-                "",
-                " >> hello",
-                "    brave new",
-                "    world",
-                "    next line",
-                ""
-            ]
+            vec![">> hello brave", "   new world", "   next line"]
         );
         assert!(rendered.lines.iter().all(|line| line.width() == 16));
-        assert_eq!(rendered.cell_at, vec![Some(0); 6]);
+        assert_eq!(rendered.cell_at, vec![Some(0); 3]);
         assert_eq!(transcript.copy_text(0), Some(source));
     }
 
     #[test]
-    fn selected_user_messages_highlight_padding_prose_and_code() {
+    fn selected_user_messages_highlight_the_surface_prose_and_code() {
         let transcript = Transcript {
             cells: vec![Cell::User {
                 text: "**bold**\n```rust\nlet x = 1;\n```".into(),

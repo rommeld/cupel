@@ -6,7 +6,7 @@
 //! there is only state (in `App`) and this projection of it.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -39,8 +39,8 @@ fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect) {
     if area.width == 0 {
         return;
     }
-    let block =
-        pane_block(" sessions ").title_bottom(Span::styled(" ctrl+n/p · click ", theme::CHROME));
+    let block = pane_block(Some("sessions"))
+        .title_bottom(Span::styled(" ctrl+n/p · click ", theme::CHROME));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let mut lines = Vec::new();
@@ -93,9 +93,9 @@ fn fit(text: &str, max: usize) -> String {
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     // Input grows with its content (explicit newlines + wrapped lines),
-    // capped at 5 visible lines, + 2 border rows. The inner width is the
-    // full frame width minus the left/right borders.
-    let inner_width = area.width.saturating_sub(2).max(1) as usize;
+    // capped at 5 visible lines, + 2 border rows. With only top/bottom
+    // borders, the input uses the full frame width.
+    let inner_width = area.width.max(1) as usize;
     let input_lines = app
         .input
         .text()
@@ -154,7 +154,7 @@ fn render_autocomplete(
         .max()
         .unwrap_or(10)
         .min(area.width);
-    let x = (input_area.x + 1 + anchor_col).min(area.right().saturating_sub(width));
+    let x = (input_area.x + anchor_col).min(area.right().saturating_sub(width));
 
     let popup = Rect {
         x,
@@ -181,10 +181,8 @@ fn render_autocomplete(
 }
 
 fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
-    // The block renders first, content after `inner` subtracts the
-    // border and the padding, so the Paragraph below never touches the
-    // frame.
-    let block = pane_block(" conversation ");
+    // Keep the pane's horizontal content margin without drawing borders.
+    let block = pane_block(None).borders(Borders::NONE);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -215,8 +213,7 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 
     frame.render_widget(Paragraph::new(rendered.lines[start..end].to_vec()), inner);
 
-    // The scrollbar rides the frame's right edge; the vertical margin
-    // spares the border corner glyphs. Rendered only when there is
+    // The scrollbar rides the frame's right edge. Rendered only when there is
     // something to scroll a permanently full bar would read as
     // decoration.
     if total > height {
@@ -227,14 +224,7 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .track_style(theme::PANE_BORDER)
             .thumb_style(theme::SCROLLBAR_THUMB);
         let mut state = ScrollbarState::new(total).position(start);
-        frame.render_stateful_widget(
-            scrollbar,
-            area.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            &mut state,
-        );
+        frame.render_stateful_widget(scrollbar, area, &mut state);
     }
 
     // A scroll indicator only when not following the tail.
@@ -279,14 +269,16 @@ fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 const SPINNER: [&str; 4] = ["◓", "◑", "◒", "◐"];
 
-/// The transcript frame: dim border, dim title, one column of padding so
-/// text never sticks to the border line.
-fn pane_block(title: &'static str) -> Block<'static> {
-    Block::new()
+/// A pane frame: dim border, optional dim title, one column of horizontal padding.
+fn pane_block(title: Option<&str>) -> Block<'static> {
+    let block = Block::new()
         .borders(Borders::ALL)
         .border_style(theme::PANE_BORDER)
-        .title(Span::styled(title, theme::CHROME))
-        .padding(Padding::horizontal(1))
+        .padding(Padding::horizontal(1));
+    match title {
+        Some(title) => block.title(Span::styled(format!(" {title} "), theme::CHROME)),
+        None => block,
+    }
 }
 
 /// Cursor position as (visual line, visual column) in the wrapped input
@@ -339,23 +331,21 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         theme::INPUT_BORDER_IDLE
     };
-    let title = if app.is_running() {
+    let mut block = Block::new()
+        .borders(Borders::TOP | Borders::BOTTOM)
+        .border_style(border_style);
+    if app.is_running() {
         let elapsed = app
             .run_started
             .map(|started| format!(" · {}", format_elapsed(started.elapsed())))
             .unwrap_or_default();
-        format!(
+        let title = format!(
             " {} {}{elapsed} ",
             SPINNER[app.frame % SPINNER.len()],
             app.activity_label()
-        )
-    } else {
-        " prompt ".to_string()
-    };
-    let block = Block::new()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(Span::styled(title, theme::CHROME));
+        );
+        block = block.title(Span::styled(title, theme::CHROME));
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -661,18 +651,15 @@ mod tests {
         terminal
             .draw(|frame| render_input(frame, &app, frame.area()))
             .unwrap();
-        assert_eq!(
-            terminal.get_cursor_position().unwrap(),
-            Position::new(10, 1)
-        );
+        assert_eq!(terminal.get_cursor_position().unwrap(), Position::new(9, 1));
         let buffer = terminal.backend().buffer();
-        for x in 1..19 {
+        for x in 0..20 {
             let cell = &buffer[(x, 1)];
             assert_eq!(cell.fg, Color::Reset);
             assert_eq!(cell.bg, Color::Reset);
             assert!(!cell.modifier.contains(Modifier::BOLD));
         }
-        let text: String = (1..10).map(|x| buffer[(x, 1)].symbol()).collect();
+        let text: String = (0..9).map(|x| buffer[(x, 1)].symbol()).collect();
         assert_eq!(text, "**draft**", "editing shows the raw source");
     }
 
@@ -687,13 +674,61 @@ mod tests {
         // Two border rows plus two text rows: input starts at y=14.
         assert_eq!(
             terminal.get_cursor_position().unwrap(),
-            Position::new(6, 16)
+            Position::new(5, 16)
         );
         let buffer = terminal.backend().buffer();
-        let first: String = (1..17).map(|x| buffer[(x, 15)].symbol()).collect();
-        let second: String = (1..6).map(|x| buffer[(x, 16)].symbol()).collect();
+        let first: String = (0..16).map(|x| buffer[(x, 15)].symbol()).collect();
+        let second: String = (0..5).map(|x| buffer[(x, 16)].symbol()).collect();
         assert_eq!(first, "hello brave new ");
         assert_eq!(second, "world");
+    }
+
+    #[test]
+    fn prompt_uses_the_full_width_without_growing_an_extra_row() {
+        let mut app = test_app();
+        app.input.insert_str("abcdefghijklmnopqrst");
+        let mut terminal = Terminal::new(TestBackend::new(20, 20)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &mut app, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..20).map(|x| buffer[(x, 16)].symbol()).collect();
+        assert_eq!(text, "abcdefghijklmnopqrst");
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(19, 16)
+        );
+        assert_eq!(app.last_transcript_inner.height, 15);
+    }
+
+    #[test]
+    fn only_the_prompt_has_top_and_bottom_borders_without_a_title() {
+        let mut app = test_app();
+        app.input.insert_str("draft");
+        app.transcript.cells.push(Cell::User {
+            text: "task".into(),
+        });
+        let screen = draw(&mut app, 80, 20);
+        assert!(!screen.contains(" conversation "), "{screen}");
+        assert!(!screen.contains(" prompt "), "{screen}");
+        for (y, row) in screen.lines().enumerate() {
+            if matches!(y, 15 | 17) {
+                assert_eq!(row, "─".repeat(80), "{screen}");
+            } else {
+                assert!(!row.contains('─'), "{screen}");
+            }
+        }
+        assert!(!screen.contains(['│', '┌', '┐', '└', '┘']), "{screen}");
+        assert!(
+            screen.lines().next().unwrap().starts_with(" >> task"),
+            "{screen}"
+        );
+        assert!(
+            screen.lines().nth(16).unwrap().starts_with("draft"),
+            "{screen}"
+        );
+        assert_eq!(app.last_transcript_inner, Rect::new(1, 0, 78, 15));
+        assert_eq!(style_of(&mut app, "─").fg, theme::INPUT_BORDER_IDLE.fg);
     }
 
     #[test]
@@ -920,6 +955,46 @@ mod tests {
         assert!(notice.contains("cupel-old"), "{notice}");
         assert!(notice.contains("find the bug"), "label = first prompt");
         assert!(notice.contains("1970-01-01"), "startedAt 1000ms date");
+    }
+
+    #[test]
+    fn session_id_command_rejects_arguments() {
+        for args in [
+            "random-string",
+            "cupel-9999999999999",
+            "cupel-test",
+            "random string",
+            "  random-string  ",
+        ] {
+            let mut app = test_app();
+            submit_command(&mut app, &format!("/session-id {args}"));
+
+            let [Cell::Notice { text }] = app.transcript.cells.as_slice() else {
+                panic!("expected only an invalid-argument notice for {args:?}");
+            };
+            assert!(text.contains("invalid argument for /session-id"), "{text}");
+            assert!(text.contains(&format!("{:?}", args.trim())), "{text}");
+            assert!(text.contains("takes no arguments"), "{text}");
+            assert!(text.contains("/hot-reload <session-id>"), "{text}");
+            assert!(!text.contains("current session:"), "{text}");
+            assert!(app.pending_prompt.is_none());
+            assert!(app.pending_reload.is_none());
+            assert!(!app.is_running());
+        }
+    }
+
+    #[test]
+    fn session_id_command_accepts_trailing_whitespace() {
+        for command in ["/session-id", "/session-id   ", "/session-id\t"] {
+            let mut app = test_app();
+            submit_command(&mut app, command);
+
+            let [Cell::Notice { text }] = app.transcript.cells.as_slice() else {
+                panic!("expected only a session-listing notice for {command:?}");
+            };
+            assert!(text.contains("current session: cupel-test"), "{text}");
+            assert!(text.contains("session persistence is disabled"), "{text}");
+        }
     }
 
     /// App with a real home + cwd on disk, for reload/resume tests.
@@ -1507,6 +1582,10 @@ mod tests {
         assert!(app.autocomplete.is_open());
         let screen = draw(&mut app, 80, 20);
         assert!(screen.contains("src/main.rs"), "popup missing:\n{screen}");
+        assert!(
+            screen.lines().any(|row| row.starts_with(" src/main.rs ")),
+            "popup starts at the input's left edge:\n{screen}"
+        );
     }
 
     #[test]
@@ -2338,13 +2417,15 @@ mod tests {
         // its events are pumped the app counts as running.
         app.start_run("spin");
         assert!(draw(&mut app, 80, 20).contains("◓ waiting for the model · 0s"));
+        assert_eq!(style_of(&mut app, "─").fg, theme::INPUT_BORDER_BUSY.fg);
         app.tick();
         assert!(draw(&mut app, 80, 20).contains("◑ waiting for the model · 0s"));
         while app.is_running() {
             let event = app.next_event().await;
             app.on_event(event).await;
         }
-        assert!(draw(&mut app, 80, 20).contains(" prompt "));
+        assert!(!draw(&mut app, 80, 20).contains(" prompt "));
+        assert_eq!(style_of(&mut app, "─").fg, theme::INPUT_BORDER_IDLE.fg);
     }
 
     #[tokio::test]
@@ -3173,7 +3254,7 @@ mod tests {
     }
 
     #[test]
-    fn the_transcript_is_one_framed_column() {
+    fn the_transcript_is_one_borderless_column() {
         let mut app = test_app();
         app.transcript.cells.push(Cell::User {
             text: "task".into(),
@@ -3191,7 +3272,7 @@ mod tests {
         app.transcript.append_assistant("found it");
         let screen = draw(&mut app, 80, 20);
         // One frame: no tools pane, no band rule.
-        assert!(screen.contains(" conversation "), "{screen}");
+        assert!(!screen.contains(" conversation "), "{screen}");
         assert!(!screen.contains(" tools "), "{screen}");
         assert!(!screen.contains("─ 1 "), "{screen}");
         // Cells follow each other top to bottom in event order...
@@ -3204,9 +3285,9 @@ mod tests {
         assert!(row_of("task") < row_of("let me look"));
         assert!(row_of("let me look") < row_of("read src/main.rs"));
         assert!(row_of("read src/main.rs") < row_of("found it"));
-        // Border, pane padding, then the user surface's own padding.
+        // Only the pane margin remains before the user message marker.
         let row = screen.lines().nth(row_of("task")).unwrap();
-        assert!(row.starts_with("│  >> task"), "{row:?}");
+        assert!(row.starts_with(" >> task"), "{row:?}");
     }
 
     #[test]
@@ -3794,6 +3875,21 @@ mod tests {
         });
         let screen = draw_sessions(&mut sessions, 100, 20);
         assert!(screen.contains(" sessions "), "{screen}");
+        assert!(!screen.contains(" conversation "), "{screen}");
+        assert!(screen.contains('┌') && screen.contains('└'), "{screen}");
+        assert!(screen.contains(" ctrl+n/p · click "), "{screen}");
+        for (y, row) in screen.lines().enumerate() {
+            let main: String = row.chars().skip(usize::from(SIDEBAR_WIDTH)).collect();
+            if matches!(y, 15 | 17) {
+                assert_eq!(
+                    main,
+                    "─".repeat(100 - usize::from(SIDEBAR_WIDTH)),
+                    "{screen}"
+                );
+            } else {
+                assert!(!main.contains(['─', '│', '┌', '┐', '└', '┘']), "{screen}");
+            }
+        }
         assert!(screen.contains("○ origin"), "{screen}");
         assert!(screen.contains("◓ auth"), "{screen}");
         // The spinner turns with the ticks.
