@@ -166,6 +166,10 @@ jobs:
             exit 0
           fi
           git commit -m "changelog: $GITHUB_REF_NAME"
+          # Someone may have pushed to main since the checkout above. Replay
+          # the commit on top of it instead of having the push rejected; a
+          # real conflict still fails the job under `set -e`.
+          git pull --rebase origin main
           git push
 
   # Bump the Homebrew tap to the release that was just published. Needs a
