@@ -16,6 +16,16 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.29.1] - 2026-10-13
 
 - fix(release): add missing prefix v to handle version number
+- feat(catalog): add Gemini 4 Argon on OpenRouter
+- feat(version): update release pipeline to add the latest version
+- fix(thinking): off on a model that cannot turn reasoning off uses its lowest level
+- feat(tui): show what the agent does and how long it worked
+- feat(agent): announce every model request with TurnStart
+- feat(tui): render thinking as markdown, show reasoning tokens
+- fix: steering comment slips and a gap before the footer version
+- feat(catalog): add GPT-6.1 Sol Ultrafast for openai and openai-codex
+- feat(core): send requestModel and serviceTier on both Responses dialects
+- feat(tui): display the current version in the footer
 
 ## [v0.27.0] - 2026-10-10
 
