@@ -8,11 +8,12 @@
 //!
 //! Styling model: every accent is a patch onto the cell's base style
 //! (Style::patch set fields win, unset fields inherit), so plain text
-//! renders byte-identical to the pre-markdown path and an Answer cell
-//! keeps its magenta identity under bold/italic. Streaming: to_lines
-//! re-renders every frame, so a not-yet-closed `**`or ``` simply styles
-//! the rest of the line/cell until the closing delimiter arrives the
-//! next delta self-corrects it.
+//! renders byte-identical to the pre-markdown path. Under CUPEL an Answer
+//! cell keeps its magenta identity under bold/italic; palette themes give
+//! headings, bold, and italic their own colors, like Zed's editor.
+//! Streaming: to_lines re-renders every frame, so a not-yet-closed `**`
+//! or ``` simply styles the rest of the line/cell until the closing
+//! delimiter arrives the next delta self-corrects it.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -345,10 +346,12 @@ fn render_block_line(
     // are dropped; depth maps to empasis (underline fades at H3+).
     let hashes = trimmed.chars().take_while(|c| *c == '#').count();
     if (1..=6).contains(&hashes) && trimmed[hashes..].starts_with(' ') {
+        // H3-H6 keep the heading style but drop the underline.
         let heading = if hashes <= 2 {
             base.patch(theme.md_heading)
         } else {
-            base.patch(theme.md_bold)
+            base.patch(theme.md_heading)
+                .remove_modifier(Modifier::UNDERLINED)
         };
         push_wrapped_spans(
             out,
@@ -715,6 +718,28 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn palette_themes_color_headings_emphasis_and_links() {
+        use crate::theme::NIGHTFOX;
+        let lines = render(
+            "# Top\n### Sub\n**bold** *italic* [docs](https://ratatui.rs)",
+            80,
+            NIGHTFOX.answer,
+            &NIGHTFOX,
+        );
+        let top = style_of(&lines, "Top");
+        assert_eq!(top.fg, NIGHTFOX.md_heading.fg);
+        assert!(top.add_modifier.contains(Modifier::UNDERLINED));
+        // H3: the heading color and bold, without the underline.
+        let sub = style_of(&lines, "Sub");
+        assert_eq!(sub.fg, NIGHTFOX.md_heading.fg);
+        assert!(sub.add_modifier.contains(Modifier::BOLD));
+        assert!(!sub.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(style_of(&lines, "bold").fg, NIGHTFOX.md_bold.fg);
+        assert_eq!(style_of(&lines, "italic").fg, NIGHTFOX.md_italic.fg);
+        assert_eq!(style_of(&lines, "docs").fg, NIGHTFOX.md_link.fg);
     }
 
     #[test]

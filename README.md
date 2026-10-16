@@ -149,7 +149,7 @@ A preset names a model, a thinking level, and optionally an additional system pr
 | `duskfox` | Duskfox - opaque | dark |
 | `nightfox` | Nightfox - opaque | dark |
 
-`cupel` draws in your terminal's own palette (its named colors plus three grays) on the terminal's own background. The other themes are *opaque*: they paint their own background on every cell, so they look the same in every terminal, whatever its color scheme or transparency. The palettes come from the Zed themes of the same names.
+`cupel` draws in your terminal's own palette (its named colors plus three grays) on the terminal's own background. The other themes are *opaque*: they paint their own background on every cell, so they look the same in every terminal, whatever its color scheme or transparency. The palettes come from the Zed themes of the same names: the text and Markdown colors (headings, bold and italic, links) from Zed's editor, the rest from its terminal colors.
 
 Only `~/.cupel/settings.json` sets the theme; a project's `.cupel/settings.json` cannot. An unknown ID starts cupel in the `cupel` theme with a warning. If saving fails, the switch still applies for this run and the notice explains why it was not saved. `/new` and `/hot-reload` keep the active theme; a hand-edited theme setting applies at the next start. Themes are TUI-only.
 
@@ -157,7 +157,7 @@ Only `~/.cupel/settings.json` sets the theme; a project's `.cupel/settings.json`
 
 Themes are compiled into cupel; there are no theme files. A custom theme therefore means building from source (see [From source](#from-source)). All themes live in `crates/cupel-tui/src/theme.rs`.
 
-1. Define the theme from a palette of 13 colors. Every part of the screen takes one of them:
+1. Define the theme from a palette of 15 colors. Every part of the screen takes one of them:
 
     ```rust
     pub const GRUVBOX_DARK: Theme = Theme::from_palette(
@@ -175,9 +175,11 @@ Themes are compiled into cupel; there are no theme files. A custom theme therefo
             red: hex(0xfb_4934),
             green: hex(0xb8_bb26),
             yellow: hex(0xfa_bd2f),
-            blue: hex(0x83_a598),
             magenta: hex(0xd3_869b),
             cyan: hex(0x8e_c07c),
+            heading: hex(0xb8_bb26),
+            emphasis: hex(0xfe_8019),
+            link: hex(0x83_a598),
         },
     );
     ```
@@ -194,9 +196,11 @@ Themes are compiled into cupel; there are no theme files. A custom theme therefo
     | `red` | errors and removed diff lines |
     | `green` | added diff lines |
     | `yellow` | notices, the input border while the agent works, the scroll marker |
-    | `blue` | links |
     | `magenta` | the final answer |
     | `cyan` | tool calls, inline code, list bullets, popup rows |
+    | `heading` | Markdown headings (Zed's `syntax.title`) |
+    | `emphasis` | bold and italic text (Zed's `syntax.emphasis`) |
+    | `link` | link text (Zed's `syntax.link_text`) |
 
 2. Add the constant to `THEMES` in the same file. `/themes` lists the themes in that order, and autocomplete offers the ID.
 

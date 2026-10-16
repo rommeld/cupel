@@ -77,10 +77,10 @@ pub struct Theme {
     pub popup_row: Style,
 
     // Markdown patch styles: applied onto a cell's base style via Style::patch. Set fields
-    // win, unset fields keep the base. A heading in an Answer cell is therefore in the
-    // answer color; only styles that do a set color (code, links) deliberately break out
-    // of the cell color, because code is code no matter which cell it is in.
-    /// H1/H2: bold + underlined (H3-H6 get `md_bold` only depth fades).
+    // win, unset fields keep the base. In CUPEL only code and links set a color, so a
+    // heading in an Answer cell stays in the answer color. Palette themes also color
+    // headings, bold, and italic, the way Zed's editor does.
+    /// H1/H2: bold + underlined (H3-H6 get the same style without the underline).
     pub md_heading: Style,
     pub md_bold: Style,
     pub md_italic: Style,
@@ -180,7 +180,7 @@ pub const CUPEL: Theme = Theme {
     md_table_header: Style::new().add_modifier(Modifier::BOLD),
 };
 
-/// The 13 colors from which [`Theme::from_palette`] builds every style role.
+/// The 15 colors from which [`Theme::from_palette`] builds every style role.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     /// Screen background.
@@ -203,17 +203,22 @@ pub struct Palette {
     pub green: Color,
     /// Notices and busy input border.
     pub yellow: Color,
-    /// Links.
-    pub blue: Color,
     /// Final answer.
     pub magenta: Color,
     /// Tools, inline code, list bullets, popup rows.
     pub cyan: Color,
+    // Markdown accents: the colors Zed's editor gives these elements.
+    /// Headings (Zed's `syntax.title`).
+    pub heading: Color,
+    /// Bold and italic text (Zed's `syntax.emphasis`).
+    pub emphasis: Color,
+    /// Link text (Zed's `syntax.link_text`).
+    pub link: Color,
 }
 
 impl Theme {
     /// Build an opaque theme with `CUPEL`'s hierarchy in a palette's colors.
-    /// Markdown modifiers remain patches onto the containing cell's style.
+    /// Headings, bold, italic, and links get the palette's Markdown accents.
     #[must_use]
     pub const fn from_palette(
         id: &'static str,
@@ -232,9 +237,11 @@ impl Theme {
             red,
             green,
             yellow,
-            blue,
             magenta,
             cyan,
+            heading,
+            emphasis,
+            link,
         } = palette;
         Self {
             id,
@@ -263,10 +270,11 @@ impl Theme {
             popup_selected: Style::new().add_modifier(Modifier::REVERSED),
             popup_row: Style::new().fg(cyan).bg(surface),
             md_heading: Style::new()
+                .fg(heading)
                 .add_modifier(Modifier::BOLD)
                 .add_modifier(Modifier::UNDERLINED),
-            md_bold: Style::new().add_modifier(Modifier::BOLD),
-            md_italic: Style::new().add_modifier(Modifier::ITALIC),
+            md_bold: Style::new().fg(emphasis).add_modifier(Modifier::BOLD),
+            md_italic: Style::new().fg(emphasis).add_modifier(Modifier::ITALIC),
             md_strike: Style::new().add_modifier(Modifier::CROSSED_OUT),
             md_code: Style::new().fg(cyan),
             md_code_block: Style::new().bg(surface),
@@ -274,7 +282,7 @@ impl Theme {
                 .add_modifier(Modifier::DIM)
                 .add_modifier(Modifier::ITALIC),
             md_bullet: Style::new().fg(cyan),
-            md_link: Style::new().fg(blue).add_modifier(Modifier::UNDERLINED),
+            md_link: Style::new().fg(link).add_modifier(Modifier::UNDERLINED),
             md_link_url: Style::new().add_modifier(Modifier::DIM),
             md_rule: Style::new().add_modifier(Modifier::DIM),
             md_table_header: Style::new().add_modifier(Modifier::BOLD),
@@ -296,7 +304,7 @@ pub const AYU_DARK: Theme = Theme::from_palette(
     Appearance::Dark,
     Palette {
         bg: hex(0x0d_1016),        // editor.background
-        fg: hex(0xbf_bdb6),        // terminal.foreground
+        fg: hex(0xbf_bdb6),        // text
         surface: hex(0x1f_2127),   // surface.background
         raised: hex(0x2d_2f34),    // element.hover
         selection: hex(0x3e_4043), // element.selected
@@ -305,10 +313,12 @@ pub const AYU_DARK: Theme = Theme::from_palette(
         red: hex(0xef_7177),       // terminal.ansi.red
         green: hex(0xaa_d84c),     // terminal.ansi.green
         yellow: hex(0xfe_b454),    // terminal.ansi.yellow
-        blue: hex(0x5a_c1fe),      // terminal.ansi.blue
         // Ayu's terminal magenta is blue; use its purple constant color.
-        magenta: hex(0xd2_a6ff), // syntax.constant
-        cyan: hex(0x95_e5cb),    // terminal.ansi.cyan
+        magenta: hex(0xd2_a6ff),  // syntax.constant
+        cyan: hex(0x95_e5cb),     // terminal.ansi.cyan
+        heading: hex(0xbf_bdb6),  // syntax.title
+        emphasis: hex(0x5a_c1fe), // syntax.emphasis
+        link: hex(0xfe_8f40),     // syntax.link_text
     },
 );
 
@@ -318,7 +328,7 @@ pub const AYU_LIGHT: Theme = Theme::from_palette(
     Appearance::Light,
     Palette {
         bg: hex(0xfc_fcfc),        // editor.background
-        fg: hex(0x5c_6166),        // terminal.foreground
+        fg: hex(0x5c_6166),        // text
         surface: hex(0xec_eced),   // surface.background
         raised: hex(0xdf_e0e1),    // element.hover
         selection: hex(0xcf_d0d2), // element.selected
@@ -327,9 +337,11 @@ pub const AYU_LIGHT: Theme = Theme::from_palette(
         red: hex(0xef_7271),       // terminal.ansi.red
         green: hex(0x85_b304),     // terminal.ansi.green
         yellow: hex(0xf1_ad49),    // terminal.ansi.yellow
-        blue: hex(0x3b_9ee5),      // terminal.ansi.blue
         magenta: hex(0xa3_7acc),   // syntax.constant (see AYU_DARK)
         cyan: hex(0x4d_bf99),      // terminal.ansi.cyan
+        heading: hex(0x5c_6166),   // syntax.title
+        emphasis: hex(0x3b_9ee5),  // syntax.emphasis
+        link: hex(0xf9_8d3f),      // syntax.link_text
     },
 );
 
@@ -339,7 +351,7 @@ pub const DAWNFOX: Theme = Theme::from_palette(
     Appearance::Light,
     Palette {
         bg: hex(0xfa_f4ed),        // editor.background
-        fg: hex(0x57_5279),        // terminal.foreground
+        fg: hex(0x4c_4769),        // text
         surface: hex(0xeb_e5df),   // surface.background
         raised: hex(0xd0_d8d8),    // editor.active_line.background
         selection: hex(0xb8_cece), // search.match_background
@@ -348,9 +360,11 @@ pub const DAWNFOX: Theme = Theme::from_palette(
         red: hex(0xb4_637a),       // terminal.ansi.red
         green: hex(0x61_8774),     // terminal.ansi.green
         yellow: hex(0xea_9d34),    // terminal.ansi.yellow
-        blue: hex(0x28_6983),      // terminal.ansi.blue
         magenta: hex(0x90_7aa9),   // terminal.ansi.magenta
         cyan: hex(0x56_949f),      // terminal.ansi.cyan
+        heading: hex(0x29_5e73),   // syntax.title
+        emphasis: hex(0xb4_637a),  // syntax.emphasis
+        link: hex(0x29_5e73),      // syntax.link_text
     },
 );
 
@@ -360,7 +374,7 @@ pub const DUSKFOX: Theme = Theme::from_palette(
     Appearance::Dark,
     Palette {
         bg: hex(0x23_2136),        // editor.background
-        fg: hex(0xe0_def4),        // terminal.foreground
+        fg: hex(0xea_e8ff),        // text
         surface: hex(0x19_1726),   // surface.background
         raised: hex(0x43_3c59),    // editor.active_line.background
         selection: hex(0x63_577d), // search.match_background
@@ -369,9 +383,11 @@ pub const DUSKFOX: Theme = Theme::from_palette(
         red: hex(0xeb_6f92),       // terminal.ansi.red
         green: hex(0xa3_be8c),     // terminal.ansi.green
         yellow: hex(0xf6_c177),    // terminal.ansi.yellow
-        blue: hex(0x56_9fba),      // terminal.ansi.blue
         magenta: hex(0xc4_a7e7),   // terminal.ansi.magenta
         cyan: hex(0x9c_cfd8),      // terminal.ansi.cyan
+        heading: hex(0x65_b1cd),   // syntax.title
+        emphasis: hex(0xeb_6f92),  // syntax.emphasis
+        link: hex(0x65_b1cd),      // syntax.link_text
     },
 );
 
@@ -381,7 +397,7 @@ pub const NIGHTFOX: Theme = Theme::from_palette(
     Appearance::Dark,
     Palette {
         bg: hex(0x19_2330),        // editor.background
-        fg: hex(0xcd_cecf),        // terminal.foreground
+        fg: hex(0xd6_d6d7),        // text
         surface: hex(0x13_1a24),   // surface.background
         raised: hex(0x2b_3b51),    // editor.active_line.background
         selection: hex(0x3c_5372), // search.match_background
@@ -390,9 +406,11 @@ pub const NIGHTFOX: Theme = Theme::from_palette(
         red: hex(0xc9_4f6d),       // terminal.ansi.red
         green: hex(0x81_b29a),     // terminal.ansi.green
         yellow: hex(0xdb_c074),    // terminal.ansi.yellow
-        blue: hex(0x71_9cd6),      // terminal.ansi.blue
         magenta: hex(0x9d_79d6),   // terminal.ansi.magenta
         cyan: hex(0x63_cdcf),      // terminal.ansi.cyan
+        heading: hex(0x86_abdc),   // syntax.title
+        emphasis: hex(0xc9_4f6d),  // syntax.emphasis
+        link: hex(0x86_abdc),      // syntax.link_text
     },
 );
 
@@ -471,6 +489,21 @@ mod tests {
         let warning = from_settings(Some("dracula")).unwrap_err();
         assert!(warning.contains("\"dracula\""), "{warning}");
         assert!(warning.contains("using cupel"), "{warning}");
+    }
+
+    #[test]
+    fn palette_markdown_uses_zeds_editor_colors() {
+        // Nightfox's values from Zed's theme file: text, syntax.title,
+        // syntax.emphasis, syntax.link_text.
+        assert_eq!(NIGHTFOX.base.fg, Some(hex(0xd6_d6d7)));
+        assert_eq!(NIGHTFOX.md_heading.fg, Some(hex(0x86_abdc)));
+        assert_eq!(NIGHTFOX.md_bold.fg, Some(hex(0xc9_4f6d)));
+        assert_eq!(NIGHTFOX.md_italic.fg, Some(hex(0xc9_4f6d)));
+        assert_eq!(NIGHTFOX.md_link.fg, Some(hex(0x86_abdc)));
+        // CUPEL sets no color here, so headings and emphasis keep the cell's.
+        assert_eq!(CUPEL.md_heading.fg, None);
+        assert_eq!(CUPEL.md_bold.fg, None);
+        assert_eq!(CUPEL.md_italic.fg, None);
     }
 
     #[test]
