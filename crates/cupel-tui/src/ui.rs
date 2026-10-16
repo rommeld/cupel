@@ -3944,12 +3944,21 @@ mod tests {
         out
     }
 
+    /// Read the repository JSON examples without enabling persistence in tests.
+    fn test_app_with_example_themes() -> App {
+        let mut app = test_app();
+        app.meta.home = Some(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+        let mut app = App::new(app.agent, app.meta, app.recorder);
+        app.meta.home = None;
+        app
+    }
+
     #[test]
     fn an_opaque_theme_leaves_no_cell_in_the_terminal_colors() {
         use crate::sessions::{Session, Sessions};
-        for theme in crate::theme::THEMES.iter().skip(1) {
+        for theme in crate::theme::example_themes().iter().skip(1) {
             let mut sessions = Sessions::new(test_app());
-            sessions.theme = Arc::new(theme.clone());
+            sessions.theme = Arc::clone(theme);
             sessions.list.push(Session {
                 label: "auth".into(),
                 app: test_app(),
@@ -3991,7 +4000,7 @@ mod tests {
             "/themes dracula",
             "/themes nightfox extra",
         ] {
-            let mut app = test_app();
+            let mut app = test_app_with_example_themes();
             submit_command(&mut app, command);
             match command {
                 "/themes nightfox" => assert!(matches!(
@@ -4023,6 +4032,16 @@ mod tests {
     #[test]
     fn themes_arguments_autocomplete_from_the_registry() {
         let mut app = test_app();
+        type_text(&mut app, "/themes ");
+        let (rows, _) = app.autocomplete.visible().expect("default theme row");
+        assert_eq!(
+            rows.len(),
+            1,
+            "without theme files, only CUPEL is available"
+        );
+        assert_eq!(rows[0].value, "cupel");
+
+        let mut app = test_app_with_example_themes();
         type_text(&mut app, "/themes ");
         let (rows, _) = app.autocomplete.visible().expect("theme rows");
         let values: Vec<&str> = rows.iter().map(|row| row.value.as_str()).collect();
@@ -4065,8 +4084,9 @@ mod tests {
     fn switching_themes_restyles_old_messages_and_lists_the_active_one() {
         use crate::app::ThemeRequest;
         use crate::sessions::Sessions;
-        use crate::theme::NIGHTFOX;
-        let mut sessions = Sessions::new(test_app());
+        let app = test_app_with_example_themes();
+        let nightfox = crate::theme::find(&app.themes, "nightfox").unwrap();
+        let mut sessions = Sessions::new(app);
         sessions.active_mut().transcript.cells.push(Cell::User {
             text: "the task".into(),
         });
@@ -4078,7 +4098,7 @@ mod tests {
             CUPEL.task.bg
         );
 
-        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(NIGHTFOX)));
+        sessions.on_theme_request(ThemeRequest::Apply(Arc::clone(&nightfox)));
         assert_eq!(sessions.theme.id, "nightfox");
         let notice = last_notice(sessions.active());
         assert!(
@@ -4086,22 +4106,22 @@ mod tests {
             "{notice}"
         );
         let task = sessions_style_of(&mut sessions, "the task");
-        assert_eq!((task.fg, task.bg), (NIGHTFOX.task.fg, NIGHTFOX.task.bg));
+        assert_eq!((task.fg, task.bg), (nightfox.task.fg, nightfox.task.bg));
         assert_eq!(
             sessions_style_of(&mut sessions, "the answer").fg,
-            NIGHTFOX.answer.fg
+            nightfox.answer.fg
         );
         assert_eq!(
             sessions_style_of(&mut sessions, "code panel").bg,
-            NIGHTFOX.md_code_block.bg
+            nightfox.md_code_block.bg
         );
         assert_eq!(
             sessions_style_of(&mut sessions, "code panel").fg,
-            NIGHTFOX.base.fg
+            nightfox.base.fg
         );
         assert_eq!(
             sessions_style_of(&mut sessions, "version:").fg,
-            NIGHTFOX.chrome.fg
+            nightfox.chrome.fg
         );
 
         sessions.on_theme_request(ThemeRequest::List);
@@ -4132,28 +4152,31 @@ mod tests {
         use crate::app::ThemeRequest;
         use crate::sessions::Sessions;
         let mut sessions = Sessions::new(test_app());
-        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(crate::theme::AYU_LIGHT)));
+        let examples = crate::theme::example_themes();
+        let ayu_light = crate::theme::find(&examples, "ayu-light").unwrap();
+        let duskfox = crate::theme::find(&examples, "duskfox").unwrap();
+        sessions.on_theme_request(ThemeRequest::Apply(Arc::clone(&ayu_light)));
         assert_eq!(sessions.theme.id, "ayu-light");
         let notice = last_notice(sessions.active());
         assert!(notice.contains("for this run only - not saved"), "{notice}");
 
         let home = std::env::temp_dir().join("cupel-ui-theme-restart");
         let _ = std::fs::remove_dir_all(&home);
-        let mut app = test_app();
+        let mut app = test_app_with_example_themes();
         app.meta.home = Some(home.clone());
         let mut sessions = Sessions::new(app);
-        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(crate::theme::AYU_LIGHT)));
+        sessions.on_theme_request(ThemeRequest::Apply(ayu_light));
         let notice = last_notice(sessions.active());
         assert!(notice.contains("saved to"), "{notice}");
 
-        let mut restarted = test_app();
+        let mut restarted = test_app_with_example_themes();
         restarted.meta.settings = cupel_coding_agent::settings::load_home_settings(Some(&home)).0;
         assert_eq!(Sessions::new(restarted).theme.id, "ayu-light");
 
         // A malformed file is not overwritten, but the live theme still switches.
         let path = home.join("settings.json");
         std::fs::write(&path, "{broken").unwrap();
-        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(crate::theme::DUSKFOX)));
+        sessions.on_theme_request(ThemeRequest::Apply(duskfox));
         assert_eq!(sessions.theme.id, "duskfox");
         assert!(last_notice(sessions.active()).contains("for this run only - not saved"));
         assert_eq!(std::fs::read_to_string(path).unwrap(), "{broken");
@@ -4173,12 +4196,14 @@ mod tests {
     async fn the_theme_survives_new_and_session_switches() {
         use crate::app::{ReloadTarget, ThemeRequest};
         use crate::sessions::{Session, Sessions};
-        let mut sessions = Sessions::new(test_app());
+        let app = test_app_with_example_themes();
+        let duskfox = crate::theme::find(&app.themes, "duskfox").unwrap();
+        let mut sessions = Sessions::new(app);
         sessions.list.push(Session {
             label: "auth".into(),
             app: test_app(),
         });
-        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(crate::theme::DUSKFOX)));
+        sessions.on_theme_request(ThemeRequest::Apply(duskfox));
         sessions.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('n'),
             KeyModifiers::CONTROL,

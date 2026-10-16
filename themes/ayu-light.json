@@ -1,0 +1,21 @@
+{
+  "name": "Ayu Light",
+  "appearance": "light",
+  "palette": {
+    "bg": "#fcfcfc",
+    "fg": "#5c6166",
+    "surface": "#ececed",
+    "raised": "#dfe0e1",
+    "selection": "#cfd0d2",
+    "border": "#cfd1d2",
+    "muted": "#8b8e92",
+    "red": "#ef7271",
+    "green": "#85b304",
+    "yellow": "#f1ad49",
+    "magenta": "#a37acc",
+    "cyan": "#4dbf99",
+    "heading": "#5c6166",
+    "emphasis": "#3b9ee5",
+    "link": "#f98d3f"
+  }
+}

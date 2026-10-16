@@ -1,0 +1,21 @@
+{
+  "name": "Duskfox - opaque",
+  "appearance": "dark",
+  "palette": {
+    "bg": "#232136",
+    "fg": "#eae8ff",
+    "surface": "#191726",
+    "raised": "#433c59",
+    "selection": "#63577d",
+    "border": "#4b4673",
+    "muted": "#817c9c",
+    "red": "#eb6f92",
+    "green": "#a3be8c",
+    "yellow": "#f6c177",
+    "magenta": "#c4a7e7",
+    "cyan": "#9ccfd8",
+    "heading": "#65b1cd",
+    "emphasis": "#eb6f92",
+    "link": "#65b1cd"
+  }
+}

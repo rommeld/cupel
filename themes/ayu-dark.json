@@ -1,0 +1,21 @@
+{
+  "name": "Ayu Dark",
+  "appearance": "dark",
+  "palette": {
+    "bg": "#0d1016",
+    "fg": "#bfbdb6",
+    "surface": "#1f2127",
+    "raised": "#2d2f34",
+    "selection": "#3e4043",
+    "border": "#3f4043",
+    "muted": "#8a8986",
+    "red": "#ef7177",
+    "green": "#aad84c",
+    "yellow": "#feb454",
+    "magenta": "#d2a6ff",
+    "cyan": "#95e5cb",
+    "heading": "#bfbdb6",
+    "emphasis": "#5ac1fe",
+    "link": "#fe8f40"
+  }
+}

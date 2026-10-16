@@ -1,0 +1,21 @@
+{
+  "name": "Nightfox - opaque",
+  "appearance": "dark",
+  "palette": {
+    "bg": "#192330",
+    "fg": "#d6d6d7",
+    "surface": "#131a24",
+    "raised": "#2b3b51",
+    "selection": "#3c5372",
+    "border": "#39506d",
+    "muted": "#738091",
+    "red": "#c94f6d",
+    "green": "#81b29a",
+    "yellow": "#dbc074",
+    "magenta": "#9d79d6",
+    "cyan": "#63cdcf",
+    "heading": "#86abdc",
+    "emphasis": "#c94f6d",
+    "link": "#86abdc"
+  }
+}

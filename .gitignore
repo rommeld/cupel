@@ -4,6 +4,8 @@
 # Everything under crates/ is source: tests, benches, examples, build.rs and
 # new crates must never be ignored by accident.
 !/crates/**
+!/themes/
+!/themes/**
 # ...except Finder metadata, which the `*` above used to hide.
 .DS_Store
 

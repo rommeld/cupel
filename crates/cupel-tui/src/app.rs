@@ -70,7 +70,7 @@ pub struct App {
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
     pub pending_theme: Option<ThemeRequest>,
-    /// Every theme `/themes` can switch to: the shipped ones and the theme
+    /// Every theme `/themes` can switch to: the built-in default and the theme
     /// files (see `theme::registry`).
     pub themes: Vec<std::sync::Arc<Theme>>,
     pub run_finished: bool,

@@ -140,6 +140,15 @@ A preset names a model, a thinking level, and optionally an additional system pr
 }
 ```
 
+`cupel` is the only built-in theme and remains the default. The five palette themes are JSON examples in [`themes/`](themes/), not compiled into the binary. From the repository root, install them without overwriting existing files:
+
+```bash
+mkdir -p "${CUPEL_HOME:-$HOME/.cupel}/themes"
+cp -n themes/*.json "${CUPEL_HOME:-$HOME/.cupel}/themes/"
+```
+
+Run `/hot-reload` to discover the files, then `/themes <id>` to switch. The palette themes below are available only after their JSON files are installed:
+
 | ID | Name | Made for |
 | -- | ---- | -------- |
 | `cupel` | Cupel (default) | your terminal's own colors |
@@ -201,13 +210,13 @@ A custom theme is a JSON file in `~/.cupel/themes/` (`$CUPEL_HOME/themes/` when 
 | `emphasis` | bold and italic text |
 | `link` | link text |
 
-cupel reads the folder at startup and again on `/new` and `/hot-reload`: after editing the file of the active theme, `/hot-reload` shows the change. `/themes` lists your themes after the shipped ones, each with the file it came from. A file named like a shipped theme (`nightfox.json`) replaces it.
+cupel reads the folder at startup and again on `/new` and `/hot-reload`: after editing the file of the active theme, `/hot-reload` shows the change. `/themes` lists file themes after the built-in `cupel` theme, in file-name order, each with the file it came from. Edit `nightfox.json` to customize Nightfox; no rebuild is needed.
 
 A file with a mistake (a missing or misspelled color, a value that isn't `#rrggbb`, a file name with capitals) is skipped, and a notice names the file and the problem. A theme whose text is hard to read on its backgrounds (contrast below 4.5:1) loads with a warning.
 
 A project's `.cupel/themes/` is not read: the theme is a personal setting, like the `"theme"` entry, which only `~/.cupel/settings.json` sets.
 
-To ship a theme with cupel itself, add a `Theme::from_palette` constant with the same 15 colors to `crates/cupel-tui/src/theme.rs` and list it in `THEMES`.
+To share another palette, add a JSON file to the repository's `themes/` folder. It must be copied into cupel home to be loaded; the repository folder is not read automatically.
 
 ### Local models
 

@@ -11,13 +11,12 @@
 //! `&Theme` as a parameter and reads its fields, so a different theme restyles the
 //! whole screen on the next frame.
 //!
-//! [`THEMES`] lists every shipped theme. [`CUPEL`] uses the terminal's own
-//! colors; the others are built from a [`Palette`] and paint an opaque background.
-//! [`registry`] hands them out as `Arc<Theme>`: a shared, reference-counted theme
-//! that the sessions, the App and the event loop can all hold at once. It also adds
-//! the user's theme files from `~/.cupel/themes` (see [`Theme::from_file`]).
+//! [`CUPEL`] is the built-in default, using the terminal's own colors. Other
+//! themes come from JSON files in `~/.cupel/themes` (see [`Theme::from_file`]).
+//! [`registry`] hands them out as `Arc<Theme>`: shared, reference-counted values
+//! that the sessions, the App and the event loop can all hold at once.
 //!
-//! These are true `const`s: ratatui`s `Style::new()`, `fg`, `bg`, and `add_modifier`
+//! CUPEL is a true `const`: ratatui`s `Style::new()`, `fg`, `bg`, and `add_modifier`
 //! are const fns. Note the chained `add_modifier` calls where two modifiers combine.
 //! The `|` operator (BitOr) is not a const fn, so `Modifier::DIM | Modifier::ITALIC`
 //! would not compile here.
@@ -34,13 +33,13 @@ use ratatui::style::{Color, Modifier, Style};
 /// look for the same role.
 #[derive(Debug, Clone)]
 pub struct Theme {
-    /// The lowercase id used by `/themes` and settings.json. A shipped theme
+    /// The lowercase id used by `/themes` and settings.json. The built-in theme
     /// borrows a string literal; a theme built at runtime owns its string.
     pub id: Cow<'static, str>,
     /// The name shown by `/themes`.
     pub name: Cow<'static, str>,
     pub appearance: Appearance,
-    /// The file a user theme was read from; `None` for shipped themes.
+    /// The file a user theme was read from; `None` for `CUPEL`.
     /// `/themes` shows it so the file can be found and edited.
     pub file: Option<PathBuf>,
     /// Painted over every cell before other styles. Empty in `CUPEL`,
@@ -303,8 +302,8 @@ impl Theme {
         }
     }
 
-    /// A theme from a file in `~/.cupel/themes`: the shipped palette themes'
-    /// mapping, with the file's id, name, and path.
+    /// A theme from a file in `~/.cupel/themes`: palette colors mapped to
+    /// style roles, with the file's id, name, and path.
     #[must_use]
     pub fn from_file(file: &ThemeFile) -> Self {
         let colors = file.palette;
@@ -343,139 +342,12 @@ const fn color(Rgb(red, green, blue): Rgb) -> Color {
     Color::Rgb(red, green, blue)
 }
 
-/// `#rrggbb` as a color, evaluated at compile time for the palettes below.
-const fn hex(rgb: u32) -> Color {
-    Color::Rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
-}
-
-// Zed palettes: Ayu from zed-industries/zed (assets/themes/ayu/ayu.json),
-// Nightfox's opaque variants from cange/nightfox.zed (themes/nvim-nightfox.json).
-// Each color's comment names its upstream key.
-pub const AYU_DARK: Theme = Theme::from_palette(
-    "ayu-dark",
-    "Ayu Dark",
-    Appearance::Dark,
-    Palette {
-        bg: hex(0x0d_1016),        // editor.background
-        fg: hex(0xbf_bdb6),        // text
-        surface: hex(0x1f_2127),   // surface.background
-        raised: hex(0x2d_2f34),    // element.hover
-        selection: hex(0x3e_4043), // element.selected
-        border: hex(0x3f_4043),    // border
-        muted: hex(0x8a_8986),     // text.muted
-        red: hex(0xef_7177),       // terminal.ansi.red
-        green: hex(0xaa_d84c),     // terminal.ansi.green
-        yellow: hex(0xfe_b454),    // terminal.ansi.yellow
-        // Ayu's terminal magenta is blue; use its purple constant color.
-        magenta: hex(0xd2_a6ff),  // syntax.constant
-        cyan: hex(0x95_e5cb),     // terminal.ansi.cyan
-        heading: hex(0xbf_bdb6),  // syntax.title
-        emphasis: hex(0x5a_c1fe), // syntax.emphasis
-        link: hex(0xfe_8f40),     // syntax.link_text
-    },
-);
-
-pub const AYU_LIGHT: Theme = Theme::from_palette(
-    "ayu-light",
-    "Ayu Light",
-    Appearance::Light,
-    Palette {
-        bg: hex(0xfc_fcfc),        // editor.background
-        fg: hex(0x5c_6166),        // text
-        surface: hex(0xec_eced),   // surface.background
-        raised: hex(0xdf_e0e1),    // element.hover
-        selection: hex(0xcf_d0d2), // element.selected
-        border: hex(0xcf_d1d2),    // border
-        muted: hex(0x8b_8e92),     // text.muted
-        red: hex(0xef_7271),       // terminal.ansi.red
-        green: hex(0x85_b304),     // terminal.ansi.green
-        yellow: hex(0xf1_ad49),    // terminal.ansi.yellow
-        magenta: hex(0xa3_7acc),   // syntax.constant (see AYU_DARK)
-        cyan: hex(0x4d_bf99),      // terminal.ansi.cyan
-        heading: hex(0x5c_6166),   // syntax.title
-        emphasis: hex(0x3b_9ee5),  // syntax.emphasis
-        link: hex(0xf9_8d3f),      // syntax.link_text
-    },
-);
-
-pub const DAWNFOX: Theme = Theme::from_palette(
-    "dawnfox",
-    "Dawnfox - opaque",
-    Appearance::Light,
-    Palette {
-        bg: hex(0xfa_f4ed),        // editor.background
-        fg: hex(0x4c_4769),        // text
-        surface: hex(0xeb_e5df),   // surface.background
-        raised: hex(0xd0_d8d8),    // editor.active_line.background
-        selection: hex(0xb8_cece), // search.match_background
-        border: hex(0xbd_bfc9),    // border.variant
-        muted: hex(0x98_93a5),     // syntax.comment
-        red: hex(0xb4_637a),       // terminal.ansi.red
-        green: hex(0x61_8774),     // terminal.ansi.green
-        yellow: hex(0xea_9d34),    // terminal.ansi.yellow
-        magenta: hex(0x90_7aa9),   // terminal.ansi.magenta
-        cyan: hex(0x56_949f),      // terminal.ansi.cyan
-        heading: hex(0x29_5e73),   // syntax.title
-        emphasis: hex(0xb4_637a),  // syntax.emphasis
-        link: hex(0x29_5e73),      // syntax.link_text
-    },
-);
-
-pub const DUSKFOX: Theme = Theme::from_palette(
-    "duskfox",
-    "Duskfox - opaque",
-    Appearance::Dark,
-    Palette {
-        bg: hex(0x23_2136),        // editor.background
-        fg: hex(0xea_e8ff),        // text
-        surface: hex(0x19_1726),   // surface.background
-        raised: hex(0x43_3c59),    // editor.active_line.background
-        selection: hex(0x63_577d), // search.match_background
-        border: hex(0x4b_4673),    // border.variant
-        muted: hex(0x81_7c9c),     // syntax.comment
-        red: hex(0xeb_6f92),       // terminal.ansi.red
-        green: hex(0xa3_be8c),     // terminal.ansi.green
-        yellow: hex(0xf6_c177),    // terminal.ansi.yellow
-        magenta: hex(0xc4_a7e7),   // terminal.ansi.magenta
-        cyan: hex(0x9c_cfd8),      // terminal.ansi.cyan
-        heading: hex(0x65_b1cd),   // syntax.title
-        emphasis: hex(0xeb_6f92),  // syntax.emphasis
-        link: hex(0x65_b1cd),      // syntax.link_text
-    },
-);
-
-pub const NIGHTFOX: Theme = Theme::from_palette(
-    "nightfox",
-    "Nightfox - opaque",
-    Appearance::Dark,
-    Palette {
-        bg: hex(0x19_2330),        // editor.background
-        fg: hex(0xd6_d6d7),        // text
-        surface: hex(0x13_1a24),   // surface.background
-        raised: hex(0x2b_3b51),    // editor.active_line.background
-        selection: hex(0x3c_5372), // search.match_background
-        border: hex(0x39_506d),    // border.variant
-        muted: hex(0x73_8091),     // syntax.comment
-        red: hex(0xc9_4f6d),       // terminal.ansi.red
-        green: hex(0x81_b29a),     // terminal.ansi.green
-        yellow: hex(0xdb_c074),    // terminal.ansi.yellow
-        magenta: hex(0x9d_79d6),   // terminal.ansi.magenta
-        cyan: hex(0x63_cdcf),      // terminal.ansi.cyan
-        heading: hex(0x86_abdc),   // syntax.title
-        emphasis: hex(0xc9_4f6d),  // syntax.emphasis
-        link: hex(0x86_abdc),      // syntax.link_text
-    },
-);
-
-/// Every shipped theme, default first, in listing and autocomplete order.
-pub const THEMES: &[Theme] = &[CUPEL, AYU_DARK, AYU_LIGHT, DAWNFOX, DUSKFOX, NIGHTFOX];
-
 /// Every theme `/themes` can switch to, shared without copying its styles.
-/// Shipped themes come first, `cupel` at `themes[0]` (the default), then the
-/// theme files in file-name order. A file with a shipped id replaces it in place.
+/// `cupel` comes first at `themes[0]` (the default), then theme files in
+/// file-name order. A file with an existing id replaces it in place.
 #[must_use]
 pub fn registry(files: &[ThemeFile]) -> Vec<Arc<Theme>> {
-    let mut themes: Vec<Arc<Theme>> = THEMES.iter().cloned().map(Arc::new).collect();
+    let mut themes = vec![Arc::new(CUPEL)];
     for file in files {
         let theme = Arc::new(Theme::from_file(file));
         match themes.iter_mut().find(|slot| slot.id == theme.id) {
@@ -505,14 +377,24 @@ pub fn from_settings(themes: &[Arc<Theme>], id: Option<&str>) -> Result<Arc<Them
     })
 }
 
+/// Repository JSON examples, never the user's home, for deterministic tests.
+#[cfg(test)]
+pub(crate) fn example_themes() -> Vec<Arc<Theme>> {
+    let home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let (files, warnings) = cupel_coding_agent::themes::load_theme_files(Some(&home));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(files.len(), 5);
+    registry(&files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn every_theme_is_found_by_its_id() {
-        let themes = registry(&[]);
-        for theme in THEMES {
+        let themes = example_themes();
+        for theme in &themes {
             assert_eq!(
                 find(&themes, &theme.id).map(|found| found.name.clone()),
                 Some(theme.name.clone())
@@ -524,20 +406,25 @@ mod tests {
                 theme.id
             );
         }
-        let mut ids: Vec<&str> = THEMES.iter().map(|theme| theme.id.as_ref()).collect();
+        let mut ids: Vec<&str> = themes.iter().map(|theme| theme.id.as_ref()).collect();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), THEMES.len());
+        assert_eq!(ids.len(), themes.len());
         assert!(find(&themes, "dracula").is_none());
         assert!(find(&themes, "Nightfox").is_none(), "ids are exact");
     }
 
     #[test]
-    fn cupel_comes_first_then_two_light_and_three_dark_themes() {
-        assert_eq!(THEMES[0].id, "cupel");
-        assert_eq!(THEMES[0].appearance, Appearance::Terminal);
+    fn cupel_is_the_only_builtin_and_remains_the_default() {
+        let builtins = registry(&[]);
+        assert_eq!(builtins.len(), 1);
+        assert_eq!(builtins[0].id, "cupel");
+        assert_eq!(builtins[0].appearance, Appearance::Terminal);
+        assert_eq!(from_settings(&builtins, None).unwrap().id, "cupel");
+        assert!(from_settings(&builtins, Some("nightfox")).is_err());
         assert_eq!(CUPEL.base, Style::new());
-        let themes = registry(&[]);
+        let themes = example_themes();
+        assert_eq!(from_settings(&themes, None).unwrap().id, "cupel");
         for (id, appearance) in [
             ("ayu-dark", Appearance::Dark),
             ("ayu-light", Appearance::Light),
@@ -555,7 +442,7 @@ mod tests {
 
     #[test]
     fn settings_name_the_theme_and_a_bad_name_falls_back_with_a_warning() {
-        let themes = registry(&[]);
+        let themes = example_themes();
         let id = |theme: Arc<Theme>| theme.id.to_string();
         assert_eq!(
             from_settings(&themes, None).map(id),
@@ -571,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_files_join_the_registry_and_can_replace_a_shipped_theme() {
+    fn theme_files_join_the_registry_in_file_order() {
         use cupel_coding_agent::themes::FilePalette;
 
         let gray = Rgb(0x28, 0x28, 0x28);
@@ -605,22 +492,11 @@ mod tests {
             file("nightfox", "My Nightfox"),
         ]);
 
-        // Six shipped themes, the new file appended, Nightfox replaced in place.
+        // Only CUPEL is built in; both file themes are appended in input order.
         let ids: Vec<&str> = themes.iter().map(|theme| theme.id.as_ref()).collect();
-        assert_eq!(
-            ids,
-            [
-                "cupel",
-                "ayu-dark",
-                "ayu-light",
-                "dawnfox",
-                "duskfox",
-                "nightfox",
-                "gruvbox-dark"
-            ]
-        );
-        assert_eq!(themes[5].name, "My Nightfox");
-        let gruvbox = &themes[6];
+        assert_eq!(ids, ["cupel", "gruvbox-dark", "nightfox"]);
+        assert_eq!(themes[2].name, "My Nightfox");
+        let gruvbox = &themes[1];
         assert_eq!(gruvbox.name, "Gruvbox Dark");
         assert_eq!(gruvbox.appearance, Appearance::Dark);
         assert_eq!(gruvbox.base.bg, Some(Color::Rgb(0x28, 0x28, 0x28)));
@@ -636,11 +512,12 @@ mod tests {
     fn palette_markdown_uses_zeds_editor_colors() {
         // Nightfox's values from Zed's theme file: text, syntax.title,
         // syntax.emphasis, syntax.link_text.
-        assert_eq!(NIGHTFOX.base.fg, Some(hex(0xd6_d6d7)));
-        assert_eq!(NIGHTFOX.md_heading.fg, Some(hex(0x86_abdc)));
-        assert_eq!(NIGHTFOX.md_bold.fg, Some(hex(0xc9_4f6d)));
-        assert_eq!(NIGHTFOX.md_italic.fg, Some(hex(0xc9_4f6d)));
-        assert_eq!(NIGHTFOX.md_link.fg, Some(hex(0x86_abdc)));
+        let nightfox = find(&example_themes(), "nightfox").unwrap();
+        assert_eq!(nightfox.base.fg, Some(Color::Rgb(0xd6, 0xd6, 0xd7)));
+        assert_eq!(nightfox.md_heading.fg, Some(Color::Rgb(0x86, 0xab, 0xdc)));
+        assert_eq!(nightfox.md_bold.fg, Some(Color::Rgb(0xc9, 0x4f, 0x6d)));
+        assert_eq!(nightfox.md_italic.fg, Some(Color::Rgb(0xc9, 0x4f, 0x6d)));
+        assert_eq!(nightfox.md_link.fg, Some(Color::Rgb(0x86, 0xab, 0xdc)));
         // CUPEL sets no color here, so headings and emphasis keep the cell's.
         assert_eq!(CUPEL.md_heading.fg, None);
         assert_eq!(CUPEL.md_bold.fg, None);
@@ -648,8 +525,8 @@ mod tests {
     }
 
     #[test]
-    fn hex_splits_the_channels() {
-        assert_eq!(hex(0x12_3456), Color::Rgb(0x12, 0x34, 0x56));
+    fn file_colors_keep_their_channels() {
+        assert_eq!(color(Rgb(0x12, 0x34, 0x56)), Color::Rgb(0x12, 0x34, 0x56));
     }
 
     /// WCAG contrast ratio: 4.5 is the body-text minimum.
@@ -674,7 +551,7 @@ mod tests {
 
     #[test]
     fn palette_text_is_readable_on_every_surface() {
-        for theme in THEMES
+        for theme in example_themes()
             .iter()
             .filter(|t| t.appearance != Appearance::Terminal)
         {

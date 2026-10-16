@@ -722,24 +722,24 @@ mod tests {
 
     #[test]
     fn palette_themes_color_headings_emphasis_and_links() {
-        use crate::theme::NIGHTFOX;
+        let nightfox = crate::theme::find(&crate::theme::example_themes(), "nightfox").unwrap();
         let lines = render(
             "# Top\n### Sub\n**bold** *italic* [docs](https://ratatui.rs)",
             80,
-            NIGHTFOX.answer,
-            &NIGHTFOX,
+            nightfox.answer,
+            &nightfox,
         );
         let top = style_of(&lines, "Top");
-        assert_eq!(top.fg, NIGHTFOX.md_heading.fg);
+        assert_eq!(top.fg, nightfox.md_heading.fg);
         assert!(top.add_modifier.contains(Modifier::UNDERLINED));
         // H3: the heading color and bold, without the underline.
         let sub = style_of(&lines, "Sub");
-        assert_eq!(sub.fg, NIGHTFOX.md_heading.fg);
+        assert_eq!(sub.fg, nightfox.md_heading.fg);
         assert!(sub.add_modifier.contains(Modifier::BOLD));
         assert!(!sub.add_modifier.contains(Modifier::UNDERLINED));
-        assert_eq!(style_of(&lines, "bold").fg, NIGHTFOX.md_bold.fg);
-        assert_eq!(style_of(&lines, "italic").fg, NIGHTFOX.md_italic.fg);
-        assert_eq!(style_of(&lines, "docs").fg, NIGHTFOX.md_link.fg);
+        assert_eq!(style_of(&lines, "bold").fg, nightfox.md_bold.fg);
+        assert_eq!(style_of(&lines, "italic").fg, nightfox.md_italic.fg);
+        assert_eq!(style_of(&lines, "docs").fg, nightfox.md_link.fg);
     }
 
     #[test]

@@ -156,7 +156,7 @@ fn render(frame: &mut Frame<'_>, cwd: &Path, selected: ProjectTrust, theme: &The
 #[cfg(test)]
 mod tests {
     use crate::project_trust::{Answer, on_key, render};
-    use crate::theme::{CUPEL, NIGHTFOX};
+    use crate::theme::CUPEL;
     use cupel_coding_agent::project_trust::ProjectTrust;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -228,6 +228,7 @@ mod tests {
 
     #[test]
     fn an_opaque_theme_paints_the_whole_screen() {
+        let nightfox = crate::theme::find(&crate::theme::example_themes(), "nightfox").unwrap();
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal
             .draw(|frame| {
@@ -235,7 +236,7 @@ mod tests {
                     frame,
                     std::path::Path::new("/foreign/repo"),
                     ProjectTrust::Restricted,
-                    &NIGHTFOX,
+                    &nightfox,
                 );
             })
             .unwrap();

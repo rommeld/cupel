@@ -1,0 +1,21 @@
+{
+  "name": "Dawnfox - opaque",
+  "appearance": "light",
+  "palette": {
+    "bg": "#faf4ed",
+    "fg": "#4c4769",
+    "surface": "#ebe5df",
+    "raised": "#d0d8d8",
+    "selection": "#b8cece",
+    "border": "#bdbfc9",
+    "muted": "#9893a5",
+    "red": "#b4637a",
+    "green": "#618774",
+    "yellow": "#ea9d34",
+    "magenta": "#907aa9",
+    "cyan": "#56949f",
+    "heading": "#295e73",
+    "emphasis": "#b4637a",
+    "link": "#295e73"
+  }
+}
