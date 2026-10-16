@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.31.0] - 2026-10-16
+
+- feat(tui): color Markdown like Zed's editor in palette themes
+- feat(catalog): plan codex/gpt-6.1-sol at Codex's 500k default window
+
 ## [v0.30.0] - 2026-10-16
 
 - docs(readme): describe themes and custom palettes
