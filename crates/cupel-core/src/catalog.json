@@ -1773,7 +1773,7 @@
         }
       ]
     },
-    "contextWindow": 272000,
+    "contextWindow": 500000,
     "maxContextWindow": 872000,
     "maxTokens": 128000,
     "compat": {
@@ -1811,7 +1811,7 @@
         }
       ]
     },
-    "contextWindow": 272000,
+    "contextWindow": 500000,
     "maxContextWindow": 872000,
     "maxTokens": 128000,
     "compat": {

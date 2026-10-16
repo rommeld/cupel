@@ -853,6 +853,17 @@ mod tests {
                 .and_then(|c| c.get("supportsTemperature")),
             Some(&serde_json::json!(false))
         );
+        // GPT-6.1 Sol is the one Codex row that plans past its price tier:
+        // the window is Codex's 500k default, yet turns above 272k still
+        // show the tier's API-equivalent prices.
+        let sol = models
+            .iter()
+            .find(|m| m.id == "codex/gpt-6.1-sol")
+            .expect("sol row");
+        assert_eq!(sol.context_window, 500_000);
+        assert_eq!(sol.max_context_window, Some(872_000));
+        let sol_tiers = sol.cost.tiers.as_ref().expect("long-context tier");
+        assert_eq!(sol_tiers[0].context_over, 272_000);
         // GPT-5.5's scale stops at xhigh: max is pinned off, temperature
         // and ceiling untouched.
         let gpt55 = models
