@@ -155,73 +155,59 @@ Only `~/.cupel/settings.json` sets the theme; a project's `.cupel/settings.json`
 
 #### Defining a custom theme
 
-Themes are compiled into cupel; there are no theme files. A custom theme therefore means building from source (see [From source](#from-source)). All themes live in `crates/cupel-tui/src/theme.rs`.
+A custom theme is a JSON file in `~/.cupel/themes/` (`$CUPEL_HOME/themes/` when `CUPEL_HOME` is set). The file name is the theme's ID: `~/.cupel/themes/gruvbox-dark.json` becomes `/themes gruvbox-dark`. Use lowercase letters, digits and dashes.
 
-1. Define the theme from a palette of 15 colors. Every part of the screen takes one of them:
-
-    ```rust
-    pub const GRUVBOX_DARK: Theme = Theme::from_palette(
-        "gruvbox-dark", // the /themes ID: lowercase letters and dashes
-        "Gruvbox Dark", // the name /themes shows
-        Appearance::Dark, // Dark or Light
-        Palette {
-            bg: hex(0x28_2828),
-            fg: hex(0xeb_dbb2),
-            surface: hex(0x1d_2021),
-            raised: hex(0x3c_3836),
-            selection: hex(0x50_4945),
-            border: hex(0x66_5c54),
-            muted: hex(0x92_8374),
-            red: hex(0xfb_4934),
-            green: hex(0xb8_bb26),
-            yellow: hex(0xfa_bd2f),
-            magenta: hex(0xd3_869b),
-            cyan: hex(0x8e_c07c),
-            heading: hex(0xb8_bb26),
-            emphasis: hex(0xfe_8019),
-            link: hex(0x83_a598),
-        },
-    );
-    ```
-
-    | Palette color | Used for |
-    | ------------- | -------- |
-    | `bg` | the background of the whole screen |
-    | `fg` | ordinary text: your messages, the model's prose and reasoning |
-    | `surface` | code blocks and popups |
-    | `raised` | the background of your messages |
-    | `selection` | the background of the clicked block (Ctrl+O copies it) |
-    | `border` | pane borders and the idle input border |
-    | `muted` | the footer, titles, hints, diff context lines, the scrollbar |
-    | `red` | errors and removed diff lines |
-    | `green` | added diff lines |
-    | `yellow` | notices, the input border while the agent works, the scroll marker |
-    | `magenta` | the final answer |
-    | `cyan` | tool calls, inline code, list bullets, popup rows |
-    | `heading` | Markdown headings (Zed's `syntax.title`) |
-    | `emphasis` | bold and italic text (Zed's `syntax.emphasis`) |
-    | `link` | link text (Zed's `syntax.link_text`) |
-
-2. Add the constant to `THEMES` in the same file. `/themes` lists the themes in that order, and autocomplete offers the ID.
-
-3. Run the theme tests. They check that the ID is unique and well formed, and that `fg` is readable (contrast of at least 4.5:1) on `bg`, `raised`, and `surface`:
-
-    ```sh
-    cargo test -p cupel-tui theme
-    ```
-
-4. Install the build with `cargo install --path crates/cupel-tui` and switch with `/themes gruvbox-dark`.
-
-To change one part of an existing theme, start from it and override that field; `..NIGHTFOX` copies every field you do not list. Each field of `Theme` has a doc comment saying what it styles:
-
-```rust
-pub const BOLD_NIGHTFOX: Theme = Theme {
-    id: "bold-nightfox",
-    name: "Nightfox with a bold answer",
-    answer: NIGHTFOX.answer.add_modifier(Modifier::BOLD),
-    ..NIGHTFOX
-};
+```json
+{
+  "name": "Gruvbox Dark",
+  "appearance": "dark",
+  "palette": {
+    "bg": "#282828",
+    "fg": "#ebdbb2",
+    "surface": "#1d2021",
+    "raised": "#3c3836",
+    "selection": "#504945",
+    "border": "#665c54",
+    "muted": "#928374",
+    "red": "#fb4934",
+    "green": "#b8bb26",
+    "yellow": "#fabd2f",
+    "magenta": "#d3869b",
+    "cyan": "#8ec07c",
+    "heading": "#b8bb26",
+    "emphasis": "#fe8019",
+    "link": "#83a598"
+  }
+}
 ```
+
+`name` is what `/themes` shows, and `appearance` is `"dark"` or `"light"`. The palette needs all 15 colors, each written `"#rrggbb"`:
+
+| Palette color | Used for |
+| ------------- | -------- |
+| `bg` | the background of the whole screen |
+| `fg` | ordinary text: your messages, the model's prose and reasoning |
+| `surface` | code blocks and popups |
+| `raised` | the background of your messages |
+| `selection` | the background of the clicked block (Ctrl+O copies it) |
+| `border` | pane borders and the idle input border |
+| `muted` | the footer, titles, hints, diff context lines, the scrollbar |
+| `red` | errors and removed diff lines |
+| `green` | added diff lines |
+| `yellow` | notices, the input border while the agent works, the scroll marker |
+| `magenta` | the final answer |
+| `cyan` | tool calls, inline code, list bullets, popup rows |
+| `heading` | Markdown headings |
+| `emphasis` | bold and italic text |
+| `link` | link text |
+
+cupel reads the folder at startup and again on `/new` and `/hot-reload`: after editing the file of the active theme, `/hot-reload` shows the change. `/themes` lists your themes after the shipped ones, each with the file it came from. A file named like a shipped theme (`nightfox.json`) replaces it.
+
+A file with a mistake (a missing or misspelled color, a value that isn't `#rrggbb`, a file name with capitals) is skipped, and a notice names the file and the problem. A theme whose text is hard to read on its backgrounds (contrast below 4.5:1) loads with a warning.
+
+A project's `.cupel/themes/` is not read: the theme is a personal setting, like the `"theme"` entry, which only `~/.cupel/settings.json` sets.
+
+To ship a theme with cupel itself, add a `Theme::from_palette` constant with the same 15 colors to `crates/cupel-tui/src/theme.rs` and list it in `THEMES`.
 
 ### Local models
 

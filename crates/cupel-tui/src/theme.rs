@@ -13,24 +13,36 @@
 //!
 //! [`THEMES`] lists every shipped theme. [`CUPEL`] uses the terminal's own
 //! colors; the others are built from a [`Palette`] and paint an opaque background.
+//! [`registry`] hands them out as `Arc<Theme>`: a shared, reference-counted theme
+//! that the sessions, the App and the event loop can all hold at once. It also adds
+//! the user's theme files from `~/.cupel/themes` (see [`Theme::from_file`]).
 //!
 //! These are true `const`s: ratatui`s `Style::new()`, `fg`, `bg`, and `add_modifier`
 //! are const fns. Note the chained `add_modifier` calls where two modifiers combine.
 //! The `|` operator (BitOr) is not a const fn, so `Modifier::DIM | Modifier::ITALIC`
 //! would not compile here.
 
+use std::borrow::Cow;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use cupel_coding_agent::themes::{FileAppearance, Rgb, ThemeFile};
 use ratatui::style::{Color, Modifier, Style};
 
 /// Every style the TUI paints, with, one field per role. A field names what the style
 /// is for (`answer`), not how it looks (`magenta`), so each theme can pick its own
 /// look for the same role.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Theme {
-    /// The lowercase id used by `/themes` and settings.json.
-    pub id: &'static str,
+    /// The lowercase id used by `/themes` and settings.json. A shipped theme
+    /// borrows a string literal; a theme built at runtime owns its string.
+    pub id: Cow<'static, str>,
     /// The name shown by `/themes`.
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     pub appearance: Appearance,
+    /// The file a user theme was read from; `None` for shipped themes.
+    /// `/themes` shows it so the file can be found and edited.
+    pub file: Option<PathBuf>,
     /// Painted over every cell before other styles. Empty in `CUPEL`,
     /// which keeps the terminal's own foreground and background.
     pub base: Style,
@@ -126,9 +138,10 @@ impl core::fmt::Display for Appearance {
 /// cupel's own look: the terminal's 16 named colors plus three gray surfaces from the
 /// xtrem-256 palette.
 pub const CUPEL: Theme = Theme {
-    id: "cupel",
-    name: "Cupel",
+    id: Cow::Borrowed("cupel"),
+    name: Cow::Borrowed("Cupel"),
     appearance: Appearance::Terminal,
+    file: None,
     base: Style::new(),
     // White on gray surface (xtrem-256 index 240, #585858).
     task: Style::new().fg(Color::White).bg(Color::Indexed(240)),
@@ -244,9 +257,10 @@ impl Theme {
             link,
         } = palette;
         Self {
-            id,
-            name,
+            id: Cow::Borrowed(id),
+            name: Cow::Borrowed(name),
             appearance,
+            file: None,
             base: Style::new().fg(fg).bg(bg),
             task: Style::new().fg(fg).bg(raised),
             assistant: Style::new().fg(fg).add_modifier(Modifier::ITALIC),
@@ -288,6 +302,45 @@ impl Theme {
             md_table_header: Style::new().add_modifier(Modifier::BOLD),
         }
     }
+
+    /// A theme from a file in `~/.cupel/themes`: the shipped palette themes'
+    /// mapping, with the file's id, name, and path.
+    #[must_use]
+    pub fn from_file(file: &ThemeFile) -> Self {
+        let colors = file.palette;
+        let palette = Palette {
+            bg: color(colors.bg),
+            fg: color(colors.fg),
+            surface: color(colors.surface),
+            raised: color(colors.raised),
+            selection: color(colors.selection),
+            border: color(colors.border),
+            muted: color(colors.muted),
+            red: color(colors.red),
+            green: color(colors.green),
+            yellow: color(colors.yellow),
+            magenta: color(colors.magenta),
+            cyan: color(colors.cyan),
+            heading: color(colors.heading),
+            emphasis: color(colors.emphasis),
+            link: color(colors.link),
+        };
+        let appearance = match file.appearance {
+            FileAppearance::Dark => Appearance::Dark,
+            FileAppearance::Light => Appearance::Light,
+        };
+        Self {
+            id: Cow::Owned(file.id.clone()),
+            name: Cow::Owned(file.name.clone()),
+            file: Some(file.path.clone()),
+            ..Self::from_palette("", "", appearance, palette)
+        }
+    }
+}
+
+/// A theme file's color as a ratatui color.
+const fn color(Rgb(red, green, blue): Rgb) -> Color {
+    Color::Rgb(red, green, blue)
 }
 
 /// `#rrggbb` as a color, evaluated at compile time for the palettes below.
@@ -417,19 +470,35 @@ pub const NIGHTFOX: Theme = Theme::from_palette(
 /// Every shipped theme, default first, in listing and autocomplete order.
 pub const THEMES: &[Theme] = &[CUPEL, AYU_DARK, AYU_LIGHT, DAWNFOX, DUSKFOX, NIGHTFOX];
 
-/// Find a shipped theme by its exact id.
+/// Every theme `/themes` can switch to, shared without copying its styles.
+/// Shipped themes come first, `cupel` at `themes[0]` (the default), then the
+/// theme files in file-name order. A file with a shipped id replaces it in place.
 #[must_use]
-pub fn find(id: &str) -> Option<&'static Theme> {
-    THEMES.iter().find(|theme| theme.id == id)
+pub fn registry(files: &[ThemeFile]) -> Vec<Arc<Theme>> {
+    let mut themes: Vec<Arc<Theme>> = THEMES.iter().cloned().map(Arc::new).collect();
+    for file in files {
+        let theme = Arc::new(Theme::from_file(file));
+        match themes.iter_mut().find(|slot| slot.id == theme.id) {
+            Some(slot) => *slot = theme,
+            None => themes.push(theme),
+        }
+    }
+    themes
+}
+
+/// Find a theme by its exact id.
+#[must_use]
+pub fn find(themes: &[Arc<Theme>], id: &str) -> Option<Arc<Theme>> {
+    themes.iter().find(|theme| theme.id == id).cloned()
 }
 
 /// Resolve a settings.json theme id. No value means the default; an unknown
 /// id returns a warning so callers can fall back without blocking startup.
-pub fn from_settings(id: Option<&str>) -> Result<&'static Theme, String> {
+pub fn from_settings(themes: &[Arc<Theme>], id: Option<&str>) -> Result<Arc<Theme>, String> {
     let Some(id) = id else {
-        return Ok(&CUPEL);
+        return Ok(Arc::clone(&themes[0]));
     };
-    find(id).ok_or_else(|| {
+    find(themes, id).ok_or_else(|| {
         format!(
             "warning: unknown theme {id:?} in settings.json - using cupel (/themes lists the themes)"
         )
@@ -442,8 +511,12 @@ mod tests {
 
     #[test]
     fn every_theme_is_found_by_its_id() {
+        let themes = registry(&[]);
         for theme in THEMES {
-            assert_eq!(find(theme.id).map(|found| found.name), Some(theme.name));
+            assert_eq!(
+                find(&themes, &theme.id).map(|found| found.name.clone()),
+                Some(theme.name.clone())
+            );
             assert!(!theme.id.is_empty());
             assert!(
                 theme.id.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
@@ -451,12 +524,12 @@ mod tests {
                 theme.id
             );
         }
-        let mut ids: Vec<&str> = THEMES.iter().map(|theme| theme.id).collect();
+        let mut ids: Vec<&str> = THEMES.iter().map(|theme| theme.id.as_ref()).collect();
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), THEMES.len());
-        assert!(find("dracula").is_none());
-        assert!(find("Nightfox").is_none(), "ids are exact");
+        assert!(find(&themes, "dracula").is_none());
+        assert!(find(&themes, "Nightfox").is_none(), "ids are exact");
     }
 
     #[test]
@@ -464,6 +537,7 @@ mod tests {
         assert_eq!(THEMES[0].id, "cupel");
         assert_eq!(THEMES[0].appearance, Appearance::Terminal);
         assert_eq!(CUPEL.base, Style::new());
+        let themes = registry(&[]);
         for (id, appearance) in [
             ("ayu-dark", Appearance::Dark),
             ("ayu-light", Appearance::Light),
@@ -472,7 +546,7 @@ mod tests {
             ("nightfox", Appearance::Dark),
         ] {
             assert_eq!(
-                find(id).map(|theme| theme.appearance),
+                find(&themes, id).map(|theme| theme.appearance),
                 Some(appearance),
                 "{id}"
             );
@@ -481,14 +555,81 @@ mod tests {
 
     #[test]
     fn settings_name_the_theme_and_a_bad_name_falls_back_with_a_warning() {
-        assert_eq!(from_settings(None).map(|theme| theme.id), Ok("cupel"));
+        let themes = registry(&[]);
+        let id = |theme: Arc<Theme>| theme.id.to_string();
         assert_eq!(
-            from_settings(Some("ayu-light")).map(|theme| theme.id),
-            Ok("ayu-light")
+            from_settings(&themes, None).map(id),
+            Ok("cupel".to_string())
         );
-        let warning = from_settings(Some("dracula")).unwrap_err();
+        assert_eq!(
+            from_settings(&themes, Some("ayu-light")).map(id),
+            Ok("ayu-light".to_string())
+        );
+        let warning = from_settings(&themes, Some("dracula")).unwrap_err();
         assert!(warning.contains("\"dracula\""), "{warning}");
         assert!(warning.contains("using cupel"), "{warning}");
+    }
+
+    #[test]
+    fn theme_files_join_the_registry_and_can_replace_a_shipped_theme() {
+        use cupel_coding_agent::themes::FilePalette;
+
+        let gray = Rgb(0x28, 0x28, 0x28);
+        let light = Rgb(0xeb, 0xdb, 0xb2);
+        let palette = FilePalette {
+            bg: gray,
+            fg: light,
+            surface: gray,
+            raised: gray,
+            selection: gray,
+            border: gray,
+            muted: light,
+            red: light,
+            green: light,
+            yellow: light,
+            magenta: light,
+            cyan: light,
+            heading: Rgb(0xb8, 0xbb, 0x26),
+            emphasis: light,
+            link: light,
+        };
+        let file = |id: &str, name: &str| ThemeFile {
+            id: id.to_string(),
+            name: name.to_string(),
+            appearance: FileAppearance::Dark,
+            palette,
+            path: PathBuf::from(format!("/home/u/.cupel/themes/{id}.json")),
+        };
+        let themes = registry(&[
+            file("gruvbox-dark", "Gruvbox Dark"),
+            file("nightfox", "My Nightfox"),
+        ]);
+
+        // Six shipped themes, the new file appended, Nightfox replaced in place.
+        let ids: Vec<&str> = themes.iter().map(|theme| theme.id.as_ref()).collect();
+        assert_eq!(
+            ids,
+            [
+                "cupel",
+                "ayu-dark",
+                "ayu-light",
+                "dawnfox",
+                "duskfox",
+                "nightfox",
+                "gruvbox-dark"
+            ]
+        );
+        assert_eq!(themes[5].name, "My Nightfox");
+        let gruvbox = &themes[6];
+        assert_eq!(gruvbox.name, "Gruvbox Dark");
+        assert_eq!(gruvbox.appearance, Appearance::Dark);
+        assert_eq!(gruvbox.base.bg, Some(Color::Rgb(0x28, 0x28, 0x28)));
+        assert_eq!(gruvbox.md_heading.fg, Some(Color::Rgb(0xb8, 0xbb, 0x26)));
+        assert_eq!(
+            gruvbox.file,
+            Some(PathBuf::from("/home/u/.cupel/themes/gruvbox-dark.json"))
+        );
+        assert_eq!(themes[0].file, None);
     }
 
     #[test]

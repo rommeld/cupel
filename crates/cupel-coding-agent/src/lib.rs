@@ -22,5 +22,6 @@ pub mod session;
 pub mod settings;
 pub mod spinoff;
 pub mod system_prompt;
+pub mod themes;
 pub mod tools;
 pub mod truncate;

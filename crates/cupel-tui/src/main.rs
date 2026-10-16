@@ -321,9 +321,11 @@ async fn run() -> Result<(), AppError> {
         // Bootstrap has not read settings yet. Invalid themes fall back
         // here; the TUI surfaces the settings warnings once it starts.
         let (home_settings, _) = cupel_coding_agent::settings::load_home_settings(home.as_deref());
-        let theme = cupel_tui::theme::from_settings(home_settings.theme.as_deref())
-            .unwrap_or(&cupel_tui::theme::CUPEL);
-        cupel_tui::project_trust::confirm(home.as_deref(), &cwd, theme)
+        let (theme_files, _) = cupel_coding_agent::themes::load_theme_files(home.as_deref());
+        let themes = cupel_tui::theme::registry(&theme_files);
+        let theme = cupel_tui::theme::from_settings(&themes, home_settings.theme.as_deref())
+            .unwrap_or_else(|_| Arc::clone(&themes[0]));
+        cupel_tui::project_trust::confirm(home.as_deref(), &cwd, &theme)
             .map_err(AppError::InteractiveMode)?;
     } else if !cupel_coding_agent::project_trust::is_trusted(home.as_deref(), &cwd) {
         eprintln!(

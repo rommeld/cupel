@@ -16,9 +16,10 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::app::{App, AppEvent, Delivery, ReloadTarget, ThemeRequest};
-use crate::theme::{CUPEL, THEMES, Theme};
+use crate::theme::Theme;
 
 pub struct Session {
     pub label: String,
@@ -31,19 +32,20 @@ pub struct Sessions {
     pub rows: Vec<(Rect, usize)>,
     pub quit_armed: bool,
     pub conflicts: Vec<Conflict>,
-    /// One look for all sessions, surviving `/new` and `/hot-reload`.
-    /// Themes are constants, so their references remain valid for the run.
-    pub theme: &'static Theme,
+    /// One look for all sessions, surviving `/new` and `/hot-reload`. An `Arc`:
+    /// the App's theme list holds the same theme, and both share it.
+    pub theme: Arc<Theme>,
 }
 
 impl Sessions {
     #[must_use]
     pub fn new(mut origin: App) -> Self {
-        let theme = crate::theme::from_settings(origin.meta.settings.theme.as_deref())
-            .unwrap_or_else(|warning| {
-                origin.notice(warning);
-                &CUPEL
-            });
+        let theme =
+            crate::theme::from_settings(&origin.themes, origin.meta.settings.theme.as_deref())
+                .unwrap_or_else(|warning| {
+                    origin.notice(warning);
+                    Arc::clone(&origin.themes[0])
+                });
         Self {
             list: vec![Session {
                 label: "origin".to_string(),
@@ -149,6 +151,11 @@ impl Sessions {
         let Session { label, app } = self.list.remove(self.active);
         let app = app.hot_reload(target).await;
         self.list.insert(self.active, Session { label, app });
+        // Show the active theme's new version after re-reading the files.
+        // If its file disappeared or broke, keep the current look until a switch.
+        if let Some(theme) = crate::theme::find(&self.active().themes, &self.theme.id) {
+            self.theme = theme;
+        }
     }
 
     /// The session on screen asked to quit (Ctrl+C, Ctrl+D, `/quit`). Quit, unless
@@ -193,21 +200,25 @@ impl Sessions {
         match request {
             ThemeRequest::List => {
                 let mut lines = vec!["themes (/themes <id>):".to_string()];
-                for theme in THEMES {
+                for theme in &self.active().themes {
                     let marker = if theme.id == self.theme.id { "*" } else { " " };
+                    let source = theme
+                        .file
+                        .as_ref()
+                        .map(|path| format!(" - {}", path.display()))
+                        .unwrap_or_default();
                     lines.push(format!(
-                        "{marker} {:<10} {} ({})",
+                        "{marker} {:<10} {} ({}){source}",
                         theme.id, theme.name, theme.appearance
                     ));
                 }
                 self.active_mut().notice(lines.join("\n"));
             }
             ThemeRequest::Apply(theme) => {
-                self.theme = theme;
                 // A failed save must not undo the switch for this run.
                 let saved = cupel_coding_agent::settings::save_theme(
                     self.active().meta.home.as_deref(),
-                    theme.id,
+                    &theme.id,
                 );
                 let note = match saved {
                     Ok(path) => format!(
@@ -220,6 +231,7 @@ impl Sessions {
                         theme.name
                     ),
                 };
+                self.theme = theme;
                 self.active_mut().notice(note);
             }
         }

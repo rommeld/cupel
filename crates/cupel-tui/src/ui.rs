@@ -21,7 +21,9 @@ const SIDEBAR_MIN_SCREEN: u16 = 80;
 const INPUT_PADDING: u16 = 1;
 
 pub fn render_sessions(frame: &mut Frame<'_>, sessions: &mut Sessions) {
-    let theme = sessions.theme;
+    // A second owner leaves `sessions` free for mutable borrows below.
+    // Arc::clone copies a pointer and counts, not the theme.
+    let theme = std::sync::Arc::clone(&sessions.theme);
     let area = frame.area();
     // Start every cell in the theme's colors; later widgets patch them.
     // CUPEL's empty base leaves the terminal colors unchanged.
@@ -33,8 +35,8 @@ pub fn render_sessions(frame: &mut Frame<'_>, sessions: &mut Sessions) {
     };
     let [sidebar, main] =
         Layout::horizontal([Constraint::Length(width), Constraint::Min(1)]).areas(area);
-    render_sidebar(frame, sessions, sidebar, theme);
-    render(frame, &mut sessions.list[sessions.active].app, main, theme);
+    render_sidebar(frame, sessions, sidebar, &theme);
+    render(frame, &mut sessions.list[sessions.active].app, main, &theme);
 }
 
 /// A mark for each session's state, its label, and the session on screen highlighted.
@@ -3947,7 +3949,7 @@ mod tests {
         use crate::sessions::{Session, Sessions};
         for theme in crate::theme::THEMES.iter().skip(1) {
             let mut sessions = Sessions::new(test_app());
-            sessions.theme = theme;
+            sessions.theme = Arc::new(theme.clone());
             sessions.list.push(Session {
                 label: "auth".into(),
                 app: test_app(),
@@ -3993,7 +3995,7 @@ mod tests {
             submit_command(&mut app, command);
             match command {
                 "/themes nightfox" => assert!(matches!(
-                    app.pending_theme, Some(ThemeRequest::Apply(theme)) if theme.id == "nightfox"
+                    &app.pending_theme, Some(ThemeRequest::Apply(theme)) if theme.id == "nightfox"
                 )),
                 "/themes" => assert!(matches!(app.pending_theme, Some(ThemeRequest::List))),
                 _ => {
@@ -4076,7 +4078,7 @@ mod tests {
             CUPEL.task.bg
         );
 
-        sessions.on_theme_request(ThemeRequest::Apply(&NIGHTFOX));
+        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(NIGHTFOX)));
         assert_eq!(sessions.theme.id, "nightfox");
         let notice = last_notice(sessions.active());
         assert!(
@@ -4114,7 +4116,7 @@ mod tests {
             "{listing}"
         );
         // Returning to the terminal theme must not retain opaque colors.
-        sessions.on_theme_request(ThemeRequest::Apply(&CUPEL));
+        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(CUPEL)));
         assert_eq!(
             sessions_style_of(&mut sessions, "the task").bg,
             CUPEL.task.bg
@@ -4130,7 +4132,7 @@ mod tests {
         use crate::app::ThemeRequest;
         use crate::sessions::Sessions;
         let mut sessions = Sessions::new(test_app());
-        sessions.on_theme_request(ThemeRequest::Apply(&crate::theme::AYU_LIGHT));
+        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(crate::theme::AYU_LIGHT)));
         assert_eq!(sessions.theme.id, "ayu-light");
         let notice = last_notice(sessions.active());
         assert!(notice.contains("for this run only - not saved"), "{notice}");
@@ -4140,7 +4142,7 @@ mod tests {
         let mut app = test_app();
         app.meta.home = Some(home.clone());
         let mut sessions = Sessions::new(app);
-        sessions.on_theme_request(ThemeRequest::Apply(&crate::theme::AYU_LIGHT));
+        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(crate::theme::AYU_LIGHT)));
         let notice = last_notice(sessions.active());
         assert!(notice.contains("saved to"), "{notice}");
 
@@ -4151,7 +4153,7 @@ mod tests {
         // A malformed file is not overwritten, but the live theme still switches.
         let path = home.join("settings.json");
         std::fs::write(&path, "{broken").unwrap();
-        sessions.on_theme_request(ThemeRequest::Apply(&crate::theme::DUSKFOX));
+        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(crate::theme::DUSKFOX)));
         assert_eq!(sessions.theme.id, "duskfox");
         assert!(last_notice(sessions.active()).contains("for this run only - not saved"));
         assert_eq!(std::fs::read_to_string(path).unwrap(), "{broken");
@@ -4176,7 +4178,7 @@ mod tests {
             label: "auth".into(),
             app: test_app(),
         });
-        sessions.on_theme_request(ThemeRequest::Apply(&crate::theme::DUSKFOX));
+        sessions.on_theme_request(ThemeRequest::Apply(Arc::new(crate::theme::DUSKFOX)));
         sessions.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('n'),
             KeyModifiers::CONTROL,
@@ -4187,6 +4189,88 @@ mod tests {
         assert_eq!(sessions.theme.id, "duskfox");
         sessions.reload(ReloadTarget::Current).await;
         assert_eq!(sessions.theme.id, "duskfox");
+    }
+
+    #[tokio::test]
+    async fn theme_files_are_listed_switched_to_and_reloaded() {
+        use crate::app::{ReloadTarget, ThemeRequest};
+        use crate::sessions::Sessions;
+
+        let root =
+            std::env::temp_dir().join(format!("cupel-ui-theme-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("home/themes");
+        std::fs::create_dir_all(&dir).unwrap();
+        let gruvbox = r##"{"name": "Gruvbox Dark", "appearance": "dark", "palette": {
+            "bg": "BG", "fg": "#ebdbb2", "surface": "#1d2021", "raised": "#3c3836",
+            "selection": "#504945", "border": "#665c54", "muted": "#928374",
+            "red": "#fb4934", "green": "#b8bb26", "yellow": "#fabd2f",
+            "magenta": "#d3869b", "cyan": "#8ec07c",
+            "heading": "#b8bb26", "emphasis": "#fe8019", "link": "#83a598"}}"##;
+        let file = dir.join("gruvbox-dark.json");
+        std::fs::write(&file, gruvbox.replace("BG", "#282828")).unwrap();
+        std::fs::write(dir.join("broken.json"), "{").unwrap();
+
+        let mut app = test_app_with_home(&root, "cupel-theme-files");
+        assert!(has_notice(
+            &app,
+            &format!("ignoring theme file {}:", dir.join("broken.json").display())
+        ));
+        type_text(&mut app, "/themes gruv");
+        let (rows, _) = app.autocomplete.visible().expect("file theme completion");
+        assert_eq!(rows[0].value, "gruvbox-dark");
+        app.input = crate::input::InputState::default();
+        let mut sessions = Sessions::new(app);
+        submit_command(sessions.active_mut(), "/themes gruvbox-dark");
+        let request = sessions
+            .active_mut()
+            .pending_theme
+            .take()
+            .expect("a request");
+        sessions.on_theme_request(request);
+        assert_eq!(sessions.theme.id, "gruvbox-dark");
+        assert_eq!(sessions.theme.base.bg, Some(Color::Rgb(0x28, 0x28, 0x28)));
+
+        sessions.on_theme_request(ThemeRequest::List);
+        let listing = last_notice(sessions.active());
+        assert!(
+            listing.contains(&format!(
+                "* gruvbox-dark Gruvbox Dark (dark) - {}",
+                file.display()
+            )),
+            "{listing}"
+        );
+
+        // The App that /hot-reload builds reads the files again.
+        std::fs::write(&file, gruvbox.replace("BG", "#1d2021")).unwrap();
+        sessions.reload(ReloadTarget::Current).await;
+        assert_eq!(sessions.theme.base.bg, Some(Color::Rgb(0x1d, 0x20, 0x21)));
+
+        // The saved file theme is also available after a restart.
+        let mut app = test_app_with_home(&root, "cupel-theme-files-restart");
+        app.meta.settings =
+            cupel_coding_agent::settings::load_home_settings(app.meta.home.as_deref()).0;
+        let restarted = Sessions::new(app);
+        assert_eq!(restarted.theme.id, "gruvbox-dark");
+        assert_eq!(restarted.theme.base.bg, sessions.theme.base.bg);
+
+        // A missing active file keeps its current styles until a switch,
+        // but cannot be selected on the next start.
+        std::fs::remove_file(file).unwrap();
+        sessions.reload(ReloadTarget::New).await;
+        assert_eq!(sessions.theme.id, "gruvbox-dark");
+        assert_eq!(sessions.theme.base.bg, Some(Color::Rgb(0x1d, 0x20, 0x21)));
+        assert!(crate::theme::find(&sessions.active().themes, "gruvbox-dark").is_none());
+        let mut app = test_app_with_home(&root, "cupel-theme-files-missing");
+        app.meta.settings =
+            cupel_coding_agent::settings::load_home_settings(app.meta.home.as_deref()).0;
+        let restarted = Sessions::new(app);
+        assert_eq!(restarted.theme.id, "cupel");
+        assert!(has_notice(
+            restarted.active(),
+            "unknown theme \"gruvbox-dark\""
+        ));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

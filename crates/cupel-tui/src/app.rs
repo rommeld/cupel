@@ -26,7 +26,7 @@ use ratatui::layout::{Position, Rect};
 use crate::autocomplete::{Autocomplete, Candidate};
 use crate::input::InputState;
 use crate::login;
-use crate::theme::{THEMES, Theme};
+use crate::theme::Theme;
 use crate::transcript::{Cell, ToolOutcome, Transcript};
 
 /// Cumulative token/cost counters across the whole session.
@@ -70,6 +70,9 @@ pub struct App {
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
     pub pending_theme: Option<ThemeRequest>,
+    /// Every theme `/themes` can switch to: the shipped ones and the theme
+    /// files (see `theme::registry`).
+    pub themes: Vec<std::sync::Arc<Theme>>,
     pub run_finished: bool,
     pub activity: Activity,
     pub run_started: Option<Instant>,
@@ -156,7 +159,7 @@ pub enum ReloadTarget {
 #[derive(Debug)]
 pub enum ThemeRequest {
     List,
-    Apply(&'static Theme),
+    Apply(std::sync::Arc<Theme>),
 }
 
 impl App {
@@ -234,7 +237,12 @@ impl App {
                 is_dir: false,
             })
             .collect();
-        let theme_candidates: Vec<Candidate> = THEMES
+        // /new, /hot-reload and every spinoff build a new App, so they
+        // see new and edited theme files as well as the startup App.
+        let (theme_files, theme_warnings) =
+            cupel_coding_agent::themes::load_theme_files(meta.home.as_deref());
+        let themes = crate::theme::registry(&theme_files);
+        let theme_candidates: Vec<Candidate> = themes
             .iter()
             .map(|theme| Candidate {
                 display: format!("{}  - {} ({})", theme.id, theme.name, theme.appearance),
@@ -298,12 +306,16 @@ impl App {
             last_answer: Status::New,
             pending_spinoff: None,
             pending_theme: None,
+            themes,
             run_finished: false,
             activity: Activity::Waiting,
             run_started: None,
         };
         app.replay_history(&history);
         for warning in std::mem::take(&mut app.meta.warnings) {
+            app.notice(warning);
+        }
+        for warning in theme_warnings {
             app.notice(warning);
         }
         // A startup condition (e.g. keyless start) also appears as a notice
@@ -1501,7 +1513,7 @@ impl App {
                 Err(error) => self.notice(format!("{error}")),
             },
             "themes" if args.is_empty() => self.pending_theme = Some(ThemeRequest::List),
-            "themes" => match crate::theme::find(args) {
+            "themes" => match crate::theme::find(&self.themes, args) {
                 Some(theme) => self.pending_theme = Some(ThemeRequest::Apply(theme)),
                 None => self.notice(format!("unknown theme: {args} (/themes lists them)")),
             },
