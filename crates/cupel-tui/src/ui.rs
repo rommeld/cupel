@@ -188,8 +188,10 @@ fn render_autocomplete(
 }
 
 fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
-    // Keep the pane's horizontal content margin without drawing borders.
-    let block = pane_block(None, theme).borders(Borders::NONE);
+    // Leave a small margin on every side without drawing borders.
+    let block = pane_block(None, theme)
+        .borders(Borders::NONE)
+        .padding(Padding::uniform(1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -705,7 +707,7 @@ mod tests {
             terminal.get_cursor_position().unwrap(),
             Position::new(19, 16)
         );
-        assert_eq!(app.last_transcript_inner.height, 15);
+        assert_eq!(app.last_transcript_inner.height, 13);
     }
 
     #[test]
@@ -727,15 +729,54 @@ mod tests {
         }
         assert!(!screen.contains(['│', '┌', '┐', '└', '┘']), "{screen}");
         assert!(
-            screen.lines().next().unwrap().starts_with(" >> task"),
+            screen.lines().nth(1).unwrap().starts_with(" >> task"),
+            "{screen}"
+        );
+        assert!(screen.lines().next().unwrap().trim().is_empty(), "{screen}");
+        assert!(
+            screen.lines().nth(14).unwrap().trim().is_empty(),
             "{screen}"
         );
         assert!(
             screen.lines().nth(16).unwrap().starts_with("draft"),
             "{screen}"
         );
-        assert_eq!(app.last_transcript_inner, Rect::new(1, 0, 78, 15));
+        assert_eq!(app.last_transcript_inner, Rect::new(1, 1, 78, 13));
         assert_eq!(style_of(&mut app, "─").fg, CUPEL.input_border_idle.fg);
+    }
+
+    #[test]
+    fn conversation_padding_remains_when_the_transcript_overflows() {
+        let mut app = test_app();
+        app.transcript.cells = vec![Cell::Answer {
+            text: (1..=20)
+                .map(|n| format!("line {n}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }];
+        let screen = draw(&mut app, 80, 20);
+        assert_eq!(app.last_transcript_inner, Rect::new(1, 1, 78, 13));
+        assert!(
+            screen.lines().nth(1).unwrap().starts_with(" line 8"),
+            "{screen}"
+        );
+        assert!(
+            screen.lines().nth(13).unwrap().starts_with(" line 20"),
+            "{screen}"
+        );
+        for y in [0, 14] {
+            // The scrollbar may occupy the right edge; text stays inside the padding.
+            assert!(
+                screen
+                    .lines()
+                    .nth(y)
+                    .unwrap()
+                    .chars()
+                    .take(79)
+                    .all(|c| c == ' '),
+                "{screen}"
+            );
+        }
     }
 
     #[test]
