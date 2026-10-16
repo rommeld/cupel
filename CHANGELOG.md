@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.31.2] - 2026-10-17
+
+- chore: remove unnecessary themes entries from .gitignore
+- refactor(tui): move palette themes from Rust to JSON files
+
 ## [v0.31.1] - 2026-10-17
 
 - feat(tui): load custom themes from separate JSON files
