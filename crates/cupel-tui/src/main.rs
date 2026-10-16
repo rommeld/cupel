@@ -318,7 +318,12 @@ async fn run() -> Result<(), AppError> {
     // Confirm before any project model reaches credential resolution or
     // any lifecycle hook can run. Piped stdin must never answer a popup.
     if !use_plain && std::io::stdin().is_terminal() {
-        cupel_tui::project_trust::confirm(home.as_deref(), &cwd)
+        // Bootstrap has not read settings yet. Invalid themes fall back
+        // here; the TUI surfaces the settings warnings once it starts.
+        let (home_settings, _) = cupel_coding_agent::settings::load_home_settings(home.as_deref());
+        let theme = cupel_tui::theme::from_settings(home_settings.theme.as_deref())
+            .unwrap_or(&cupel_tui::theme::CUPEL);
+        cupel_tui::project_trust::confirm(home.as_deref(), &cwd, theme)
             .map_err(AppError::InteractiveMode)?;
     } else if !cupel_coding_agent::project_trust::is_trusted(home.as_deref(), &cwd) {
         eprintln!(

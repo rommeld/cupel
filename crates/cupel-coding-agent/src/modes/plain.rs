@@ -566,6 +566,7 @@ mod tests {
             "login",
             "logout",
             "thinking",
+            "themes",
             "preset",
             "session-id",
             "hot-reload",

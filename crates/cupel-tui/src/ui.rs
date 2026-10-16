@@ -14,13 +14,17 @@ use ratatui::widgets::{
 
 use crate::app::{App, Status, format_elapsed};
 use crate::sessions::Sessions;
-use crate::{theme, transcript};
+use crate::{theme::Theme, transcript};
 
 const SIDEBAR_WIDTH: u16 = 24;
 const SIDEBAR_MIN_SCREEN: u16 = 80;
 
 pub fn render_sessions(frame: &mut Frame<'_>, sessions: &mut Sessions) {
+    let theme = sessions.theme;
     let area = frame.area();
+    // Start every cell in the theme's colors; later widgets patch them.
+    // CUPEL's empty base leaves the terminal colors unchanged.
+    frame.render_widget(Block::new().style(theme.base), area);
     let width = if sessions.list.len() > 1 && area.width >= SIDEBAR_MIN_SCREEN {
         SIDEBAR_WIDTH
     } else {
@@ -28,19 +32,19 @@ pub fn render_sessions(frame: &mut Frame<'_>, sessions: &mut Sessions) {
     };
     let [sidebar, main] =
         Layout::horizontal([Constraint::Length(width), Constraint::Min(1)]).areas(area);
-    render_sidebar(frame, sessions, sidebar);
-    render(frame, &mut sessions.list[sessions.active].app, main);
+    render_sidebar(frame, sessions, sidebar, theme);
+    render(frame, &mut sessions.list[sessions.active].app, main, theme);
 }
 
 /// A mark for each session's state, its label, and the session on screen highlighted.
 /// It revords where each row was drawn, so a click can find its session.
-fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect) {
+fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect, theme: &Theme) {
     sessions.rows.clear();
     if area.width == 0 {
         return;
     }
-    let block = pane_block(Some("sessions"))
-        .title_bottom(Span::styled(" ctrl+n/p · click ", theme::CHROME));
+    let block = pane_block(Some("sessions"), theme)
+        .title_bottom(Span::styled(" ctrl+n/p · click ", theme.chrome));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let mut lines = Vec::new();
@@ -60,13 +64,13 @@ fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect) {
         let room = usize::from(inner.width).saturating_sub(2 + badge.len());
         let text = format!("{mark} {:<room$}", fit(&session.label, room));
         let style = if index == sessions.active {
-            theme::POPUP_SELECTED
+            theme.popup_selected
         } else {
             ratatui::style::Style::default()
         };
         lines.push(Line::from(vec![
             Span::styled(text, style),
-            Span::styled(badge, style.patch(theme::ERROR)),
+            Span::styled(badge, style.patch(theme.error)),
         ]));
         let y = inner.y + index as u16;
         if y < inner.bottom() {
@@ -91,7 +95,7 @@ fn fit(text: &str, max: usize) -> String {
     cut
 }
 
-pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     // Input grows with its content (explicit newlines + wrapped lines),
     // capped at 5 visible lines, + 2 border rows. With only top/bottom
     // borders, the input uses the full frame width.
@@ -113,13 +117,13 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
     ])
     .areas(area);
 
-    render_transcript(frame, app, transcript_area);
-    render_queued(frame, app, queued_area);
-    render_input(frame, app, input_area);
-    render_footer(frame, app, footer_area);
+    render_transcript(frame, app, transcript_area, theme);
+    render_queued(frame, app, queued_area, theme);
+    render_input(frame, app, input_area, theme);
+    render_footer(frame, app, footer_area, theme);
     // Drawn last so it overdraws the transcript's bottom rows in
     // immediate-mode rendering, paint order is the z-order.
-    render_autocomplete(frame, app, area, transcript_area, input_area);
+    render_autocomplete(frame, app, area, transcript_area, input_area, theme);
 }
 
 /// The `@path` completion popup, anchored just above the input box at the
@@ -130,6 +134,7 @@ fn render_autocomplete(
     area: Rect,
     transcript_area: Rect,
     input_area: Rect,
+    theme: &Theme,
 ) {
     let Some((rows, selected)) = app.autocomplete.visible() else {
         return;
@@ -164,29 +169,33 @@ fn render_autocomplete(
     };
 
     // Clear blanks the transcript underneath, then the rows paint on top.
+    // It also resets colors: the paragraph repaints the entire popup surface,
+    // including padding after shorter rows.
     frame.render_widget(Clear, popup);
     let lines: Vec<Line<'_>> = rows
         .iter()
         .enumerate()
         .map(|(i, row)| {
             let style = if i == selected {
-                theme::POPUP_SELECTED
+                theme.popup_selected
             } else {
-                theme::POPUP_ROW
+                theme.popup_row
             };
             Line::from(Span::styled(format!(" {} ", row.display), style))
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines), popup);
+    frame.render_widget(Paragraph::new(lines).style(theme.popup_row), popup);
 }
 
-fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
+fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     // Keep the pane's horizontal content margin without drawing borders.
-    let block = pane_block(None).borders(Borders::NONE);
+    let block = pane_block(None, theme).borders(Borders::NONE);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rendered = app.transcript.to_lines(inner.width, app.selected_cell);
+    let rendered = app
+        .transcript
+        .to_lines(inner.width, app.selected_cell, theme);
     let total = rendered.lines.len();
     let height = inner.height as usize;
 
@@ -221,8 +230,8 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             .begin_symbol(None)
             .end_symbol(None)
             .track_symbol(Some("│"))
-            .track_style(theme::PANE_BORDER)
-            .thumb_style(theme::SCROLLBAR_THUMB);
+            .track_style(theme.pane_border)
+            .thumb_style(theme.scrollbar_thumb);
         let mut state = ScrollbarState::new(total).position(start);
         frame.render_stateful_widget(scrollbar, area, &mut state);
     }
@@ -238,7 +247,7 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
             height: 1,
         };
         frame.render_widget(
-            Paragraph::new(marker).style(theme::SCROLL_MARKER),
+            Paragraph::new(marker).style(theme.scroll_marker),
             marker_area,
         );
     }
@@ -247,7 +256,7 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
 /// The waiting prompts above the input box: "Steer:" rows first (they go in sooner),
 /// then "Follow-up:" rows, oldest first. The first line of each prompt, then the key
 /// that takes them back.
-fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     if app.steering.is_empty() && app.queued.is_empty() {
         return;
     }
@@ -262,7 +271,7 @@ fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 .map(|text| format!(" Follow-up: {}", first_line(text))),
         )
         .chain([" ↳ alt+up to edit all queued messages".to_string()])
-        .map(|line| Line::from(Span::styled(line, theme::CHROME)))
+        .map(|line| Line::from(Span::styled(line, theme.chrome)))
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
 }
@@ -270,13 +279,13 @@ fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect) {
 const SPINNER: [&str; 4] = ["◓", "◑", "◒", "◐"];
 
 /// A pane frame: dim border, optional dim title, one column of horizontal padding.
-fn pane_block(title: Option<&str>) -> Block<'static> {
+fn pane_block(title: Option<&str>, theme: &Theme) -> Block<'static> {
     let block = Block::new()
         .borders(Borders::ALL)
-        .border_style(theme::PANE_BORDER)
+        .border_style(theme.pane_border)
         .padding(Padding::horizontal(1));
     match title {
-        Some(title) => block.title(Span::styled(format!(" {title} "), theme::CHROME)),
+        Some(title) => block.title(Span::styled(format!(" {title} "), theme.chrome)),
         None => block,
     }
 }
@@ -325,11 +334,11 @@ fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
     (visual_line, 0) // unreachable: the last logical line always contains the cursor
 }
 
-fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let border_style = if app.is_running() {
-        theme::INPUT_BORDER_BUSY
+        theme.input_border_busy
     } else {
-        theme::INPUT_BORDER_IDLE
+        theme.input_border_idle
     };
     let mut block = Block::new()
         .borders(Borders::TOP | Borders::BOTTOM)
@@ -344,7 +353,7 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
             SPINNER[app.frame % SPINNER.len()],
             app.activity_label()
         );
-        block = block.title(Span::styled(title, theme::CHROME));
+        block = block.title(Span::styled(title, theme.chrome));
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -374,7 +383,7 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     });
 }
 
-fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
+fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let state = if app.is_running() { "working" } else { "idle" };
     // the thinking level appears only for
     // reasoning models; "off" keeps the word "thinking" so a bare level
@@ -427,23 +436,20 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let [status_row, hints_row] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
-    frame.render_widget(
-        Paragraph::new(Span::styled(left, theme::CHROME)),
-        status_row,
-    );
+    frame.render_widget(Paragraph::new(Span::styled(left, theme.chrome)), status_row);
     let [hints_area, version_area] = Layout::horizontal([
         Constraint::Min(0),
         Constraint::Length(version_label.len() as u16 + 1),
     ])
     .areas(hints_row);
     frame.render_widget(
-        Paragraph::new(Span::styled(hints, theme::CHROME)),
+        Paragraph::new(Span::styled(hints, theme.chrome)),
         hints_area,
     );
     // Right-aligned, the area's spare column sits in front of the label. It is
     // the gap that keeps cut-off hints from running into the version.
     frame.render_widget(
-        Paragraph::new(Span::styled(version_label, theme::CHROME)).right_aligned(),
+        Paragraph::new(Span::styled(version_label, theme.chrome)).right_aligned(),
         version_area,
     );
 }
@@ -469,6 +475,7 @@ mod tests {
     //! terminal (or an API key the Agent is constructed but never run).
 
     use super::*;
+    use crate::theme::CUPEL;
     use crate::transcript::{Cell, ToolOutcome};
     use cupel_agent::{Agent, AgentEvent, AgentOptions};
     use cupel_coding_agent::modes::SessionMeta;
@@ -539,7 +546,7 @@ mod tests {
     fn draw(app: &mut App, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
-            .draw(|frame| render(frame, app, frame.area()))
+            .draw(|frame| render(frame, app, frame.area(), &CUPEL))
             .unwrap();
         // Flatten the buffer to a string for containment assertions.
         let buffer = terminal.backend().buffer().clone();
@@ -561,7 +568,7 @@ mod tests {
     fn style_of(app: &mut App, needle: &str) -> ratatui::style::Style {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
-            .draw(|frame| render(frame, app, frame.area()))
+            .draw(|frame| render(frame, app, frame.area(), &CUPEL))
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
         for y in 0..buffer.area.height {
@@ -639,8 +646,8 @@ mod tests {
         assert!(!prompt.add_modifier.contains(Modifier::BOLD));
         assert_eq!(style_of(&mut app, "fn main").fg, Some(Color::White));
         app.selected_cell = Some(0);
-        assert_eq!(style_of(&mut app, "bold").bg, theme::SELECTED.bg);
-        assert_eq!(style_of(&mut app, "fn main").bg, theme::SELECTED.bg);
+        assert_eq!(style_of(&mut app, "bold").bg, CUPEL.selected.bg);
+        assert_eq!(style_of(&mut app, "fn main").bg, CUPEL.selected.bg);
     }
 
     #[test]
@@ -649,7 +656,7 @@ mod tests {
         app.input.insert_str("**draft**");
         let mut terminal = Terminal::new(TestBackend::new(20, 3)).unwrap();
         terminal
-            .draw(|frame| render_input(frame, &app, frame.area()))
+            .draw(|frame| render_input(frame, &app, frame.area(), &CUPEL))
             .unwrap();
         assert_eq!(terminal.get_cursor_position().unwrap(), Position::new(9, 1));
         let buffer = terminal.backend().buffer();
@@ -669,7 +676,7 @@ mod tests {
         app.input.insert_str("hello brave new world");
         let mut terminal = Terminal::new(TestBackend::new(20, 20)).unwrap();
         terminal
-            .draw(|frame| render(frame, &mut app, frame.area()))
+            .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
             .unwrap();
         // Two border rows plus two text rows: input starts at y=14.
         assert_eq!(
@@ -689,7 +696,7 @@ mod tests {
         app.input.insert_str("abcdefghijklmnopqrst");
         let mut terminal = Terminal::new(TestBackend::new(20, 20)).unwrap();
         terminal
-            .draw(|frame| render(frame, &mut app, frame.area()))
+            .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text: String = (0..20).map(|x| buffer[(x, 16)].symbol()).collect();
@@ -728,7 +735,7 @@ mod tests {
             "{screen}"
         );
         assert_eq!(app.last_transcript_inner, Rect::new(1, 0, 78, 15));
-        assert_eq!(style_of(&mut app, "─").fg, theme::INPUT_BORDER_IDLE.fg);
+        assert_eq!(style_of(&mut app, "─").fg, CUPEL.input_border_idle.fg);
     }
 
     #[test]
@@ -2417,7 +2424,7 @@ mod tests {
         // its events are pumped the app counts as running.
         app.start_run("spin");
         assert!(draw(&mut app, 80, 20).contains("◓ waiting for the model · 0s"));
-        assert_eq!(style_of(&mut app, "─").fg, theme::INPUT_BORDER_BUSY.fg);
+        assert_eq!(style_of(&mut app, "─").fg, CUPEL.input_border_busy.fg);
         app.tick();
         assert!(draw(&mut app, 80, 20).contains("◑ waiting for the model · 0s"));
         while app.is_running() {
@@ -2425,7 +2432,7 @@ mod tests {
             app.on_event(event).await;
         }
         assert!(!draw(&mut app, 80, 20).contains(" prompt "));
-        assert_eq!(style_of(&mut app, "─").fg, theme::INPUT_BORDER_IDLE.fg);
+        assert_eq!(style_of(&mut app, "─").fg, CUPEL.input_border_idle.fg);
     }
 
     #[tokio::test]
@@ -3342,7 +3349,7 @@ mod tests {
         // The selected block renders with the highlight background.
         let _ = draw(&mut app, 80, 24);
         let style = style_of(&mut app, "private reasoning");
-        assert_eq!(style.bg, theme::SELECTED.bg);
+        assert_eq!(style.bg, CUPEL.selected.bg);
 
         // Ctrl+O queues the raw text and confirms with a notice.
         app.on_terminal_event(Event::Key(KeyEvent::new(
@@ -3856,6 +3863,253 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    fn an_opaque_theme_leaves_no_cell_in_the_terminal_colors() {
+        use crate::sessions::{Session, Sessions};
+        for theme in crate::theme::THEMES.iter().skip(1) {
+            let mut sessions = Sessions::new(test_app());
+            sessions.theme = theme;
+            sessions.list.push(Session {
+                label: "auth".into(),
+                app: test_app(),
+            });
+            let app = sessions.active_mut();
+            app.transcript.cells.push(Cell::User {
+                text: "the task".into(),
+            });
+            app.transcript.cells.push(Cell::Answer {
+                text: "```rust\nfn main() {}\n```".into(),
+            });
+            // Exercise Clear in the command popup as well as the sidebar.
+            type_text(app, "/");
+            let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            terminal
+                .draw(|frame| render_sessions(frame, &mut sessions))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let screen: String = buffer
+                .content
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect();
+            assert!(screen.contains("help"), "{screen}");
+            assert!(screen.contains("sessions"), "{screen}");
+            for cell in &buffer.content {
+                assert_ne!(cell.bg, Color::Reset, "{}: {screen}", theme.id);
+                assert_ne!(cell.fg, Color::Reset, "{}: {screen}", theme.id);
+            }
+        }
+    }
+
+    #[test]
+    fn themes_command_is_handled_locally() {
+        use crate::app::ThemeRequest;
+        for command in [
+            "/themes nightfox",
+            "/themes",
+            "/themes dracula",
+            "/themes nightfox extra",
+        ] {
+            let mut app = test_app();
+            submit_command(&mut app, command);
+            match command {
+                "/themes nightfox" => assert!(matches!(
+                    app.pending_theme, Some(ThemeRequest::Apply(theme)) if theme.id == "nightfox"
+                )),
+                "/themes" => assert!(matches!(app.pending_theme, Some(ThemeRequest::List))),
+                _ => {
+                    assert!(app.pending_theme.is_none());
+                    assert_eq!(
+                        last_notice(&app),
+                        format!(
+                            "unknown theme: {} (/themes lists them)",
+                            command.trim_start_matches("/themes ")
+                        )
+                    );
+                }
+            }
+            assert!(app.pending_prompt.is_none());
+            assert!(!app.is_running());
+            assert!(
+                !app.transcript
+                    .cells
+                    .iter()
+                    .any(|cell| matches!(cell, Cell::User { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn themes_arguments_autocomplete_from_the_registry() {
+        let mut app = test_app();
+        type_text(&mut app, "/themes ");
+        let (rows, _) = app.autocomplete.visible().expect("theme rows");
+        let values: Vec<&str> = rows.iter().map(|row| row.value.as_str()).collect();
+        assert_eq!(
+            values[..6],
+            [
+                "cupel",
+                "ayu-dark",
+                "ayu-light",
+                "dawnfox",
+                "duskfox",
+                "nightfox"
+            ]
+        );
+        assert!(rows[5].display.contains("Nightfox - opaque (dark)"));
+    }
+
+    /// Style of the first ASCII occurrence, using the event loop's render path.
+    fn sessions_style_of(
+        sessions: &mut crate::sessions::Sessions,
+        needle: &str,
+    ) -> ratatui::style::Style {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| render_sessions(frame, sessions))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for y in 0..buffer.area.height {
+            let row: String = (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect();
+            if let Some(col) = row.find(needle) {
+                return buffer[(u16::try_from(col).unwrap(), y)].style();
+            }
+        }
+        panic!("needle {needle:?} not on screen");
+    }
+
+    #[test]
+    fn switching_themes_restyles_old_messages_and_lists_the_active_one() {
+        use crate::app::ThemeRequest;
+        use crate::sessions::Sessions;
+        use crate::theme::NIGHTFOX;
+        let mut sessions = Sessions::new(test_app());
+        sessions.active_mut().transcript.cells.push(Cell::User {
+            text: "the task".into(),
+        });
+        sessions.active_mut().transcript.cells.push(Cell::Answer {
+            text: "the answer with `code`\n```\ncode panel\n```".into(),
+        });
+        assert_eq!(
+            sessions_style_of(&mut sessions, "the task").bg,
+            CUPEL.task.bg
+        );
+
+        sessions.on_theme_request(ThemeRequest::Apply(&NIGHTFOX));
+        assert_eq!(sessions.theme.id, "nightfox");
+        let notice = last_notice(sessions.active());
+        assert!(
+            notice.starts_with("theme switched to Nightfox - opaque"),
+            "{notice}"
+        );
+        let task = sessions_style_of(&mut sessions, "the task");
+        assert_eq!((task.fg, task.bg), (NIGHTFOX.task.fg, NIGHTFOX.task.bg));
+        assert_eq!(
+            sessions_style_of(&mut sessions, "the answer").fg,
+            NIGHTFOX.answer.fg
+        );
+        assert_eq!(
+            sessions_style_of(&mut sessions, "code panel").bg,
+            NIGHTFOX.md_code_block.bg
+        );
+        assert_eq!(
+            sessions_style_of(&mut sessions, "code panel").fg,
+            NIGHTFOX.base.fg
+        );
+        assert_eq!(
+            sessions_style_of(&mut sessions, "version:").fg,
+            NIGHTFOX.chrome.fg
+        );
+
+        sessions.on_theme_request(ThemeRequest::List);
+        let listing = last_notice(sessions.active());
+        assert!(listing.starts_with("themes (/themes <id>):"), "{listing}");
+        assert!(
+            listing.contains("* nightfox   Nightfox - opaque (dark)"),
+            "{listing}"
+        );
+        assert!(
+            listing.contains("  cupel      Cupel (terminal colors)"),
+            "{listing}"
+        );
+        // Returning to the terminal theme must not retain opaque colors.
+        sessions.on_theme_request(ThemeRequest::Apply(&CUPEL));
+        assert_eq!(
+            sessions_style_of(&mut sessions, "the task").bg,
+            CUPEL.task.bg
+        );
+        assert_eq!(
+            sessions_style_of(&mut sessions, "version:").bg,
+            Some(Color::Reset)
+        );
+    }
+
+    #[test]
+    fn a_saved_theme_survives_a_restart() {
+        use crate::app::ThemeRequest;
+        use crate::sessions::Sessions;
+        let mut sessions = Sessions::new(test_app());
+        sessions.on_theme_request(ThemeRequest::Apply(&crate::theme::AYU_LIGHT));
+        assert_eq!(sessions.theme.id, "ayu-light");
+        let notice = last_notice(sessions.active());
+        assert!(notice.contains("for this run only - not saved"), "{notice}");
+
+        let home = std::env::temp_dir().join("cupel-ui-theme-restart");
+        let _ = std::fs::remove_dir_all(&home);
+        let mut app = test_app();
+        app.meta.home = Some(home.clone());
+        let mut sessions = Sessions::new(app);
+        sessions.on_theme_request(ThemeRequest::Apply(&crate::theme::AYU_LIGHT));
+        let notice = last_notice(sessions.active());
+        assert!(notice.contains("saved to"), "{notice}");
+
+        let mut restarted = test_app();
+        restarted.meta.settings = cupel_coding_agent::settings::load_home_settings(Some(&home)).0;
+        assert_eq!(Sessions::new(restarted).theme.id, "ayu-light");
+
+        // A malformed file is not overwritten, but the live theme still switches.
+        let path = home.join("settings.json");
+        std::fs::write(&path, "{broken").unwrap();
+        sessions.on_theme_request(ThemeRequest::Apply(&crate::theme::DUSKFOX));
+        assert_eq!(sessions.theme.id, "duskfox");
+        assert!(last_notice(sessions.active()).contains("for this run only - not saved"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "{broken");
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn an_unknown_theme_setting_warns_and_starts_with_the_default() {
+        let mut app = test_app();
+        app.meta.settings.theme = Some("dracula".into());
+        let sessions = crate::sessions::Sessions::new(app);
+        assert_eq!(sessions.theme.id, "cupel");
+        assert!(has_notice(sessions.active(), "unknown theme \"dracula\""));
+    }
+
+    #[tokio::test]
+    async fn the_theme_survives_new_and_session_switches() {
+        use crate::app::{ReloadTarget, ThemeRequest};
+        use crate::sessions::{Session, Sessions};
+        let mut sessions = Sessions::new(test_app());
+        sessions.list.push(Session {
+            label: "auth".into(),
+            app: test_app(),
+        });
+        sessions.on_theme_request(ThemeRequest::Apply(&crate::theme::DUSKFOX));
+        sessions.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
+        )));
+        assert_eq!(sessions.active, 1);
+        assert_eq!(sessions.theme.id, "duskfox");
+        sessions.reload(ReloadTarget::New).await;
+        assert_eq!(sessions.theme.id, "duskfox");
+        sessions.reload(ReloadTarget::Current).await;
+        assert_eq!(sessions.theme.id, "duskfox");
     }
 
     #[test]

@@ -26,6 +26,7 @@ use ratatui::layout::{Position, Rect};
 use crate::autocomplete::{Autocomplete, Candidate};
 use crate::input::InputState;
 use crate::login;
+use crate::theme::{THEMES, Theme};
 use crate::transcript::{Cell, ToolOutcome, Transcript};
 
 /// Cumulative token/cost counters across the whole session.
@@ -68,6 +69,7 @@ pub struct App {
     pub last_top_line: usize,
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
+    pub pending_theme: Option<ThemeRequest>,
     pub run_finished: bool,
     pub activity: Activity,
     pub run_started: Option<Instant>,
@@ -149,6 +151,14 @@ pub enum ReloadTarget {
     Resume(String),
 }
 
+/// A `/themes` request handed to `Sessions` by the event loop. `Apply`
+/// carries a resolved theme so an unknown id cannot reach the switch.
+#[derive(Debug)]
+pub enum ThemeRequest {
+    List,
+    Apply(&'static Theme),
+}
+
 impl App {
     #[must_use]
     pub fn new(agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
@@ -224,6 +234,14 @@ impl App {
                 is_dir: false,
             })
             .collect();
+        let theme_candidates: Vec<Candidate> = THEMES
+            .iter()
+            .map(|theme| Candidate {
+                display: format!("{}  - {} ({})", theme.id, theme.name, theme.appearance),
+                value: theme.id.to_string(),
+                is_dir: false,
+            })
+            .collect();
         let logout_candidates = vec![Candidate {
             display: "openai-codex  - remove the stored ChatGPT login".to_string(),
             value: "openai-codex".to_string(),
@@ -239,6 +257,7 @@ impl App {
             .with_commands(command_candidates)
             .with_command_args("model", model_candidates)
             .with_command_args("thinking", thinking_candidates)
+            .with_command_args("themes", theme_candidates)
             .with_command_args("preset", preset_candidates)
             .with_command_args("provider", provider_candidates)
             .with_command_args("login", login_candidates)
@@ -278,6 +297,7 @@ impl App {
             last_top_line: 0,
             last_answer: Status::New,
             pending_spinoff: None,
+            pending_theme: None,
             run_finished: false,
             activity: Activity::Waiting,
             run_started: None,
@@ -1479,6 +1499,11 @@ impl App {
             "spinoff" => match args.parse() {
                 Ok(command) => self.pending_spinoff = Some(command),
                 Err(error) => self.notice(format!("{error}")),
+            },
+            "themes" if args.is_empty() => self.pending_theme = Some(ThemeRequest::List),
+            "themes" => match crate::theme::find(args) {
+                Some(theme) => self.pending_theme = Some(ThemeRequest::Apply(theme)),
+                None => self.notice(format!("unknown theme: {args} (/themes lists them)")),
             },
             "quit" => self.should_quit = true,
             _ => return false,

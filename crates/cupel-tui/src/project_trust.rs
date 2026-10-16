@@ -13,12 +13,12 @@ use ratatui::layout::{Constraint, Layout};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::theme;
+use crate::theme::Theme;
 
 /// Ask once per canonical project and persist either answer in cupel home.
 /// There is no CLI auto-trust flag; noninteractive startup stays restricted
 /// unless an earlier interactive decision explicitly granted trust.
-pub fn confirm(home: Option<&Path>, cwd: &Path) -> std::io::Result<()> {
+pub fn confirm(home: Option<&Path>, cwd: &Path, theme: &Theme) -> std::io::Result<()> {
     if decision(home, cwd).is_some() {
         return Ok(());
     }
@@ -28,7 +28,7 @@ pub fn confirm(home: Option<&Path>, cwd: &Path) -> std::io::Result<()> {
         execute!(std::io::stdout(), EnableBracketedPaste)?;
         let mut selected = ProjectTrust::Restricted;
         loop {
-            terminal.draw(|frame| render(frame, cwd, selected))?;
+            terminal.draw(|frame| render(frame, cwd, selected, theme))?;
             if let Event::Key(key) = event::read()? {
                 match on_key(&mut selected, key) {
                     Some(Answer::Save(trust)) => return Ok(trust),
@@ -87,7 +87,7 @@ fn on_key(selected: &mut ProjectTrust, key: KeyEvent) -> Option<Answer> {
     }
 }
 
-fn render(frame: &mut Frame<'_>, cwd: &Path, selected: ProjectTrust) {
+fn render(frame: &mut Frame<'_>, cwd: &Path, selected: ProjectTrust, theme: &Theme) {
     let [_, middle, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(19),
@@ -104,9 +104,9 @@ fn render(frame: &mut Frame<'_>, cwd: &Path, selected: ProjectTrust) {
         Span::styled(
             text,
             if selected == trust {
-                theme::POPUP_SELECTED
+                theme.popup_selected
             } else {
-                theme::POPUP_ROW
+                theme.popup_row
             },
         )
     };
@@ -137,9 +137,12 @@ fn render(frame: &mut Frame<'_>, cwd: &Path, selected: ProjectTrust) {
         Line::from("Arrows/Tab: select   Enter: confirm   Esc: without trust   Ctrl+C: quit"),
         Line::from("Decision saved in cupel home, not in this repository."),
     ];
+    // Clear resets colors too, so repaint the popup after the screen base.
+    frame.render_widget(Block::new().style(theme.base), frame.area());
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)
+            .style(theme.base)
             .block(
                 Block::default()
                     .title(" Project trust ")
@@ -153,6 +156,7 @@ fn render(frame: &mut Frame<'_>, cwd: &Path, selected: ProjectTrust) {
 #[cfg(test)]
 mod tests {
     use crate::project_trust::{Answer, on_key, render};
+    use crate::theme::{CUPEL, NIGHTFOX};
     use cupel_coding_agent::project_trust::ProjectTrust;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -198,6 +202,7 @@ mod tests {
                     frame,
                     std::path::Path::new("/foreign/repo"),
                     ProjectTrust::Restricted,
+                    &CUPEL,
                 );
             })
             .unwrap();
@@ -219,5 +224,28 @@ mod tests {
         ] {
             assert!(screen.contains(text), "missing warning/choice: {text}");
         }
+    }
+
+    #[test]
+    fn an_opaque_theme_paints_the_whole_screen() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| {
+                render(
+                    frame,
+                    std::path::Path::new("/foreign/repo"),
+                    ProjectTrust::Restricted,
+                    &NIGHTFOX,
+                );
+            })
+            .unwrap();
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .all(|cell| { cell.bg != ratatui::style::Color::Reset })
+        );
     }
 }

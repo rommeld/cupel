@@ -19,13 +19,14 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
 use crate::terminal_text::sanitize;
-use crate::theme;
+use crate::theme::Theme;
 use crate::transcript::wrap_line;
 
-/// Render markdown into wrapped, styled lines for one transcript cell.
-/// `base` is the cell's identity style (`TASK`, `ASSISTANT`, `ANSWER`).
+/// Render markdown into wrapped, styled lines for one transcript cell. `base` is the
+/// cell's identity style (`task`, `assistant`, `answer`), and `theme` supplies the
+/// markdown accents.
 #[must_use]
-pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
+pub fn render(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let text = sanitize(text);
     let lines: Vec<&str> = text.split('\n').collect();
@@ -41,7 +42,7 @@ pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
             continue;
         }
         if in_code {
-            push_code_line(&mut out, lines[i], width);
+            push_code_line(&mut out, lines[i], width, theme);
             i += 1;
             continue;
         }
@@ -51,10 +52,10 @@ pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
         if trimmed.starts_with('|')
             && is_table_separator(lines.get(i + 1).copied().unwrap_or("default"))
         {
-            i += render_table(&mut out, &lines[i..], width, base);
+            i += render_table(&mut out, &lines[i..], width, base, theme);
             continue;
         }
-        render_block_line(&mut out, lines[i], width, base);
+        render_block_line(&mut out, lines[i], width, base, theme);
         i += 1;
     }
     if out.is_empty() {
@@ -65,16 +66,16 @@ pub fn render(text: &str, width: usize, base: Style) -> Vec<Line<'static>> {
 
 /// The effective style for the current flag state computed at flush
 /// time, so nested emphasis composes via path stacking.
-fn inline_style(base: Style, bold: bool, italic: bool, strike: bool) -> Style {
+fn inline_style(base: Style, bold: bool, italic: bool, strike: bool, theme: &Theme) -> Style {
     let mut style = base;
     if bold {
-        style = style.patch(theme::MD_BOLD);
+        style = style.patch(theme.md_bold);
     }
     if italic {
-        style = style.patch(theme::MD_ITALIC);
+        style = style.patch(theme.md_italic);
     }
     if strike {
-        style = style.patch(theme::MD_STRIKE);
+        style = style.patch(theme.md_strike);
     }
     style
 }
@@ -90,7 +91,7 @@ fn flush(segements: &mut Vec<(String, Style)>, current: &mut String, style: Styl
 /// flags; the text between two flushes shares one style. Unclosed
 /// delimiters style the rest of the line correct for streaming, where
 /// the closing half may simply not have arrived yet.
-fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
+fn inline_spans(text: &str, base: Style, theme: &Theme) -> Vec<(String, Style)> {
     let chars: Vec<char> = text.chars().collect();
     let mut segments: Vec<(String, Style)> = Vec::new();
     let mut current = String::new();
@@ -102,7 +103,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
         // Inside inline code nothing is special except the closing tick.
         if code {
             if c == '`' {
-                flush(&mut segments, &mut current, base.patch(theme::MD_CODE));
+                flush(&mut segments, &mut current, base.patch(theme.md_code));
                 code = false;
             } else {
                 current.push(c);
@@ -110,7 +111,7 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
             i += 1;
             continue;
         }
-        let style = inline_style(base, bold, italic, strike);
+        let style = inline_style(base, bold, italic, strike, theme);
         match c {
             // Backslash escapes the next punctuation char.
             '\\' if chars.get(i + 1).is_some_and(char::is_ascii_punctuation) => {
@@ -161,9 +162,9 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
             '[' => match parse_link(&chars[i..]) {
                 Some((label, url, consumed)) => {
                     flush(&mut segments, &mut current, style);
-                    segments.push((label.clone(), base.patch(theme::MD_LINK)));
+                    segments.push((label.clone(), base.patch(theme.md_link)));
                     if !url.is_empty() && url != label {
-                        segments.push((format!(" ({url})"), base.patch(theme::MD_LINK_URL)));
+                        segments.push((format!(" ({url})"), base.patch(theme.md_link_url)));
                     }
                     i += consumed;
                 }
@@ -180,9 +181,9 @@ fn inline_spans(text: &str, base: Style) -> Vec<(String, Style)> {
     }
     // An unclosed code span keeps the code style see the module doc.
     let final_style = if code {
-        base.patch(theme::MD_CODE)
+        base.patch(theme.md_code)
     } else {
-        inline_style(base, bold, italic, strike)
+        inline_style(base, bold, italic, strike, theme)
     };
     flush(&mut segments, &mut current, final_style);
     if segments.is_empty() {
@@ -324,7 +325,13 @@ fn display_width(text: &str) -> usize {
     text.chars().map(|c| c.width().unwrap_or(0)).sum()
 }
 
-fn render_block_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, base: Style) {
+fn render_block_line(
+    out: &mut Vec<Line<'static>>,
+    line: &str,
+    width: usize,
+    base: Style,
+    theme: &Theme,
+) {
     let trimmed = line.trim_start();
     let indent = line.len() - trimmed.len();
 
@@ -339,13 +346,13 @@ fn render_block_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, bas
     let hashes = trimmed.chars().take_while(|c| *c == '#').count();
     if (1..=6).contains(&hashes) && trimmed[hashes..].starts_with(' ') {
         let heading = if hashes <= 2 {
-            base.patch(theme::MD_HEADING)
+            base.patch(theme.md_heading)
         } else {
-            base.patch(theme::MD_BOLD)
+            base.patch(theme.md_bold)
         };
         push_wrapped_spans(
             out,
-            inline_spans(trimmed[hashes + 1..].trim_start(), heading),
+            inline_spans(trimmed[hashes + 1..].trim_start(), heading, theme),
             width,
             None,
             0,
@@ -361,7 +368,7 @@ fn render_block_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, bas
     {
         out.push(Line::from(Span::styled(
             "─".repeat(width),
-            base.patch(theme::MD_RULE),
+            base.patch(theme.md_rule),
         )));
         return;
     }
@@ -369,11 +376,11 @@ fn render_block_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, bas
     // Blockqoute: one level (nested '>' collapse into it) a receded
     // bar-prefixed run, inline markup still active inside.
     if let Some(rest) = trimmed.strip_prefix('>') {
-        let quote = base.patch(theme::MD_QUOTE);
+        let quote = base.patch(theme.md_quote);
         let content = rest.trim_start_matches('>').trim_start();
         push_wrapped_spans(
             out,
-            inline_spans(content, quote),
+            inline_spans(content, quote, theme),
             width,
             Some(("▌ ".to_string(), quote)),
             2,
@@ -388,15 +395,15 @@ fn render_block_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, bas
         let hang = display_width(&prefix);
         push_wrapped_spans(
             out,
-            inline_spans(rest, base),
+            inline_spans(rest, base, theme),
             width,
-            Some((prefix, base.patch(theme::MD_BULLET))),
+            Some((prefix, base.patch(theme.md_bullet))),
             hang,
         );
         return;
     }
 
-    push_wrapped_spans(out, inline_spans(line, base), width, None, 0);
+    push_wrapped_spans(out, inline_spans(line, base, theme), width, None, 0);
 }
 
 /// "- "/"* "/"+ " -> a bullet; "12. " -> the number. None = not a list.
@@ -417,10 +424,10 @@ fn split_list_marker(text: &str) -> Option<(String, &str)> {
 /// so the "code look" is a full-width panel every wrapped chunk is
 /// padded to the terminal width so the background forms one surface
 /// (a bg colors only the cells under its own characters).
-fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize) {
+fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, theme: &Theme) {
     // Deliberately not the cell's base style: code is code, in every
     // cell. Terminal-default fg on the indexed panel tint.
-    let style = Style::new().bg(theme::MD_CODE_BLOCK_BG);
+    let style = theme.md_code_block;
     for chunk in wrap_line(&format!(" {line}"), width.saturating_sub(1)) {
         let pad = width.saturating_sub(display_width(&chunk));
         out.push(Line::from(Span::styled(
@@ -448,7 +455,13 @@ fn split_cless(row: &str) -> Vec<String> {
 /// Render the table starting at lines[0] (header row; lines[1] is the
 /// separator). Returns how many source lines were consumed, so the
 /// caller's cursor can jump past the whole block.
-fn render_table(out: &mut Vec<Line<'static>>, lines: &[&str], width: usize, base: Style) -> usize {
+fn render_table(
+    out: &mut Vec<Line<'static>>,
+    lines: &[&str],
+    width: usize,
+    base: Style,
+    theme: &Theme,
+) -> usize {
     let mut rows: Vec<Vec<Vec<(String, Style)>>> = Vec::new();
     let mut consumed = 0;
     for (idx, line) in lines.iter().enumerate() {
@@ -460,14 +473,14 @@ fn render_table(out: &mut Vec<Line<'static>>, lines: &[&str], width: usize, base
             continue;
         }
         let cell_base = if idx == 0 {
-            base.patch(theme::MD_TABLE_HEADER)
+            base.patch(theme.md_table_header)
         } else {
             base
         };
         rows.push(
             split_cless(line)
                 .iter()
-                .map(|cell| inline_spans(cell, cell_base))
+                .map(|cell| inline_spans(cell, cell_base, theme))
                 .collect(),
         );
     }
@@ -500,7 +513,7 @@ fn render_table(out: &mut Vec<Line<'static>>, lines: &[&str], width: usize, base
         let mut spans: Vec<Span<'static>> = Vec::new();
         for (i, col_width) in widths.iter().enumerate() {
             if i > 0 {
-                spans.push(Span::styled(" │ ".to_string(), base.patch(theme::MD_RULE)));
+                spans.push(Span::styled(" │ ".to_string(), base.patch(theme.md_rule)));
             }
             let empty = Vec::new();
             let cell = row.get(i).unwrap_or(&empty);
@@ -512,7 +525,7 @@ fn render_table(out: &mut Vec<Line<'static>>, lines: &[&str], width: usize, base
             let rule: Vec<String> = widths.iter().map(|w| "─".repeat(*w)).collect();
             out.push(Line::from(Span::styled(
                 rule.join("─┼─"),
-                base.patch(theme::MD_RULE),
+                base.patch(theme.md_rule),
             )));
         }
     }
@@ -565,6 +578,7 @@ fn clip_segments(segments: &[(String, Style)], budget: usize) -> Vec<Span<'stati
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::CUPEL;
     use ratatui::style::{Color, Modifier};
 
     fn flat_text(lines: &[Line<'_>]) -> Vec<String> {
@@ -589,7 +603,7 @@ mod tests {
         // The invariant: no markdown syntax = one span, base style,
         // identical wrapping the renderer is a strict superset.
         let base = Style::new().fg(Color::Magenta);
-        let lines = render("hello brave new world", 11, base);
+        let lines = render("hello brave new world", 11, base, &CUPEL);
         assert_eq!(flat_text(&lines), ["hello ", "brave new ", "world"]);
         for line in &lines {
             assert_eq!(line.spans.len(), 1);
@@ -599,7 +613,7 @@ mod tests {
 
     #[test]
     fn a_long_first_word_wraps_without_an_empty_leading_line() {
-        let lines = render("**日本語日本語**", 8, Style::new());
+        let lines = render("**日本語日本語**", 8, Style::new(), &CUPEL);
         assert_eq!(flat_text(&lines), ["日本語日", "本語"]);
         assert!(lines.iter().all(|line| line.width() <= 8));
         for line in &lines {
@@ -610,7 +624,12 @@ mod tests {
     #[test]
     fn inline_emphasis_patches_the_base_style() {
         let base = Style::new().fg(Color::Magenta);
-        let lines = render("a **bold** and *italic* and `code` and ~~gone~~", 80, base);
+        let lines = render(
+            "a **bold** and *italic* and `code` and ~~gone~~",
+            80,
+            base,
+            &CUPEL,
+        );
         let bold = style_of(&lines, "bold");
         assert!(bold.add_modifier.contains(Modifier::BOLD));
         assert_eq!(bold.fg, Some(Color::Magenta), "patch keeps the cell color");
@@ -635,6 +654,7 @@ mod tests {
             r"2 * 3 = 6, snake_case_name, \*literal\*",
             80,
             Style::new(),
+            &CUPEL,
         ))
         .concat();
         assert!(text.contains("2 * 3 = 6"), "{text}");
@@ -650,10 +670,10 @@ mod tests {
             "[unfinished",
             "[label](unfinished",
         ] {
-            let text = flat_text(&render(input, 80, Style::new())).concat();
+            let text = flat_text(&render(input, 80, Style::new(), &CUPEL)).concat();
             assert_eq!(text, input);
         }
-        let lines = render("- [ ] todo\n- [x] done", 80, Style::new());
+        let lines = render("- [ ] todo\n- [x] done", 80, Style::new(), &CUPEL);
         assert_eq!(flat_text(&lines), ["• [ ] todo", "• [x] done"]);
     }
 
@@ -663,6 +683,7 @@ mod tests {
             "[docs](https://ratatui.rs) and [src/main.rs](src/main.rs)",
             80,
             Style::new(),
+            &CUPEL,
         );
         let text = flat_text(&lines).concat();
         assert!(text.contains("docs (https://ratatui.rs)"), "{text}");
@@ -679,7 +700,7 @@ mod tests {
     fn a_word_crossing_a_style_boundary_never_splits() {
         // "**bo**ld" is one word of two styled halves; at width 6 it must
         // wrap as a unit, not break between "bo" and "ld".
-        let lines = render("xxxx **bo**ld", 6, Style::new());
+        let lines = render("xxxx **bo**ld", 6, Style::new(), &CUPEL);
         let text = flat_text(&lines);
         assert_eq!(text, ["xxxx ", "bold"], "{text:?}");
     }
@@ -688,7 +709,7 @@ mod tests {
     fn unclosed_streaming_delimiters_style_the_tail() {
         // Mid-stream a closing ** may not have arrived yet the tail
         // renders bold and self-corrects on the next delta.
-        let lines = render("a **stream", 80, Style::new());
+        let lines = render("a **stream", 80, Style::new(), &CUPEL);
         assert!(
             style_of(&lines, "stream")
                 .add_modifier
@@ -698,7 +719,7 @@ mod tests {
 
     #[test]
     fn headings_drop_hashes_and_fade_by_depth() {
-        let lines = render("# Top\n### Sub\n#nohashtag", 80, Style::new());
+        let lines = render("# Top\n### Sub\n#nohashtag", 80, Style::new(), &CUPEL);
         let text = flat_text(&lines);
         assert_eq!(text[0], "Top");
         assert!(
@@ -721,18 +742,23 @@ mod tests {
 
     #[test]
     fn lists_hang_their_wrapped_lines() {
-        let lines = render("- a rather long list item that wraps", 20, Style::new());
+        let lines = render(
+            "- a rather long list item that wraps",
+            20,
+            Style::new(),
+            &CUPEL,
+        );
         let text = flat_text(&lines);
         assert!(text[0].starts_with("• a rather"), "{text:?}");
         assert!(text[1].starts_with("  "), "continuation hangs: {text:?}");
         // Nested + ordered markers survive.
-        let text = flat_text(&render("  - nested\n2. second", 80, Style::new()));
+        let text = flat_text(&render("  - nested\n2. second", 80, Style::new(), &CUPEL));
         assert_eq!(text, ["  • nested", "2. second"]);
     }
 
     #[test]
     fn quotes_and_rules_render_as_chrome() {
-        let lines = render("> wise words\n---", 10, Style::new());
+        let lines = render("> wise words\n---", 10, Style::new(), &CUPEL);
         let text = flat_text(&lines);
         assert!(text[0].starts_with("▌ wise"), "{text:?}");
         assert!(
@@ -745,7 +771,12 @@ mod tests {
 
     #[test]
     fn code_panels_cover_the_full_width() {
-        let lines = render("```rust\nfn main() {}\nlet x = 1;\n```", 24, Style::new());
+        let lines = render(
+            "```rust\nfn main() {}\nlet x = 1;\n```",
+            24,
+            Style::new(),
+            &CUPEL,
+        );
         let text = flat_text(&lines);
         assert_eq!(
             text,
@@ -761,14 +792,14 @@ mod tests {
     fn an_unclosed_fence_streams_as_code() {
         // The closing ``` has not arrived yet: everything after the fence
         // renders as code until it does.
-        let lines = render("text\n```\nstill code", 20, Style::new());
+        let lines = render("text\n```\nstill code", 20, Style::new(), &CUPEL);
         assert_eq!(style_of(&lines, "still code").bg, Some(Color::Indexed(235)));
     }
 
     #[test]
     fn tables_align_and_style_the_header() {
         let md = "| Name | Wert |\n|---|---|\n| a | **1** |\n| lang_und_breit | 2 |";
-        let lines = render(md, 80, Style::new());
+        let lines = render(md, 80, Style::new(), &CUPEL);
         let text = flat_text(&lines);
         assert!(
             text[0].contains("Name") && text[0].contains("│"),
@@ -795,7 +826,7 @@ mod tests {
     #[test]
     fn wide_tables_shrink_and_clip_with_ellipsis() {
         let md = "| col | eine sehr sehr sehr lange zelle |\n|---|---|\n| a | b |";
-        let lines = render(md, 24, Style::new());
+        let lines = render(md, 24, Style::new(), &CUPEL);
         for line in &lines {
             assert!(display_width(&flat_text(std::slice::from_ref(line))[0]) <= 24);
         }
@@ -808,7 +839,7 @@ mod tests {
     #[test]
     fn a_lone_pipe_line_is_not_a_table() {
         // Without a separator row it is just a paragraph containing pipes.
-        let text = flat_text(&render("| not | a table", 80, Style::new())).concat();
+        let text = flat_text(&render("| not | a table", 80, Style::new(), &CUPEL)).concat();
         assert!(text.contains("| not | a table"), "{text}");
     }
 
@@ -820,13 +851,18 @@ mod tests {
             "[\u{009b}31mvisible](https://example.test/\u{009d}52;c;payload\u{009c})",
             "| col | value |\n|---|---|\n| \tvisible | \x1b]52;c;payload\x07text |",
         ] {
-            let lines = render(input, 80, Style::new());
+            let lines = render(input, 80, Style::new(), &CUPEL);
             for span in lines.iter().flat_map(|line| &line.spans) {
                 assert!(span.content.chars().all(|c| !c.is_control()));
             }
             assert!(!flat_text(&lines).concat().contains("payload"));
         }
-        let code = flat_text(&render("```\n\tgo build ./...\n```", 24, Style::new()));
+        let code = flat_text(&render(
+            "```\n\tgo build ./...\n```",
+            24,
+            Style::new(),
+            &CUPEL,
+        ));
         assert_eq!(code[0], "     go build ./...     ");
     }
 }

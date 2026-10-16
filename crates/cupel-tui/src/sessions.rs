@@ -17,7 +17,8 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Position, Rect};
 use std::path::{Path, PathBuf};
 
-use crate::app::{App, AppEvent, Delivery, ReloadTarget};
+use crate::app::{App, AppEvent, Delivery, ReloadTarget, ThemeRequest};
+use crate::theme::{CUPEL, THEMES, Theme};
 
 pub struct Session {
     pub label: String,
@@ -30,11 +31,19 @@ pub struct Sessions {
     pub rows: Vec<(Rect, usize)>,
     pub quit_armed: bool,
     pub conflicts: Vec<Conflict>,
+    /// One look for all sessions, surviving `/new` and `/hot-reload`.
+    /// Themes are constants, so their references remain valid for the run.
+    pub theme: &'static Theme,
 }
 
 impl Sessions {
     #[must_use]
-    pub fn new(origin: App) -> Self {
+    pub fn new(mut origin: App) -> Self {
+        let theme = crate::theme::from_settings(origin.meta.settings.theme.as_deref())
+            .unwrap_or_else(|warning| {
+                origin.notice(warning);
+                &CUPEL
+            });
         Self {
             list: vec![Session {
                 label: "origin".to_string(),
@@ -44,6 +53,7 @@ impl Sessions {
             rows: Vec::new(),
             quit_armed: false,
             conflicts: Vec::new(),
+            theme,
         }
     }
 
@@ -174,6 +184,44 @@ impl Sessions {
             }
             session.app.agent.wait_for_idle().await;
             session.app.recorder.end_session().await;
+        }
+    }
+
+    /// List the themes or switch every session. Transcripts are restyled
+    /// on every frame, so old messages change too.
+    pub fn on_theme_request(&mut self, request: ThemeRequest) {
+        match request {
+            ThemeRequest::List => {
+                let mut lines = vec!["themes (/themes <id>):".to_string()];
+                for theme in THEMES {
+                    let marker = if theme.id == self.theme.id { "*" } else { " " };
+                    lines.push(format!(
+                        "{marker} {:<10} {} ({})",
+                        theme.id, theme.name, theme.appearance
+                    ));
+                }
+                self.active_mut().notice(lines.join("\n"));
+            }
+            ThemeRequest::Apply(theme) => {
+                self.theme = theme;
+                // A failed save must not undo the switch for this run.
+                let saved = cupel_coding_agent::settings::save_theme(
+                    self.active().meta.home.as_deref(),
+                    theme.id,
+                );
+                let note = match saved {
+                    Ok(path) => format!(
+                        "theme switched to {} (saved to {})",
+                        theme.name,
+                        path.display()
+                    ),
+                    Err(error) => format!(
+                        "theme switched to {} for this run only - not saved: {error}",
+                        theme.name
+                    ),
+                };
+                self.active_mut().notice(note);
+            }
         }
     }
 

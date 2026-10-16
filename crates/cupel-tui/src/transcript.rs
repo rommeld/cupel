@@ -19,7 +19,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
 use crate::terminal_text::sanitize;
-use crate::theme;
+use crate::theme::Theme;
 
 use std::time::{Duration, Instant};
 
@@ -195,7 +195,7 @@ impl Transcript {
     /// All text is sanitized before layout; raw cells remain unchanged for
     /// streaming, session history, and explicit clipboard copying.
     #[must_use]
-    pub fn to_lines(&self, width: u16, selected: Option<usize>) -> Rendered {
+    pub fn to_lines(&self, width: u16, selected: Option<usize>, theme: &Theme) -> Rendered {
         let width = width.max(10) as usize;
         let mut rendered = Rendered {
             lines: Vec::new(),
@@ -207,14 +207,14 @@ impl Transcript {
                 rendered.lines.push(Line::default());
                 rendered.cell_at.push(None);
             }
-            let mut lines = cell_lines(cell, width);
+            let mut lines = cell_lines(cell, width, theme);
             if selected == Some(index) {
                 // Spans can carry their own panel background. Tint both
                 // layers without changing foregrounds or Markdown modifiers.
                 for line in &mut lines {
-                    line.style = line.style.patch(theme::SELECTED);
+                    line.style = line.style.patch(theme.selected);
                     for span in &mut line.spans {
-                        span.style = span.style.patch(theme::SELECTED);
+                        span.style = span.style.patch(theme.selected);
                     }
                 }
             }
@@ -249,40 +249,40 @@ impl Transcript {
 
 /// Styled, wrapped lines for one cell. Tool cells delegate to
 /// [`tool_lines`]; everything else is conversation.
-fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
+fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     match cell {
         Cell::User { text } => {
-            out.extend(user_lines(text, width));
+            out.extend(user_lines(text, width, theme));
         }
         Cell::Assistant { text } => {
             // Assistant prose is markdown; the base style keeps the cell
             // identity (markdown accents patch onto it).
-            out.extend(crate::markdown::render(text, width, theme::ASSISTANT));
+            out.extend(crate::markdown::render(text, width, theme.assistant, theme));
         }
         Cell::Answer { text } => {
-            out.extend(crate::markdown::render(text, width, theme::ANSWER));
+            out.extend(crate::markdown::render(text, width, theme.answer, theme));
         }
         Cell::Thinking { text } => {
             // Thinking is markdown too. Reasoning summaries (Codex, GPT) open
             // every section with a `**Title**` line that would otherwise show
             // its asterisks.
-            out.extend(crate::markdown::render(text, width, theme::REASONING));
+            out.extend(crate::markdown::render(text, width, theme.reasoning, theme));
         }
         Cell::Error { text } => {
-            push_wrapped(&mut out, &format!("error: {text}"), width, theme::ERROR);
+            push_wrapped(&mut out, &format!("error: {text}"), width, theme.error);
         }
         Cell::Notice { text } => {
-            push_wrapped(&mut out, text, width, theme::NOTICE);
+            push_wrapped(&mut out, text, width, theme.notice);
         }
         Cell::Usage { text } => {
-            push_wrapped(&mut out, text, width, theme::DETAIL);
+            push_wrapped(&mut out, text, width, theme.detail);
         }
         Cell::Summary { text } => {
-            push_wrapped(&mut out, "[context summary]", width, theme::NOTICE);
-            out.extend(crate::markdown::render(text, width, theme::REASONING));
+            push_wrapped(&mut out, "[context summary]", width, theme.notice);
+            out.extend(crate::markdown::render(text, width, theme.reasoning, theme));
         }
-        Cell::Tool { .. } => out.extend(tool_lines(cell, width)),
+        Cell::Tool { .. } => out.extend(tool_lines(cell, width, theme)),
     }
     out
 }
@@ -290,15 +290,15 @@ fn cell_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
 /// A full-width user surface with a `>>` marker on the first content row.
 /// Render Markdown before adding the marker so
 /// headings and code fences are recognized at the start of source lines.
-fn user_lines(text: &str, width: usize) -> Vec<Line<'static>> {
+fn user_lines(text: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let prefix = ">> ";
     let content_width = width.saturating_sub(prefix.len()).max(1);
-    crate::markdown::render(text, content_width, theme::TASK)
+    crate::markdown::render(text, content_width, theme.task, theme)
         .into_iter()
         .enumerate()
         .map(|(index, mut line)| {
             let trailing = width.saturating_sub(prefix.len() + line.width());
-            line.style = theme::TASK.patch(line.style);
+            line.style = theme.task.patch(line.style);
             line.spans.insert(
                 0,
                 Span::raw(if index == 0 {
@@ -316,7 +316,7 @@ fn user_lines(text: &str, width: usize) -> Vec<Line<'static>> {
 /// Styled, wrapped lines for one tool cell: the call's header line, then
 /// the result. The full output already went to the model. The preview is a
 /// digest, and the marker line says how to see the rest.
-fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
+fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let Cell::Tool {
         name,
         call,
@@ -330,7 +330,7 @@ fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
         return Vec::new();
     };
     let mut out: Vec<Line<'static>> = Vec::new();
-    push_wrapped(&mut out, call, width, theme::TOOL_HEADER);
+    push_wrapped(&mut out, call, width, theme.tool_header);
     match result {
         None => {
             if let Some(live) = live {
@@ -338,23 +338,23 @@ fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
                 let lines: Vec<&str> = live.lines().collect();
                 let hidden = lines.len().saturating_sub(TOOL_PREVIEW_LINES);
                 for line in &lines[hidden..] {
-                    push_wrapped(&mut out, &format!("  {line}"), width, theme::DETAIL);
+                    push_wrapped(&mut out, &format!("  {line}"), width, theme.detail);
                 }
             }
             let waiting = match started_at {
                 Some(started) => format!("  ... running {}", format_seconds(started.elapsed())),
                 None => "  ...".to_string(),
             };
-            push_wrapped(&mut out, &waiting, width, theme::DETAIL);
+            push_wrapped(&mut out, &waiting, width, theme.detail);
         }
         Some(ToolOutcome {
             diff: Some(diff), ..
-        }) => push_diff(&mut out, diff, width),
+        }) => push_diff(&mut out, diff, width, theme),
         Some(outcome) => {
             let style = if outcome.is_error {
-                theme::ERROR
+                theme.error
             } else {
-                theme::DETAIL
+                theme.detail
             };
             // Strip whole sequences before previewing: an OSC payload can
             // span lines, including lines hidden by the preview window.
@@ -370,7 +370,7 @@ fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
                     &mut out,
                     &format!("  ... ({hidden} earlier lines, ctrl+t to expand)"),
                     width,
-                    theme::DETAIL,
+                    theme.detail,
                 );
                 for line in &lines[hidden..] {
                     push_wrapped(&mut out, &format!("  {line}"), width, style);
@@ -383,7 +383,7 @@ fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
                     &mut out,
                     &format!("  ... ({hidden} more lines, ctrl+t to expand)"),
                     width,
-                    theme::DETAIL,
+                    theme.detail,
                 );
             }
             if let Some(took) = outcome.took
@@ -393,7 +393,7 @@ fn tool_lines(cell: &Cell, width: usize) -> Vec<Line<'static>> {
                     &mut out,
                     &format!("  took {}", format_seconds(took)),
                     width,
-                    theme::DETAIL,
+                    theme.detail,
                 );
             }
         }
@@ -414,13 +414,13 @@ fn previews_the_tail(tool_name: &str) -> bool {
 /// Diff lines, styled by their first byte. The patch tool's diff format
 /// (text_diff.rs) puts the marker first.
 /// `-12 old`, `+12 new`, `12 context`, and a `   ...` row between hunks.
-fn push_diff(out: &mut Vec<Line<'static>>, diff: &str, width: usize) {
+fn push_diff(out: &mut Vec<Line<'static>>, diff: &str, width: usize, theme: &Theme) {
     let diff = sanitize(diff);
     for line in diff.lines() {
         let style = match line.as_bytes().first() {
-            Some(b'+') => theme::DIFF_ADD,
-            Some(b'-') => theme::DIFF_DEL,
-            _ => theme::DIFF_CTX,
+            Some(b'+') => theme.diff_add,
+            Some(b'-') => theme.diff_del,
+            _ => theme.diff_ctx,
         };
         push_wrapped(out, &format!("  {line}"), width, style);
     }
@@ -511,6 +511,7 @@ fn split_keeping_spaces(line: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::CUPEL;
 
     /// Extract the plain text from a ratatui `Line` (concatenated span content).
     fn line_text(line: &Line) -> String {
@@ -562,7 +563,7 @@ mod tests {
     fn assistant_prose_is_white_and_italic() {
         let mut transcript = Transcript::default();
         transcript.append_assistant("Checking **the code** now.");
-        let rendered = transcript.to_lines(80, None);
+        let rendered = transcript.to_lines(80, None, &CUPEL);
         assert_eq!(line_text(&rendered.lines[0]), "Checking the code now.");
         for span in &rendered.lines[0].spans {
             assert_eq!(span.style.fg, Some(ratatui::style::Color::White));
@@ -584,7 +585,7 @@ mod tests {
                 text: source.into(),
             }],
         };
-        let rendered = transcript.to_lines(48, None);
+        let rendered = transcript.to_lines(48, None, &CUPEL);
         assert_eq!(
             rendered.lines.len(),
             2,
@@ -632,7 +633,7 @@ mod tests {
             .find(|span| span.content.contains("fn main"))
             .unwrap();
         assert_eq!(fenced.style.patch(code.style).fg, Some(Color::White));
-        assert_eq!(code.style.bg, Some(theme::MD_CODE_BLOCK_BG));
+        assert_eq!(code.style.bg, CUPEL.md_code_block.bg);
         assert_eq!(
             transcript.copy_text(0),
             Some(source),
@@ -649,7 +650,7 @@ mod tests {
                 text: "**日本語日本語**".into(),
             }],
         };
-        let rendered = transcript.to_lines(10, None);
+        let rendered = transcript.to_lines(10, None, &CUPEL);
         assert_eq!(rendered.lines.len(), 2);
         assert_eq!(line_text(&rendered.lines[0]), ">> 日本語 ");
         assert_eq!(line_text(&rendered.lines[1]), "   日本語 ");
@@ -666,7 +667,7 @@ mod tests {
                 text: "abcdefghijklm".into(),
             }],
         };
-        let rendered = transcript.to_lines(16, None);
+        let rendered = transcript.to_lines(16, None, &CUPEL);
         assert_eq!(rendered.lines.len(), 1);
         assert_eq!(line_text(&rendered.lines[0]), ">> abcdefghijklm");
         assert_eq!(rendered.cell_at, vec![Some(0)]);
@@ -680,7 +681,7 @@ mod tests {
                 text: source.into(),
             }],
         };
-        let rendered = transcript.to_lines(16, None);
+        let rendered = transcript.to_lines(16, None, &CUPEL);
         let lines: Vec<String> = rendered
             .lines
             .iter()
@@ -702,13 +703,13 @@ mod tests {
                 text: "**bold**\n```rust\nlet x = 1;\n```".into(),
             }],
         };
-        let rendered = transcript.to_lines(40, Some(0));
+        let rendered = transcript.to_lines(40, Some(0), &CUPEL);
         for line in &rendered.lines {
-            assert_eq!(line.style.bg, theme::SELECTED.bg);
+            assert_eq!(line.style.bg, CUPEL.selected.bg);
             assert!(
                 line.spans
                     .iter()
-                    .all(|span| span.style.bg == theme::SELECTED.bg)
+                    .all(|span| span.style.bg == CUPEL.selected.bg)
             );
         }
     }
@@ -775,7 +776,7 @@ mod tests {
 
     #[test]
     fn bash_previews_the_tail_and_files_the_head() {
-        let texts: Vec<String> = tool_lines(&bash_cell(false), 60)
+        let texts: Vec<String> = tool_lines(&bash_cell(false), 60, &CUPEL)
             .iter()
             .map(line_text)
             .collect();
@@ -788,7 +789,10 @@ mod tests {
         if let Cell::Tool { name, .. } = &mut read {
             *name = "read".into();
         }
-        let texts: Vec<String> = tool_lines(&read, 60).iter().map(line_text).collect();
+        let texts: Vec<String> = tool_lines(&read, 60, &CUPEL)
+            .iter()
+            .map(line_text)
+            .collect();
         assert_eq!(texts[1], "  line 1");
         assert_eq!(texts[6], "  line 6");
         assert_eq!(texts[7], "  ... (4 more lines, ctrl+t to expand)");
@@ -805,7 +809,10 @@ mod tests {
         t.mark_tool_started("1");
         t.attach_tool_progress("1", "a\nb\nc\nd\ne\nf\ng".into());
 
-        let texts: Vec<String> = tool_lines(&t.cells[0], 60).iter().map(line_text).collect();
+        let texts: Vec<String> = tool_lines(&t.cells[0], 60, &CUPEL)
+            .iter()
+            .map(line_text)
+            .collect();
         assert_eq!(texts[1], "  b", "the snapshot's tail, six lines");
         assert_eq!(texts[6], "  g");
         assert!(texts[7].starts_with("  ... running "), "{texts:?}");
@@ -819,14 +826,17 @@ mod tests {
                 took: None,
             },
         );
-        let texts: Vec<String> = tool_lines(&t.cells[0], 60).iter().map(line_text).collect();
+        let texts: Vec<String> = tool_lines(&t.cells[0], 60, &CUPEL)
+            .iter()
+            .map(line_text)
+            .collect();
         assert_eq!(texts, vec!["$ cargo test", " g ", "  took 0.0s"]);
         assert!(matches!(&t.cells[0], Cell::Tool { live: None, .. }));
     }
 
     #[test]
     fn expansion_shows_every_line_and_toggles_per_cell_or_for_all() {
-        let texts: Vec<String> = tool_lines(&bash_cell(true), 60)
+        let texts: Vec<String> = tool_lines(&bash_cell(true), 60, &CUPEL)
             .iter()
             .map(line_text)
             .collect();
@@ -873,17 +883,17 @@ mod tests {
                 took: None,
             }),
         };
-        let lines = tool_lines(&cell, 40);
+        let lines = tool_lines(&cell, 40, &CUPEL);
         let texts: Vec<String> = lines.iter().map(line_text).collect();
         assert_eq!(texts[0], "{}");
         assert_eq!(texts[1], "   1 fn main() {");
         assert_eq!(texts[2], "  -2     old();");
         assert_eq!(texts[3], "  +2     new();");
         assert_eq!(texts[4], "   3 }");
-        assert_eq!(lines[1].spans[0].style, theme::DIFF_CTX);
-        assert_eq!(lines[2].spans[0].style, theme::DIFF_DEL);
-        assert_eq!(lines[3].spans[0].style, theme::DIFF_ADD);
-        assert_eq!(lines[4].spans[0].style, theme::DIFF_CTX);
+        assert_eq!(lines[1].spans[0].style, CUPEL.diff_ctx);
+        assert_eq!(lines[2].spans[0].style, CUPEL.diff_del);
+        assert_eq!(lines[3].spans[0].style, CUPEL.diff_add);
+        assert_eq!(lines[4].spans[0].style, CUPEL.diff_ctx);
         assert!(
             !texts.iter().any(|t| t.contains("Updated the following")),
             "the confirmation line is for the model, not the screen"
@@ -952,7 +962,7 @@ mod tests {
         use ratatui::style::Modifier;
         let mut t = Transcript::default();
         t.append_thinking("**Reading the parser**\n\nThe `parse` function is long.");
-        let rendered = t.to_lines(60, None);
+        let rendered = t.to_lines(60, None, &CUPEL);
         let texts: Vec<String> = rendered.lines.iter().map(line_text).collect();
         assert_eq!(
             texts,
@@ -970,7 +980,12 @@ mod tests {
         t.append_thinking("let me look");
         t.cells.push(tool("1"));
         t.append_assistant("found it");
-        let texts: Vec<String> = t.to_lines(40, None).lines.iter().map(line_text).collect();
+        let texts: Vec<String> = t
+            .to_lines(40, None, &CUPEL)
+            .lines
+            .iter()
+            .map(line_text)
+            .collect();
         // One column, a blank spacer between cells, no band rule anywhere.
         assert_eq!(
             texts,
@@ -984,7 +999,7 @@ mod tests {
         t.append_thinking("short");
         t.cells.push(tool("1"));
         t.append_thinking("after");
-        let rendered = t.to_lines(40, None);
+        let rendered = t.to_lines(40, None, &CUPEL);
         assert_eq!(rendered.cell_at.len(), rendered.lines.len());
         assert_eq!(rendered.cell_at[0], Some(0), "the thinking line");
         assert_eq!(rendered.cell_at[1], None, "the spacer is chrome");
@@ -1000,9 +1015,9 @@ mod tests {
     fn selected_cell_lines_carry_the_highlight_background() {
         let mut t = Transcript::default();
         t.append_assistant("hello world");
-        let selected = t.to_lines(40, Some(0));
-        assert_eq!(selected.lines[0].style.bg, theme::SELECTED.bg);
-        let unselected = t.to_lines(40, None);
+        let selected = t.to_lines(40, Some(0), &CUPEL);
+        assert_eq!(selected.lines[0].style.bg, CUPEL.selected.bg);
+        let unselected = t.to_lines(40, None, &CUPEL);
         assert_eq!(unselected.lines[0].style.bg, None);
     }
 
@@ -1047,7 +1062,7 @@ mod tests {
                         took: None,
                     }),
                 };
-                let lines = tool_lines(&cell, 80);
+                let lines = tool_lines(&cell, 80, &CUPEL);
                 assert_safe(&lines);
                 let texts: Vec<String> = lines.iter().map(line_text).collect();
                 assert_eq!(texts[0], "read    Makefile");
@@ -1077,7 +1092,7 @@ mod tests {
             ],
         };
         for width in [10, 80] {
-            let rendered = t.to_lines(width, Some(0));
+            let rendered = t.to_lines(width, Some(0), &CUPEL);
             assert_safe(&rendered.lines);
             let text: String = rendered.lines.iter().map(line_text).collect();
             assert!(!text.contains("payload"), "{text}");
@@ -1101,7 +1116,7 @@ mod tests {
         }
         t.cells.push(cell);
         t.attach_tool_progress("1", raw.into());
-        let lines = tool_lines(&t.cells[0], 80);
+        let lines = tool_lines(&t.cells[0], 80, &CUPEL);
         assert_safe(&lines);
         assert_eq!(line_text(&lines[1]), "      visible");
         assert!(
@@ -1121,7 +1136,7 @@ mod tests {
                 took: None,
             },
         );
-        let lines = tool_lines(&t.cells[0], 80);
+        let lines = tool_lines(&t.cells[0], 80, &CUPEL);
         assert_safe(&lines);
         assert_eq!(line_text(&lines[1]), "     visible ");
 
@@ -1130,12 +1145,13 @@ mod tests {
             &mut lines,
             "\x1b[31m+1\tnew\x1b[0m\n-2 old\x1b]52;c;payload\nmore\x07",
             80,
+            &CUPEL,
         );
         assert_safe(&lines);
         assert_eq!(line_text(&lines[0]), "  +1  new");
-        assert_eq!(lines[0].spans[0].style, theme::DIFF_ADD);
+        assert_eq!(lines[0].spans[0].style, CUPEL.diff_add);
         assert_eq!(line_text(&lines[1]), "  -2 old");
-        assert_eq!(lines[1].spans[0].style, theme::DIFF_DEL);
+        assert_eq!(lines[1].spans[0].style, CUPEL.diff_del);
     }
 
     #[test]
@@ -1143,7 +1159,7 @@ mod tests {
         let mut t = Transcript::default();
         t.append_assistant("before\x1b]52;c;");
         assert_eq!(
-            t.to_lines(80, None)
+            t.to_lines(80, None, &CUPEL)
                 .lines
                 .iter()
                 .map(line_text)
@@ -1152,7 +1168,7 @@ mod tests {
         );
         t.append_assistant("payload\nmore\x1b");
         assert_eq!(
-            t.to_lines(80, None)
+            t.to_lines(80, None, &CUPEL)
                 .lines
                 .iter()
                 .map(line_text)
@@ -1161,7 +1177,7 @@ mod tests {
         );
         t.append_assistant("\\after");
         assert_eq!(
-            t.to_lines(80, None)
+            t.to_lines(80, None, &CUPEL)
                 .lines
                 .iter()
                 .map(line_text)
@@ -1175,7 +1191,7 @@ mod tests {
 
         t.append_thinking("\u{009b}3");
         t.append_thinking("1mvisible\u{009b}0m");
-        let rendered = t.to_lines(80, None);
+        let rendered = t.to_lines(80, None, &CUPEL);
         assert_safe(&rendered.lines);
         assert_eq!(line_text(rendered.lines.last().unwrap()), "visible");
     }
@@ -1207,7 +1223,7 @@ mod tests {
             .unwrap();
             terminal
                 .draw(|frame| {
-                    let rendered = t.to_lines(frame.area().width, None);
+                    let rendered = t.to_lines(frame.area().width, None, &CUPEL);
                     frame.render_widget(Paragraph::new(rendered.lines), frame.area());
                 })
                 .unwrap();

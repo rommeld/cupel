@@ -209,6 +209,9 @@ async fn event_loop(
         if let Some(command) = sessions.active_mut().pending_spinoff.take() {
             sessions.spinoff(command).await;
         }
+        if let Some(request) = sessions.active_mut().pending_theme.take() {
+            sessions.on_theme_request(request);
+        }
         let app = sessions.active_mut();
 
         // A prompt accepted by the (synchronous) key handler starts here:

@@ -258,6 +258,10 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Set thinking level: /thinking off|minimal|low|medium|high|xhigh|max",
     },
     BuiltinCommand {
+        name: "themes",
+        description: "Switch the color theme: /themes <id> (no argument lists them)",
+    },
+    BuiltinCommand {
         name: "spinoff",
         description: "Parallel sessions in git worktrees: /spinoff <name> [preset] starts one, /spinoff merge <name> [message] or /spinoff drop <name> ends one, no argument lists them",
     },
