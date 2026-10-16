@@ -32,6 +32,10 @@ pub struct Settings {
     /// `providers`. skip_serializing_if: a key save must not inject `"model": {}`.
     #[serde(rename = "model", default, skip_serializing_if = "BTreeMap::is_empty")]
     pub presets: BTreeMap<String, Preset>,
+    /// TUI theme id, written by `/themes`. Styles live in cupel-tui; only
+    /// the id belongs here. A key save must not inject `"theme": null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     /// Every unknown top-level field, round-tripped through save.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -152,6 +156,8 @@ impl Settings {
     /// the project's map is deliverately not touched at all.
     /// - loopKiller: project overrides home when present (the usual
     /// later-wins layering, mirroring models.json).
+    /// - theme: home only. `/themes` saves there; a project value must not
+    /// override the saved choice on the next start.
     /// extra: the home copy rides along because it exists for the save
     /// round-trip, which only ever writes the home file.
     #[must_use]
@@ -170,6 +176,7 @@ impl Settings {
             providers: home.providers,
             loop_killer: project.loop_killer.or(home.loop_killer),
             presets,
+            theme: home.theme,
             extra: home.extra,
             invalid_default_preset,
         }
@@ -187,6 +194,7 @@ impl core::fmt::Debug for Settings {
             .field("extra", &self.extra.keys().collect::<Vec<_>>())
             .field("loopKiller", &self.loop_killer)
             .field("model", &self.presets.keys().collect::<Vec<_>>())
+            .field("theme", &self.theme)
             .finish_non_exhaustive()
     }
 }
@@ -226,12 +234,13 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
     let mut value: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("{} has invalid JSON syntax: {e}", path.display()))?;
     // Each section is parsed on its own, so one wrong entry never discards
-    // the others: a preset, a provider key or the loopKiller section that
-    // does not fit is skipped with a warning that names it. Warnings never
-    // quote a provider entry's value, which may be a key.
+    // the others: a preset, a provider key, the loopKiller section or the
+    // theme that does not fit is skipped with a warning that names it.
+    // Warnings never quote a provider entry's value, which may be a key.
     let presets = take_section(&mut value, "model");
     let providers = take_section(&mut value, "providers");
     let loop_killer = take_section(&mut value, "loopKiller");
+    let theme = take_section(&mut value, "theme");
     let mut settings: Settings = serde_json::from_value(value)
         .map_err(|e| format!("{} has invalid settings data: {e}", path.display()))?;
     let file = path.display();
@@ -286,6 +295,14 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
             }
         },
     }
+    // Only the TUI knows which ids exist. This layer checks the value's type.
+    match theme {
+        None | Some(serde_json::Value::Null) => {}
+        Some(serde_json::Value::String(id)) => settings.theme = Some(id),
+        Some(_) => warnings.push(format!(
+            "warning: ignoring theme in {file}: expected a theme id string"
+        )),
+    }
     Ok((settings, warnings))
 }
 
@@ -336,9 +353,28 @@ pub enum SaveError {
     Io { path: PathBuf, reason: String },
 }
 
-/// Read-modify-write one provider key into `<home>/settings.json`,
-/// creating the home directory if needed. Returns the path written (for
-/// the TUI notice).
+/// Save one provider key using the safe [`update_settings`] write path.
+/// Returns the path written for the TUI notice.
+pub fn save_provider_key(
+    home: Option<&Path>,
+    provider: &str,
+    key: &str,
+) -> Result<PathBuf, SaveError> {
+    update_settings(home, |settings| {
+        settings
+            .providers
+            .insert(provider.to_string(), key.to_string());
+    })
+}
+
+/// Save the `/themes` choice using the same safe write path as provider keys.
+pub fn save_theme(home: Option<&Path>, id: &str) -> Result<PathBuf, SaveError> {
+    update_settings(home, |settings| settings.theme = Some(id.to_string()))
+}
+
+/// Read-modify-write `<home>/settings.json`, applying `edit` to settings
+/// read fresh from disk. Creates the home directory if needed and returns
+/// the path written. Every settings save shares this careful write path.
 ///
 /// Design points:
 /// - The file is re-read here instead of trusting any in-memory copy:
@@ -352,10 +388,9 @@ pub enum SaveError {
 /// - The temp file is created 0600 on Unix before any secret byte lands
 /// on disk; rename carries that mode to the final path, tightening even
 /// a pre-existing 0644 file.
-pub fn save_provider_key(
+fn update_settings(
     home: Option<&Path>,
-    provider: &str,
-    key: &str,
+    edit: impl FnOnce(&mut Settings),
 ) -> Result<PathBuf, SaveError> {
     use std::io::Write as _;
 
@@ -378,9 +413,7 @@ pub fn save_provider_key(
         }
     };
 
-    settings
-        .providers
-        .insert(provider.to_string(), key.to_string());
+    edit(&mut settings);
 
     // The home dir may not exist yet (first run, fresh CUPEL_HOME). No
     // exists() pre-check: create_dir_all is idempotent, and attempting
@@ -716,6 +749,107 @@ mod tests {
         let serialized = serde_json::to_string_pretty(&parsed).unwrap();
         let reparsed: Settings = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed, reparsed);
+    }
+
+    #[test]
+    fn the_theme_saves_and_loads_without_touching_anything_else() {
+        let home = temp_root("save-theme");
+        let path = settings_path(&home);
+        let original = serde_json::json!({
+            "providers": {"anthropic": "sk-a"},
+            "loopKiller": {"maxRepeats": 3},
+            "model": {"fast": {
+                "provider": "anthropic", "model": "test", "thinkingLevel": "off"
+            }},
+            "editor": "vim"
+        });
+        std::fs::write(&path, original.to_string()).unwrap();
+        assert_eq!(save_theme(Some(&home), "nightfox").unwrap(), path);
+        let settings = load_settings(&path).unwrap();
+        assert_eq!(settings.theme.as_deref(), Some("nightfox"));
+        let mut expected = original;
+        expected["theme"] = serde_json::json!("nightfox");
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written, expected);
+
+        // Provider saves use the same path and must keep the chosen theme.
+        save_provider_key(Some(&home), "fireworks", "fw-1").unwrap();
+        assert_eq!(
+            load_settings(&path).unwrap().theme.as_deref(),
+            Some("nightfox")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        assert!(matches!(
+            save_theme(None, "nightfox"),
+            Err(SaveError::NoHome)
+        ));
+        // Strict saves refuse malformed JSON and malformed settings alike.
+        for bad in [
+            "{not json",
+            r#"{"theme":5,"providers":{"anthropic":"keep"}}"#,
+        ] {
+            std::fs::write(&path, bad).unwrap();
+            assert!(matches!(
+                save_theme(Some(&home), "nightfox"),
+                Err(SaveError::Malformed { .. })
+            ));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), bad);
+        }
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn a_wrong_theme_value_costs_only_itself() {
+        let home = temp_root("bad-theme");
+        for value in [
+            serde_json::json!(5),
+            serde_json::json!(true),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            std::fs::write(
+                settings_path(&home),
+                serde_json::json!({"theme": value, "providers": {"anthropic": "keep-this-key"}})
+                    .to_string(),
+            )
+            .unwrap();
+            let (settings, warnings) = load_home_settings(Some(&home));
+            assert_eq!(settings.theme, None);
+            assert_eq!(settings.api_key("anthropic"), Some("keep-this-key"));
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert!(warnings[0].contains("ignoring theme"), "{warnings:?}");
+        }
+        std::fs::write(settings_path(&home), r#"{"theme":null}"#).unwrap();
+        let (settings, warnings) = load_home_settings(Some(&home));
+        assert_eq!(settings.theme, None);
+        assert!(warnings.is_empty());
+        save_provider_key(Some(&home), "anthropic", "key").unwrap();
+        assert!(
+            !std::fs::read_to_string(settings_path(&home))
+                .unwrap()
+                .contains("\"theme\"")
+        );
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn the_theme_comes_from_home_only() {
+        let mut home = Settings::default();
+        home.theme = Some("ayu-light".into());
+        let mut project = Settings::default();
+        project.theme = Some("nightfox".into());
+        let merged = Settings::layered(home, project.clone());
+        assert_eq!(merged.theme.as_deref(), Some("ayu-light"));
+        assert_eq!(Settings::layered(Settings::default(), project).theme, None);
     }
 
     #[test]
