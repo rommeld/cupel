@@ -463,15 +463,21 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
     },
     // The model card lists the same standard input/output prices as Sol
     // but $0.10/M cached input. Codex CLI's models.json gives GPT-6.1 Sol
-    // the same limits and effort scale as Sol (checked 2026-10-08).
+    // the same ceiling and effort scale as Sol (checked 2026-10-08).
     // https://openai.com/de-DE/index/introducing-gpt-6-1-sol/
+    // The 500k window is OpenAI's Codex default since 2026-10-12. It comes
+    // from the backend's live model list; the models.json bundled with
+    // Codex CLI still says 272k (checked 2026-10-16). The >272k tier stays:
+    // the cost line shows API-equivalent prices, and the API still charges
+    // the tier.
+    // https://x.com/thsottiaux/status/2109430343346581527
     PinnedCodex {
         id: "gpt-6.1-sol",
         name: "GPT-6.1 Sol",
         vision: true,
         cost: (2.0, 10.0, 0.1, 2.5),
         long_context_tier: true,
-        context_window: 272_000,
+        context_window: 500_000,
         max_context_window: Some(872_000),
         levels: CODEX_LEVELS_TO_MAX,
         temperature: false,
