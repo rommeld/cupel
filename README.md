@@ -18,6 +18,7 @@ A cupel is a small vessel for refining precious metals. This project borrows tha
   - [Project context](#project-context)
   - [Slash commands](#slash-commands)
   - [Providers](#providers)
+  - [Themes](#themes)
   - [Local models](#local-models)
   - [Guardrails](#guardrails)
 - [Appendix](#appendix)
@@ -69,6 +70,7 @@ Supported providers: Anthropic, OpenAI (Responses), OpenAI (Codex), AWS Bedrock,
 | `/logout openai-codex` | Remove a stored login |
 | `/thinking <level>` | Set thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `/preset <name>`| Switch model, thinking level, and prompt to a preset (no argument lists them) |
+| `/themes [id]` | Switch the color theme (no argument lists them) |
 | `/review [path...]` | Bundle the project, specific paths, or a `--diff` into a code-review prompt |
 | `/usage` | Show session token and cost totals |
 | `/session-id` | Show the current session ID and list this project's sessions |
@@ -127,6 +129,95 @@ A preset names a model, a thinking level, and optionally an additional system pr
 ```
 
 `provider`, `model` (an id from `/model`), and `thinkingLevel` (`off` ... `max`) are required. `prompt` is appended to the system prompt while the preset is active. `/preset fast` switches all three at once. The `default` preset also applies at startup.
+
+### Themes
+
+`/themes` lists the color themes and marks the active one. `/themes <id>` switches every session at once, including the messages already on screen. Typing `/themes ` offers the IDs in autocomplete. The choice is saved to `~/.cupel/settings.json`, so the next start uses it too:
+
+```json
+{
+  "theme": "nightfox"
+}
+```
+
+| ID | Name | Made for |
+| -- | ---- | -------- |
+| `cupel` | Cupel (default) | your terminal's own colors |
+| `ayu-dark` | Ayu Dark | dark |
+| `ayu-light` | Ayu Light | light |
+| `dawnfox` | Dawnfox - opaque | light |
+| `duskfox` | Duskfox - opaque | dark |
+| `nightfox` | Nightfox - opaque | dark |
+
+`cupel` draws in your terminal's own palette (its named colors plus three grays) on the terminal's own background. The other themes are *opaque*: they paint their own background on every cell, so they look the same in every terminal, whatever its color scheme or transparency. The palettes come from the Zed themes of the same names.
+
+Only `~/.cupel/settings.json` sets the theme; a project's `.cupel/settings.json` cannot. An unknown ID starts cupel in the `cupel` theme with a warning. If saving fails, the switch still applies for this run and the notice explains why it was not saved. `/new` and `/hot-reload` keep the active theme; a hand-edited theme setting applies at the next start. Themes are TUI-only.
+
+#### Defining a custom theme
+
+Themes are compiled into cupel; there are no theme files. A custom theme therefore means building from source (see [From source](#from-source)). All themes live in `crates/cupel-tui/src/theme.rs`.
+
+1. Define the theme from a palette of 13 colors. Every part of the screen takes one of them:
+
+    ```rust
+    pub const GRUVBOX_DARK: Theme = Theme::from_palette(
+        "gruvbox-dark", // the /themes ID: lowercase letters and dashes
+        "Gruvbox Dark", // the name /themes shows
+        Appearance::Dark, // Dark or Light
+        Palette {
+            bg: hex(0x28_2828),
+            fg: hex(0xeb_dbb2),
+            surface: hex(0x1d_2021),
+            raised: hex(0x3c_3836),
+            selection: hex(0x50_4945),
+            border: hex(0x66_5c54),
+            muted: hex(0x92_8374),
+            red: hex(0xfb_4934),
+            green: hex(0xb8_bb26),
+            yellow: hex(0xfa_bd2f),
+            blue: hex(0x83_a598),
+            magenta: hex(0xd3_869b),
+            cyan: hex(0x8e_c07c),
+        },
+    );
+    ```
+
+    | Palette color | Used for |
+    | ------------- | -------- |
+    | `bg` | the background of the whole screen |
+    | `fg` | ordinary text: your messages, the model's prose and reasoning |
+    | `surface` | code blocks and popups |
+    | `raised` | the background of your messages |
+    | `selection` | the background of the clicked block (Ctrl+O copies it) |
+    | `border` | pane borders and the idle input border |
+    | `muted` | the footer, titles, hints, diff context lines, the scrollbar |
+    | `red` | errors and removed diff lines |
+    | `green` | added diff lines |
+    | `yellow` | notices, the input border while the agent works, the scroll marker |
+    | `blue` | links |
+    | `magenta` | the final answer |
+    | `cyan` | tool calls, inline code, list bullets, popup rows |
+
+2. Add the constant to `THEMES` in the same file. `/themes` lists the themes in that order, and autocomplete offers the ID.
+
+3. Run the theme tests. They check that the ID is unique and well formed, and that `fg` is readable (contrast of at least 4.5:1) on `bg`, `raised`, and `surface`:
+
+    ```sh
+    cargo test -p cupel-tui theme
+    ```
+
+4. Install the build with `cargo install --path crates/cupel-tui` and switch with `/themes gruvbox-dark`.
+
+To change one part of an existing theme, start from it and override that field; `..NIGHTFOX` copies every field you do not list. Each field of `Theme` has a doc comment saying what it styles:
+
+```rust
+pub const BOLD_NIGHTFOX: Theme = Theme {
+    id: "bold-nightfox",
+    name: "Nightfox with a bold answer",
+    answer: NIGHTFOX.answer.add_modifier(Modifier::BOLD),
+    ..NIGHTFOX
+};
+```
 
 ### Local models
 

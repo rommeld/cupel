@@ -18,6 +18,7 @@ use crate::{theme::Theme, transcript};
 
 const SIDEBAR_WIDTH: u16 = 24;
 const SIDEBAR_MIN_SCREEN: u16 = 80;
+const INPUT_PADDING: u16 = 1;
 
 pub fn render_sessions(frame: &mut Frame<'_>, sessions: &mut Sessions) {
     let theme = sessions.theme;
@@ -97,9 +98,9 @@ fn fit(text: &str, max: usize) -> String {
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     // Input grows with its content (explicit newlines + wrapped lines),
-    // capped at 5 visible lines, + 2 border rows. With only top/bottom
-    // borders, the input uses the full frame width.
-    let inner_width = area.width.max(1) as usize;
+    // capped at 5 visible lines, + 2 border rows. Account for the same
+    // horizontal padding used by the editor so wrapping and height agree.
+    let inner_width = area.width.saturating_sub(2 * INPUT_PADDING).max(1) as usize;
     let input_lines = app
         .input
         .text()
@@ -159,7 +160,7 @@ fn render_autocomplete(
         .max()
         .unwrap_or(10)
         .min(area.width);
-    let x = (input_area.x + anchor_col).min(area.right().saturating_sub(width));
+    let x = (input_area.x + INPUT_PADDING + anchor_col).min(area.right().saturating_sub(width));
 
     let popup = Rect {
         x,
@@ -344,7 +345,8 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     };
     let mut block = Block::new()
         .borders(Borders::TOP | Borders::BOTTOM)
-        .border_style(border_style);
+        .border_style(border_style)
+        .padding(Padding::horizontal(INPUT_PADDING));
     if app.is_running() {
         let elapsed = app
             .run_started
@@ -660,7 +662,10 @@ mod tests {
         terminal
             .draw(|frame| render_input(frame, &app, frame.area(), &CUPEL))
             .unwrap();
-        assert_eq!(terminal.get_cursor_position().unwrap(), Position::new(9, 1));
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(10, 1)
+        );
         let buffer = terminal.backend().buffer();
         for x in 0..20 {
             let cell = &buffer[(x, 1)];
@@ -668,7 +673,7 @@ mod tests {
             assert_eq!(cell.bg, Color::Reset);
             assert!(!cell.modifier.contains(Modifier::BOLD));
         }
-        let text: String = (0..9).map(|x| buffer[(x, 1)].symbol()).collect();
+        let text: String = (1..10).map(|x| buffer[(x, 1)].symbol()).collect();
         assert_eq!(text, "**draft**", "editing shows the raw source");
     }
 
@@ -683,31 +688,62 @@ mod tests {
         // Two border rows plus two text rows: input starts at y=14.
         assert_eq!(
             terminal.get_cursor_position().unwrap(),
-            Position::new(5, 16)
+            Position::new(6, 16)
         );
         let buffer = terminal.backend().buffer();
-        let first: String = (0..16).map(|x| buffer[(x, 15)].symbol()).collect();
-        let second: String = (0..5).map(|x| buffer[(x, 16)].symbol()).collect();
+        let first: String = (1..17).map(|x| buffer[(x, 15)].symbol()).collect();
+        let second: String = (1..6).map(|x| buffer[(x, 16)].symbol()).collect();
         assert_eq!(first, "hello brave new ");
         assert_eq!(second, "world");
     }
 
     #[test]
-    fn prompt_uses_the_full_width_without_growing_an_extra_row() {
+    fn prompt_fills_the_padded_width_without_growing_an_extra_row() {
         let mut app = test_app();
-        app.input.insert_str("abcdefghijklmnopqrst");
+        app.input.insert_str("abcdefghijklmnopqr");
         let mut terminal = Terminal::new(TestBackend::new(20, 20)).unwrap();
         terminal
             .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text: String = (0..20).map(|x| buffer[(x, 16)].symbol()).collect();
-        assert_eq!(text, "abcdefghijklmnopqrst");
+        assert_eq!(text, " abcdefghijklmnopqr ");
         assert_eq!(
             terminal.get_cursor_position().unwrap(),
-            Position::new(19, 16)
+            Position::new(18, 16)
         );
         assert_eq!(app.last_transcript_inner.height, 13);
+    }
+
+    #[test]
+    fn prompt_padding_applies_to_empty_input_and_wrapped_lines() {
+        let mut app = test_app();
+        let mut terminal = Terminal::new(TestBackend::new(20, 20)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
+            .unwrap();
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(1, 16)
+        );
+
+        app.input.insert_str("abcdefghijklmnopqrst");
+        terminal
+            .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
+            .unwrap();
+        assert_eq!(
+            terminal.get_cursor_position().unwrap(),
+            Position::new(3, 16)
+        );
+        assert_eq!(
+            app.last_transcript_inner.height, 12,
+            "wrapped input gets two rows"
+        );
+        let buffer = terminal.backend().buffer();
+        let first: String = (0..20).map(|x| buffer[(x, 15)].symbol()).collect();
+        let second: String = (0..20).map(|x| buffer[(x, 16)].symbol()).collect();
+        assert_eq!(first, " abcdefghijklmnopqr ");
+        assert_eq!(second, format!(" st{}", " ".repeat(17)));
     }
 
     #[test]
@@ -738,7 +774,7 @@ mod tests {
             "{screen}"
         );
         assert!(
-            screen.lines().nth(16).unwrap().starts_with("draft"),
+            screen.lines().nth(16).unwrap().starts_with(" draft"),
             "{screen}"
         );
         assert_eq!(app.last_transcript_inner, Rect::new(1, 1, 78, 13));
@@ -1631,8 +1667,8 @@ mod tests {
         let screen = draw(&mut app, 80, 20);
         assert!(screen.contains("src/main.rs"), "popup missing:\n{screen}");
         assert!(
-            screen.lines().any(|row| row.starts_with(" src/main.rs ")),
-            "popup starts at the input's left edge:\n{screen}"
+            screen.lines().any(|row| row.starts_with("  src/main.rs ")),
+            "popup starts at the input's padded left edge:\n{screen}"
         );
     }
 
