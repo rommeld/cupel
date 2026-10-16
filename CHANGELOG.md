@@ -3,6 +3,16 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.30.0] - 2026-10-16
+
+- docs(readme): describe themes and custom palettes
+- fix(tui): add vertical conversation padding
+- feat(tui): add switchable color themes
+- feat(config): persist the TUI theme
+- fix(release): rebase the changelog commit before pushing to main
+- ci: remove the sync-version and version workflows
+- docs(changelog): list the commits of the failed v0.28.0 and v0.29.0 releases
+
 ## [v0.29.3] - 2026-10-14
 
 - fix(version): release will now correctly updates version
