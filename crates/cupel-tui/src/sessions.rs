@@ -8,7 +8,8 @@ use cupel_coding_agent::session;
 use cupel_coding_agent::spinoff::{
     self, Conflict, Group, MergeOutcome, Side, Spinoff, SpinoffError, SpinoffName,
 };
-use cupel_core::types::{AssistantMessage, Message};
+use cupel_coding_agent::update::Version;
+use cupel_core::types::{AssistantMessage, Message, ModelThinkingLevel};
 use futures_util::FutureExt as _;
 use futures_util::future::select_all;
 use ratatui::crossterm::event::{
@@ -32,9 +33,16 @@ pub struct Sessions {
     pub rows: Vec<(Rect, usize)>,
     pub quit_armed: bool,
     pub conflicts: Vec<Conflict>,
-    /// One look for all sessions, surviving `/new` and `/hot-reload`. An `Arc`:
-    /// the App's theme list holds the same theme, and both share it.
     pub theme: Arc<Theme>,
+}
+
+/// How cupel starts again on a new release: the binary, its arguments, and what to
+/// say on the terminal before it happens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Restart {
+    pub binary: PathBuf,
+    pub args: Vec<String>,
+    pub note: String,
 }
 
 impl Sessions {
@@ -192,6 +200,60 @@ impl Sessions {
             session.app.agent.wait_for_idle().await;
             session.app.recorder.end_session().await;
         }
+    }
+
+    /// The restart onto `binary`, the release `version` that `/update` installed, or
+    /// why a restart now would lose something.
+    ///
+    /// A restart keeps what is on disk. The origin comes back through `--resume <id>`
+    /// when it has a history, with its model and thinking level. The spinoffs come
+    /// back the way they do at every start (`restore`): each with the newest transcript
+    /// of its worktree.
+    pub fn restart(&self, binary: &Path, version: &Version) -> Result<Restart, String> {
+        for (index, session) in self.list.iter().enumerate() {
+            let app = &session.app;
+            if let Some(blocker) = app.restart_blocker() {
+                return Err(format!("{} {blocker}", session.label));
+            }
+            // When the newest transcript in a spinoff's worktree is not this session's
+            // (after `/hot-reload <id>`), `restore` would bring back another
+            // conversation.
+            if index > 0 && !app.agent.state().messages.is_empty() {
+                let cwd = Path::new(&app.meta.cwd);
+                let newest = session::find_latest(app.meta.home.as_deref(), cwd);
+                if newest.as_deref() != app.recorder.transcript() {
+                    return Err(format!(
+                        "{} would come back with another conversation (its transcript is \
+                        not the newest in its worktree)",
+                        session.label
+                    ));
+                }
+            }
+        }
+        let origin = &self.list[0].app;
+        let state = origin.agent.state();
+        // The words `--thinking` takes. No level is off.
+        let thinking = state
+            .thinking_level
+            .map_or("off", |level| ModelThinkingLevel::from(level).as_str());
+        let mut args = vec![
+            "--model".to_string(),
+            state.model.id,
+            "--thinking".to_string(),
+            thinking.to_string(),
+        ];
+        let note = if state.messages.is_empty() {
+            format!("cupel {version} is installed - restarting")
+        } else {
+            let id = origin.recorder.session_id();
+            args.extend(["--resume".to_string(), id.to_string()]);
+            format!("cupel {version} is installed - restarting and resuming session {id}")
+        };
+        Ok(Restart {
+            binary: binary.to_path_buf(),
+            args,
+            note,
+        })
     }
 
     /// List the themes or switch every session. Transcripts are restyled
@@ -726,4 +788,156 @@ fn conflicts_of<'a>(conflicts: &'a [Conflict], side: &Side) -> Vec<(&'a Side, &'
         .iter()
         .filter_map(|conflict| Some((conflict.other(side)?, conflict.files.as_slice())))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use cupel_agent::{Agent, AgentMessage, AgentOptions};
+    use cupel_coding_agent::update::Version;
+
+    use crate::app::App;
+    use crate::sessions::{Session, Sessions};
+    use crate::ui::tests::{test_app, test_app_with_home};
+
+    const BINARY: &str = "/tmp/new/cupel";
+
+    fn version() -> Version {
+        Version::new(99, 0, 0)
+    }
+
+    fn model() -> String {
+        cupel_core::catalog::builtin_models().remove(0).id
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("cupel-restart-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        root
+    }
+
+    /// Two prompts in memory, `saved` of them in the transcript, thinking at high.
+    fn with_history(root: &Path, id: &str, saved: usize) -> App {
+        let mut app = test_app_with_home(root, id);
+        let history = vec![
+            AgentMessage::user_text("fix the bug"),
+            AgentMessage::user_text("and add a test"),
+        ];
+        for message in &history[..saved] {
+            app.recorder.record(message);
+        }
+        let mut options = AgentOptions::new(app.agent.state().model, app.agent.registry());
+        options.messages = history;
+        options.thinking_level = Some(cupel_core::types::ThinkingLevel::High);
+        App::new(Agent::new(options), app.meta, app.recorder)
+    }
+
+    #[test]
+    fn a_fresh_session_restarts_without_resume() {
+        let sessions = Sessions::new(test_app());
+        let restart = sessions.restart(Path::new(BINARY), &version()).unwrap();
+        assert_eq!(restart.binary, Path::new(BINARY));
+        let model = model();
+        assert_eq!(restart.args, ["--model", &model, "--thinking", "off"]);
+        assert_eq!(restart.note, "cupel 99.0.0 is installed - restarting");
+    }
+
+    #[test]
+    fn a_conversation_comes_back_with_its_id_model_and_thinking_level() {
+        let root = temp_root("resume");
+        let mut sessions = Sessions::new(with_history(&root, "cupel-7", 2));
+        // Restart resumes the origin, not whichever session is on screen.
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app: test_app(),
+        });
+        sessions.active = 1;
+        let restart = sessions.restart(Path::new(BINARY), &version()).unwrap();
+        let model = model();
+        let args = [
+            "--model",
+            &model,
+            "--thinking",
+            "high",
+            "--resume",
+            "cupel-7",
+        ];
+        assert_eq!(restart.args, args);
+        let note = "cupel 99.0.0 is installed - restarting and resuming session cupel-7";
+        assert_eq!(restart.note, note);
+    }
+
+    #[test]
+    fn a_restart_never_loses_what_is_not_on_disk() {
+        let root = temp_root("blocked");
+        let sessions = Sessions::new(with_history(&root, "cupel-8", 1));
+        let reason = sessions.restart(Path::new(BINARY), &version());
+        assert_eq!(
+            reason.unwrap_err(),
+            "origin has history its transcript file lacks"
+        );
+
+        let mut sessions = Sessions::new(test_app());
+        sessions.active_mut().input.insert_str("half a thought");
+        let reason = sessions.restart(Path::new(BINARY), &version());
+        assert_eq!(
+            reason.unwrap_err(),
+            "origin has unsent text in its input box"
+        );
+
+        let mut sessions = Sessions::new(test_app());
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        sessions.active_mut().run_events = Some(events);
+        let reason = sessions.restart(Path::new(BINARY), &version());
+        assert_eq!(reason.unwrap_err(), "origin is still working");
+
+        let mut sessions = Sessions::new(test_app());
+        let (flow, _events, _cancel, _code) = crate::login::stub_flow();
+        sessions.active_mut().login = Some(flow);
+        let reason = sessions.restart(Path::new(BINARY), &version());
+        assert_eq!(reason.unwrap_err(), "origin waits for a login");
+    }
+
+    #[test]
+    fn a_restart_checks_sessions_off_screen() {
+        let mut sessions = Sessions::new(test_app());
+        let mut app = test_app();
+        app.input.insert_str("unsent spinoff prompt");
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+        let reason = sessions.restart(Path::new(BINARY), &version());
+        assert_eq!(reason.unwrap_err(), "auth has unsent text in its input box");
+    }
+
+    #[test]
+    fn a_spinoff_must_come_back_with_its_own_conversation() {
+        let root = temp_root("spinoff");
+        let spinoff = with_history(&root, "cupel-old", 2);
+        let dir = spinoff.recorder.sessions_dir().unwrap();
+        let newer = dir.join("cupel-new.jsonl");
+        std::fs::write(&newer, "").unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        let file = std::fs::File::options().write(true).open(&newer).unwrap();
+        file.set_modified(later).unwrap();
+
+        let mut sessions = Sessions::new(test_app());
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app: spinoff,
+        });
+        let reason = sessions.restart(Path::new(BINARY), &version()).unwrap_err();
+        assert!(
+            reason.starts_with("auth would come back with another conversation"),
+            "{reason}"
+        );
+
+        // Its own transcript is now newest, so restore will resume it.
+        std::fs::remove_file(&newer).unwrap();
+        let restart = sessions.restart(Path::new(BINARY), &version()).unwrap();
+        assert!(!restart.args.contains(&"--resume".to_string()));
+    }
 }

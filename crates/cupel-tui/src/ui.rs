@@ -1084,7 +1084,7 @@ pub(crate) mod tests {
     }
 
     /// App with a real home + cwd on disk, for reload/resume tests.
-    fn test_app_with_home(root: &std::path::Path, session_id: &str) -> App {
+    pub(crate) fn test_app_with_home(root: &std::path::Path, session_id: &str) -> App {
         let (home, cwd) = (root.join("home"), root.join("proj"));
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&home).unwrap();

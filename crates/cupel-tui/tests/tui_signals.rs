@@ -88,7 +88,8 @@ mod tests {
             context_files: Vec::new(),
             base_system_prompt: String::new(),
         };
-        cupel_tui::run(Agent::new(options), meta, recorder).await
+        cupel_tui::run(Agent::new(options), meta, recorder).await?;
+        Ok(())
     }
 
     fn check_shutdown(test_name: &str, signal: &str, idle: bool) {

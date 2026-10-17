@@ -279,7 +279,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "update",
-        description: "Install the newest cupel release (for installs made by install.sh)",
+        description: "Install the newest cupel release and restart into it (for installs made by install.sh)",
     },
     BuiltinCommand {
         name: "quit",

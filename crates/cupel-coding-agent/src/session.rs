@@ -308,6 +308,13 @@ impl SessionRecorder {
         self.path.as_deref().and_then(Path::parent)
     }
 
+    /// This session's transcript file, whether it exists yet or not (it appears with
+    /// the first message); `None` when persistence is off.
+    #[must_use]
+    pub fn transcript(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
     /// A prompt is about to start a run. Settles any pending `stop` hook
     /// first (ordering guarantee for external consumers), lazily creates
     /// the transcript, then fires `session-start` (once) and
@@ -499,9 +506,13 @@ mod tests {
         let rec = recorder(&root.join("home"), &root.join("proj"));
         let dir = rec.sessions_dir().expect("home given, dir known");
         assert!(dir.ends_with(format!("sessions/{}", project_slug(&root.join("proj")))));
+        let path = dir.join("cupel-42.jsonl");
+        assert_eq!(rec.transcript(), Some(path.as_path()));
+        assert!(!path.exists(), "the transcript is created lazily");
         // Disabled persistence (no home): no dir either.
         let disabled = SessionRecorder::new(None, &root.join("proj"), "cupel-1", "m");
         assert!(disabled.sessions_dir().is_none());
+        assert!(disabled.transcript().is_none());
     }
 
     #[test]

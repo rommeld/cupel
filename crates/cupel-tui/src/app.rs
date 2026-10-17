@@ -429,6 +429,30 @@ impl App {
         }
     }
 
+    /// What a restart would lose in this session, or `None` when nothing would. A
+    /// restart keeps what is on disk and nothing else.
+    #[must_use]
+    pub fn restart_blocker(&self) -> Option<&'static str> {
+        if self.is_running() {
+            return Some("is still working");
+        }
+        if !self.input.is_empty() {
+            return Some("has unsent text in its input box");
+        }
+        if self.login.is_some() {
+            return Some("waits for a login");
+        }
+        // `--resume` brings back what the transcript holds. When that is less than the
+        // history (persistence is off, a write failed), the rest would be lost.
+        let history = self.agent.state().messages.len();
+        let saved = self
+            .recorder
+            .transcript()
+            .and_then(|path| cupel_coding_agent::session::load_transcript(path).ok())
+            .map_or(0, |(_, messages)| messages.len());
+        (saved < history).then_some("has history its transcript file lacks")
+    }
+
     pub fn tick(&mut self) {
         self.frame = self.frame.wrapping_add(1);
     }
