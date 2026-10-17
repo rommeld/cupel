@@ -21,6 +21,9 @@ pub struct Settings {
     pub loop_killer: Option<LoopKillerSettings>,
     #[serde(rename = "model", default, skip_serializing_if = "BTreeMap::is_empty")]
     pub presets: BTreeMap<String, Preset>,
+    /// `"checkForUpdates": false` turns off the TUI's startup check. `None` means
+    /// on. Home only: `layered` ignores the project's value. A key save must not
+    /// add this field to a file whose author never wrote it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_for_updates: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -125,11 +128,14 @@ impl Settings {
     pub fn api_key(&self, provider: &str) -> Option<&str> {
         self.providers.get(provider).map(String::as_str)
     }
-    /// Whether the TUI asks GitHub for a newer release at startup.
+
+    /// Whether the TUI asks GitHub for a newer release at startup: yes, unless the
+    /// home settings say `"checkForUpdates": false`.
     #[must_use]
     pub fn checks_for_updates(&self) -> bool {
         self.check_for_updates.unwrap_or(true)
     }
+
     /// The effective repeat allowance; None = loop killer off. Opt-in by
     /// decision: no loopKiller section (or maxRepeats 0) means `cupel`
     /// behaves exactly as before this feature existed.
@@ -144,6 +150,7 @@ impl Settings {
     /// the project's map is deliverately not touched at all.
     /// - loopKiller: project overrides home when present (the usual
     /// later-wins layering, mirroring models.json).
+    /// - checkForUpdates: home only, like the keys.
     /// - theme: home only. `/themes` saves there; a project value must not
     /// override the saved choice on the next start.
     /// extra: the home copy rides along because it exists for the save
@@ -224,8 +231,8 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
     let mut value: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("{} has invalid JSON syntax: {e}", path.display()))?;
     // Each section is parsed on its own, so one wrong entry never discards
-    // the others: a preset, a provider key, the loopKiller section or
-    // checkForUpdates that does not fit is skipped with a warning that names it.
+    // the others: a preset, a provider key, loopKiller, checkForUpdates or theme
+    // that does not fit is skipped with a warning that names it.
     // Warnings never quote a provider entry's value, which may be a key.
     let presets = take_section(&mut value, "model");
     let providers = take_section(&mut value, "providers");
@@ -290,7 +297,7 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
         None | Some(serde_json::Value::Null) => {}
         Some(serde_json::Value::Bool(check)) => settings.check_for_updates = Some(check),
         Some(_) => warnings.push(format!(
-            "warning: ignoring checkForUpdates in {file}: except true or false"
+            "warning: ignoring checkForUpdates in {file}: expected true or false"
         )),
     }
     // Only the TUI knows which ids exist. This layer checks the value's type.
@@ -1216,7 +1223,13 @@ mod tests {
         assert!(settings.checks_for_updates());
         assert_eq!(settings.api_key("anthropic"), Some("sk-a"));
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("checkForUpdates"), "{}", warnings[0]);
+        assert_eq!(
+            warnings[0],
+            format!(
+                "warning: ignoring checkForUpdates in {}: expected true or false",
+                path.display()
+            )
+        );
 
         // A project can't switch it, in either direction.
         let mut project = Settings::default();

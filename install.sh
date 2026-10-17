@@ -8,6 +8,7 @@
 #
 #   ~/.cupel/
 #   ├── bin/cupel      the binary (this dir goes on PATH)
+#   ├── bin/.cupel-installer   tells cupel's /update it may replace the binary
 #   ├── AGENTS.md      global context, loaded into every session (optional)
 #   ├── prompts/*.md   global /command prompt templates
 #   └── memory/        reserved for the future memory feature
@@ -86,6 +87,10 @@ fi
 tar -xzf "$tmp/$asset.tar.gz" -C "$tmp"
 mkdir -p "$INSTALL_DIR"
 install -m 755 "$tmp/cupel" "$INSTALL_DIR/cupel"
+# cupel's /update replaces only a binary that this script installed. The marker
+# says so; Homebrew and builds from source have none.
+echo "cupel's install.sh put the cupel binary here; /update may replace it" \
+    > "$INSTALL_DIR/.cupel-installer"
 echo "installed cupel to $INSTALL_DIR/cupel"
 
 # Scaffold the config side of the home (mkdir -p never overwrites anything).

@@ -43,7 +43,7 @@ impl Default for Updates {
 
 impl Updates {
     /// Ask GitHub in the background whether a newer release is out. A failure (offline,
-    /// a timeout, the rate limit) only reaches the log: the ckeck is a courtesy and
+    /// a timeout, the rate limit) only reaches the log: the check is a courtesy and
     /// must never get in the way.
     pub fn check(&mut self) {
         let sender = self.sender.clone();
