@@ -21,9 +21,10 @@ grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
 ignore.workspace = true
-# For the bounded ollama /api/tags discovery probe at startup and
-# the dev-time generate-catalog bin (models.dev fetch).
+# For the bounded ollama /api/tags discovery probe at startup, the dev-time 
+# generate-catalog bin (models.dev fetch), and update check.
 reqwest.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 similar.workspace = true

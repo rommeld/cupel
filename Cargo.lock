@@ -805,6 +805,7 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "similar",
