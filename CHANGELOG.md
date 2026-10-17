@@ -3,6 +3,14 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.32.0] - 2026-10-18
+
+- feat(tui): restart into the installed release
+- feat(tui): /update installs the newest release
+- feat(update): install a newer release in palce of install.sh's binary
+- feat(tui): announce a newer release once per launch
+- feat(update): check GitHub for latest version
+
 ## [v0.31.2] - 2026-10-17
 
 - chore: remove unnecessary themes entries from .gitignore
