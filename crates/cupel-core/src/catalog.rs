@@ -209,6 +209,37 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_deepseek_flash_uses_the_1017_snapshot_and_native_efforts() {
+        use crate::types::InputModality;
+
+        let models = builtin_models();
+        assert!(
+            !models
+                .iter()
+                .any(|m| m.id == "deepseek/deepseek-v4.1-flash")
+        );
+        let model = models
+            .iter()
+            .find(|m| m.id == "deepseek/deepseek-v4.1-flash-1017")
+            .expect("DeepSeek V4.1 Flash 1017 row");
+        assert_eq!(model.name, "DeepSeek V4.1 Flash 1017");
+        assert_eq!(model.provider.as_str(), Provider::OPENROUTER);
+        assert!(model.reasoning);
+        assert_eq!(model.input, vec![InputModality::Text, InputModality::Image]);
+        // Off explicitly sends "none"; low/high/max keep their own names.
+        // A max key would disable that level, even if mapped to "max".
+        assert_eq!(
+            serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+            serde_json::json!({
+                "medium": null,
+                "minimal": null,
+                "off": "none",
+                "xhigh": null,
+            })
+        );
+    }
+
+    #[test]
     fn price_tier_rows_plan_against_the_threshold() {
         // The long-context family: the planning window is the price-tier
         // threshold (requests never drift into 2x pricing unnoticed), the

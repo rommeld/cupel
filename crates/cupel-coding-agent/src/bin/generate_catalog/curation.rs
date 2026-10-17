@@ -388,7 +388,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("deepseek/deepseek-v4-pro", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-pro-0813", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-flash-0731", Thinking::FromEffort),
-            openrouter("deepseek/deepseek-v4.1-flash", Thinking::FromEffort),
+            openrouter("deepseek/deepseek-v4.1-flash-1017", Thinking::FromEffort),
             openrouter("x-ai/grok-4.6", Thinking::FromEffort),
             openrouter("x-ai/grok-4.7", Thinking::FromEffort),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),

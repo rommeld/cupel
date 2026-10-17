@@ -1299,18 +1299,18 @@
         ],
         "temperature": true
       },
-      "deepseek/deepseek-v4.1-flash": {
+      "deepseek/deepseek-v4.1-flash-1017": {
         "cost": {
-          "cache_read": 0.006,
+          "cache_read": 0.003,
           "cache_write": 0.0,
-          "input": 0.3,
-          "output": 1.2,
+          "input": 0.15,
+          "output": 0.6,
           "tiers": []
         },
         "limit": {
           "context": 1048576,
           "input": null,
-          "output": 943718
+          "output": 393216
         },
         "modalities": {
           "input": [
@@ -1318,15 +1318,13 @@
             "image"
           ]
         },
-        "name": "DeepSeek V4.1 Flash",
+        "name": "DeepSeek V4.1 Flash 1017",
         "reasoning": true,
         "reasoning_options": [
           {
-            "type": "toggle"
-          },
-          {
             "type": "effort",
             "values": [
+              "none",
               "low",
               "high",
               "max"

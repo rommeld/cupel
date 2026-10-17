@@ -1173,8 +1173,8 @@
     }
   },
   {
-    "id": "deepseek/deepseek-v4.1-flash",
-    "name": "DeepSeek V4.1 Flash",
+    "id": "deepseek/deepseek-v4.1-flash-1017",
+    "name": "DeepSeek V4.1 Flash 1017",
     "api": "openai-completions",
     "provider": "openrouter",
     "baseUrl": "https://openrouter.ai/api/v1",
@@ -1182,6 +1182,7 @@
     "thinkingLevelMap": {
       "medium": null,
       "minimal": null,
+      "off": "none",
       "xhigh": null
     },
     "input": [
@@ -1189,13 +1190,13 @@
       "image"
     ],
     "cost": {
-      "input": 0.3,
-      "output": 1.2,
-      "cachedRead": 0.006,
+      "input": 0.15,
+      "output": 0.6,
+      "cachedRead": 0.003,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 943718,
+    "maxTokens": 393216,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
