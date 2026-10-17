@@ -79,13 +79,17 @@ mod tests {
             templates: Vec::new(),
             models: vec![model],
             home: Some(home),
-            settings: Settings::default(),
+            settings: Settings {
+                check_for_updates: Some(false),
+                ..Settings::default()
+            },
             startup_warning: None,
             warnings: Vec::new(),
             context_files: Vec::new(),
             base_system_prompt: String::new(),
         };
-        cupel_tui::run(Agent::new(options), meta, recorder).await
+        cupel_tui::run(Agent::new(options), meta, recorder).await?;
+        Ok(())
     }
 
     fn check_shutdown(test_name: &str, signal: &str, idle: bool) {

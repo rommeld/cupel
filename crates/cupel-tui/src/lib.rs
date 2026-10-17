@@ -4,12 +4,14 @@
 //!
 //! ## Event architecture
 //!
-//! Terminal input, agent events and termination signals feed the event loop:
+//! Terminal input, agent events, update events  and termination signals feed the event
+//! loop:
 //!
 //! ```text
 //!  crossterm (blocking thread) ──channel──▶            ┌── ui::render
 //!                                          tokio::select ──▶ App ──┘
 //!  AgentEventStream (active run) ─────────▶
+//!  Updates (startup check, /update) ───────────────▶
 //!  TerminationSignals ──────────────────▶
 //! ```
 //!
@@ -31,6 +33,7 @@ mod terminal_text;
 pub mod theme;
 pub mod transcript;
 pub mod ui;
+pub mod updates;
 
 use cupel_agent::Agent;
 use cupel_coding_agent::modes::{SessionMeta, TerminationSignals};
@@ -40,14 +43,24 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 
-/// Run the interactive session until the user quits.
+/// How the interactive session ended.
+pub enum Exit {
+    /// The user quit, or the terminal went away.
+    Quit,
+    /// `/update` installed a new release. The caller starts it after the terminal
+    /// has been restored.
+    Restart(sessions::Restart),
+}
+
+/// Run the interactive session until the user quits, or until `/update` asks for a
+/// restart onto a new release.
 ///
 /// Errors are I/O failures; agent failures surface inside the UI.
 pub async fn run(
     agent: Agent,
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
-) -> std::io::Result<()> {
+) -> std::io::Result<Exit> {
     // Register before entering raw mode so termination always takes the restore path.
     let signals = TerminationSignals::new()?;
     // `ratatui::init` enters raw mode + the alternate screen and installs a
@@ -123,9 +136,13 @@ async fn event_loop(
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
     mut signals: TerminationSignals,
-) -> std::io::Result<()> {
+) -> std::io::Result<Exit> {
     let mut sessions = sessions::Sessions::new(app::App::new(agent, meta, recorder));
     sessions.restore().await;
+    let mut updates = updates::Updates::default();
+    if sessions.active().meta.settings.checks_for_updates() {
+        updates.check();
+    }
     let mut terminal_events = spawn_input_thread();
     // The spinner's clock lives outside the loop.
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -140,11 +157,11 @@ async fn event_loop(
         // parks forever while idle, so this never busy-spins.
         tokio::select! {
             // External termination must not wait for the busy-spinoff quit confirmation.
-            _ = signals.recv() => break Ok(()),
+            _ = signals.recv() => break Ok(Exit::Quit),
             event = terminal_events.recv() => {
                 match event {
                     Some(event) => sessions.on_terminal_event(event),
-                    None => break Ok(()), // Input thread died; nothing left to do.
+                    None => break Ok(Exit::Quit), // Input thread died; nothing left to do.
                 }
             }
             // Agent events and login events share one wakeup: two
@@ -152,6 +169,12 @@ async fn event_loop(
             // App multiplexes them itself (App::next_event).
             (index, event) = sessions.next_event() => {
                 sessions.list[index].app.on_event(event).await;
+            }
+            // The update work has its own source, because it belongs to no session.
+            event = updates.next_event() => {
+                if let Some(restart) = updates.on_event(event, &mut sessions) {
+                    break Ok(Exit::Restart(restart));
+                }
             }
             _ = ticker.tick(), if sessions.any_running() => {
                 sessions.tick();
@@ -209,6 +232,13 @@ async fn event_loop(
         if let Some(command) = sessions.active_mut().pending_spinoff.take() {
             sessions.spinoff(command).await;
         }
+        // `/update` is the process's business, not the session's: the update work gets
+        // every session, to see whether one of them is busy.
+        if core::mem::take(&mut sessions.active_mut().update_requested)
+            && let Some(restart) = updates.request(&mut sessions)
+        {
+            break Ok(Exit::Restart(restart));
+        }
         if let Some(request) = sessions.active_mut().pending_theme.take() {
             sessions.on_theme_request(request);
         }
@@ -223,7 +253,7 @@ async fn event_loop(
         }
 
         if sessions.quit_requested() {
-            break Ok(());
+            break Ok(Exit::Quit);
         }
     };
     // Don't leave a run mid-flight, even if drawing failed after a terminal hangup.

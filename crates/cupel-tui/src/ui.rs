@@ -475,7 +475,7 @@ fn thinking_level_name(level: cupel_core::types::ThinkingLevel) -> &'static str 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! Headless render tests: ratatui's `TestBackend` draws frames into an
     //! in-memory buffer, so the full render path is testable without a
     //! terminal (or an API key the Agent is constructed but never run).
@@ -492,7 +492,7 @@ mod tests {
     use ratatui::style::Modifier;
     use std::sync::Arc;
 
-    fn test_app() -> App {
+    pub(crate) fn test_app() -> App {
         test_app_in("/tmp")
     }
 
@@ -1084,7 +1084,7 @@ mod tests {
     }
 
     /// App with a real home + cwd on disk, for reload/resume tests.
-    fn test_app_with_home(root: &std::path::Path, session_id: &str) -> App {
+    pub(crate) fn test_app_with_home(root: &std::path::Path, session_id: &str) -> App {
         let (home, cwd) = (root.join("home"), root.join("proj"));
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::create_dir_all(&home).unwrap();
@@ -2856,7 +2856,7 @@ mod tests {
     }
 
     /// Type a command, close the popup typing opened, and submit it.
-    fn run_command(app: &mut App, command: &str) {
+    pub(crate) fn run_command(app: &mut App, command: &str) {
         type_text(app, command);
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         app.on_terminal_event(Event::Key(KeyEvent::new(
@@ -2865,7 +2865,7 @@ mod tests {
         )));
     }
 
-    fn has_notice(app: &App, needle: &str) -> bool {
+    pub(crate) fn has_notice(app: &App, needle: &str) -> bool {
         app.transcript
             .cells
             .iter()

@@ -69,6 +69,7 @@ pub struct App {
     pub last_top_line: usize,
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
+    pub update_requested: bool,
     pub pending_theme: Option<ThemeRequest>,
     /// Every theme `/themes` can switch to: the built-in default and the theme
     /// files (see `theme::registry`).
@@ -305,6 +306,7 @@ impl App {
             last_top_line: 0,
             last_answer: Status::New,
             pending_spinoff: None,
+            update_requested: false,
             pending_theme: None,
             themes,
             run_finished: false,
@@ -425,6 +427,30 @@ impl App {
         } else {
             self.last_answer
         }
+    }
+
+    /// What a restart would lose in this session, or `None` when nothing would. A
+    /// restart keeps what is on disk and nothing else.
+    #[must_use]
+    pub fn restart_blocker(&self) -> Option<&'static str> {
+        if self.is_running() {
+            return Some("is still working");
+        }
+        if !self.input.is_empty() {
+            return Some("has unsent text in its input box");
+        }
+        if self.login.is_some() {
+            return Some("waits for a login");
+        }
+        // `--resume` brings back what the transcript holds. When that is less than the
+        // history (persistence is off, a write failed), the rest would be lost.
+        let history = self.agent.state().messages.len();
+        let saved = self
+            .recorder
+            .transcript()
+            .and_then(|path| cupel_coding_agent::session::load_transcript(path).ok())
+            .map_or(0, |(_, messages)| messages.len());
+        (saved < history).then_some("has history its transcript file lacks")
     }
 
     pub fn tick(&mut self) {
@@ -1518,6 +1544,7 @@ impl App {
                 None => self.notice(format!("unknown theme: {args} (/themes lists them)")),
             },
             "quit" => self.should_quit = true,
+            "update" => self.update_requested = true,
             _ => return false,
         }
         true

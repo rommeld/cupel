@@ -15,34 +15,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
-    /// BTreeMap (not HashMap) so re-serialization is determenstic:
-    /// HashMap iteration order is randomized per process.
     #[serde(default)]
     pub providers: BTreeMap<String, String>,
-    /// Loop-killer section; None = not configured. Opt-in by decision: an
-    /// absent section changes nothing about existing behavior.
-    /// skip_serializing_if: a key save must not inject "loopKiller": null
-    /// into a file whose author never wrote that key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_killer: Option<LoopKillerSettings>,
-    /// Named model presets from the `"model"` section: `/preset <name>`
-    /// switches to one, and the one named [`Default_PRESET`] picks the
-    /// startup model. THe JSON key stays `model` (the file's vocabulary).
-    /// BTreeMap: sorted names for listings and a deterministic save, same as
-    /// `providers`. skip_serializing_if: a key save must not inject `"model": {}`.
     #[serde(rename = "model", default, skip_serializing_if = "BTreeMap::is_empty")]
     pub presets: BTreeMap<String, Preset>,
-    /// TUI theme id, written by `/themes`. Styles live in cupel-tui; only
-    /// the id belongs here. A key save must not inject `"theme": null`.
+    /// `"checkForUpdates": false` turns off the TUI's startup check. `None` means
+    /// on. Home only: `layered` ignores the project's value. A key save must not
+    /// add this field to a file whose author never wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_for_updates: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
-    /// Every unknown top-level field, round-tripped through save.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
-    /// Why this file's [`DEFAULT_PRESET`] was skipped, when it was. The
-    /// default preset is explicit configuration, so startup refuses to run
-    /// instead of quietly picking another model. Runtime only: never read
-    /// from or written to the file.
     #[serde(skip)]
     pub invalid_default_preset: Option<String>,
 }
@@ -132,7 +119,6 @@ impl ThinkingSetting {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoopKillerSettings {
-    /// 0 = explicitly disabled (same as leaving the section out).
     pub max_repeats: u32,
 }
 
@@ -142,6 +128,14 @@ impl Settings {
     pub fn api_key(&self, provider: &str) -> Option<&str> {
         self.providers.get(provider).map(String::as_str)
     }
+
+    /// Whether the TUI asks GitHub for a newer release at startup: yes, unless the
+    /// home settings say `"checkForUpdates": false`.
+    #[must_use]
+    pub fn checks_for_updates(&self) -> bool {
+        self.check_for_updates.unwrap_or(true)
+    }
+
     /// The effective repeat allowance; None = loop killer off. Opt-in by
     /// decision: no loopKiller section (or maxRepeats 0) means `cupel`
     /// behaves exactly as before this feature existed.
@@ -156,6 +150,7 @@ impl Settings {
     /// the project's map is deliverately not touched at all.
     /// - loopKiller: project overrides home when present (the usual
     /// later-wins layering, mirroring models.json).
+    /// - checkForUpdates: home only, like the keys.
     /// - theme: home only. `/themes` saves there; a project value must not
     /// override the saved choice on the next start.
     /// extra: the home copy rides along because it exists for the save
@@ -176,6 +171,7 @@ impl Settings {
             providers: home.providers,
             loop_killer: project.loop_killer.or(home.loop_killer),
             presets,
+            check_for_updates: home.check_for_updates,
             theme: home.theme,
             extra: home.extra,
             invalid_default_preset,
@@ -194,6 +190,7 @@ impl core::fmt::Debug for Settings {
             .field("extra", &self.extra.keys().collect::<Vec<_>>())
             .field("loopKiller", &self.loop_killer)
             .field("model", &self.presets.keys().collect::<Vec<_>>())
+            .field("checkForUpdates", &self.check_for_updates)
             .field("theme", &self.theme)
             .finish_non_exhaustive()
     }
@@ -234,12 +231,13 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
     let mut value: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("{} has invalid JSON syntax: {e}", path.display()))?;
     // Each section is parsed on its own, so one wrong entry never discards
-    // the others: a preset, a provider key, the loopKiller section or the
-    // theme that does not fit is skipped with a warning that names it.
+    // the others: a preset, a provider key, loopKiller, checkForUpdates or theme
+    // that does not fit is skipped with a warning that names it.
     // Warnings never quote a provider entry's value, which may be a key.
     let presets = take_section(&mut value, "model");
     let providers = take_section(&mut value, "providers");
     let loop_killer = take_section(&mut value, "loopKiller");
+    let check_for_updates = take_section(&mut value, "checkForUpdates");
     let theme = take_section(&mut value, "theme");
     let mut settings: Settings = serde_json::from_value(value)
         .map_err(|e| format!("{} has invalid settings data: {e}", path.display()))?;
@@ -294,6 +292,13 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
                 warnings.push(format!("warning: ignoring loopKiller in {file}: {error}"));
             }
         },
+    }
+    match check_for_updates {
+        None | Some(serde_json::Value::Null) => {}
+        Some(serde_json::Value::Bool(check)) => settings.check_for_updates = Some(check),
+        Some(_) => warnings.push(format!(
+            "warning: ignoring checkForUpdates in {file}: expected true or false"
+        )),
     }
     // Only the TUI knows which ids exist. This layer checks the value's type.
     match theme {
@@ -1192,5 +1197,62 @@ mod tests {
         // Right id, wrong provider: not found.
         preset.provider = "openrouter".into();
         assert!(preset.find_model(&catalog).is_none());
+    }
+
+    #[test]
+    fn the_update_check_is_on_unless_the_home_file_says_false() {
+        let home = temp_root("check-for-updates");
+        let path = home.join("settings.json");
+        assert!(
+            load_settings(&path).unwrap().checks_for_updates(),
+            "no file"
+        );
+
+        std::fs::write(&path, r#"{"checkForUpdates": false}"#).unwrap();
+        let (settings, warnings) = load_settings_with_warnings(&path).unwrap();
+        assert!(!settings.checks_for_updates());
+        assert!(warnings.is_empty());
+
+        // A wrong value costs only itself: the key next to it survives.
+        std::fs::write(
+            &path,
+            r#"{"checkForUpdates": "no", "providers": {"anthropic": "sk-a"}}"#,
+        )
+        .unwrap();
+        let (settings, warnings) = load_settings_with_warnings(&path).unwrap();
+        assert!(settings.checks_for_updates());
+        assert_eq!(settings.api_key("anthropic"), Some("sk-a"));
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            warnings[0],
+            format!(
+                "warning: ignoring checkForUpdates in {}: expected true or false",
+                path.display()
+            )
+        );
+
+        // A project can't switch it, in either direction.
+        let mut project = Settings::default();
+        project.check_for_updates = Some(false);
+        assert!(Settings::layered(Settings::default(), project.clone()).checks_for_updates());
+        let mut off = Settings::default();
+        off.check_for_updates = Some(false);
+        project.check_for_updates = Some(true);
+        assert!(!Settings::layered(off, project).checks_for_updates());
+    }
+
+    #[test]
+    fn save_keeps_check_for_updates_and_writes_none_by_itself() {
+        let home = temp_root("save-check-for-updates");
+        std::fs::write(home.join("settings.json"), r#"{"checkForUpdates": false}"#).unwrap();
+        save_provider_key(Some(&home), "anthropic", "sk-a").unwrap();
+        let saved = load_settings(&home.join("settings.json")).unwrap();
+        assert!(!saved.checks_for_updates());
+
+        // A file that never had the key doesn't get one from a key save.
+        let fresh = temp_root("save-no-check-for-updates");
+        save_provider_key(Some(&fresh), "anthropic", "sk-a").unwrap();
+        let text = std::fs::read_to_string(fresh.join("settings.json")).unwrap();
+        assert!(!text.contains("checkForUpdates"), "{text}");
     }
 }

@@ -48,12 +48,30 @@ fn main() -> std::process::ExitCode {
         .build()
         .expect("failed to build tokio runtime");
     match runtime.block_on(run()) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(None) => std::process::ExitCode::SUCCESS,
+        Ok(Some(restart)) => restart_into(&restart),
         Err(err) => {
             eprintln!("error: {err}");
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+/// Become the new cupel in this process, keeping its terminal, directory and
+/// environment. The TUI has restored the terminal before this runs. `exec` returns
+/// only when starting the new binary failed.
+fn restart_into(restart: &cupel_tui::sessions::Restart) -> std::process::ExitCode {
+    use std::os::unix::process::CommandExt as _;
+    eprintln!("{}", restart.note);
+    let error = std::process::Command::new(&restart.binary)
+        .args(&restart.args)
+        .exec();
+    eprintln!(
+        "error: cannot start {}: {error}\nstart it yourself: cupel {}",
+        restart.binary.display(),
+        restart.args.join(" ")
+    );
+    std::process::ExitCode::FAILURE
 }
 
 /// What `--resume` asked for: the newest session of this project, or one
@@ -293,7 +311,8 @@ fn use_plain_mode(args: &CliArgs, stdin_is_terminal: bool, stdout_is_terminal: b
     args.plain || !stdin_is_terminal || !stdout_is_terminal
 }
 
-async fn run() -> Result<(), AppError> {
+/// `Some` when `/update` installed a release that cupel should restart into.
+async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
     let args = parse_args(std::env::args().skip(1)).map_err(AppError::Arguments)?;
     let use_plain = use_plain_mode(
         &args,
@@ -445,12 +464,16 @@ async fn run() -> Result<(), AppError> {
     if use_plain {
         modes::plain::run(agent, &meta, recorder)
             .await
-            .map_err(AppError::PlainMode)
-    } else {
-        cupel_tui::run(agent, meta, recorder)
-            .await
-            .map_err(AppError::InteractiveMode)
+            .map_err(AppError::PlainMode)?;
+        return Ok(None);
     }
+    let exit = cupel_tui::run(agent, meta, recorder)
+        .await
+        .map_err(AppError::InteractiveMode)?;
+    Ok(match exit {
+        cupel_tui::Exit::Quit => None,
+        cupel_tui::Exit::Restart(restart) => Some(restart),
+    })
 }
 
 #[cfg(test)]
@@ -459,6 +482,90 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<CliArgs, String> {
         parse_args(args.iter().map(ToString::to_string))
+    }
+
+    #[test]
+    fn restart_exec_preserves_process_context() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::process::{Command, Stdio};
+
+        // Exercise exec in a child so the test runner is never replaced.
+        if let Some(binary) = std::env::var_os("CUPEL_RESTART_EXEC_CHILD") {
+            let restart = cupel_tui::sessions::Restart {
+                binary: binary.into(),
+                args: [
+                    "--model",
+                    "a model with spaces",
+                    "--thinking",
+                    "high",
+                    "--resume",
+                    "cupel-test",
+                ]
+                .map(ToString::to_string)
+                .to_vec(),
+                note: "restarting test fixture".to_string(),
+            };
+            let status = restart_into(&restart);
+            panic!("exec unexpectedly returned {status:?}");
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "cupel-restart-exec-{}-{}",
+            std::process::id(),
+            cupel_core::types::now_ms()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let binary = root.join("cupel");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nprintf 'restart-fixture\\n%s\\n%s\\n%s\\n' \
+                \"$$\" \"$PWD\" \"$CUPEL_RESTART_SENTINEL\"\nprintf '%s\\n' \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::restart_exec_preserves_process_context",
+                "--nocapture",
+            ])
+            .env("CUPEL_RESTART_EXEC_CHILD", &binary)
+            .env("CUPEL_RESTART_SENTINEL", "preserved")
+            .current_dir(&root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let expected = format!(
+            "restart-fixture\n{pid}\n{}\npreserved\n--model\na model with spaces\n\
+            --thinking\nhigh\n--resume\ncupel-test\n",
+            root.display()
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&expected),
+            "{output:?}"
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("restarting test fixture"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_restart_returns_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "cupel-restart-missing-{}-{}",
+            std::process::id(),
+            cupel_core::types::now_ms()
+        ));
+        let restart = cupel_tui::sessions::Restart {
+            binary: root.join("cupel"),
+            args: vec!["--resume".to_string(), "cupel-test".to_string()],
+            note: "restarting".to_string(),
+        };
+        assert_eq!(restart_into(&restart), std::process::ExitCode::FAILURE);
     }
 
     #[test]
