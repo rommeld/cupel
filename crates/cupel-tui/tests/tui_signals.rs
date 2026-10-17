@@ -79,7 +79,10 @@ mod tests {
             templates: Vec::new(),
             models: vec![model],
             home: Some(home),
-            settings: Settings::default(),
+            settings: Settings {
+                check_for_updates: Some(false),
+                ..Settings::default()
+            },
             startup_warning: None,
             warnings: Vec::new(),
             context_files: Vec::new(),

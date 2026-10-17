@@ -4,12 +4,14 @@
 //!
 //! ## Event architecture
 //!
-//! Terminal input, agent events and termination signals feed the event loop:
+//! Terminal input, agent events, update events  and termination signals feed the event
+//! loop:
 //!
 //! ```text
 //!  crossterm (blocking thread) ──channel──▶            ┌── ui::render
 //!                                          tokio::select ──▶ App ──┘
 //!  AgentEventStream (active run) ─────────▶
+//!  Updates (startup check) ───────────────▶
 //!  TerminationSignals ──────────────────▶
 //! ```
 //!
@@ -31,6 +33,7 @@ mod terminal_text;
 pub mod theme;
 pub mod transcript;
 pub mod ui;
+pub mod updates;
 
 use cupel_agent::Agent;
 use cupel_coding_agent::modes::{SessionMeta, TerminationSignals};
@@ -126,6 +129,10 @@ async fn event_loop(
 ) -> std::io::Result<()> {
     let mut sessions = sessions::Sessions::new(app::App::new(agent, meta, recorder));
     sessions.restore().await;
+    let mut updates = updates::Updates::default();
+    if sessions.active().meta.settings.checks_for_updates() {
+        updates.check();
+    }
     let mut terminal_events = spawn_input_thread();
     // The spinner's clock lives outside the loop.
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -153,6 +160,8 @@ async fn event_loop(
             (index, event) = sessions.next_event() => {
                 sessions.list[index].app.on_event(event).await;
             }
+            // The update work has its own source, because it belongs to no session.
+            event = updates.next_event() => updates.on_event(event, &mut sessions),
             _ = ticker.tick(), if sessions.any_running() => {
                 sessions.tick();
             }

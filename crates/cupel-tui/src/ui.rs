@@ -475,7 +475,7 @@ fn thinking_level_name(level: cupel_core::types::ThinkingLevel) -> &'static str 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! Headless render tests: ratatui's `TestBackend` draws frames into an
     //! in-memory buffer, so the full render path is testable without a
     //! terminal (or an API key the Agent is constructed but never run).
@@ -492,7 +492,7 @@ mod tests {
     use ratatui::style::Modifier;
     use std::sync::Arc;
 
-    fn test_app() -> App {
+    pub(crate) fn test_app() -> App {
         test_app_in("/tmp")
     }
 
@@ -2865,7 +2865,7 @@ mod tests {
         )));
     }
 
-    fn has_notice(app: &App, needle: &str) -> bool {
+    pub(crate) fn has_notice(app: &App, needle: &str) -> bool {
         app.transcript
             .cells
             .iter()
