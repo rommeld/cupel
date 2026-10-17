@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.32.1] - 2026-10-18
+
+- feat(catalog): update OpenRouter DeepSeek V4.1 Flash to 1017
+
 ## [v0.32.0] - 2026-10-18
 
 - feat(tui): restart into the installed release
