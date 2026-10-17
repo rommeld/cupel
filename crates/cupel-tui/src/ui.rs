@@ -2856,7 +2856,7 @@ pub(crate) mod tests {
     }
 
     /// Type a command, close the popup typing opened, and submit it.
-    fn run_command(app: &mut App, command: &str) {
+    pub(crate) fn run_command(app: &mut App, command: &str) {
         type_text(app, command);
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         app.on_terminal_event(Event::Key(KeyEvent::new(

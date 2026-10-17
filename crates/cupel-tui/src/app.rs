@@ -69,6 +69,7 @@ pub struct App {
     pub last_top_line: usize,
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
+    pub update_requested: bool,
     pub pending_theme: Option<ThemeRequest>,
     /// Every theme `/themes` can switch to: the built-in default and the theme
     /// files (see `theme::registry`).
@@ -305,6 +306,7 @@ impl App {
             last_top_line: 0,
             last_answer: Status::New,
             pending_spinoff: None,
+            update_requested: false,
             pending_theme: None,
             themes,
             run_finished: false,
@@ -1518,6 +1520,7 @@ impl App {
                 None => self.notice(format!("unknown theme: {args} (/themes lists them)")),
             },
             "quit" => self.should_quit = true,
+            "update" => self.update_requested = true,
             _ => return false,
         }
         true

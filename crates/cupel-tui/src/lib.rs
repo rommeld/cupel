@@ -11,7 +11,7 @@
 //!  crossterm (blocking thread) ──channel──▶            ┌── ui::render
 //!                                          tokio::select ──▶ App ──┘
 //!  AgentEventStream (active run) ─────────▶
-//!  Updates (startup check) ───────────────▶
+//!  Updates (startup check, /update) ───────────────▶
 //!  TerminationSignals ──────────────────▶
 //! ```
 //!
@@ -217,6 +217,11 @@ async fn event_loop(
         }
         if let Some(command) = sessions.active_mut().pending_spinoff.take() {
             sessions.spinoff(command).await;
+        }
+        // `/update` is the process's business, not the session's: the update work gets
+        // every session, to see whether one of them is busy.
+        if core::mem::take(&mut sessions.active_mut().update_requested) {
+            updates.request(&mut sessions);
         }
         if let Some(request) = sessions.active_mut().pending_theme.take() {
             sessions.on_theme_request(request);

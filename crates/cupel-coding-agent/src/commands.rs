@@ -278,6 +278,10 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Show session token and cost totals",
     },
     BuiltinCommand {
+        name: "update",
+        description: "Install the newest cupel release (for installs made by install.sh)",
+    },
+    BuiltinCommand {
         name: "quit",
         description: "Quit cupel",
     },
