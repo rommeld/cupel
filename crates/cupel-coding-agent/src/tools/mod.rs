@@ -21,6 +21,7 @@
 //! when a stricter policy is needed.
 
 pub mod apply_patch;
+pub mod ask_user;
 pub mod bash;
 pub mod file_queue;
 pub mod grep;

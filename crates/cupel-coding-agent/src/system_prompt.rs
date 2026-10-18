@@ -38,6 +38,13 @@ pub fn build_system_prompt(
             unique in the file",
         );
     }
+    if has("ask_user") {
+        guidelines.push(
+            "Use ask_user when a design decision is the user's to make and several options \
+            are reasonable, and recommend one of them; don't ask what the code, the project \
+            instructions, or an earlier answer already tells you.",
+        );
+    }
     guidelines.push("Be concise in your responses");
     guidelines.push("Show file paths clearly when working with files");
     let guidelines = guidelines

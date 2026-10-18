@@ -18,7 +18,13 @@ use crate::loop_killer::LoopKiller;
 use crate::search::GrepSearch;
 use crate::settings::Settings;
 use crate::system_prompt::build_system_prompt;
-use crate::tools::{apply_patch::ApplyPatchTool, bash::BashTool, grep::GrepTool, read::ReadTool};
+use crate::tools::{
+    apply_patch::ApplyPatchTool,
+    ask_user::{AskUserTool, QuestionReceiver},
+    bash::BashTool,
+    grep::GrepTool,
+    read::ReadTool,
+};
 
 /// Name + one-line snippet per tool for the system prompt (full
 /// descriptions travel in the tool schemas).
@@ -34,34 +40,32 @@ pub const TOOL_SUMMARIES: &[(&str, &str)] = &[
         "grep",
         "Search file contents for patterns (respects .gitignore)",
     ),
+    (
+        "ask_user",
+        "Ask the user to decide a design question: two or more options, one recommended",
+    ),
 ];
+
+/// Which frontend a session runs in. Only the TUI can answer a question while a run
+/// waits for it, so only the TUI gets the `ask_user` tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Frontend {
+    Plain,
+    Tui,
+}
 
 /// The reloadable parts of a session, all derived from `~/.cupel` +
 /// `<cwd>/.cupel` + the cwd itself.
 pub struct Ingredients {
-    /// System prompt incl. freshly read AGENTS.md/CLAUDE.md context files.
     pub system_prompt: String,
     pub tools: Vec<Arc<dyn AgentTool>>,
-    /// `/name` prompt templates from `<root>/prompts/*.md`.
     pub templates: Vec<PromptTemplate>,
-    /// Merged model catalog (builtins + models.json + ollama discovery).
     pub models: Vec<Model>,
-    /// The agent-loop hooks (bash guard + loop killer + ...), rebuild per
-    /// load so /hot-reload picks up both bash-deny edits and a changed
-    /// loopKiller setting.
     pub hooks: SessionHooks,
-    /// Layered settings: ~/.cupel/settings.json overlaid with the
-    /// project's .cupel/settings.json (non-secret fields only -provider
-    /// keys stay home-only by construction). Loaded here so /hot-reload
-    /// picks up hand edits to either file.
     pub settings: Settings,
-    /// The context files (AGENTS.md/CLAUDE.md) as loaded, kept alongside
-    /// the system prompt they were embedded into, so a later in-place
-    /// `/hot-reload` can diff against them instead of re-reading blind.
     pub context_files: Vec<crate::resources::ContextFile>,
-    /// Non-fatal configuration failures. Frontends choose the output channel:
-    /// stderr in plain mode, transcript notices in the TUI.
     pub warnings: Vec<String>,
+    pub questions: Option<QuestionReceiver>,
 }
 
 /// Load every ingredient fresh from disk (and the bounded ollama probe).
@@ -71,6 +75,7 @@ pub async fn load(
     cwd: &Path,
     home: Option<PathBuf>,
     registry: &cupel_core::provider::Registry,
+    frontend: Frontend,
 ) -> Ingredients {
     let roots = crate::resources::roots_for(home.clone(), cwd);
     let context_files = crate::resources::load_context_files(&roots);
@@ -93,15 +98,29 @@ pub async fn load(
 
     // The grep tool talks to a CodeSearch backend.
     let backend = Arc::new(GrepSearch::new(cwd));
-    let tools: Vec<Arc<dyn AgentTool>> = vec![
+    let mut tools: Vec<Arc<dyn AgentTool>> = vec![
         Arc::new(ReadTool::new(cwd)),
         Arc::new(BashTool::new(cwd)),
         Arc::new(ApplyPatchTool::new(cwd)),
         Arc::new(GrepTool::new(cwd, backend)),
     ];
+    let questions = match frontend {
+        Frontend::Tui => {
+            let (tool, questions) = AskUserTool::new();
+            tools.push(Arc::new(tool));
+            Some(questions)
+        }
+        Frontend::Plain => None,
+    };
+    // The prompt lists the tools this session has, and no others.
+    let summaries: Vec<(&str, &str)> = TOOL_SUMMARIES
+        .iter()
+        .copied()
+        .filter(|(name, _)| tools.iter().any(|tool| tool.name() == *name))
+        .collect();
 
     Ingredients {
-        system_prompt: build_system_prompt(cwd, TOOL_SUMMARIES, &context_files),
+        system_prompt: build_system_prompt(cwd, &summaries, &context_files),
         context_files,
         tools,
         templates,
@@ -109,6 +128,7 @@ pub async fn load(
         hooks,
         settings,
         warnings,
+        questions,
     }
 }
 
@@ -213,11 +233,11 @@ mod tests {
         .unwrap();
 
         let registry = cupel_core::default_registry();
-        let restricted = load(&cwd, Some(home.clone()), &registry).await;
+        let restricted = load(&cwd, Some(home.clone()), &registry, Frontend::Plain).await;
         assert!(!restricted.models.iter().any(|m| m.id == "local-test"));
         crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Trusted)
             .unwrap();
-        let ingredients = load(&cwd, Some(home), &registry).await;
+        let ingredients = load(&cwd, Some(home), &registry, Frontend::Plain).await;
 
         assert!(ingredients.system_prompt.contains("ALWAYS SAY PING"));
         assert!(ingredients.templates.iter().any(|t| t.name == "greet"));
@@ -252,7 +272,7 @@ mod tests {
         std::fs::write(cwd.join(".cupel/bash-deny"), "[project-rule\n").unwrap();
 
         let registry = cupel_core::default_registry();
-        let ingredients = load(&cwd, Some(home.clone()), &registry).await;
+        let ingredients = load(&cwd, Some(home.clone()), &registry, Frontend::Plain).await;
         assert_eq!(ingredients.settings, Settings::default());
         assert_eq!(ingredients.warnings.len(), 6, "{:?}", ingredients.warnings);
         for path in broken_files {
@@ -281,7 +301,7 @@ mod tests {
             r#"{"providers":{"fixture":"do-not-display-this-key"}}"#,
         )
         .unwrap();
-        let ingredients = load(&cwd, Some(home), &registry).await;
+        let ingredients = load(&cwd, Some(home), &registry, Frontend::Plain).await;
         assert_eq!(ingredients.settings.api_key("fixture"), None);
         assert!(
             ingredients
@@ -295,6 +315,33 @@ mod tests {
                 .iter()
                 .all(|warning| !warning.contains("do-not-display-this-key"))
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_the_tui_gets_the_ask_user_tool() {
+        let root = std::env::temp_dir().join("cupel-bootstrap-ask-user");
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, cwd) = (root.join("home"), root.join("proj"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let registry = cupel_core::default_registry();
+
+        let tui = load(&cwd, Some(home.clone()), &registry, Frontend::Tui).await;
+        assert!(tui.tools.iter().any(|tool| tool.name() == "ask_user"));
+        assert!(tui.questions.is_some());
+        assert!(tui.system_prompt.contains("- ask_user: Ask the user"));
+        // The whole guideline, so a line break from a wrapped literal shows.
+        assert!(tui.system_prompt.contains(
+            "- Use ask_user when a design decision is the user's to make and several options \
+             are reasonable, and recommend one of them; don't ask what the code, the project \
+             instructions, or an earlier answer already tells you.\n"
+        ));
+
+        let plain = load(&cwd, Some(home), &registry, Frontend::Plain).await;
+        assert!(plain.tools.iter().all(|tool| tool.name() != "ask_user"));
+        assert!(plain.questions.is_none());
+        assert!(!plain.system_prompt.contains("ask_user"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

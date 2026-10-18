@@ -19,6 +19,7 @@ use std::io::IsTerminal as _;
 use std::sync::Arc;
 
 use cupel_agent::{Agent, AgentOptions, ToolExecutionMode};
+use cupel_coding_agent::bootstrap::Frontend;
 use cupel_coding_agent::modes::{self, SessionMeta};
 use cupel_coding_agent::settings::{DEFAULT_PRESET, Preset, Settings};
 use cupel_core::types::{Model, ThinkingLevel};
@@ -352,7 +353,8 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
              start cupel interactively to confirm project trust"
         );
     }
-    let ingredients = cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry).await;
+    let ingredients =
+        cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry, Frontend::Plain).await;
     // Surface plain-mode warnings before model selection can fail. In the
     // TUI they travel with SessionMeta, never through the alternate screen.
     if use_plain {

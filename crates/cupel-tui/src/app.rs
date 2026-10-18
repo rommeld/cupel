@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt as _;
 
 use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
+use cupel_coding_agent::bootstrap::Frontend;
 use cupel_coding_agent::commands;
 use cupel_coding_agent::modes::SessionMeta;
 use cupel_coding_agent::session::SessionRecorder;
@@ -82,14 +83,10 @@ pub struct App {
 /// What a running agent does right now. The input box title shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Activity {
-    /// A request went out and nothing has come back yet.
     Waiting,
     Thinking,
     Writing,
-    /// The model writes a tool call. Its name only arrives with the finished
-    /// call, so there is none to show yet.
     CallingTool,
-    /// A tool runs; the tool's name.
     Running(String),
     Retrying,
     Compacting,
@@ -696,8 +693,13 @@ impl App {
     async fn reload_in_place(self, cwd: &std::path::Path) -> Self {
         let state = self.agent.state();
         let registry = self.agent.registry();
-        let ingredients =
-            cupel_coding_agent::bootstrap::load(cwd, self.meta.home.clone(), &registry).await;
+        let ingredients = cupel_coding_agent::bootstrap::load(
+            cwd,
+            self.meta.home.clone(),
+            &registry,
+            Frontend::Plain,
+        )
+        .await;
         let warning_suffix = if ingredients.warnings.is_empty() {
             ""
         } else {
@@ -852,7 +854,9 @@ impl App {
         session_id: String,
         seeded: Vec<AgentMessage>,
     ) -> Self {
-        let ingredients = cupel_coding_agent::bootstrap::load(cwd, home.clone(), &registry).await;
+        let ingredients =
+            cupel_coding_agent::bootstrap::load(cwd, home.clone(), &registry, Frontend::Plain)
+                .await;
 
         let mut options = cupel_agent::AgentOptions::new(carry.model.clone(), registry);
         options.system_prompt = format!("{}{}", ingredients.system_prompt, carry.preset_prompt);
