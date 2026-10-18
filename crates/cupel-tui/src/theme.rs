@@ -47,6 +47,8 @@ pub struct Theme {
     pub base: Style,
     /// User messages in the conversation.
     pub task: Style,
+    /// The open `ask_user` question: bold, in the busy input border's color.
+    pub question: Style,
     /// Mid-turn assistant prose (commentary between tool calls).
     pub assistant: Style,
     /// The turn's final answer: the emphasized counterpart to `task`.
@@ -144,6 +146,7 @@ pub const CUPEL: Theme = Theme {
     base: Style::new(),
     // White on gray surface (xtrem-256 index 240, #585858).
     task: Style::new().fg(Color::White).bg(Color::Indexed(240)),
+    question: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     assistant: Style::new().fg(Color::White).add_modifier(Modifier::ITALIC),
     // Magenta because cyan (tools), red (errors), and yellow (notice) are taken and
     // bold alone is too subtle next to plain prose.
@@ -262,6 +265,7 @@ impl Theme {
             file: None,
             base: Style::new().fg(fg).bg(bg),
             task: Style::new().fg(fg).bg(raised),
+            question: Style::new().fg(yellow).add_modifier(Modifier::BOLD),
             assistant: Style::new().fg(fg).add_modifier(Modifier::ITALIC),
             answer: Style::new().fg(magenta),
             reasoning: Style::new().fg(fg).add_modifier(Modifier::ITALIC),

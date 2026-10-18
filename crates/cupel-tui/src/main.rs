@@ -353,8 +353,14 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
              start cupel interactively to confirm project trust"
         );
     }
+    // Only the TUI can answer the agent's questions (see `Frontend`).
+    let frontend = if use_plain {
+        Frontend::Plain
+    } else {
+        Frontend::Tui
+    };
     let ingredients =
-        cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry, Frontend::Plain).await;
+        cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry, frontend).await;
     // Surface plain-mode warnings before model selection can fail. In the
     // TUI they travel with SessionMeta, never through the alternate screen.
     if use_plain {
@@ -469,7 +475,7 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
             .map_err(AppError::PlainMode)?;
         return Ok(None);
     }
-    let exit = cupel_tui::run(agent, meta, recorder)
+    let exit = cupel_tui::run(agent, meta, recorder, ingredients.questions)
         .await
         .map_err(AppError::InteractiveMode)?;
     Ok(match exit {

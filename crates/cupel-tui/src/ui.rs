@@ -14,6 +14,7 @@ use ratatui::widgets::{
 
 use crate::app::{App, Status, format_elapsed};
 use crate::sessions::Sessions;
+use crate::terminal_text::sanitize;
 use crate::{theme::Theme, transcript};
 
 const SIDEBAR_WIDTH: u16 = 24;
@@ -54,6 +55,7 @@ fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect, th
     for (index, session) in sessions.list.iter().enumerate() {
         let mark = match session.app.status() {
             Status::Running => SPINNER[session.app.frame % SPINNER.len()],
+            Status::Asking => "?",
             Status::Done => "✓",
             Status::Failed => "✗",
             Status::New => "○",
@@ -112,8 +114,18 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         .clamp(1, 5) as u16;
     let waiting = app.steering.len() + app.queued.len();
     let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
-    let [transcript_area, queued_area, input_area, footer_area] = Layout::vertical([
+    // An open question gets the rows it needs, but at most half the screen.
+    let question = question_lines(app, inner_width, theme);
+    let question_rows = (question.len() as u16).min(area.height / 2);
+    let [
+        transcript_area,
+        question_area,
+        queued_area,
+        input_area,
+        footer_area,
+    ] = Layout::vertical([
         Constraint::Min(1),
+        Constraint::Length(question_rows),
         Constraint::Length(queued_lines),
         Constraint::Length(input_lines + 2),
         Constraint::Length(2),
@@ -121,6 +133,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     .areas(area);
 
     render_transcript(frame, app, transcript_area, theme);
+    frame.render_widget(Paragraph::new(question), question_area);
     render_queued(frame, app, queued_area, theme);
     render_input(frame, app, input_area, theme);
     render_footer(frame, app, footer_area, theme);
@@ -256,6 +269,45 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
             marker_area,
         );
     }
+}
+
+/// The open question above the input box: the question, then each option with
+/// its description below it. The highlighted option is the one Enter picks.
+fn question_lines(app: &App, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let Some(open) = &app.question else {
+        return Vec::new();
+    };
+    let question = open.pending.question();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut push = |text: &str, style| {
+        let text = sanitize(text);
+        for logical in text.split('\n') {
+            for row in transcript::wrap_line(logical, width) {
+                lines.push(Line::from(Span::styled(row, style)));
+            }
+        }
+    };
+    push(&format!(" ? {}", question.question), theme.question);
+    for (index, choice) in question.options.iter().enumerate() {
+        let (marker, style) = if index == open.selected {
+            ("›", theme.popup_selected)
+        } else {
+            (" ", theme.popup_row)
+        };
+        let recommended = if choice.recommended {
+            " (recommended)"
+        } else {
+            ""
+        };
+        push(
+            &format!(" {marker} {}. {}{recommended}", index + 1, choice.label),
+            style,
+        );
+        if !choice.description.is_empty() {
+            push(&format!("      {}", choice.description), theme.chrome);
+        }
+    }
+    lines
 }
 
 /// The waiting prompts above the input box: "Steer:" rows first (they go in sooner),
@@ -434,7 +486,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     // The mouse hint tracks selection mode, so it never lies about what
     // the wheel currently does. It shares the status row's left margin because
     // a right-aligned hint row would sit staggered against it.
-    let hints = if app.mouse_captured {
+    let hints = if app.question.is_some() {
+        " ↑↓ choose · enter answer (typed text wins) · alt+enter newline · @ file · esc abort"
+    } else if app.mouse_captured {
         " enter send · ctrl+enter steer · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
     } else {
         " enter send · ctrl+enter steer · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
@@ -485,6 +539,7 @@ pub(crate) mod tests {
     use crate::transcript::{Cell, ToolOutcome};
     use cupel_agent::{Agent, AgentEvent, AgentOptions};
     use cupel_coding_agent::modes::SessionMeta;
+    use cupel_coding_agent::tools::ask_user::{Answer, AskUserTool, PendingQuestion};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -4996,5 +5051,230 @@ pub(crate) mod tests {
         ));
         let subject = git_output(&repo, &["log", "-1", "--format=%s"]);
         assert_eq!(subject, "Add line nine\n");
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.on_terminal_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    /// The tool's arguments: two options, the second one recommended.
+    fn presets_question() -> serde_json::Value {
+        serde_json::json!({
+            "question": "Where should presets live?",
+            "options": [
+                {"label": "settings.json", "description": "No new file.", "recommended": false},
+                {"label": "presets.toml", "description": "A second loader.", "recommended": true}
+            ]
+        })
+    }
+
+    /// Put the question on screen the way the event loop does. The returned
+    /// receiver is the end the tool would wait on.
+    fn open_question(app: &mut App) -> tokio::sync::oneshot::Receiver<Answer> {
+        let question = serde_json::from_value(presets_question()).unwrap();
+        let (pending, answer) = PendingQuestion::new(question);
+        app.on_question(Some(pending));
+        answer
+    }
+
+    #[tokio::test]
+    async fn an_open_question_shows_its_options_and_waits() {
+        let mut app = test_app();
+        app.start_run("plan the presets");
+        let _answer = open_question(&mut app);
+        let screen = draw(&mut app, 100, 30);
+        assert!(screen.contains("? Where should presets live?"), "{screen}");
+        assert!(screen.contains("  1. settings.json"), "{screen}");
+        assert!(
+            screen.contains("› 2. presets.toml (recommended)"),
+            "{screen}"
+        );
+        assert!(screen.contains("A second loader."), "{screen}");
+        assert!(screen.contains("waiting for your answer"), "{screen}");
+        assert!(
+            screen.contains("enter answer (typed text wins)"),
+            "{screen}"
+        );
+        assert_eq!(app.status(), Status::Asking);
+    }
+
+    #[tokio::test]
+    async fn enter_sends_the_recommended_option_back_to_the_tool() {
+        use cupel_agent::AgentTool as _;
+        let mut app = test_app();
+        let (tool, questions) = AskUserTool::new();
+        app.questions = Some(questions);
+        // The tool asks from its own task, the way it runs inside the agent loop.
+        let ask = tokio::spawn(async move {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            tool.execute("call_1", presets_question(), cancel, None)
+                .await
+        });
+        let event = app.next_event().await;
+        app.on_event(event).await;
+        press(&mut app, KeyCode::Enter);
+        // Checked before waiting on the tool: an Enter that didn't answer
+        // fails here instead of waiting forever.
+        assert!(app.question.is_none());
+
+        let result = ask.await.unwrap().unwrap();
+        assert_eq!(
+            result,
+            cupel_agent::types::AgentToolResult::text("The user picked option 2: presets.toml")
+        );
+    }
+
+    #[test]
+    fn up_and_down_stay_within_the_options() {
+        let mut app = test_app();
+        let mut answer = open_question(&mut app);
+        // The highlight starts on option 2, the recommended one and the last.
+        for key in [KeyCode::Down, KeyCode::Down, KeyCode::Up, KeyCode::Up] {
+            press(&mut app, key);
+        }
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(answer.try_recv(), Ok(Answer::Picked(0)));
+    }
+
+    #[test]
+    fn typed_text_is_the_answer() {
+        let mut app = test_app();
+        let mut answer = open_question(&mut app);
+        type_text(&mut app, "env vars");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(answer.try_recv(), Ok(Answer::Typed("env vars".to_string())));
+        assert!(app.input.is_empty());
+        assert!(app.pending_prompt.is_none(), "an answer is no prompt");
+    }
+
+    #[test]
+    fn modified_enter_answers_a_question_without_steering() {
+        for code in [KeyCode::Enter, KeyCode::Char('j')] {
+            let mut app = test_app();
+            let mut answer = open_question(&mut app);
+            type_text(&mut app, "neither");
+            app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)));
+            assert!(app.question.is_some(), "Alt+Enter adds a line");
+            type_text(&mut app, "use env vars");
+            app.on_terminal_event(Event::Key(KeyEvent::new(code, KeyModifiers::CONTROL)));
+            assert_eq!(
+                answer.try_recv(),
+                Ok(Answer::Typed("neither\nuse env vars".to_string()))
+            );
+            assert!(app.question.is_none());
+            assert!(app.input.is_empty());
+            assert!(app.pending_prompt.is_none());
+            assert!(app.steering.is_empty());
+            assert!(app.queued.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_background_question_marks_its_session_in_the_sidebar() {
+        use crate::sessions::{Session, Sessions};
+        let mut sessions = Sessions::new(test_app());
+        let mut app = test_app();
+        let _answer = open_question(&mut app);
+        sessions.list.push(Session {
+            label: "auth".to_string(),
+            app,
+        });
+        let screen = draw_sessions(&mut sessions, 100, 30);
+        assert!(screen.contains("? auth"), "{screen}");
+        assert!(!screen.contains("Where should presets live?"), "{screen}");
+    }
+
+    #[test]
+    fn question_rows_use_the_active_theme() {
+        let mut app = test_app();
+        let _answer = open_question(&mut app);
+        for theme in crate::theme::example_themes() {
+            let lines = question_lines(&app, 100, &theme);
+            let style = lines[0].spans[0].style;
+            assert_eq!(style.fg, theme.input_border_busy.fg);
+            assert!(style.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(lines[1].spans[0].style, theme.popup_row);
+            assert_eq!(lines[2].spans[0].style, theme.chrome);
+            assert_eq!(lines[3].spans[0].style, theme.popup_selected);
+        }
+    }
+
+    #[test]
+    fn question_rows_wrap_and_strip_terminal_commands() {
+        let mut app = test_app();
+        let mut args = presets_question();
+        args["question"] = serde_json::json!("\u{1b}[31mWhere should presets live?\u{1b}[0m");
+        args["options"][0]["label"] = serde_json::json!("\u{1b}]52;c;payload\u{7}settings.json");
+        args["options"][0]["description"] = serde_json::json!("No\tnew file.\nKeep the loader.");
+        let (pending, mut answer) = PendingQuestion::new(serde_json::from_value(args).unwrap());
+        app.on_question(Some(pending));
+        let lines = question_lines(&app, 20, &CUPEL);
+        let text = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("settings.json"), "{text}");
+        assert!(text.contains("Keep the loader."), "{text}");
+        assert!(!text.contains(['\u{1b}', '\u{7}', '\t']));
+        assert!(!text.contains("payload"));
+        assert!(lines.iter().all(|line| line.width() <= 20));
+        for (width, height) in [(1, 1), (10, 6), (20, 10)] {
+            draw(&mut app, width, height);
+        }
+        // Rendering changes no answer data.
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(answer.try_recv(), Ok(Answer::Picked(1)));
+    }
+
+    #[tokio::test]
+    async fn esc_aborts_the_run_and_takes_the_question_away() {
+        use tokio::sync::oneshot::error::TryRecvError;
+        let mut app = test_app();
+        app.start_run("plan the presets");
+        let mut answer = open_question(&mut app);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.question.is_none());
+        assert_eq!(answer.try_recv(), Err(TryRecvError::Closed));
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_finished_run_closes_its_question() {
+        let mut app = test_app();
+        let _answer = open_question(&mut app);
+        // The event stream closed without an AgentEnd.
+        app.on_agent_event(None).await;
+        assert!(app.question.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_closed_question_channel_stops_waking_the_loop() {
+        let mut app = test_app();
+        let (tool, questions) = AskUserTool::new();
+        app.questions = Some(questions);
+        drop(tool);
+        let event = app.next_event().await;
+        app.on_event(event).await;
+        assert!(app.questions.is_none());
+    }
+
+    #[tokio::test]
+    async fn reloaded_sessions_listen_for_questions() {
+        use crate::app::ReloadTarget;
+        // In place keeps the session; New opens one, like /spinoff does.
+        for (name, target) in [
+            ("current", ReloadTarget::Current),
+            ("new", ReloadTarget::New),
+        ] {
+            let root = std::env::temp_dir().join(format!("cupel-ui-reload-questions-{name}"));
+            let _ = std::fs::remove_dir_all(&root);
+            let app = test_app_with_home(&root, "cupel-current");
+            let app = app.hot_reload(target).await;
+            assert!(app.questions.is_some(), "{name}");
+        }
     }
 }

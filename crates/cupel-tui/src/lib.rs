@@ -37,6 +37,7 @@ pub mod updates;
 
 use cupel_agent::Agent;
 use cupel_coding_agent::modes::{SessionMeta, TerminationSignals};
+use cupel_coding_agent::tools::ask_user::QuestionReceiver;
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -45,21 +46,20 @@ use ratatui::crossterm::execute;
 
 /// How the interactive session ended.
 pub enum Exit {
-    /// The user quit, or the terminal went away.
     Quit,
-    /// `/update` installed a new release. The caller starts it after the terminal
-    /// has been restored.
     Restart(sessions::Restart),
 }
 
 /// Run the interactive session until the user quits, or until `/update` asks for a
-/// restart onto a new release.
+/// restart onto a new release. `questions` is where the agent's `ask_user` tool
+/// sends its questions.
 ///
 /// Errors are I/O failures; agent failures surface inside the UI.
 pub async fn run(
     agent: Agent,
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
+    questions: Option<QuestionReceiver>,
 ) -> std::io::Result<Exit> {
     // Register before entering raw mode so termination always takes the restore path.
     let signals = TerminationSignals::new()?;
@@ -96,7 +96,7 @@ pub async fn run(
         );
         ratatui_hook(info);
     }));
-    let result = event_loop(&mut terminal, agent, meta, recorder, signals).await;
+    let result = event_loop(&mut terminal, agent, meta, recorder, questions, signals).await;
     // Pop what was pushed, before `restore` leaves the alternate screen it was
     // pushed on.
     let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
@@ -135,9 +135,12 @@ async fn event_loop(
     agent: Agent,
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
+    questions: Option<QuestionReceiver>,
     mut signals: TerminationSignals,
 ) -> std::io::Result<Exit> {
-    let mut sessions = sessions::Sessions::new(app::App::new(agent, meta, recorder));
+    let mut app = app::App::new(agent, meta, recorder);
+    app.questions = questions;
+    let mut sessions = sessions::Sessions::new(app);
     sessions.restore().await;
     let mut updates = updates::Updates::default();
     if sessions.active().meta.settings.checks_for_updates() {

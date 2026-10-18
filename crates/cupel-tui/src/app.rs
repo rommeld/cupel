@@ -15,6 +15,7 @@ use cupel_coding_agent::commands;
 use cupel_coding_agent::modes::SessionMeta;
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
+use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
     UserContentBody,
@@ -72,12 +73,18 @@ pub struct App {
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
     pub update_requested: bool,
     pub pending_theme: Option<ThemeRequest>,
-    /// Every theme `/themes` can switch to: the built-in default and the theme
-    /// files (see `theme::registry`).
     pub themes: Vec<std::sync::Arc<Theme>>,
     pub run_finished: bool,
     pub activity: Activity,
     pub run_started: Option<Instant>,
+    pub questions: Option<QuestionReceiver>,
+    pub question: Option<OpenQuestion>,
+}
+
+/// A question from the `ask_user` tool, on screen until it is answered.
+pub struct OpenQuestion {
+    pub pending: PendingQuestion,
+    pub selected: usize,
 }
 
 /// What a running agent does right now. The input box title shows it.
@@ -119,6 +126,7 @@ pub enum Delivery {
 pub enum Status {
     New,
     Running,
+    Asking,
     Done,
     Failed,
 }
@@ -142,6 +150,7 @@ pub struct Carry {
 pub enum AppEvent {
     Agent(Option<AgentEvent>),
     Login(Option<login::LoginEvent>),
+    Question(Option<PendingQuestion>),
 }
 
 /// What `/new` or `/hot-reload` asked for.
@@ -309,6 +318,8 @@ impl App {
             run_finished: false,
             activity: Activity::Waiting,
             run_started: None,
+            question: None,
+            questions: None,
         };
         app.replay_history(&history);
         for warning in std::mem::take(&mut app.meta.warnings) {
@@ -419,7 +430,9 @@ impl App {
     /// Session's state for the sidebar.
     #[must_use]
     pub fn status(&self) -> Status {
-        if self.is_running() {
+        if self.question.is_some() {
+            Status::Asking
+        } else if self.is_running() {
             Status::Running
         } else {
             self.last_answer
@@ -519,6 +532,30 @@ impl App {
                     // closes; a directory still does, so it keeps completing.
                     self.autocomplete
                         .refresh(self.input.text(), self.input.cursor());
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // An open question takes the keys that answer it. Everything else works as
+        // usual: typing writes an answer of one's own, Alt+Enter adds a line to it,
+        // and Esc aborts the run.
+        if let Some(open) = &mut self.question {
+            let last = open.pending.question().options.len().saturating_sub(1);
+            match (key.code, ctrl, alt) {
+                (KeyCode::Up, _, false) => {
+                    open.selected = open.selected.saturating_sub(1);
+                    return;
+                }
+                (KeyCode::Down, _, false) => {
+                    open.selected = (open.selected + 1).min(last);
+                    return;
+                }
+                // Ctrl+Enter answers too: a steered prompt would wait behind the very
+                // question it should answer.
+                (KeyCode::Enter, _, false) | (KeyCode::Char('j'), true, _) => {
+                    self.answer_question();
                     return;
                 }
                 _ => {}
@@ -697,7 +734,7 @@ impl App {
             cwd,
             self.meta.home.clone(),
             &registry,
-            Frontend::Plain,
+            Frontend::Tui,
         )
         .await;
         let warning_suffix = if ingredients.warnings.is_empty() {
@@ -751,6 +788,7 @@ impl App {
         // The session continues: retain its open transcript, started state,
         // and pending hook chain rather than creating a fresh recorder.
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, self.recorder);
+        app.questions = ingredients.questions;
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
         if let Some(message) = delta_message {
@@ -855,8 +893,7 @@ impl App {
         seeded: Vec<AgentMessage>,
     ) -> Self {
         let ingredients =
-            cupel_coding_agent::bootstrap::load(cwd, home.clone(), &registry, Frontend::Plain)
-                .await;
+            cupel_coding_agent::bootstrap::load(cwd, home.clone(), &registry, Frontend::Tui).await;
 
         let mut options = cupel_agent::AgentOptions::new(carry.model.clone(), registry);
         options.system_prompt = format!("{}{}", ingredients.system_prompt, carry.preset_prompt);
@@ -896,6 +933,7 @@ impl App {
         };
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
+        app.questions = ingredients.questions;
         app.session_keys = carry.session_keys;
         app.mouse_captured = carry.mouse_captured;
         app
@@ -1007,11 +1045,27 @@ impl App {
         self.send(&trimmed, delivery);
     }
 
+    /// Enter on an open question. Typed text is the answer; with nothing typed, the
+    /// highlighted option is.
+    fn answer_question(&mut self) {
+        let Some(open) = self.question.take() else {
+            return;
+        };
+        self.autocomplete.close();
+        let typed = self.input.submit();
+        let answer = match typed.trim() {
+            "" => Answer::Picked(open.selected),
+            text => Answer::Typed(text.to_string()),
+        };
+        open.pending.answer(answer);
+    }
+
     /// Esc or Ctrl-C while running. The queued and steered prompts go back
     /// into the input box first. An aborted run never reaches the point
     /// where it would take them, so they would sit in the agent's queues
     /// until the next run ends.
     fn abort_run(&mut self) {
+        self.question = None;
         self.restore_queued();
         self.agent.abort();
     }
@@ -1108,6 +1162,9 @@ impl App {
     /// thinks (when it writes headlines), otherwise the activity.
     #[must_use]
     pub fn activity_label(&self) -> String {
+        if self.question.is_some() {
+            return "waiting for your answer".to_string();
+        }
         if self.activity == Activity::Thinking
             && let Some(Cell::Thinking { text }) = self.transcript.cells.last()
             && let Some(headline) = reasoning_headline(text)
@@ -1659,6 +1716,21 @@ impl App {
         }
     }
 
+    /// The `ask_user` tool asks. Until the answer, the question takes Up, Down and
+    /// Enter (see `on_key`).
+    pub fn on_question(&mut self, question: Option<PendingQuestion>) {
+        let Some(pending) = question else {
+            // Every sender is gone. Stop listening: a closed channel is always ready,
+            // and the event loop would spin on it.
+            self.questions = None;
+            return;
+        };
+        let selected = pending.question().recommended();
+        self.question = Some(OpenQuestion { pending, selected });
+        // The question builds on what the agent just wrote: show the end.
+        self.scroll_from_bottom = 0;
+    }
+
     /// Await the next agent event, or park forever when no run is active.
     /// Parking (instead of returning None immediately) matters inside
     /// `tokio::select!`: a constantly-ready branch would busy-spin the loop.
@@ -1669,14 +1741,15 @@ impl App {
         }
     }
 
-    /// The two background sources, multiplexed behind one `&mut self`
-    /// future mod.rs cannot hold two `app.next_...()` branches in its
-    /// select! (each would borrow `app` mutably). Inside the method the
-    /// borrows split field-by-field, which is exactly what the borrow
-    /// checker is happy to prove.
+    /// The background sources (the run, a login, the questions), multiplexed
+    /// behind one `&mut self` future mod.rs cannot hold two `app.next_...()`
+    /// branches in its select! (each would borrow `app` mutably). Inside the
+    /// method the borrows split field-by-field, which is exactly what the
+    /// borrow checker is happy to prove.
     pub async fn next_event(&mut self) -> AppEvent {
         let run_events = &mut self.run_events;
         let login = &mut self.login;
+        let questions = &mut self.questions;
         tokio::select! {
             event = async {
                 match run_events {
@@ -1690,6 +1763,12 @@ impl App {
                     None => std::future::pending().await,
                 }
             } => AppEvent::Login(event),
+            question = async {
+                match questions {
+                    Some(questions) => questions.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => AppEvent::Question(question)
         }
     }
 
@@ -1697,6 +1776,7 @@ impl App {
         match event {
             AppEvent::Agent(event) => self.on_agent_event(event).await,
             AppEvent::Login(event) => self.on_login_event(event),
+            AppEvent::Question(question) => self.on_question(question),
         }
     }
 
@@ -1859,6 +1939,9 @@ impl App {
             });
         }
         self.run_events = None;
+        // A run can end with its question still open (a crash, a closed event stream).
+        // A question nobody waits for must not keep taking Enter.
+        self.question = None;
         // Fire the `stop` hook without blocking the UI; the next prompt's
         // before_prompt (or session end) settles it.
         self.recorder.on_agent_end();
