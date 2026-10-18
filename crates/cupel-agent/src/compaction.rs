@@ -222,14 +222,18 @@ const PRUNE_MIN_BYTES: u64 = 256;
 /// Elide the bodies of all (large) tool results in `messages`. The caller
 /// passes only the slice outside the keep window. Tool calls stay intact,
 /// so the conversation narrative ("the agent read foo.rs, then edited it")
-/// survives; only the bulky, re-derivable payloads go. Returns how many
+/// survives; only the bulky, re-derivable payloads go. Results of the tools named in
+/// `keep` are never elided (see [`AgentTool::reproducible`]). Returns how many
 /// results were elided.
-fn elide_stale_tool_results(messages: &mut [AgentMessage]) -> usize {
+fn elide_stale_tool_results(messages: &mut [AgentMessage], keep: &[&str]) -> usize {
     let mut pruned = 0;
     for message in messages {
         let AgentMessage::Llm(Message::ToolResult(result)) = message else {
             continue;
         };
+        if keep.contains(&result.tool_name.as_str()) {
+            continue;
+        }
         let content_bytes: u64 = result
             .content
             .iter()
@@ -364,7 +368,13 @@ pub async fn compact(
     // Elide only outside the keep window (the recent tail stays verbatim, so
     // the model may be mid-task on those outputs). When this is enough,
     // return before any LLM call: no summarization cost, no summary at all.
-    let pruned_tool_results = elide_stale_tool_results(&mut context.messages[..cut]);
+    let keep: Vec<&str> = context
+        .tools
+        .iter()
+        .filter(|tool| !tool.reproducible())
+        .map(|tool| tool.name())
+        .collect();
+    let pruned_tool_results = elide_stale_tool_results(&mut context.messages[..cut], &keep);
     if pruned_tool_results > 0 {
         invalidate_usage_anchors(&mut context.messages);
         let tokens_after = estimate_context_tokens(context);
@@ -643,12 +653,12 @@ mod tests {
     #[test]
     fn pruning_elides_large_results_and_spares_small_ones() {
         let mut messages = vec![tool_result(10_000), tool_result(100), user("keep me")];
-        let pruned = elide_stale_tool_results(&mut messages);
+        let pruned = elide_stale_tool_results(&mut messages, &[]);
         assert_eq!(pruned, 1, "only the large result is elided");
         assert_eq!(result_text(&messages[0]), ELIDED_TOOL_RESULT);
         assert_eq!(result_text(&messages[1]).len(), 100, "small one intact");
         // Idempotent: the stub itself is below the size floor.
-        assert_eq!(elide_stale_tool_results(&mut messages), 0);
+        assert_eq!(elide_stale_tool_results(&mut messages, &[]), 0);
     }
 
     /// A model whose api has no registered provider: any summarization
@@ -709,6 +719,77 @@ mod tests {
         assert_eq!(result_text(&context.messages[1]), ELIDED_TOOL_RESULT);
         // The kept tail and the old user message survive untouched.
         assert_eq!(context.messages.len(), 3);
+    }
+
+    /// A tool that can't repeat its result, like a question to the user.
+    struct Unrepeatable;
+
+    #[async_trait::async_trait]
+    impl crate::types::AgentTool for Unrepeatable {
+        fn name(&self) -> &str {
+            "ask_user"
+        }
+        fn description(&self) -> &str {
+            "asks the user"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn reproducible(&self) -> bool {
+            false
+        }
+        async fn execute(
+            &self,
+            _tool_call_id: &str,
+            _args: serde_json::Value,
+            _cancel: CancellationToken,
+            _on_update: Option<crate::types::ToolUpdateFn>,
+        ) -> Result<crate::types::AgentToolResult, crate::types::ToolError> {
+            Ok(crate::types::AgentToolResult::text("an answer"))
+        }
+    }
+
+    #[tokio::test]
+    async fn pruning_spares_results_a_tool_cannot_repeat() {
+        // Above the 256-byte floor, so only `keep` can save it.
+        let mut answer = tool_result(1_000);
+        if let AgentMessage::Llm(Message::ToolResult(result)) = &mut answer {
+            result.tool_name = "ask_user".into();
+        }
+        let tool: Arc<dyn crate::types::AgentTool> = Arc::new(Unrepeatable);
+        let mut context = AgentContext {
+            system_prompt: String::new(),
+            messages: vec![
+                user("old question"),
+                answer,
+                tool_result(40_000),
+                user("recent question"),
+            ],
+            tools: vec![tool],
+        };
+        let config = CompactionConfig {
+            enabled: true,
+            reserve_tokens: 1000,
+            keep_recent_tokens: 100,
+        };
+        let outcome = compact(
+            &mut context,
+            &Arc::new(Registry::new()),
+            &model_with_window(6_000),
+            None,
+            &config,
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("pruning suffices - no LLM needed");
+
+        assert_eq!(outcome.pruned_tool_results, 1, "only the read result goes");
+        assert_eq!(
+            result_text(&context.messages[1]).len(),
+            1_000,
+            "the answer stays"
+        );
+        assert_eq!(result_text(&context.messages[2]), ELIDED_TOOL_RESULT);
     }
 
     #[tokio::test]

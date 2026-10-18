@@ -86,6 +86,9 @@ pub trait AgentTool: Send + Sync {
     fn describe_call(&self, _args: &Value) -> String {
         self.name().to_string()
     }
+    fn reproducible(&self) -> bool {
+        true
+    }
     async fn execute(
         &self,
         tool_call_id: &str,
