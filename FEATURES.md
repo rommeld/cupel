@@ -1,7 +1,7 @@
 # cupel features
 
 Inventory of the features implemented in the current source checkout, including
-local working-tree changes, as of October 9, 2026. This describes implementation
+local working-tree changes, as of October 20, 2026. This describes implementation
 scope, not a roadmap or a guarantee that every feature is in a published release.
 
 ## Contents
@@ -68,7 +68,10 @@ scope, not a roadmap or a guarantee that every feature is in a published release
 - Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 - Provider- and model-specific thinking mappings, adaptive/budget-based thinking,
   and clamping to supported levels.
+- Models that cannot disable reasoning map `off` to their lowest supported level.
 - Compatibility settings for endpoint-specific request fields and capabilities.
+- Request-model aliases and service-tier selection for OpenAI and Codex Responses.
+- Independent compatibility-field validation, with warnings for invalid values.
 - Custom model-level and request-level HTTP headers.
 
 ### Credentials
@@ -80,6 +83,8 @@ scope, not a roadmap or a guarantee that every feature is in a published release
 - Codex browser OAuth, pasted-redirect fallback, and device-code login.
 - Stored OAuth credentials in `auth.json` with automatic token refresh before
   requests.
+- Bounded Codex refresh requests, reuse of still-valid tokens after refresh
+  failures, and adoption of credentials rotated by another session.
 - Login cancellation and logout.
 - AWS credential-chain integration, including profile and region configuration.
 - Keyless local endpoints.
@@ -93,6 +98,7 @@ scope, not a roadmap or a guarantee that every feature is in a published release
 | `grep` | Regex or literal search; case-insensitive matching; path/glob filters; context lines; file paths and line numbers; `.gitignore` awareness. |
 | `apply_patch` | Create, delete, update, and rename multiple files in one patch; validate all hunks before writing; preserve BOM/line endings; return change diffs. |
 | `bash` | Execute shell commands; stream stdout/stderr; optional timeout; report nonzero exits as errors; preserve oversized output in temporary files; cancel process groups. |
+| `ask_user` | Ask one design question with two to five options and exactly one recommendation; wait for a selected option or a free-text answer; TUI-only. |
 
 Additional tooling features:
 
@@ -111,7 +117,9 @@ Additional tooling features:
 
 - Repeated inference, tool execution, and result-feedback loop.
 - Streaming text, reasoning, tool-call arguments, and tool-execution events.
-- Parallel tool execution, with sequential execution supported by the library.
+- Request-start events for each inference turn.
+- Parallel tool execution, with sequential execution supported by the library
+  and sequential batches when required by a tool, including `ask_user`.
 - Follow-up prompts queued while the agent works and processed one at a time
   after it would otherwise stop.
 - Active-run steering: interrupt a streaming reply and deliver steering messages
@@ -124,6 +132,8 @@ Additional tooling features:
 - Automatic context compaction in two tiers:
   1. Prune stale, recoverable tool output without an inference call.
   2. Summarize older history into a structured checkpoint when necessary.
+- Non-reproducible tool results, including user answers, exempt from first-tier
+  pruning; older history can still be summarized.
 - Context-overflow recovery and model-aware compaction budgets.
 - Token estimation anchored to actual provider usage when available.
 - Output-token clamping to remaining context capacity.
@@ -132,6 +142,8 @@ Additional tooling features:
 - Recovery from thinking blocks invalidated by edited history.
 - Provider-supported prompt caching and cache-retention options.
 - Input, output, and cache-token accounting.
+- Separate reasoning-token counts when reported by the provider, included in
+  output-token totals rather than counted twice.
 - Estimated cost calculation, including cache pricing and long-context tiers.
 
 ## Project customization
@@ -147,6 +159,8 @@ Additional tooling features:
   `${@:N}`, and `${@:N:L}`.
 - More-specific templates override same-name templates from earlier layers.
 - Layered home/project settings and presets.
+- Invalid settings sections and preset entries isolated with warnings; invalid
+  default presets rejected at startup rather than silently selecting a fallback.
 - Hot reload of instructions, templates, models, settings, guardrails, and tools.
 - In-place instruction updates appended as compact context diffs rather than
   re-embedding complete files.
@@ -180,7 +194,8 @@ Additional tooling features:
 - Independent conversation history and working directory for each session.
 - Inherit runtime configuration or select a preset for a new spinoff.
 - Switch sessions through a sidebar, mouse clicks, or `Ctrl+N` / `Ctrl+P`.
-- Per-session running, completed, failed, and new-session indicators.
+- Per-session running, awaiting-answer, completed, failed, and new-session
+  indicators.
 - Restore existing spinoffs and their newest transcripts after restarting.
 - Detect potential merge conflicts between checkout changes after agent runs,
   including uncommitted changes and non-ignored untracked files.
@@ -198,10 +213,14 @@ Additional tooling features:
 
 - Chronological transcript of prompts, prose, reasoning, tools, errors, notices,
   usage, and compaction summaries.
-- Streaming Markdown formatting, including emphasis, code blocks, and tables.
+- Streaming Markdown formatting for prose and reasoning, including emphasis,
+  code blocks, and tables.
 - Tool-result previews, individual expansion by click, and global expansion with
   `Ctrl+T`.
 - Tool progress, duration, outcome, and patch-diff displays.
+- Live activity labels for model waits, thinking, writing, tools, retries, and
+  compaction, with reasoning headlines when available.
+- Elapsed run time while working and a completion-duration line afterward.
 - Unicode-aware multiline input, prompt history, and bracketed paste.
 - Newlines through `Alt+Enter` without submitting the prompt.
 - Fuzzy `@path` completion, including directory drill-down and quoted paths.
@@ -213,14 +232,32 @@ Additional tooling features:
 - Steer an active run with `Ctrl+Enter` where supported, or `Ctrl+J`.
 - Restore queued follow-ups for editing with `Alt+Up`.
 - Abort an active run with `Esc` or `Ctrl+C`.
+- Agent questions above the input box, with the recommended option selected
+  initially; choose with `Up` / `Down` and `Enter`, or type a custom answer.
 - Copy a selected block or the latest answer through OSC 52 with `Ctrl+O`, where
   supported by the terminal.
 - Native terminal selection mode through `Ctrl+Y`.
-- Footer showing model, provider, thinking level, session ID, usage, cost, and
-  context occupancy.
+- Footer showing model, provider, thinking level, session ID, usage, cost,
+  context occupancy, and cupel version.
 - Distinguish planning windows, optional maximum context ceilings, and assumed
   discovery limits in the footer.
 - Animated working indicators and terminal-state restoration on exit.
+
+### Themes
+
+- Runtime theme switching through `/themes [id]`, applying to every session and
+  messages already on screen.
+- Built-in `cupel` theme using the terminal's palette and background.
+- Custom dark and light JSON palettes in `<cupel home>/themes/<id>.json`, with
+  filename-based IDs and no rebuild required.
+- Example Ayu Dark, Ayu Light, Dawnfox, Duskfox, and Nightfox palettes in
+  `themes/`, available after copying them into cupel home.
+- Theme choice saved to home `settings.json`; project settings and project
+  theme folders cannot override personal themes.
+- Theme-file discovery at startup, `/new`, and `/hot-reload`; edits to the active
+  palette apply on reload.
+- Invalid theme files skipped with warnings, low-contrast palettes warned about,
+  and unknown startup theme IDs replaced by the default theme.
 
 ## Safety, hooks, and extensibility
 
@@ -255,6 +292,8 @@ Additional tooling features:
 - Custom message conversion, context transformation, API-key resolution,
   tool-call vetoes, stopping rules, steering, and follow-up hooks.
 - Tool progress updates, structured tool details, and early-termination support.
+- Per-tool execution-mode and reproducibility declarations for scheduling and
+  compaction.
 - Opt-in tracing through `RUST_LOG` for requests, agent runs, tools, usage, costs,
   retries, compaction, and timing.
 - Plain-mode logs to stderr; interactive logs to a file to avoid corrupting the
@@ -272,6 +311,7 @@ Additional tooling features:
 | `/logout [openai-codex]` | List stored logins or remove the Codex login. |
 | `/thinking <level>` | Set thinking level. |
 | `/preset [name]` | List presets or switch model, thinking level, and prompt together. |
+| `/themes [id]` | List color themes or switch every session to a theme. |
 | `/review [path ...]` or `/review --diff` | Build a code-review prompt. |
 | `/usage` | Show session token and cost totals. |
 | `/session-id` | Show the current ID and this project's sessions. |
@@ -280,6 +320,7 @@ Additional tooling features:
 | `/spinoff <name> [preset]` | Create a parallel worktree session. |
 | `/spinoff merge <name> [message]` | Merge a spinoff into the origin. |
 | `/spinoff drop <name>` | Drop a spinoff and archive its sessions. |
+| `/update` | Install the newest release and restart into it for `install.sh` installations. |
 | `/quit` | Quit cupel. |
 | `/<template> [arguments]` | Expand a user-defined prompt template. |
 
@@ -293,8 +334,19 @@ available through startup CLI arguments.
 - Shell installer with a cupel home layout.
 - Source installation through Cargo.
 - Homebrew packaging.
-- Development-time catalog generation from `models.dev`, with curated
-  compatibility settings and checked-in catalog data.
+- Background GitHub release checks once per TUI launch, with a notice when a
+  newer version is available and fail-soft network handling.
+- Startup update checks enabled by default; disable with
+  `"checkForUpdates": false` in home `settings.json` without disabling manual
+  `/update`.
+- Self-updates for installer-managed binaries, with platform-specific downloads,
+  SHA-256 checksum verification, and atomic binary replacement.
+- Restart into an installed release with the origin session, model, and thinking
+  level restored; spinoffs restored from their newest transcripts.
+- Update and restart checks across sessions to avoid interrupting active work
+  or discarding unsent input, pending logins, or unpersisted history.
+- Development-time catalog generation from a versioned `models.dev` snapshot,
+  with curated compatibility settings and checked-in catalog data.
 - CI, release, changelog, and version-update automation.
 
 ## Current boundaries
@@ -312,6 +364,8 @@ available through startup CLI arguments.
 - Do not resume the same transcript simultaneously from multiple processes:
   concurrent appends can interleave.
 - The catalog generator is a development tool, not an automatic runtime update.
+- Self-updates require an `install.sh`-managed binary; Homebrew and source
+  installations must be updated through their original installation method.
 
 ### Source areas
 
@@ -320,5 +374,5 @@ available through startup CLI arguments.
 | Provider-neutral inference | [`crates/cupel-core/src/`](crates/cupel-core/src/) |
 | Agent loop and compaction | [`crates/cupel-agent/src/`](crates/cupel-agent/src/) |
 | Coding tools, configuration, sessions, and Git worktrees | [`crates/cupel-coding-agent/src/`](crates/cupel-coding-agent/src/) |
-| CLI and terminal UI | [`crates/cupel-tui/src/`](crates/cupel-tui/src/) |
+| CLI, terminal UI, and themes | [`crates/cupel-tui/src/`](crates/cupel-tui/src/), [`themes/`](themes/) |
 | Installation and release support | [`install.sh`](install.sh), [`packaging/`](packaging/), [`.github/workflows/`](.github/workflows/) |
