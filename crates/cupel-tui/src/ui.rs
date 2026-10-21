@@ -1,12 +1,13 @@
 //! The render pass: `App` state in, one frame out.
 //!
-//! ratatui is immediate mode this function redescribes the entire screen
-//! every frame, and the library diffs against the previous frame to emit
-//! minimal terminal writes. So there is no "update the widget" anywhere;
-//! there is only state (in `App`) and this projection of it.
+//! ratatui is immediate mode this function redescribes the entire screen every frame,
+//! and the library diffs against the previous frame to emit minimal terminal writes.
+//! So there is no "update the widget" anywhere; there is only state (in `App`) and
+//! this projection of it.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -20,6 +21,7 @@ use crate::{theme::Theme, transcript};
 const SIDEBAR_WIDTH: u16 = 24;
 const SIDEBAR_MIN_SCREEN: u16 = 80;
 const INPUT_PADDING: u16 = 1;
+const QUESTION_PADDING: u16 = 2;
 
 pub fn render_sessions(frame: &mut Frame<'_>, sessions: &mut Sessions) {
     // A second owner leaves `sessions` free for mutable borrows below.
@@ -101,9 +103,9 @@ fn fit(text: &str, max: usize) -> String {
 }
 
 pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
-    // Input grows with its content (explicit newlines + wrapped lines),
-    // capped at 5 visible lines, + 2 border rows. Account for the same
-    // horizontal padding used by the editor so wrapping and height agree.
+    // Input grows with its content (explicit newlines + wrapped lines), capped at 5
+    // visible lines, + 2 border rows. Account for the same horizontal padding used by
+    // the editor so wrapping and height agree.
     let inner_width = area.width.saturating_sub(2 * INPUT_PADDING).max(1) as usize;
     let input_lines = app
         .input
@@ -114,18 +116,37 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         .clamp(1, 5) as u16;
     let waiting = app.steering.len() + app.queued.len();
     let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
-    // An open question gets the rows it needs, but at most half the screen.
-    let question = question_lines(app, inner_width, theme);
-    let question_rows = (question.len() as u16).min(area.height / 2);
+    // Reserve the editor, footer, queues and one transcript row first. The pane itself
+    // uses at most half the screen; its outside gaps are separate rows.
+    let available = area.height.saturating_sub(
+        queued_lines
+            .saturating_add(input_lines + 2)
+            .saturating_add(3),
+    );
+    let question_gap = u16::from(app.question.is_some() && available >= 9);
+    let question_budget = (area.height / 2).min(available.saturating_sub(2 * question_gap));
+    let question = question_pane(
+        app,
+        Rect {
+            height: question_budget,
+            ..area
+        },
+        theme,
+    );
+    let question_rows = question.as_ref().map_or(0, |pane| pane.height);
     let [
         transcript_area,
+        _,
         question_area,
+        _,
         queued_area,
         input_area,
         footer_area,
     ] = Layout::vertical([
         Constraint::Min(1),
+        Constraint::Length(question_gap),
         Constraint::Length(question_rows),
+        Constraint::Length(question_gap),
         Constraint::Length(queued_lines),
         Constraint::Length(input_lines + 2),
         Constraint::Length(2),
@@ -133,7 +154,9 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     .areas(area);
 
     render_transcript(frame, app, transcript_area, theme);
-    frame.render_widget(Paragraph::new(question), question_area);
+    if let Some(question) = question {
+        render_question(frame, question, question_area, theme);
+    }
     render_queued(frame, app, queued_area, theme);
     render_input(frame, app, input_area, theme);
     render_footer(frame, app, footer_area, theme);
@@ -271,24 +294,140 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     }
 }
 
-/// The open question above the input box: the question, then each option with
-/// its description below it. The highlighted option is the one Enter picks.
-fn question_lines(app: &App, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+/// Wrapped question content and the rows belonging to the selected option. The range
+/// includes its description, but not the blank row before it.
+#[derive(Default)]
+struct QuestionLines {
+    lines: Vec<Line<'static>>,
+    selected: std::ops::Range<usize>,
+}
+
+/// A frame-local render plan, not session state. Closing the question drops it.
+struct QuestionPane {
+    block: Block<'static>,
+    content: QuestionLines,
+    height: u16,
+}
+
+/// Construct the same block for measurement and painting. Small panes shed padding
+/// first, then border, rather than reserving every row for chrome.
+fn question_pane(app: &App, area: Rect, theme: &Theme) -> Option<QuestionPane> {
+    app.question.as_ref()?;
+    if area.is_empty() {
+        return None;
+    }
+    let framed = area.width >= 3 && area.height >= 3;
+    let horizontal = if area.width >= 12 {
+        QUESTION_PADDING
+    } else {
+        0
+    };
+    let vertical = u16::from(area.height >= 7);
+    let block = Block::new()
+        .borders(if framed {
+            Borders::TOP | Borders::BOTTOM
+        } else {
+            Borders::NONE
+        })
+        .border_style(theme.pane_border)
+        .padding(Padding::new(horizontal, horizontal, vertical, vertical));
+    let block = if framed {
+        block.title(Span::styled(" Decision required ", theme.question))
+    } else {
+        block
+    };
+    let inner = block.inner(area);
+    let content = question_lines(app, usize::from(inner.width.max(1)), theme);
+    let chrome = area.height.saturating_sub(inner.height);
+    let rows = u16::try_from(content.lines.len()).unwrap_or(u16::MAX);
+    Some(QuestionPane {
+        block,
+        content,
+        height: rows.saturating_add(chrome).min(area.height),
+    })
+}
+
+/// Paint a viewport derived from the selection: no second scroll state can become
+/// stale after Up/Down, a resize, or a switch to another session.
+fn render_question(frame: &mut Frame<'_>, pane: QuestionPane, area: Rect, theme: &Theme) {
+    let inner = pane.block.inner(area);
+    let visible = usize::from(inner.height);
+    let total = pane.content.lines.len();
+    let selected = &pane.content.selected;
+    // Fit the whole selected option when possible. If its description is taller than
+    // the viewport, keep the label at the top instead of hidding the choice.
+    let start = if selected.len() > visible {
+        selected.start
+    } else {
+        selected.end.saturating_sub(visible)
+    }
+    .min(total.saturating_sub(visible));
+    let end = (start + visible).min(total);
+    let block = if area.width >= 3 && area.height >= 3 && visible > 0 && total > visible {
+        pane.block.title_bottom(Span::styled(
+            format!(" rows {}-{end}/{total} ", start + 1),
+            theme.chrome,
+        ))
+    } else {
+        pane.block
+    };
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(pane.content.lines[start..end].to_vec()),
+        inner,
+    );
+}
+
+/// Sanatize before wrapping and reserve the prefix's display columns on every row.
+/// Continuations keep their indentation, including after explicit newlines.
+fn push_question_text(
+    lines: &mut Vec<Line<'static>>,
+    text: &str,
+    first: &str,
+    continuation: &str,
+    width: usize,
+    style: Style,
+) {
+    let prefix_width = Line::from(first)
+        .width()
+        .max(Line::from(continuation).width());
+    // On narrower terminals omit indentation; the Paragraph safely clips a character
+    // wider than itself.
+    let (first, continuation, prefix_width) = if width >= prefix_width + 2 {
+        (first, continuation, prefix_width)
+    } else {
+        ("", "", 0)
+    };
+    let text = sanitize(text);
+    let mut first_row = true;
+    for logical in text.split('\n') {
+        for row in transcript::wrap_line(logical, width.saturating_sub(prefix_width).max(1)) {
+            let prefix = if first_row { first } else { continuation };
+            lines.push(Line::from(Span::styled(format!("{prefix}{row}"), style)));
+            first_row = false;
+        }
+    }
+}
+
+/// The question, a blank row, and separated options. All margins belong to the block;
+/// prefixes here express hierarchy rather than outside padding.
+fn question_lines(app: &App, width: usize, theme: &Theme) -> QuestionLines {
     let Some(open) = &app.question else {
-        return Vec::new();
+        return QuestionLines::default();
     };
     let question = open.pending.question();
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut push = |text: &str, style| {
-        let text = sanitize(text);
-        for logical in text.split('\n') {
-            for row in transcript::wrap_line(logical, width) {
-                lines.push(Line::from(Span::styled(row, style)));
-            }
-        }
-    };
-    push(&format!(" ? {}", question.question), theme.question);
+    let mut content = QuestionLines::default();
+    push_question_text(
+        &mut content.lines,
+        &question.question,
+        "? ",
+        " ",
+        width,
+        theme.question,
+    );
     for (index, choice) in question.options.iter().enumerate() {
+        content.lines.push(Line::default());
+        let start = content.lines.len();
         let (marker, style) = if index == open.selected {
             ("›", theme.popup_selected)
         } else {
@@ -299,15 +438,29 @@ fn question_lines(app: &App, width: usize, theme: &Theme) -> Vec<Line<'static>> 
         } else {
             ""
         };
-        push(
-            &format!(" {marker} {}. {}{recommended}", index + 1, choice.label),
+        push_question_text(
+            &mut content.lines,
+            &format!("{}{recommended}", choice.label),
+            &format!("{marker} {}. ", index + 1),
+            "     ",
+            width,
             style,
         );
         if !choice.description.is_empty() {
-            push(&format!("      {}", choice.description), theme.chrome);
+            push_question_text(
+                &mut content.lines,
+                &choice.description,
+                "     ",
+                "     ",
+                width,
+                theme.chrome,
+            );
+        }
+        if index == open.selected {
+            content.selected = start..content.lines.len();
         }
     }
-    lines
+    content
 }
 
 /// The waiting prompts above the input box: "Steer:" rows first (they go in sooner),
@@ -401,7 +554,9 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
         .borders(Borders::TOP | Borders::BOTTOM)
         .border_style(border_style)
         .padding(Padding::horizontal(INPUT_PADDING));
-    if app.is_running() {
+    if app.question.is_some() {
+        block = block.title(Span::styled(" Your answer ", theme.chrome));
+    } else if app.is_running() {
         let elapsed = app
             .run_started
             .map(|started| format!(" · {}", format_elapsed(started.elapsed())))
@@ -5090,7 +5245,7 @@ pub(crate) mod tests {
             "{screen}"
         );
         assert!(screen.contains("A second loader."), "{screen}");
-        assert!(screen.contains("waiting for your answer"), "{screen}");
+        assert!(screen.contains("Your answer"), "{screen}");
         assert!(
             screen.contains("enter answer (typed text wins)"),
             "{screen}"
@@ -5189,13 +5344,13 @@ pub(crate) mod tests {
         let mut app = test_app();
         let _answer = open_question(&mut app);
         for theme in crate::theme::example_themes() {
-            let lines = question_lines(&app, 100, &theme);
+            let lines = question_lines(&app, 100, &theme).lines;
             let style = lines[0].spans[0].style;
             assert_eq!(style.fg, theme.input_border_busy.fg);
             assert!(style.add_modifier.contains(Modifier::BOLD));
-            assert_eq!(lines[1].spans[0].style, theme.popup_row);
-            assert_eq!(lines[2].spans[0].style, theme.chrome);
-            assert_eq!(lines[3].spans[0].style, theme.popup_selected);
+            assert_eq!(lines[2].spans[0].style, theme.popup_row);
+            assert_eq!(lines[3].spans[0].style, theme.chrome);
+            assert_eq!(lines[5].spans[0].style, theme.popup_selected);
         }
     }
 
@@ -5208,7 +5363,7 @@ pub(crate) mod tests {
         args["options"][0]["description"] = serde_json::json!("No\tnew file.\nKeep the loader.");
         let (pending, mut answer) = PendingQuestion::new(serde_json::from_value(args).unwrap());
         app.on_question(Some(pending));
-        let lines = question_lines(&app, 20, &CUPEL);
+        let lines = question_lines(&app, 24, &CUPEL).lines;
         let text = lines
             .iter()
             .map(Line::to_string)
@@ -5218,13 +5373,158 @@ pub(crate) mod tests {
         assert!(text.contains("Keep the loader."), "{text}");
         assert!(!text.contains(['\u{1b}', '\u{7}', '\t']));
         assert!(!text.contains("payload"));
-        assert!(lines.iter().all(|line| line.width() <= 20));
+        assert!(lines.iter().all(|line| line.width() <= 24));
         for (width, height) in [(1, 1), (10, 6), (20, 10)] {
             draw(&mut app, width, height);
         }
         // Rendering changes no answer data.
         press(&mut app, KeyCode::Enter);
         assert_eq!(answer.try_recv(), Ok(Answer::Picked(1)));
+    }
+
+    #[test]
+    fn a_question_pane_has_inside_padding_and_outside_gaps() {
+        let mut app = test_app();
+        let _answer = open_question(&mut app);
+        let screen = draw(&mut app, 100, 30);
+        assert!(!screen.contains(['│', '┌', '┐', '└', '┘']), "{screen}");
+        let rows: Vec<&str> = screen.lines().collect();
+        let top = rows
+            .iter()
+            .position(|row| row.contains("Decision required"))
+            .unwrap();
+        let bottom = rows
+            .iter()
+            .position(|row| row.chars().all(|ch| ch == '─'))
+            .unwrap();
+        let question = rows
+            .iter()
+            .position(|row| row.contains("? Where should presets live?"))
+            .unwrap();
+        assert!(rows[top - 1].trim().is_empty(), "{screen}");
+        assert!(rows[top + 1].trim().is_empty(), "{screen}");
+        assert_eq!(question, top + 2, "{screen}");
+        assert!(rows[question].starts_with("  ? "), "{screen}");
+        assert!(rows[question + 1].trim().is_empty(), "{screen}");
+        assert!(rows[bottom - 1].trim().is_empty(), "{screen}");
+        assert!(rows[bottom + 1].trim().is_empty(), "{screen}");
+        assert!(rows[bottom + 2].contains("Your answer"), "{screen}");
+    }
+
+    #[test]
+    fn answering_removes_the_pane_and_restores_transcript_space() {
+        let mut app = test_app();
+        let mut answer = open_question(&mut app);
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
+            .unwrap();
+        let asking_height = app.last_transcript_height;
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(answer.try_recv(), Ok(Answer::Picked(1)));
+        terminal
+            .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
+            .unwrap();
+        assert!(app.last_transcript_height > asking_height);
+        // Inspect the same terminal's second frame, not a fresh blank buffer.
+        let buffer = terminal.backend().buffer();
+        let text: String = buffer
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(!text.contains("Decision required"));
+        assert!(!text.contains("Your answer"));
+        assert!(!text.contains("presets.toml"));
+        assert!(question_pane(&app, Rect::new(0, 0, 100, 15), &CUPEL).is_none());
+    }
+
+    #[test]
+    fn a_capped_question_keeps_the_selected_label_visible_after_resizing() {
+        let mut app = test_app();
+        let mut args = presets_question();
+        args["options"] = serde_json::json!(
+            (1..=5)
+                .map(|number| {
+                    serde_json::json!({
+                        "label": format!("choice-{number}"),
+                        "description": "A long description. ".repeat(20),
+                        "recommended": number == 5
+                    })
+                })
+                .collect::<Vec<_>>()
+        );
+        let (pending, mut answer) = PendingQuestion::new(serde_json::from_value(args).unwrap());
+        app.on_question(Some(pending));
+        for (width, height) in [(80, 24), (60, 12), (100, 30)] {
+            let screen = draw(&mut app, width, height);
+            assert!(screen.contains("› 5. choice-5"), "{screen}");
+            assert!(screen.contains(" rows "), "{screen}");
+        }
+        press(&mut app, KeyCode::Up);
+        assert!(draw(&mut app, 80, 24).contains("› 4. choice-4"));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(answer.try_recv(), Ok(Answer::Picked(3)));
+    }
+
+    #[test]
+    fn question_continuations_keep_their_display_column_indent() {
+        let mut lines = Vec::new();
+        push_question_text(
+            &mut lines,
+            "日本語の説明です。More words.\nAnother line.",
+            "› 1. ",
+            "     ",
+            20,
+            CUPEL.popup_selected,
+        );
+        assert!(lines.len() > 2);
+        assert!(lines[0].to_string().starts_with("› 1. "));
+        assert!(
+            lines[1..]
+                .iter()
+                .all(|line| line.to_string().starts_with("     "))
+        );
+        assert!(lines.iter().all(|line| line.width() <= 20));
+    }
+
+    #[test]
+    fn a_question_pane_uses_the_active_theme_for_border_and_title() {
+        let mut app = test_app();
+        let _answer = open_question(&mut app);
+        for theme in crate::theme::example_themes() {
+            let area = Rect::new(0, 0, 100, 15);
+            let pane = question_pane(&app, area, &theme).unwrap();
+            assert!(pane.height <= area.height);
+            let mut terminal = Terminal::new(TestBackend::new(100, 15)).unwrap();
+            terminal
+                .draw(|frame| render_question(frame, pane, area, &theme))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(
+                buffer[(99, 0)].fg,
+                theme.pane_border.fg.unwrap_or(Color::Reset)
+            );
+            assert_eq!(buffer[(2, 0)].fg, theme.question.fg.unwrap_or(Color::Reset));
+            assert!(buffer[(2, 0)].modifier.contains(Modifier::BOLD));
+        }
+    }
+
+    #[test]
+    fn a_question_pane_degrades_without_panicking_in_tiny_areas() {
+        let mut app = test_app();
+        let _answer = open_question(&mut app);
+        for (width, height) in [(1, 1), (2, 2), (10, 6), (20, 10)] {
+            draw(&mut app, width, height);
+        }
+        let area = Rect::new(0, 0, 8, 2);
+        let pane = question_pane(&app, area, &CUPEL).unwrap();
+        assert_eq!(
+            pane.block.inner(area),
+            area,
+            "no border or title consumes the body"
+        );
+        assert!(question_pane(&app, Rect::default(), &CUPEL).is_none());
     }
 
     #[tokio::test]
