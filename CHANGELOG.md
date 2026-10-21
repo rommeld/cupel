@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.1] - 2026-10-21
+
+- feat(tui): give open questions a padded decision pane
+- docs: update feature overview
+- docs: modify and explain how to contribute to cupel
+
 ## [v0.33.0] - 2026-10-18
 
 - feat(tui): answer the agent's questions above the input box
