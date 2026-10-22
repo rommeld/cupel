@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.2] - 2026-10-22
+
+- feat(core): update provider models. add minimax m3.1 flash to openrouter and deepseek v4.1 flash to fireworks
+- feat(tui): move model and effort level from footer above prompt pane
+- fix(cert): update crates version to handle affected certificates
+
 ## [v0.33.1] - 2026-10-21
 
 - feat(tui): give open questions a padded decision pane
