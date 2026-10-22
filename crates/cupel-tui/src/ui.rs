@@ -116,12 +116,12 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         .clamp(1, 5) as u16;
     let waiting = app.steering.len() + app.queued.len();
     let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
-    // Reserve the editor, footer, queues and one transcript row first. The pane itself
-    // uses at most half the screen; its outside gaps are separate rows.
+    // Reserve the editor, model status, footer, queues and one transcript row first.
+    // The pane itself uses at most half the screen; its outside gaps are separate rows.
     let available = area.height.saturating_sub(
         queued_lines
             .saturating_add(input_lines + 2)
-            .saturating_add(3),
+            .saturating_add(4),
     );
     let question_gap = u16::from(app.question.is_some() && available >= 9);
     let question_budget = (area.height / 2).min(available.saturating_sub(2 * question_gap));
@@ -140,6 +140,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         question_area,
         _,
         queued_area,
+        model_area,
         input_area,
         footer_area,
     ] = Layout::vertical([
@@ -148,6 +149,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         Constraint::Length(question_rows),
         Constraint::Length(question_gap),
         Constraint::Length(queued_lines),
+        Constraint::Length(1),
         Constraint::Length(input_lines + 2),
         Constraint::Length(2),
     ])
@@ -158,21 +160,22 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         render_question(frame, question, question_area, theme);
     }
     render_queued(frame, app, queued_area, theme);
+    render_model_status(frame, app, model_area, theme);
     render_input(frame, app, input_area, theme);
     render_footer(frame, app, footer_area, theme);
     // Drawn last so it overdraws the transcript's bottom rows in
     // immediate-mode rendering, paint order is the z-order.
-    render_autocomplete(frame, app, area, transcript_area, input_area, theme);
+    render_autocomplete(frame, app, area, transcript_area, model_area, theme);
 }
 
-/// The `@path` completion popup, anchored just above the input box at the
-/// column of the token's `@`.
+/// The `@path` completion popup, anchored above the model status line at the
+/// column of the token's `@`, leaving the model and effort visible while typing.
 fn render_autocomplete(
     frame: &mut Frame<'_>,
     app: &App,
     area: Rect,
     transcript_area: Rect,
-    input_area: Rect,
+    anchor_area: Rect,
     theme: &Theme,
 ) {
     let Some((rows, selected)) = app.autocomplete.visible() else {
@@ -198,11 +201,11 @@ fn render_autocomplete(
         .max()
         .unwrap_or(10)
         .min(area.width);
-    let x = (input_area.x + INPUT_PADDING + anchor_col).min(area.right().saturating_sub(width));
+    let x = (anchor_area.x + INPUT_PADDING + anchor_col).min(area.right().saturating_sub(width));
 
     let popup = Rect {
         x,
-        y: input_area.y.saturating_sub(height),
+        y: anchor_area.y.saturating_sub(height),
         width,
         height,
     };
@@ -596,11 +599,9 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     });
 }
 
-fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
-    let state = if app.is_running() { "working" } else { "idle" };
-    // the thinking level appears only for
-    // reasoning models; "off" keeps the word "thinking" so a bare level
-    // name never reads like part of the model name.
+fn render_model_status(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
+    // Only reasoning models show effort; keep "thinking" even for "off" so
+    // the level never reads like part of the model name.
     let thinking_segment = if app.agent.model_supports_reasoning() {
         match app.agent.effective_thinking_level() {
             None => " | thinking off".to_string(),
@@ -609,6 +610,17 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     } else {
         String::new()
     };
+    let label = format!(
+        "{} ({}){thinking_segment} ",
+        app.meta.model_name, app.meta.provider,
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(label, theme.chrome)).right_aligned(),
+        area,
+    );
+}
+
+fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let window = app.agent.context_window();
     let percent = (app.context_tokens * 100).checked_div(window).unwrap_or(0);
     let maximum = app.agent.max_context_window().filter(|&max| max > window);
@@ -623,12 +635,8 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     // The session id sits in the always-visible left half so `--resume
     // <id>` (or /hot-reload <id>) can be typed from what's on screen.
     let left = format!(
-        " {} ({}){} | {} | {} | {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k{window_label} ({percent}%){maximum_segment}",
-        app.meta.model_name,
-        app.meta.provider,
-        thinking_segment,
+        " {} | {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k{window_label} ({percent}%){maximum_segment}",
         app.recorder.session_id(),
-        state,
         app.totals.input,
         app.totals.output,
         app.totals.cache_read,
@@ -670,7 +678,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
 }
 
 /// Display name for a thinking level the same lowercase words the
-/// /thinking command accepts, so footer and command speak one language.
+/// /thinking command accepts, so model status and command speak one language.
 fn thinking_level_name(level: cupel_core::types::ThinkingLevel) -> &'static str {
     use cupel_core::types::ThinkingLevel;
     match level {
@@ -924,7 +932,7 @@ pub(crate) mod tests {
             terminal.get_cursor_position().unwrap(),
             Position::new(18, 16)
         );
-        assert_eq!(app.last_transcript_inner.height, 13);
+        assert_eq!(app.last_transcript_inner.height, 12);
     }
 
     #[test]
@@ -948,7 +956,7 @@ pub(crate) mod tests {
             Position::new(3, 16)
         );
         assert_eq!(
-            app.last_transcript_inner.height, 12,
+            app.last_transcript_inner.height, 11,
             "wrapped input gets two rows"
         );
         let buffer = terminal.backend().buffer();
@@ -982,14 +990,14 @@ pub(crate) mod tests {
         );
         assert!(screen.lines().next().unwrap().trim().is_empty(), "{screen}");
         assert!(
-            screen.lines().nth(14).unwrap().trim().is_empty(),
+            screen.lines().nth(13).unwrap().trim().is_empty(),
             "{screen}"
         );
         assert!(
             screen.lines().nth(16).unwrap().starts_with(" draft"),
             "{screen}"
         );
-        assert_eq!(app.last_transcript_inner, Rect::new(1, 1, 78, 13));
+        assert_eq!(app.last_transcript_inner, Rect::new(1, 1, 78, 12));
         assert_eq!(style_of(&mut app, "─").fg, CUPEL.input_border_idle.fg);
     }
 
@@ -1003,16 +1011,16 @@ pub(crate) mod tests {
                 .join("\n"),
         }];
         let screen = draw(&mut app, 80, 20);
-        assert_eq!(app.last_transcript_inner, Rect::new(1, 1, 78, 13));
+        assert_eq!(app.last_transcript_inner, Rect::new(1, 1, 78, 12));
         assert!(
-            screen.lines().nth(1).unwrap().starts_with(" line 8"),
+            screen.lines().nth(1).unwrap().starts_with(" line 9"),
             "{screen}"
         );
         assert!(
-            screen.lines().nth(13).unwrap().starts_with(" line 20"),
+            screen.lines().nth(12).unwrap().starts_with(" line 20"),
             "{screen}"
         );
-        for y in [0, 14] {
+        for y in [0, 13] {
             // The scrollbar may occupy the right edge; text stays inside the padding.
             assert!(
                 screen
@@ -1154,6 +1162,24 @@ pub(crate) mod tests {
             screen.contains("cupel-test"),
             "session id missing from footer:\n{screen}"
         );
+    }
+
+    #[test]
+    fn footer_omits_run_status() {
+        for running in [false, true] {
+            let mut app = test_app();
+            let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+            app.run_events = running.then_some(events);
+            for width in [80, 120, 200] {
+                let screen = draw(&mut app, width, 20);
+                let status_row = screen.lines().nth(18).expect("footer status row");
+                assert!(
+                    status_row
+                        .starts_with(" cupel-test | 0 in / 0 out / 0 cached | $0.0000 | ctx "),
+                    "footer must show session and usage without run status:\n{screen}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1766,7 +1792,14 @@ pub(crate) mod tests {
             "tool result missing:\n{screen}"
         );
         assert!(screen.contains("next question"), "input missing:\n{screen}");
-        assert!(screen.contains("Test Model"), "footer missing:\n{screen}");
+        assert!(
+            screen.contains("Test Model"),
+            "model status missing:\n{screen}"
+        );
+        assert!(
+            screen.contains("cupel-test | 0 in"),
+            "footer missing:\n{screen}"
+        );
     }
 
     #[test]
@@ -1881,6 +1914,14 @@ pub(crate) mod tests {
         assert!(
             screen.lines().any(|row| row.starts_with("  src/main.rs ")),
             "popup starts at the input's padded left edge:\n{screen}"
+        );
+        assert!(
+            screen
+                .lines()
+                .nth(14)
+                .unwrap()
+                .ends_with("Test Model (test) | thinking off "),
+            "autocomplete must not cover the model status:\n{screen}"
         );
     }
 
@@ -3536,17 +3577,62 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn footer_shows_the_thinking_level_for_reasoning_models() {
+    fn model_status_shows_the_thinking_level_for_reasoning_models() {
         let mut app = test_app();
         // AgentOptions::new leaves thinking at None -> "thinking off".
         let screen = draw(&mut app, 120, 20);
-        assert!(screen.contains("thinking off"), "{screen}");
+        assert!(
+            screen.lines().nth(14).unwrap().contains("thinking off"),
+            "{screen}"
+        );
 
         app.agent
             .set_thinking_level(Some(cupel_core::types::ThinkingLevel::Medium));
         let screen = draw(&mut app, 120, 20);
-        assert!(screen.contains("thinking medium"), "{screen}");
+        assert!(
+            screen.lines().nth(14).unwrap().contains("thinking medium"),
+            "{screen}"
+        );
         assert!(!screen.contains("thinking off"), "{screen}");
+    }
+
+    #[test]
+    fn model_and_effort_are_right_aligned_above_the_prompt_not_in_the_footer() {
+        let mut app = test_app();
+        app.agent
+            .set_thinking_level(Some(cupel_core::types::ThinkingLevel::High));
+        let label = "Test Model (test) | thinking high ";
+        for width in [80, 120, 200] {
+            let screen = draw(&mut app, width, 20);
+            let rows = screen.lines().collect::<Vec<_>>();
+            assert_eq!(
+                rows[14],
+                format!("{}{label}", " ".repeat(usize::from(width) - label.len())),
+                "{screen}"
+            );
+            assert_eq!(
+                rows[15],
+                "─".repeat(usize::from(width)),
+                "model status has its own row above the prompt border"
+            );
+            assert!(rows[18].starts_with(" cupel-test | 0 in /"), "{screen}");
+            assert!(
+                !rows[18].contains("Test Model") && !rows[18].contains("thinking"),
+                "{screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_status_omits_effort_for_non_reasoning_models() {
+        let mut app = test_app();
+        let mut model = app.agent.state().model;
+        model.reasoning = false;
+        app.agent.set_model(model);
+        let screen = draw(&mut app, 120, 20);
+        let row = screen.lines().nth(14).unwrap();
+        assert!(row.ends_with("Test Model (test) "), "{screen}");
+        assert!(!row.contains("thinking"), "{screen}");
     }
 
     #[test]
@@ -4274,7 +4360,8 @@ pub(crate) mod tests {
         sessions: &mut crate::sessions::Sessions,
         needle: &str,
     ) -> ratatui::style::Style {
-        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        // Keep the old transcript budget after adding the model status row.
+        let mut terminal = Terminal::new(TestBackend::new(100, 31)).unwrap();
         terminal
             .draw(|frame| render_sessions(frame, sessions))
             .unwrap();
@@ -4331,6 +4418,10 @@ pub(crate) mod tests {
         );
         assert_eq!(
             sessions_style_of(&mut sessions, "version:").fg,
+            nightfox.chrome.fg
+        );
+        assert_eq!(
+            sessions_style_of(&mut sessions, "Test Model").fg,
             nightfox.chrome.fg
         );
 
@@ -5408,7 +5499,8 @@ pub(crate) mod tests {
         assert!(rows[question + 1].trim().is_empty(), "{screen}");
         assert!(rows[bottom - 1].trim().is_empty(), "{screen}");
         assert!(rows[bottom + 1].trim().is_empty(), "{screen}");
-        assert!(rows[bottom + 2].contains("Your answer"), "{screen}");
+        assert!(rows[bottom + 2].contains("Test Model"), "{screen}");
+        assert!(rows[bottom + 3].contains("Your answer"), "{screen}");
     }
 
     #[test]
