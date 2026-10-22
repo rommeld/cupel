@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.3] - 2026-10-22
+
+- feat: remove outdated models
+
 ## [v0.33.2] - 2026-10-22
 
 - feat(core): update provider models. add minimax m3.1 flash to openrouter and deepseek v4.1 flash to fireworks
