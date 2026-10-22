@@ -251,7 +251,10 @@ mod tests {
             let plans_on_tier = model.provider.as_str() == Provider::OPENAI
                 || (model.provider.as_str() == Provider::OPENROUTER
                     && model.id.starts_with("openai/"))
-                || model.id == "claude-haiku-5-5";
+                || matches!(
+                    model.id.as_str(),
+                    "claude-haiku-5-5" | "anthropic/claude-haiku-5.5"
+                );
             if !plans_on_tier {
                 continue;
             }
@@ -576,14 +579,16 @@ mod tests {
         // them from models.dev anyway.
         // - MiMo V2.6 has only a toggle (like Laguna S 2.1): no map, so off
         //   sends effort "none" and every other level goes out by its name.
-        // - Ember-1 has Kimi K3's shape: a toggle plus low/high/max.
+        // - Ember-1 has Kimi K3's shape: none/low/high/max efforts.
         let models = builtin_models();
         for (id, map) in [
             ("xiaomi/mimo-v2.6-pro", serde_json::Value::Null),
             ("xiaomi/mimo-v2.6-flash", serde_json::Value::Null),
             (
                 "fireworks/ember-1",
-                serde_json::json!({"minimal": null, "medium": null, "xhigh": null}),
+                serde_json::json!({
+                    "off": "none", "minimal": null, "medium": null, "xhigh": null,
+                }),
             ),
         ] {
             let model = models.iter().find(|m| m.id == id).expect(id);

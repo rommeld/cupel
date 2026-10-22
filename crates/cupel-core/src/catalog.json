@@ -702,6 +702,58 @@
     }
   },
   {
+    "id": "accounts/fireworks/models/deepseek-v4p1-flash-1017",
+    "name": "DeepSeek V4.1 Flash 1017",
+    "api": "anthropic-messages",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cachedRead": 0.006,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000,
+    "compat": {
+      "sendSessionAffinityHeaders": true,
+      "supportsCacheControlOnTools": false,
+      "supportsEagerToolInputStreaming": false,
+      "supportsLongCacheRetention": false
+    }
+  },
+  {
+    "id": "accounts/fireworks/routers/deepseek-flash-latest",
+    "name": "DeepSeek Flash Latest",
+    "api": "anthropic-messages",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cachedRead": 0.006,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000,
+    "compat": {
+      "sendSessionAffinityHeaders": true,
+      "supportsCacheControlOnTools": false,
+      "supportsEagerToolInputStreaming": false,
+      "supportsLongCacheRetention": false
+    }
+  },
+  {
     "id": "accounts/fireworks/models/minimax-m3",
     "name": "MiniMax-M3",
     "api": "anthropic-messages",
@@ -945,6 +997,35 @@
     }
   },
   {
+    "id": "accounts/fireworks/models/muse-spark-open",
+    "name": "Muse Spark Open",
+    "api": "openai-completions",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.25,
+      "output": 4.25,
+      "cachedRead": 0.15,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false
+    }
+  },
+  {
     "id": "qwen/qwen3.8-max-0902",
     "name": "Qwen3.8 Max 0902",
     "api": "openai-completions",
@@ -963,7 +1044,7 @@
       "input": 2.0,
       "output": 6.0,
       "cachedRead": 0.25,
-      "cachedWrite": 2.5
+      "cachedWrite": 0.0
     },
     "contextWindow": 1000000,
     "maxTokens": 131072,
@@ -1009,6 +1090,7 @@
     "thinkingLevelMap": {
       "medium": null,
       "minimal": null,
+      "off": "none",
       "xhigh": null
     },
     "input": [
@@ -1016,9 +1098,9 @@
       "image"
     ],
     "cost": {
-      "input": 0.9,
-      "output": 14.0,
-      "cachedRead": 0.6,
+      "input": 0.239,
+      "output": 11.936,
+      "cachedRead": 0.21,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -1045,13 +1127,13 @@
       "text"
     ],
     "cost": {
-      "input": 0.039,
-      "output": 4.8,
-      "cachedRead": 0.038,
+      "input": 0.7,
+      "output": 2.2,
+      "cachedRead": 0.13,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 943718,
+    "maxTokens": 262144,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -1075,13 +1157,13 @@
       "image"
     ],
     "cost": {
-      "input": 0.15,
-      "output": 0.5,
-      "cachedRead": 0.03,
+      "input": 0.0052,
+      "output": 0.1985,
+      "cachedRead": 0.0052,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 943717,
+    "maxTokens": 943718,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -1098,15 +1180,16 @@
       "low": null,
       "max": null,
       "medium": null,
-      "minimal": null
+      "minimal": null,
+      "off": "none"
     },
     "input": [
       "text"
     ],
     "cost": {
-      "input": 0.2088,
-      "output": 0.4176,
-      "cachedRead": 0.0174,
+      "input": 0.442656,
+      "output": 0.885312,
+      "cachedRead": 0.036888,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -1126,6 +1209,7 @@
     "thinkingLevelMap": {
       "medium": null,
       "minimal": null,
+      "off": "none",
       "xhigh": null
     },
     "input": [
@@ -1154,19 +1238,20 @@
     "thinkingLevelMap": {
       "medium": null,
       "minimal": null,
+      "off": "none",
       "xhigh": null
     },
     "input": [
       "text"
     ],
     "cost": {
-      "input": 0.0061,
-      "output": 1.28,
-      "cachedRead": 0.0061,
+      "input": 0.04444,
+      "output": 0.13332,
+      "cachedRead": 0.001414,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
-    "maxTokens": 943718,
+    "maxTokens": 131072,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -1326,9 +1411,9 @@
       "image"
     ],
     "cost": {
-      "input": 0.75,
-      "output": 3.75,
-      "cachedRead": 0.075,
+      "input": 0.825,
+      "output": 4.125,
+      "cachedRead": 0.0825,
       "cachedWrite": 0.041667
     },
     "contextWindow": 1048576,
@@ -1362,7 +1447,7 @@
       "cachedWrite": 0.1875
     },
     "contextWindow": 1048576,
-    "maxTokens": 65536,
+    "maxTokens": 943718,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -1400,6 +1485,45 @@
     },
     "contextWindow": 272000,
     "maxContextWindow": 922000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "openai/gpt-6-astra-pro",
+    "name": "GPT-6 Astra Pro",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "image",
+      "text"
+    ],
+    "cost": {
+      "input": 10.0,
+      "output": 50.0,
+      "cachedRead": 1.0,
+      "cachedWrite": 12.5,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 20.0,
+          "output": 75.0,
+          "cachedRead": 2.0,
+          "cachedWrite": 25.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 1050000,
     "maxTokens": 128000,
     "compat": {
       "supportsDeveloperRole": false,
@@ -1447,6 +1571,45 @@
     }
   },
   {
+    "id": "openai/gpt-6-sol-pro",
+    "name": "GPT-6 Sol Pro",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "none"
+    },
+    "input": [
+      "image",
+      "text"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 2.5,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 4.0,
+          "output": 15.0,
+          "cachedRead": 0.4,
+          "cachedWrite": 5.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 1050000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
     "id": "openai/gpt-6.1-sol",
     "name": "GPT-6.1 Sol",
     "api": "openai-completions",
@@ -1486,6 +1649,45 @@
     }
   },
   {
+    "id": "openai/gpt-6.1-sol-pro",
+    "name": "GPT-6.1 Sol Pro",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "image",
+      "text"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 2.5,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 4.0,
+          "output": 15.0,
+          "cachedRead": 0.2,
+          "cachedWrite": 5.0
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 1050000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
     "id": "openai/gpt-6-luna",
     "name": "GPT-6 Luna",
     "api": "openai-completions",
@@ -1517,6 +1719,142 @@
     },
     "contextWindow": 272000,
     "maxContextWindow": 922000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "openai/gpt-6-luna-pro",
+    "name": "GPT-6 Luna Pro",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "none"
+    },
+    "input": [
+      "image",
+      "text"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cachedRead": 0.01,
+      "cachedWrite": 0.125,
+      "tiers": [
+        {
+          "contextOver": 272000,
+          "input": 0.2,
+          "output": 0.75,
+          "cachedRead": 0.02,
+          "cachedWrite": 0.25
+        }
+      ]
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 1050000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "anthropic/claude-sonnet-5.5",
+    "name": "Claude Sonnet 5.5",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "anthropic/claude-opus-5.5",
+    "name": "Claude Opus 5.5",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4.0,
+      "output": 20.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 5.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "anthropic/claude-haiku-5.5",
+    "name": "Claude Haiku 5.5",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": "none"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cachedRead": 0.01,
+      "cachedWrite": 0.125,
+      "tiers": [
+        {
+          "contextOver": 100000,
+          "input": 0.5,
+          "output": 2.5,
+          "cachedRead": 0.05,
+          "cachedWrite": 0.625
+        }
+      ]
+    },
+    "contextWindow": 100000,
+    "maxContextWindow": 1000000,
     "maxTokens": 128000,
     "compat": {
       "supportsDeveloperRole": false,
@@ -1569,6 +1907,35 @@
       "input": 4.0,
       "output": 20.0,
       "cachedRead": 0.2,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "meta/muse-spark-open",
+    "name": "Muse Spark Open",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.25,
+      "output": 4.25,
+      "cachedRead": 0.15,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,
@@ -1687,6 +2054,7 @@
     "thinkingLevelMap": {
       "medium": null,
       "minimal": null,
+      "off": "none",
       "xhigh": null
     },
     "input": [
@@ -1701,6 +2069,335 @@
     },
     "contextWindow": 1048576,
     "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "recursive/flint-v1.0:free",
+    "name": "Flint (free)",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cachedRead": 0.0,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 262144,
+    "maxTokens": 235929,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "minimax/minimax-m3.1-flash",
+    "name": "MiniMax-M3.1-Flash",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.6,
+      "cachedRead": 0.015,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 524288,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "elorian/glimpse",
+    "name": "Glimpse",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.6,
+      "output": 3.0,
+      "cachedRead": 0.06,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 262144,
+    "maxTokens": 256000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "xingchen-agi/xing4.0-29b-a4b:free",
+    "name": "Xing4.0 29B A4B (free)",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cachedRead": 0.0,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 262144,
+    "maxTokens": 235929,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "inception/mercury-3",
+    "name": "Mercury 3",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": "none",
+      "xhigh": null
+    },
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.35,
+      "cachedRead": 0.01,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "unbiased/pareto-26.10",
+    "name": "Pareto 26.10",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": false,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.8,
+      "output": 3.2,
+      "cachedRead": 0.03,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "unbiased/pareto-26.9",
+    "name": "Pareto 26.9",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": false,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.5,
+      "output": 7.5,
+      "cachedRead": 0.25,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 262144,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "~unbiased/pareto-latest",
+    "name": "Pareto Latest",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": false,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.8,
+      "output": 3.2,
+      "cachedRead": 0.03,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "nvidia/nemotron-3.5-super-vl",
+    "name": "Nemotron 3.5 Super VL",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.5,
+      "cachedRead": 0.02,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 235929,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "nvidia/nemotron-3.5-super-vl:free",
+    "name": "Nemotron 3.5 Super VL (free)",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cachedRead": 0.0,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "liquid/lfm-2.5-24b-a2b",
+    "name": "LFM2.5-24B-A2B",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.05,
+      "output": 0.7,
+      "cachedRead": 0.025,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 128000,
+    "maxTokens": 8192,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "mistralai/mistral-large-4-0",
+    "name": "Mistral Large 4",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "low": null,
+      "max": null,
+      "medium": null,
+      "minimal": null,
+      "off": "none",
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.36,
+      "output": 4.18,
+      "cachedRead": 0.14,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "reflection/beam-1.0-501b-a23b",
+    "name": "Beam 1.0 501B A23B",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.25,
+      "output": 1.0,
+      "cachedRead": 0.05,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
