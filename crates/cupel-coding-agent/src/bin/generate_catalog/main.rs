@@ -807,10 +807,6 @@ mod tests {
                 "codex/gpt-6.1-sol",
                 "codex/gpt-6-astra",
                 "codex/gpt-6-luna",
-                "codex/gpt-5.6-sol",
-                "codex/gpt-5.6-luna",
-                "codex/gpt-5.6-terra",
-                "codex/gpt-5.5",
             ]
         );
         for model in &models {
@@ -864,25 +860,6 @@ mod tests {
         assert_eq!(sol.max_context_window, Some(872_000));
         let sol_tiers = sol.cost.tiers.as_ref().expect("long-context tier");
         assert_eq!(sol_tiers[0].context_over, 272_000);
-        // GPT-5.5's scale stops at xhigh: max is pinned off, temperature
-        // and ceiling untouched.
-        let gpt55 = models
-            .iter()
-            .find(|m| m.id == "codex/gpt-5.5")
-            .expect("row");
-        assert_eq!(
-            gpt55.thinking_level_map.as_ref().expect("map").get("max"),
-            Some(&None)
-        );
-        assert!(
-            gpt55
-                .compat
-                .as_ref()
-                .expect("compat")
-                .get("supportsTemperature")
-                .is_none()
-        );
-        assert!(gpt55.max_context_window.is_none());
     }
 
     #[test]

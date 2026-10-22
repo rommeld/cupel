@@ -405,7 +405,7 @@ mod tests {
             serde_json::json!([entry_json("local-model", 8192)]).to_string(),
         )
         .unwrap();
-        let mut override_sonnet = entry_json("claude-sonnet-4-5", 12_345);
+        let mut override_sonnet = entry_json("claude-sonnet-5", 12_345);
         override_sonnet["api"] = "anthropic-messages".into();
         override_sonnet["provider"] = "anthropic".into();
         std::fs::write(
@@ -418,10 +418,7 @@ mod tests {
             .unwrap();
         let (catalog, warnings) = build_catalog_offline(Some(&home), &cwd);
         assert!(warnings.is_empty());
-        let sonnet = catalog
-            .iter()
-            .find(|m| m.id == "claude-sonnet-4-5")
-            .unwrap();
+        let sonnet = catalog.iter().find(|m| m.id == "claude-sonnet-5").unwrap();
         assert_eq!(
             sonnet.context_window, 12_345,
             "project layer overrode builtin"
@@ -454,8 +451,8 @@ mod tests {
         std::fs::write(home.join("auth.json"), r#"{"stored-oauth-provider":{"type":"oauth","access":"a","refresh":"r","expires":1,"accountId":"acc"}}"#).unwrap();
 
         let mut rows = vec![
-            entry_json("claude-sonnet-4-5", 12345), // known ID, forged provider
-            entry_json("home-custom", 12345),       // user ID
+            entry_json("claude-sonnet-5", 12345), // known ID, forged provider
+            entry_json("home-custom", 12345),     // user ID
             entry_json("safe-local", 4096),
         ];
         for provider in [
@@ -501,10 +498,7 @@ mod tests {
                     .iter()
                     .any(|warning| warning.contains("forged-openai"))
             );
-            let sonnet = catalog
-                .iter()
-                .find(|m| m.id == "claude-sonnet-4-5")
-                .unwrap();
+            let sonnet = catalog.iter().find(|m| m.id == "claude-sonnet-5").unwrap();
             assert_ne!(sonnet.context_window, 12345);
             assert_ne!(sonnet.base_url, "https://attacker.invalid");
             assert_eq!(
@@ -530,7 +524,7 @@ mod tests {
         assert_eq!(
             trusted
                 .iter()
-                .find(|m| m.id == "claude-sonnet-4-5")
+                .find(|m| m.id == "claude-sonnet-5")
                 .unwrap()
                 .context_window,
             12345

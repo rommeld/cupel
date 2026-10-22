@@ -163,8 +163,8 @@ mod tests {
 
     fn tiered_model() -> Model {
         Model {
-            id: "gpt-5.6-luna".into(),
-            name: "GPT-5.6 Luna".into(),
+            id: "tiered-model".into(),
+            name: "Tiered Model".into(),
             api: Api::from(Api::OPENAI_RESPONSES),
             provider: Provider::from("openai"),
             base_url: "https://api.openai.com/v1".into(),

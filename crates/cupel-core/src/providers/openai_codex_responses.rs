@@ -296,14 +296,14 @@ mod tests {
         assert_eq!(other.to_string(), "provider returned HTTP 403: forbidden");
     }
 
-    /// A Codex catalog row as M4 will generate it: reasoning on, the
-    /// minimal->low rename pinned, ChatGPT backend base URL.
+    /// A Codex fixture: reasoning on, the minimal->low rename pinned,
+    /// ChatGPT backend base URL, and optional compat left unset.
     fn codex_model() -> Model {
         let mut map = ThinkingLevelMap::new();
         map.insert("minimal".to_string(), Some("low".to_string()));
         Model {
-            id: "gpt-5.4".to_string(),
-            name: "GPT-5.4".to_string(),
+            id: "gpt-6-sol".to_string(),
+            name: "GPT-6 Sol".to_string(),
             api: Api::from(Api::OPENAI_CODEX_RESPONSES),
             provider: Provider::from(Provider::OPENAI_CODEX),
             base_url: "https://chatgpt.com/backend-api".to_string(),
@@ -454,15 +454,15 @@ mod tests {
         );
         assert!(body.get("temperature").is_none(), "{body}");
 
-        // A GPT-5.5 row (max -> null pinned by the generator) clamps max
-        // down to xhigh, the level below it on the scale.
-        let mut gpt55 = codex_model();
-        gpt55
+        // A custom row with max -> null clamps max down to xhigh,
+        // the level below it on the scale.
+        let mut limited = codex_model();
+        limited
             .thinking_level_map
             .as_mut()
             .expect("map")
             .insert("max".to_string(), None);
-        let body = build_request_body(&gpt55, &context_with_prompt(), &options);
+        let body = build_request_body(&limited, &context_with_prompt(), &options);
         assert_eq!(body["reasoning"]["effort"], json!("xhigh"));
         // ...and without the knob the temperature still goes out.
         assert_eq!(body["temperature"], json!(0.2));
@@ -545,7 +545,7 @@ mod tests {
             content: vec![AssistantContent::Text(TextContent::plain(""))],
             api: Api::from(Api::OPENAI_RESPONSES),
             provider: Provider::from(provider),
-            model: "gpt-5.4".to_string(),
+            model: "gpt-6-sol".to_string(),
             response_model: None,
             response_id: None,
             usage: Usage::default(),
@@ -576,12 +576,12 @@ mod tests {
         let mut model = codex_model();
         // Without the knob the id goes out verbatim (user models.json).
         let body = build_request_body(&model, &context_with_prompt(), &StreamOptions::default());
-        assert_eq!(body["model"], json!("gpt-5.4"));
+        assert_eq!(body["model"], json!("gpt-6-sol"));
         // Catalog rows carry codex/-namespaced ids plus the real name.
-        model.id = "codex/gpt-5.4".to_string();
-        model.compat = Some(json!({"requestModel": "gpt-5.4"}));
+        model.id = "codex/gpt-6-sol".to_string();
+        model.compat = Some(json!({"requestModel": "gpt-6-sol"}));
         let body = build_request_body(&model, &context_with_prompt(), &StreamOptions::default());
-        assert_eq!(body["model"], json!("gpt-5.4"));
+        assert_eq!(body["model"], json!("gpt-6-sol"));
     }
 
     #[test]

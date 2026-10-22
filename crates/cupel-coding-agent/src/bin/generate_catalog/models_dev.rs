@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn gpt56_shaped_effort_keeps_xhigh_by_omission() {
+    fn sol_shaped_effort_keeps_xhigh_by_omission() {
         // The trap this derivation exists for: xhigh must not appear in
         // the map when it is supported (see model.rs XHigh arm).
         let options = [effort(&["none", "low", "medium", "high", "xhigh", "max"])];

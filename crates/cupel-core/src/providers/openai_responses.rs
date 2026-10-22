@@ -1171,12 +1171,12 @@ mod tests {
         let body = build_request_body(&astra_model(), &context(), &with_reasoning(None));
         assert!(body.get("reasoning").is_none(), "{body}");
 
-        // The GPT-5.6 shape (off -> "none") still sends the explicit none.
-        let mut gpt56 = astra_model();
+        // A row with off -> "none" still sends the explicit none.
+        let mut switchable = astra_model();
         let mut map = ThinkingLevelMap::new();
         map.insert("off".to_string(), Some("none".to_string()));
-        gpt56.thinking_level_map = Some(map);
-        let body = build_request_body(&gpt56, &context(), &with_reasoning(None));
+        switchable.thinking_level_map = Some(map);
+        let body = build_request_body(&switchable, &context(), &with_reasoning(None));
         assert_eq!(body["reasoning"], json!({"effort": "none"}));
     }
 

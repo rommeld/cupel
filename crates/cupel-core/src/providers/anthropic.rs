@@ -42,9 +42,9 @@ const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 #[serde(rename_all = "camelCase", default)]
 struct AnthropicCompat {
     /// Use `thinking.type: "adaptive"` + `output_config.effort` instead of a
-    /// token budget. Newer models (Opus 4.7+, Fable 5) require this.
+    /// token budget. Claude 5+ models require this.
     force_adaptive_thinking: bool,
-    /// Opus 4.7+ rejects a non-default `temperature`.
+    /// Adaptive Claude models reject a non-default `temperature`.
     supports_temperature: bool,
     /// Whether the endpoint supports `eager_input_streaming` on tools. When
     /// it does not, we request the fine-grained tool streaming beta instead.
@@ -660,7 +660,7 @@ fn build_request_body(
     let cache_control = cache_control_value(options, compat);
 
     // The unified reasoning level decides
-    // between adaptive effort (new models) and token budgets (older models),
+    // between adaptive effort and token budgets (Anthropic-compatible gateways),
     // and budget-based thinking needs max_tokens head-room.
     let mut thinking: Option<Value> = None;
     let mut output_config: Option<Value> = None;
@@ -678,7 +678,7 @@ fn build_request_body(
                 if compat.force_adaptive_thinking {
                     // Adaptive: the model decides when/how much to think; we
                     // only steer with an effort level. "summarized" keeps the
-                    // display behavior consistent with older Claude 4 models.
+                    // display behavior consistent with budget-based thinking.
                     if let Some(effort) = thinking_effort(
                         model,
                         Some(level),
@@ -767,7 +767,7 @@ fn build_request_body(
     }
 
     // Temperature is incompatible with extended thinking and unsupported on
-    // Opus 4.7+.
+    // adaptive Claude models.
     if let Some(temperature) = options.temperature
         && !thinking_enabled
         && compat.supports_temperature
@@ -1247,8 +1247,8 @@ mod tests {
             temperature: Some(0.2),
             ..StreamOptions::default()
         };
-        let sonnet = catalog_model("claude-sonnet-4-5");
-        let body = body_for(&sonnet, &options);
+        let budget = catalog_model("accounts/fireworks/models/inkling");
+        let body = body_for(&budget, &options);
         assert_eq!(body["thinking"], json!({"type": "disabled"}));
         assert_eq!(body["temperature"], json!(0.2));
 

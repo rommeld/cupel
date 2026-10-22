@@ -107,7 +107,7 @@ fn match_candidates(model: &Model) -> Vec<String> {
 #[derive(Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct BedrockCompat {
-    /// Claude 4.7+ generation: adaptive thinking with native `xhigh` and
+    /// Claude 5+ generation: adaptive thinking with native `xhigh` and
     /// prompt caching. `Some(false)` forces token-budget thinking.
     force_adaptive_thinking: Option<bool>,
 }
@@ -129,17 +129,13 @@ fn is_claude_model(model: &Model) -> bool {
     id.contains("anthropic.claude") || id.contains("anthropic/claude") || name.contains("claude")
 }
 
-/// Claude 4.6+ use adaptive thinking (effort) instead of token budgets.
+/// Newer Claude models use adaptive thinking (effort) instead of token budgets.
 fn supports_adaptive_thinking(model: &Model) -> bool {
     bedrock_compat(model)
         .force_adaptive_thinking
         .unwrap_or_else(|| {
             match_candidates(model).iter().any(|s| {
-                s.contains("opus-4-6")
-                    || s.contains("opus-4-7")
-                    || s.contains("opus-4-8")
-                    || s.contains("sonnet-4-6")
-                    || s.contains("opus-5")
+                s.contains("opus-5")
                     || s.contains("sonnet-5")
                     || s.contains("haiku-5")
                     || s.contains("fable-5")
@@ -147,16 +143,14 @@ fn supports_adaptive_thinking(model: &Model) -> bool {
         })
 }
 
-/// The xhigh effort arrived with Opus 4.7; the 4.6 models stop at high.
+/// Claude 5+ models support native xhigh effort.
 /// "opus-5" also matches Opus 5.5, "sonnet-5" Sonnet 5.5.
 fn supports_native_xhigh(model: &Model) -> bool {
     bedrock_compat(model)
         .force_adaptive_thinking
         .unwrap_or_else(|| {
             match_candidates(model).iter().any(|s| {
-                s.contains("opus-4-7")
-                    || s.contains("opus-4-8")
-                    || s.contains("opus-5")
+                s.contains("opus-5")
                     || s.contains("sonnet-5")
                     || s.contains("haiku-5")
                     || s.contains("fable-5")
@@ -180,9 +174,6 @@ fn supports_prompt_caching(model: &Model) -> bool {
             || s.contains("opus-5")
             || s.contains("sonnet-5")
             || s.contains("haiku-5")
-            || s.contains("-4-") // any Claude 4.x
-            || s.contains("claude-3-7-sonnet")
-            || s.contains("claude-3-5-haiku")
     })
 }
 
@@ -1243,11 +1234,9 @@ mod tests {
 
     #[test]
     fn off_without_a_map_entry_explicitly_disables_thinking() {
-        for id in [
-            "us.anthropic.claude-sonnet-5",
-            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        ] {
-            let model = catalog_model(id);
+        for adaptive in [true, false] {
+            let mut model = catalog_model("us.anthropic.claude-sonnet-5");
+            model.compat = Some(json!({"forceAdaptiveThinking": adaptive}));
             assert!(
                 model
                     .thinking_level_map
@@ -1258,7 +1247,7 @@ mod tests {
             assert_eq!(
                 fields(&model, None),
                 Some(json!({"thinking": {"type": "disabled"}})),
-                "{id}"
+                "adaptive={adaptive}"
             );
         }
     }
@@ -1299,7 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_effort_clamps_metadata_and_legacy_wire_limits_together() {
+    fn adaptive_effort_clamps_metadata_with_and_without_compat() {
         let mut model = catalog_model("global.anthropic.claude-sonnet-5-5");
         let map = model
             .thinking_level_map
@@ -1311,15 +1300,12 @@ mod tests {
         let minimal = fields(&model, Some(ThinkingLevel::Minimal)).unwrap();
         assert_eq!(minimal["output_config"]["effort"], "balanced");
 
-        // Older adaptive Claude models cannot send xhigh even if metadata omits
-        // that key. With max/high disabled, the nearest sendable level is medium.
-        model.id = "us.anthropic.claude-sonnet-4-6".to_string();
-        model.name = "Claude Sonnet 4.6".to_string();
-        // A 4.6 row carries no 4.7+ compat; the id tables decide.
+        // Without catalog compat, the id tables still permit native xhigh.
+        // With max/high disabled, xhigh is the highest sendable level.
         model.compat = None;
         for level in [ThinkingLevel::XHigh, ThinkingLevel::Max] {
             let fields = fields(&model, Some(level)).unwrap();
-            assert_eq!(fields["output_config"]["effort"], "balanced");
+            assert_eq!(fields["output_config"]["effort"], "xhigh");
         }
     }
 

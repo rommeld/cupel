@@ -116,7 +116,6 @@ mod tests {
         for id in [
             "claude-sonnet-5",
             "claude-haiku-5-5",
-            "claude-sonnet-4-5",
             "gpt-6-astra",
             "codex/gpt-6-astra",
             "openai/gpt-6-astra",
@@ -125,6 +124,38 @@ mod tests {
                 models.iter().any(|m| m.id == id),
                 "{id} missing from catalog"
             );
+        }
+    }
+
+    #[test]
+    fn claude_catalog_models_are_version_five_or_newer() {
+        for model in builtin_models()
+            .into_iter()
+            .filter(|model| model.id.contains("claude-"))
+        {
+            let major = model
+                .id
+                .split(['-', '.'])
+                .find_map(|part| part.parse::<u32>().ok())
+                .expect("Claude model id contains a version");
+            assert!(major >= 5, "{} is a retired Claude model", model.id);
+        }
+    }
+
+    #[test]
+    fn openai_catalog_models_are_version_six_or_newer() {
+        for model in builtin_models().into_iter().filter(|model| {
+            matches!(
+                model.provider.as_str(),
+                Provider::OPENAI | Provider::OPENAI_CODEX
+            ) || model.id.starts_with("openai/")
+        }) {
+            let major = model
+                .id
+                .split(['-', '.'])
+                .find_map(|part| part.parse::<u32>().ok())
+                .expect("OpenAI model id contains a version");
+            assert!(major >= 6, "{} is a retired OpenAI model", model.id);
         }
     }
 
@@ -524,7 +555,6 @@ mod tests {
     #[test]
     fn haiku55_row_is_adaptive_and_keeps_its_native_toggle() {
         let models = builtin_models();
-        assert!(!models.iter().any(|m| m.id == "claude-haiku-4-5"));
         let model = models
             .iter()
             .find(|m| m.id == "claude-haiku-5-5")
@@ -629,7 +659,7 @@ mod tests {
     #[test]
     fn codex_models_ride_the_chatgpt_backend() {
         // The subscription rows have namespaced ids because cupel's flat id
-        // space gives the bare gpt-5.6 ids to the openai provider. They use
+        // space gives the bare GPT-6 ids to the openai provider. They use
         // the ChatGPT backend URL and a compat requestModel carrying the wire name
         // the namespacing hid.
         let mut seen = 0;
@@ -677,7 +707,7 @@ mod tests {
                 model.id
             );
         }
-        assert_eq!(seen, 9, "only supported Codex models belong in the catalog");
+        assert_eq!(seen, 5, "only supported Codex models belong in the catalog");
     }
 
     #[test]

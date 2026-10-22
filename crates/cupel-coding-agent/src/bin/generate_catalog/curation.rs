@@ -45,7 +45,7 @@ pub enum Thinking {
 pub enum Window {
     /// models.dev's `limit.context` verbatim.
     ModelsDev,
-    /// Models with long-context pricing (GPT-5.6, GPT-6, Haiku 5.5): the
+    /// Models with long-context pricing (GPT-6, Haiku 5.5): the
     /// planning window is the price tier's threshold, and models.dev's
     /// `limit.input` (or `limit.context`) becomes `maxContextWindow`.
     PriceTier,
@@ -131,17 +131,6 @@ const SONNET55_THINKING: &[(&str, Option<&str>)] =
 
 // Compact row constructors, one per model family, with the same shape the
 // old catalog.rs used (fireworks_anthropic / fireworks_glm52 helpers).
-const fn anthropic(id: &'static str, rename: Option<&'static str>) -> Curated {
-    Curated {
-        id,
-        rename,
-        api: Api::ANTHROPIC_MESSAGES,
-        base_url: ANTHROPIC_BASE_URL,
-        thinking: Thinking::Budget,
-        compat: Compat::None,
-        window: Window::ModelsDev,
-    }
-}
 
 /// Claude models that answer `budget_tokens` with a 400 (Sonnet 5,
 /// Opus 5, Opus 5.5, Fable 5/5.1): effort levels replace token budgets, and
@@ -198,7 +187,7 @@ const fn bedrock(id: &'static str, rename: Option<&'static str>, thinking: Think
     }
 }
 
-/// Claude 4.7+ on Bedrock: the same adaptive compat as the Anthropic twin, so
+/// Claude 5+ on Bedrock: the same adaptive compat as the Anthropic twin, so
 /// the Bedrock provider reads the model's capabilities from the catalog
 /// instead of guessing them from the id.
 const fn bedrock_adaptive(
@@ -292,8 +281,6 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 window: Window::PriceTier,
                 ..anthropic_preserved("claude-haiku-5-5")
             },
-            anthropic("claude-sonnet-4-6", None),
-            anthropic("claude-sonnet-4-5", Some("Claude Sonnet 4.5")),
         ],
     },
     CuratedProvider {
@@ -308,20 +295,12 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             // leaves `reasoning` out, as it does for Astra.
             openai("gpt-6.1-sol", None),
             openai("gpt-6-luna", None),
-            openai("gpt-5.6-sol", Some("GPT-5.6 Solar")),
-            openai("gpt-5.6-luna", None),
-            openai("gpt-5.6-terra", None),
         ],
     },
     CuratedProvider {
         models_dev_id: "amazon-bedrock",
         cupel_id: Provider::AMAZON_BEDROCK,
         models: &[
-            bedrock(
-                "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                Some("Claude Sonnet 4.5 (Bedrock)"),
-                Thinking::Budget,
-            ),
             bedrock_adaptive(
                 "us.anthropic.claude-sonnet-5",
                 Some("Claude Sonnet 5 (Bedrock)"),
@@ -449,7 +428,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
 /// catalog id as `codex/<id>` and stores the backend name in compat's
 /// `requestModel`. That split exists because cupel's catalog is one flat
 /// id namespace (merge_models replaces by id, /model addresses by id),
-/// and the openai provider already owns "gpt-5.6-sol" etc.
+/// and the openai provider already owns "gpt-6-sol" etc.
 pub struct PinnedCodex {
     pub id: &'static str,
     pub name: &'static str,
@@ -471,9 +450,7 @@ pub struct PinnedCodex {
     pub temperature: bool,
 }
 
-/// The two effort scales the Codex backend advertises today: every row
-/// stops at xhigh except the GPT-5.6 and GPT-6 families, which add max.
-const CODEX_LEVELS_TO_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
+/// The effort scale advertised by the Codex backend for GPT-6 models.
 const CODEX_LEVELS_TO_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Row order = catalog order: the first row is the `/provider
@@ -533,50 +510,6 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         max_context_window: Some(872_000),
         levels: CODEX_LEVELS_TO_MAX,
         temperature: false,
-    },
-    PinnedCodex {
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        vision: true,
-        cost: (5.0, 30.0, 0.5, 6.25),
-        long_context_tier: true,
-        context_window: 272_000,
-        max_context_window: Some(872_000),
-        levels: CODEX_LEVELS_TO_MAX,
-        temperature: true,
-    },
-    PinnedCodex {
-        id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
-        vision: true,
-        cost: (0.2, 1.2, 0.02, 0.25),
-        long_context_tier: true,
-        context_window: 272_000,
-        max_context_window: Some(872_000),
-        levels: CODEX_LEVELS_TO_MAX,
-        temperature: true,
-    },
-    PinnedCodex {
-        id: "gpt-5.6-terra",
-        name: "GPT-5.6 Terra",
-        vision: true,
-        cost: (2.0, 12.0, 0.2, 2.5),
-        long_context_tier: true,
-        context_window: 272_000,
-        max_context_window: Some(872_000),
-        levels: CODEX_LEVELS_TO_MAX,
-        temperature: true,
-    },
-    PinnedCodex {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        vision: true,
-        cost: (5.0, 30.0, 0.5, 0.0),
-        long_context_tier: true,
-        context_window: 272_000,
-        max_context_window: None,
-        levels: CODEX_LEVELS_TO_XHIGH,
-        temperature: true,
     },
 ];
 
