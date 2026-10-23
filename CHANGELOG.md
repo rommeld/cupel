@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.4] - 2026-10-23
+
+- feat: expansion of the openrouter model catalog
+
 ## [v0.33.3] - 2026-10-22
 
 - feat: remove outdated models
