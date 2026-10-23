@@ -26,3 +26,4 @@ pub mod themes;
 pub mod tools;
 pub mod truncate;
 pub mod update;
+pub mod usage;
