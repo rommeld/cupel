@@ -240,6 +240,58 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_kimi31_pro_keeps_its_native_reasoning_and_image_input() {
+        use crate::types::InputModality;
+
+        let model = builtin_models()
+            .into_iter()
+            .find(|m| m.id == "moonshotai/kimi-k3.1-pro")
+            .expect("Kimi K3.1 Pro row");
+        assert_eq!(model.name, "Kimi K3.1 Pro");
+        assert_eq!(model.provider.as_str(), Provider::OPENROUTER);
+        assert!(model.reasoning);
+        assert_eq!(model.input, vec![InputModality::Text, InputModality::Image]);
+        assert_eq!(
+            serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+            serde_json::json!({
+                "medium": null,
+                "minimal": null,
+                "off": "none",
+                "xhigh": null,
+            })
+        );
+        assert_eq!(
+            model
+                .compat
+                .as_ref()
+                .and_then(|c| c.get("supportsTemperature")),
+            Some(&serde_json::json!(false))
+        );
+    }
+
+    #[test]
+    fn openrouter_flint_free_has_no_token_charges() {
+        use crate::types::InputModality;
+
+        let model = builtin_models()
+            .into_iter()
+            .find(|m| m.id == "recursive/flint-v1.0:free")
+            .expect("Flint free row");
+        assert_eq!(model.provider.as_str(), Provider::OPENROUTER);
+        assert!(model.reasoning);
+        assert_eq!(model.input, vec![InputModality::Text]);
+        for price in [
+            model.cost.input,
+            model.cost.output,
+            model.cost.cached_read,
+            model.cost.cached_write,
+        ] {
+            assert!(price.abs() < f64::EPSILON);
+        }
+        assert!(model.cost.tiers.is_none());
+    }
+
+    #[test]
     fn openrouter_deepseek_flash_uses_the_1017_snapshot_and_native_efforts() {
         use crate::types::InputModality;
 

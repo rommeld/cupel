@@ -1780,6 +1780,41 @@
         ],
         "temperature": true
       },
+      "moonshotai/kimi-k3.1-pro": {
+        "cost": {
+          "cache_read": 0.2,
+          "cache_write": 0.0,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video"
+          ]
+        },
+        "name": "Kimi K3.1 Pro",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
       "nvidia/nemotron-3.5-super-vl": {
         "cost": {
           "cache_read": 0.02,

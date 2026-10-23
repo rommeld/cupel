@@ -368,6 +368,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 Thinking::Explicit(KIMI_K27_CODE_OPENROUTER_THINKING),
             ),
             openrouter("moonshotai/kimi-k3", Thinking::FromEffort),
+            openrouter("moonshotai/kimi-k3.1-pro", Thinking::FromEffort),
             openrouter("z-ai/glm-5.3", Thinking::FromEffort),
             openrouter("z-ai/glm-5.3-flash", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-pro", Thinking::FromEffort),

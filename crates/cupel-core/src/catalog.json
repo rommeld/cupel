@@ -940,6 +940,37 @@
     }
   },
   {
+    "id": "moonshotai/kimi-k3.1-pro",
+    "name": "Kimi K3.1 Pro",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "off": "none",
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
     "id": "z-ai/glm-5.3",
     "name": "GLM-5.3",
     "api": "openai-completions",
