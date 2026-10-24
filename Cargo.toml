@@ -142,7 +142,6 @@ missing_inline_in_public_items = "allow"
 missing_trait_methods = "allow"
 
 module_name_repetitions = "allow"
-mod_module_files = "allow"
 
 needless_pass_by_value = "allow"
 needless_raw_strings = "allow"
@@ -157,6 +156,8 @@ pub_with_shorthand = "allow"
 pub_without_shorthand = "allow"
 
 question_mark_used = "allow"
+
+self_named_module_files = "allow"
 
 semicolon_outside_block = "allow"
 
