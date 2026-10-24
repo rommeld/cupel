@@ -22,6 +22,7 @@ use cupel_agent::{Agent, AgentOptions, ToolExecutionMode};
 use cupel_coding_agent::bootstrap::Frontend;
 use cupel_coding_agent::modes::{self, SessionMeta};
 use cupel_coding_agent::settings::{DEFAULT_PRESET, Preset, Settings};
+use cupel_coding_agent::startup::ThinkingChoice;
 use cupel_core::types::{Model, ThinkingLevel};
 use thiserror::Error;
 
@@ -89,11 +90,6 @@ struct CliArgs {
     resume: Option<ResumeTarget>,
 }
 
-enum ThinkingChoice {
-    Default,
-    Explicit(Option<ThinkingLevel>),
-}
-
 /// Parameterized on the iterator (instead of reading `std::env::args`
 /// internally) so tests can drive it without process-global state.
 fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
@@ -111,16 +107,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--thinking" | "-t" => {
                 let value = iter.next().ok_or("--thinking requires a value")?;
-                parsed.thinking = ThinkingChoice::Explicit(match value.as_str() {
-                    "off" => None,
-                    "minimal" => Some(ThinkingLevel::Minimal),
-                    "low" => Some(ThinkingLevel::Low),
-                    "medium" => Some(ThinkingLevel::Medium),
-                    "high" => Some(ThinkingLevel::High),
-                    "xhigh" => Some(ThinkingLevel::XHigh),
-                    "max" => Some(ThinkingLevel::Max),
-                    other => return Err(format!("unknown thinking level: {other}")),
-                });
+                parsed.thinking = value.parse()?;
             }
             "--plain" => parsed.plain = true,
             // The id is optional: a bare `--resume` (next arg missing or
@@ -165,107 +152,16 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
 }
 
 fn thinking_level(args: &CliArgs, model: &Model, preset: Option<&Preset>) -> Option<ThinkingLevel> {
-    match args.thinking {
-        ThinkingChoice::Explicit(level) => level,
-        ThinkingChoice::Default => match preset {
-            Some(preset) => preset.thinking_level.level(),
-            None => Some(
-                if model.id == "codex/gpt-6-sol" && model.provider.as_str() == "openai-codex" {
-                    ThinkingLevel::High
-                } else {
-                    ThinkingLevel::Medium
-                },
-            ),
-        },
-    }
+    cupel_coding_agent::startup::thinking_level(args.thinking, model, preset)
 }
 
-/// Pick a model + API key from CLI args and the merged catalog (built-ins,
-/// models.json layers, discovered local models). Credential knowledge
-/// lives in `providers.rs`, shared with the TUI's `/provider` command;
-/// keys sources at startup: exported env var, then ~/.cupel/settings.json.
-/// Precedence: `--model`> the `default` preset > a ChatGPT login > the
-/// first provider with cedentials > a keyless local model.
 fn select_model(
     args: &CliArgs,
     catalog: &[Model],
     settings: &Settings,
     home: Option<&std::path::Path>,
 ) -> Result<(Model, Option<String>), String> {
-    use cupel_coding_agent::providers;
-
-    if let Some(wanted) = &args.model {
-        let model = catalog
-            .iter()
-            .find(|m| m.id == *wanted)
-            .cloned()
-            .ok_or_else(|| format!("unknown model: {wanted} (see --help for the list)"))?;
-        let key = providers::resolve_api_key(model.provider.as_str(), settings);
-        return Ok((model, key));
-    }
-
-    // The default preset is explicit configuration: an unknown model is an
-    // error like a mistyped --model, never a silent start on something else.
-    // A default preset that does not even parse is the same mistake.
-    if let Some(reason) = &settings.invalid_default_preset {
-        return Err(format!(
-            "invalid default preset in {reason} (fix \"model\" in settings.json)"
-        ));
-    }
-    if let Some(preset) = settings.presets.get(DEFAULT_PRESET) {
-        let model = preset.find_model(catalog).cloned().ok_or_else(|| {
-            format!(
-                "unknown model in the default preset: {}/{} (fix \"model\" in settings.json; \
-                see --help for the list)",
-                preset.provider, preset.model,
-            )
-        })?;
-        let key = providers::resolve_api_key(model.provider.as_str(), settings);
-        return Ok((model, key));
-    }
-
-    // A stored ChatGPT login makes Codex the default, regardless of where
-    // its models occur in the catalog or which other keys are configured.
-    if cupel_coding_agent::auth::has_credential(home, "openai-codex")
-        && let Some(model) = catalog
-            .iter()
-            .find(|m| m.provider.as_str() == "openai-codex")
-    {
-        return Ok((model.clone(), None));
-    }
-
-    // Otherwise, first provider with cloud credentials wins, in
-    // catalog order. Bedrock carries no key through StreamOptions because the
-    // AWS chain resolves inside the provider. Keyless local models fall
-    // through here (no env var, and normally not settings entry), so a
-    // configured cloud key always beats a merely-running ollama.
-    for model in catalog {
-        match model.provider.as_str() {
-            "amazon-bedrock" if providers::has_aws_credentials() => {
-                return Ok((model.clone(), None));
-            }
-            "openai-codex" => {} // OAuth only, never a settings key.
-            provider => {
-                if let Some(key) = providers::resolve_api_key(provider, settings) {
-                    return Ok((model.clone(), Some(key)));
-                }
-            }
-        }
-    }
-    // Pass 2: with no cloud credentials anywhere, a keyless local model
-    // (discovered ollama, models.json entry) is the last resort before
-    // giving up.
-    if let Some(model) = catalog.iter().find(|m| providers::is_keyless(m)) {
-        return Ok((model.clone(), None));
-    }
-    Err(
-        "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, FIREWORKS_API_KEY, \
-         OPENROUTER_API_KEY, or AWS credentials, add a key to ~/.cupel/settings.json, log in \
-         with a ChatGPT subscription (/login openai-codex in the TUI), start a local server \
-         (ollama / llama-server - see README 'Local models'), or start with an explicit \
-         `--model <id>` and enter a key in the TUI via `/provider <name> <api-key>"
-            .to_string(),
-    )
+    cupel_coding_agent::startup::select_model(args.model.as_deref(), catalog, settings, home)
 }
 
 /// Install the tracing subscriber. This is the one place in the whole workspace

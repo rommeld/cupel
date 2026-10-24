@@ -21,6 +21,7 @@ pub mod search;
 pub mod session;
 pub mod settings;
 pub mod spinoff;
+pub mod startup;
 pub mod system_prompt;
 pub mod themes;
 pub mod tools;
