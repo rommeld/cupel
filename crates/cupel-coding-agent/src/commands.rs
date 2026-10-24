@@ -275,7 +275,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "usage",
-        description: "Show session token and cost totals",
+        description: "Open model token/cost tables for this session and all saved sessions",
     },
     BuiltinCommand {
         name: "update",

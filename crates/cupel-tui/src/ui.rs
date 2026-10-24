@@ -166,6 +166,9 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     // Drawn last so it overdraws the transcript's bottom rows in
     // immediate-mode rendering, paint order is the z-order.
     render_autocomplete(frame, app, area, transcript_area, model_area, theme);
+    if let Some(popup) = &mut app.usage_popup {
+        crate::usage::render(frame, popup, area, theme);
+    }
 }
 
 /// The `@path` completion popup, anchored above the model status line at the
@@ -593,10 +596,12 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
 
     // Place the real terminal cursor at the editing position. (ratatui hides
     // it unless the app explicitly positions it each frame.)
-    frame.set_cursor_position(Position {
-        x: inner.x + (cursor_col as u16).min(inner.width.saturating_sub(1)),
-        y: inner.y + ((cursor_line - scroll) as u16).min(inner.height.saturating_sub(1)),
-    });
+    if app.usage_popup.is_none() {
+        frame.set_cursor_position(Position {
+            x: inner.x + (cursor_col as u16).min(inner.width.saturating_sub(1)),
+            y: inner.y + ((cursor_line - scroll) as u16).min(inner.height.saturating_sub(1)),
+        });
+    }
 }
 
 fn render_model_status(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {

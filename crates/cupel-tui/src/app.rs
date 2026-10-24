@@ -16,6 +16,7 @@ use cupel_coding_agent::modes::SessionMeta;
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
 use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
+use cupel_coding_agent::usage::{HistoryUsage, UsageByModel, UsageTotals};
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
     UserContentBody,
@@ -31,14 +32,7 @@ use crate::login;
 use crate::theme::Theme;
 use crate::transcript::{Cell, ToolOutcome, Transcript};
 
-/// Cumulative token/cost counters across the whole session.
-#[derive(Default)]
-pub struct Totals {
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cost: f64,
-}
+use crate::usage::UsagePopup;
 
 pub struct App {
     pub agent: Agent,
@@ -46,7 +40,9 @@ pub struct App {
     pub transcript: Transcript,
     pub input: InputState,
     pub autocomplete: Autocomplete,
-    pub totals: Totals,
+    pub totals: UsageTotals,
+    pub usage_by_model: UsageByModel,
+    pub usage_popup: Option<UsagePopup>,
     pub run_events: Option<AgentEventStream>,
     pub scroll_from_bottom: usize,
     pub last_transcript_height: u16,
@@ -151,6 +147,7 @@ pub enum AppEvent {
     Agent(Option<AgentEvent>),
     Login(Option<login::LoginEvent>),
     Question(Option<PendingQuestion>),
+    Usage(Result<HistoryUsage, tokio::task::JoinError>),
 }
 
 /// What `/new` or `/hot-reload` asked for.
@@ -287,7 +284,9 @@ impl App {
             transcript: Transcript::default(),
             input: InputState::default(),
             autocomplete,
-            totals: Totals::default(),
+            totals: UsageTotals::default(),
+            usage_by_model: UsageByModel::default(),
+            usage_popup: None,
             run_events: None,
             scroll_from_bottom: 0,
             last_transcript_height: 0,
@@ -468,6 +467,21 @@ impl App {
     }
 
     pub fn on_terminal_event(&mut self, event: Event) {
+        if let Some(popup) = &mut self.usage_popup {
+            // Preserve process control and the existing mouse-capture toggle.
+            let global = matches!(
+                &event,
+                Event::Key(key) if key.kind == KeyEventKind::Press
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(key.code, KeyCode::Char('c' | 'd' | 'y'))
+            );
+            if !global {
+                if popup.on_terminal_event(&event) {
+                    self.usage_popup = None;
+                }
+                return;
+            }
+        }
         match event {
             // Windows terminals report key releases too; only act on press.
             Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key),
@@ -1175,6 +1189,9 @@ impl App {
     }
 
     fn account_assistant(&mut self, assistant: &cupel_core::types::AssistantMessage) {
+        // Reported tokens are spent event if the response subsequently failed.
+        self.usage_by_model.record(assistant);
+        self.totals = self.usage_by_model.totals();
         // Steering cut this reply short on purpose. No error. The run goes on with
         // the steered prompt. Esc empties `steering` before it aborts, so an Esc never
         // lands here.
@@ -1202,10 +1219,6 @@ impl App {
             });
         }
         let usage = &assistant.usage;
-        self.totals.input += usage.input;
-        self.totals.output += usage.output;
-        self.totals.cache_read += usage.cache_read;
-        self.totals.cost += usage.cost.total;
         self.context_tokens = if usage.total_tokens > 0 {
             usage.total_tokens
         } else {
@@ -1522,9 +1535,16 @@ impl App {
                 }
             }
             "usage" => {
-                self.notice(format!(
-                    "session totals: {} in / {} out / {} cached, ${:.4}",
-                    self.totals.input, self.totals.output, self.totals.cache_read, self.totals.cost
+                // Derive the identiy even if a recorder write failure cleared its path.
+                let exclude = cupel_coding_agent::session::sessions_dir(
+                    self.meta.home.as_deref(),
+                    std::path::Path::new(&self.meta.cwd),
+                )
+                .map(|dir| dir.join(format!("{}.jsonl", self.recorder.session_id())));
+                self.usage_popup = Some(UsagePopup::new(
+                    self.usage_by_model.clone(),
+                    self.meta.home.clone(),
+                    exclude,
                 ));
             }
             "new" => {
@@ -1750,6 +1770,7 @@ impl App {
         let run_events = &mut self.run_events;
         let login = &mut self.login;
         let questions = &mut self.questions;
+        let usage_popup = &mut self.usage_popup;
         tokio::select! {
             event = async {
                 match run_events {
@@ -1768,7 +1789,13 @@ impl App {
                     Some(questions) => questions.recv().await,
                     None => std::future::pending().await,
                 }
-            } => AppEvent::Question(question)
+            } => AppEvent::Question(question),
+            result = async {
+                match usage_popup {
+                    Some(popup) => popup.next_event().await,
+                    None => std::future::pending().await,
+                }
+            } => AppEvent::Usage(result)
         }
     }
 
@@ -1777,6 +1804,11 @@ impl App {
             AppEvent::Agent(event) => self.on_agent_event(event).await,
             AppEvent::Login(event) => self.on_login_event(event),
             AppEvent::Question(question) => self.on_question(question),
+            AppEvent::Usage(result) => {
+                if let Some(popup) = &mut self.usage_popup {
+                    popup.finish_loading(result);
+                }
+            }
         }
     }
 

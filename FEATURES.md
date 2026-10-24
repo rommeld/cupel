@@ -313,7 +313,7 @@ Additional tooling features:
 | `/preset [name]` | List presets or switch model, thinking level, and prompt together. |
 | `/themes [id]` | List color themes or switch every session to a theme. |
 | `/review [path ...]` or `/review --diff` | Build a code-review prompt. |
-| `/usage` | Show session token and cost totals. |
+| `/usage` | Open current-session and all-history token/cost tables by model; close with `Esc` or the top-left `X` |
 | `/session-id` | Show the current ID and this project's sessions. |
 | `/hot-reload [session-id]` | Reload configuration in place or resume another session. |
 | `/spinoff` | List spinoffs. |

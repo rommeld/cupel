@@ -34,6 +34,10 @@ pub mod theme;
 pub mod transcript;
 pub mod ui;
 pub mod updates;
+pub mod usage;
+
+#[cfg(test)]
+mod usage_tests;
 
 use cupel_agent::Agent;
 use cupel_coding_agent::modes::{SessionMeta, TerminationSignals};

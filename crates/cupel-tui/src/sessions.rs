@@ -79,6 +79,10 @@ impl Sessions {
     /// Input goes to the session on screen, except the keys and clicks that switch
     /// sessions.
     pub fn on_terminal_event(&mut self, event: Event) {
+        if self.active().usage_popup.is_some() {
+            self.active_mut().on_terminal_event(event);
+            return;
+        }
         match event {
             Event::Key(key)
                 if key.kind == KeyEventKind::Press

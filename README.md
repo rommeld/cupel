@@ -72,7 +72,7 @@ Supported providers: Anthropic, OpenAI (Responses), OpenAI (Codex), AWS Bedrock,
 | `/preset <name>`| Switch model, thinking level, and prompt to a preset (no argument lists them) |
 | `/themes [id]` | Switch the color theme (no argument lists them) |
 | `/review [path...]` | Bundle the project, specific paths, or a `--diff` into a code-review prompt |
-| `/usage` | Show session token and cost totals |
+| `/usage` | Open current-session and all-history token/cost tables by model; close with `Esc` or the top-left `X` |
 | `/session-id` | Show the current session ID and list this project's sessions |
 | `/hot-reload [session-id]` | Reload `.cupel` config into the running or another session |
 | `/quit` | Quit cupel |
