@@ -42,7 +42,7 @@ jobs:
             artifact: cupel-linux-aarch64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set workspace version from release tag
         env:
@@ -131,7 +131,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The changelog commit lands on main, not on the tag this run was
           # triggered by; full history + tags are needed so the script can
@@ -181,7 +181,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Update Homebrew tap
         env:
           GH_TOKEN: ${{ github.token }}
