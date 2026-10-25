@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.8] - 2026-10-25
+
+- fix(ci): correct macOS universal architecture verification
+
 ## [v0.33.6] - 2026-10-25
 
 - fix(docs): cupel fixed some typos in the README
