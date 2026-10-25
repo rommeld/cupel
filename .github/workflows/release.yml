@@ -94,7 +94,9 @@ jobs:
               target/aarch64-apple-darwin/release/$binary \
               target/x86_64-apple-darwin/release/$binary \
               -output "$binary"
-            lipo -verify_arch arm64 x86_64 "$binary"
+            # Put the input first and verify slices separately across Xcode versions.
+            lipo "$binary" -verify_arch arm64
+            lipo "$binary" -verify_arch x86_64
           done
 
       - name: Build (Linux musl)
