@@ -33,11 +33,32 @@ curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
 Release publication is retryable: an interrupted draft resumes its uploads;
-an already published release and its assets are left unchanged. Re-running
-failed jobs can finish the changelog or Homebrew update after publication.
-Updates to `main` and Homebrew are queued separately and compare SemVer
-precedence against their current version. Older tags still get a GitHub Release,
-but do not replace newer workspace versions, changelog sections, or formulas.
+an already published release and its assets are left unchanged. After publication,
+the changelog job opens a `release/changelog-<tag>` PR with `CHANGELOG.md` and
+workspace version updates instead of pushing to protected `main`. Merge this PR
+after CI passes. Retries refresh the same branch and reuse its open PR.
+
+Enable **Settings > Actions > General > Workflow permissions > Allow GitHub
+Actions to create and approve pull requests**. The job needs `contents: write`,
+`pull-requests: write`, and `actions: write`; it never approves or merges its PR.
+Because `GITHUB_TOKEN`-created PRs do not trigger ordinary PR workflows, the job
+explicitly dispatches `ci.yml` on the update branch to satisfy required checks.
+
+Re-running failed jobs can finish PR creation/CI dispatch or the Homebrew update
+after publication. Updates to `main` and Homebrew are queued separately and
+compare SemVer precedence against their current version. Older tags still get
+a GitHub Release, but do not replace newer workspace versions, changelog
+sections, or formulas.
+
+To recover bookkeeping for an already-published tag, run the current helper in
+a clean checkout of `main` with full history and tags and an authenticated `gh`:
+
+```sh
+sh packaging/open-release-update.sh v0.33.8
+```
+
+Re-running an old release run uses that tag's original workflow definition.
+It does not pick up workflow fixes merged later.
 
 Both executables go into `${CUPEL_INSTALL_DIR:-${CUPEL_HOME:-$HOME/.cupel}/bin}`.
 The installer preserves compatibility with older `cupel`-only archives and

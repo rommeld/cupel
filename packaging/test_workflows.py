@@ -86,6 +86,150 @@ class VersionOrderTests(unittest.TestCase):
                 self.assertEqual(result.stdout.strip(), expected)
 
 
+class ReleaseUpdateTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="cupel-release-update-test-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.work = root / "checkout"
+        self.work.mkdir()
+        self.remote = root / "remote.git"
+        self.calls = root / "calls"
+        self.pr = root / "pr"
+        self.fail_dispatch = root / "fail-dispatch"
+        tools = root / "tools"
+        tools.mkdir()
+        gh = tools / "gh"
+        gh.write_text("""#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$CALLS"
+case "$1 $2" in
+    'pr list') if [ -f "$PR" ]; then echo 42; fi ;;
+    'pr create')
+        [ ! -f "$PR" ]
+        echo 42 > "$PR"
+        echo https://github.com/example/cupel/pull/42 ;;
+    'workflow run') [ ! -f "$FAIL_DISPATCH" ] ;;
+    *) exit 1 ;;
+esac
+""")
+        gh.chmod(0o755)
+        cargo = tools / "cargo"
+        cargo.write_text("""#!/bin/sh
+set -eu
+[ "$*" = 'update --workspace' ]
+awk -F '"' '/^version = / { print $2; exit }' Cargo.toml > Cargo.lock
+""")
+        cargo.chmod(0o755)
+        self.env = {
+            **os.environ,
+            "PATH": f"{tools}{os.pathsep}{os.defpath}",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "CALLS": str(self.calls), "PR": str(self.pr),
+            "FAIL_DISPATCH": str(self.fail_dispatch),
+        }
+        self.git("init", "--bare", "--initial-branch=main", str(self.remote))
+        self.git("init", "--initial-branch=main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "commit.gpgsign", "false")
+        (self.work / "Cargo.toml").write_text('[workspace.package]\nversion = "0.33.6"\n')
+        (self.work / "Cargo.lock").write_text("0.33.6\n")
+        (self.work / "CHANGELOG.md").write_text("# Changelog\n\n## [v0.33.6] - 2026-10-24\n\n- Previous release\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "previous release")
+        self.git("tag", "v0.33.6")
+        (self.work / "README.md").write_text("Example change\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "example change")
+        self.git("tag", "v0.33.8")
+        self.git("remote", "add", "origin", str(self.remote))
+        self.git("push", "origin", "main", "--tags")
+        self.main = self.git("rev-parse", "main")
+        hook = self.remote / "hooks/update"
+        hook.write_text("""#!/bin/sh
+if [ "$1" = refs/heads/main ]; then
+    echo 'GH013: Changes must be made through a pull request' >&2
+    exit 1
+fi
+""")
+        hook.chmod(0o755)
+
+    def git(self, *args):
+        return subprocess.run(
+            ["git", *args], cwd=self.work, env=self.env,
+            capture_output=True, text=True, check=True, timeout=10,
+        ).stdout.strip()
+
+    def update(self, tag="v0.33.8"):
+        return subprocess.run(
+            ["sh", str(PACKAGING / "open-release-update.sh"), tag],
+            cwd=self.work, env=self.env, capture_output=True, text=True, timeout=30,
+        )
+
+    def test_opens_pr_and_dispatches_ci_without_pushing_protected_main(self):
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        branch = "release/changelog-v0.33.8"
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
+        self.assertEqual(
+            self.git("ls-remote", "origin", f"refs/heads/{branch}").split()[0],
+            self.git("rev-parse", branch),
+        )
+        self.assertEqual(
+            self.git("diff", "--name-only", f"main...{branch}").splitlines(),
+            ["CHANGELOG.md", "Cargo.lock", "Cargo.toml"],
+        )
+        self.assertIn("## [v0.33.8]", self.git("show", f"{branch}:CHANGELOG.md"))
+        self.assertIn("- example change", self.git("show", f"{branch}:CHANGELOG.md"))
+        self.assertIn('version = "0.33.8"', self.git("show", f"{branch}:Cargo.toml"))
+        self.assertEqual(self.git("show", f"{branch}:Cargo.lock"), "0.33.8")
+        calls = self.calls.read_text().splitlines()
+        self.assertTrue(calls[0].startswith("pr list --state open --base main --head " + branch))
+        self.assertTrue(calls[1].startswith("pr create --base main --head " + branch))
+        self.assertEqual(calls[2], "workflow run ci.yml --ref " + branch)
+
+    def test_retry_reuses_pr_after_failed_ci_dispatch(self):
+        self.fail_dispatch.touch()
+        self.assertNotEqual(self.update().returncode, 0)
+        self.git("switch", "main")
+        self.fail_dispatch.unlink()
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls.read_text().splitlines()
+        self.assertEqual(sum(call.startswith("pr create ") for call in calls), 1)
+        self.assertEqual(sum(call.startswith("workflow run ") for call in calls), 2)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
+
+    def test_retry_refuses_to_overwrite_a_concurrent_branch_change(self):
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.git("switch", "main")
+        branch = "release/changelog-v0.33.8"
+        self.git("--git-dir", str(self.remote), "update-ref", f"refs/heads/{branch}", self.main)
+        calls = self.calls.read_text()
+        self.assertNotEqual(self.update().returncode, 0)
+        self.assertEqual(self.git("ls-remote", "origin", f"refs/heads/{branch}").split()[0], self.main)
+        self.assertEqual(self.calls.read_text(), calls)
+
+    def test_already_recorded_release_does_not_open_pr_or_dispatch_ci(self):
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.git("switch", "main")
+        self.git("merge", "--ff-only", "release/changelog-v0.33.8")
+        self.calls.unlink()
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(self.git("branch", "--show-current"), "main")
+
+    def test_older_release_is_skipped(self):
+        result = self.update("v0.33.5")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.main)
+
+
 class PublishReleaseTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="cupel-publish-test-")
