@@ -9,7 +9,7 @@ well-explained improvements are a great starting point.
 ## Getting started
 
 1. Fork the repository and create a branch for your change.
-2. Install a recent stable Rust toolchain, including rustfmt and Clippy.
+2. Install Rust with rustup; the repository pins its toolchain, rustfmt, and Clippy.
 3. Read the [README](README.md) and [coding guidelines](AGENTS.md).
 
 Build and run locally:
@@ -43,8 +43,8 @@ Before submitting, run:
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets
-cargo test --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 ```
 
 ## Issues and pull requests
