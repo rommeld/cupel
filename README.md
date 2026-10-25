@@ -73,7 +73,7 @@ Supported providers: Anthropic, OpenAI (Responses), OpenAI (Codex), AWS Bedrock,
 | `/login openai-codex [device]` | Log in with a ChatGPT Plus/Pro subscription |
 | `/logout openai-codex` | Remove a stored login |
 | `/thinking <level>` | Set thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `/preset <name>`| Switch model, thinking level, and prompt to a preset (no argument lists them) |
+| `/preset <name>` | Switch model, thinking level, and prompt to a preset (no argument lists them) |
 | `/themes [id]` | Switch the color theme (no argument lists them) |
 | `/review [path...]` | Bundle the project, specific paths, or a `--diff` into a code-review prompt |
 | `/usage` | Open current-session and all-history token/cost tables by model; close with `Esc` or the top-left `X` |
@@ -112,7 +112,7 @@ Built-in providers:
 
 ### Presets
 
-A preset names a model, a thinking level, and optionally an additional system prompt. Define presets in the `model` section of `setting.json`:
+A preset names a model, a thinking level, and optionally an additional system prompt. Define presets in the `model` section of `settings.json`:
 
 ```json
 {
