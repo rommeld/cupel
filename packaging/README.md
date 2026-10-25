@@ -9,8 +9,10 @@ stay unchanged, so existing Cupel installers and `/update` remain compatible.
 
 Pre-flight, in order:
 
-1. CI is green on `main` (`.github/workflows/ci.yml` - fmt, clippy, tests
-   and packaging checks on Ubuntu x86_64, Ubuntu aarch64, and macOS).
+1. CI is green on `main` (`.github/workflows/ci.yml` - fmt, strict Clippy, tests
+   and packaging checks on Ubuntu x86_64, Ubuntu aarch64, and macOS). The release
+   workflow also runs this same CI workflow on the tagged commit and requires
+   it to pass before publication. Rust and Clippy use `rust-toolchain.toml`.
 2. Choose a `vX.Y.Z` or `vX.Y.Z-prerelease` tag. The release workflow sets the
    inherited workspace version from it before building both executables.
 
@@ -29,6 +31,13 @@ therefore `install.sh` - point at it. Users install with:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
+
+Release publication is retryable: an interrupted draft resumes its uploads;
+an already published release and its assets are left unchanged. Re-running
+failed jobs can finish the changelog or Homebrew update after publication.
+Updates to `main` and Homebrew are queued separately and compare SemVer
+precedence against their current version. Older tags still get a GitHub Release,
+but do not replace newer workspace versions, changelog sections, or formulas.
 
 Both executables go into `${CUPEL_INSTALL_DIR:-${CUPEL_HOME:-$HOME/.cupel}/bin}`.
 The installer preserves compatibility with older `cupel`-only archives and
