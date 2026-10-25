@@ -3,6 +3,13 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.6] - 2026-10-25
+
+- fix(docs): cupel fixed some typos in the README
+- feat(example): smoke test for using ACP in OpenHands and Zed
+- feat(acp): add persistent stdio agent frontend
+- refact(startup): share frontend model and thinking selection
+
 ## [v0.33.5] - 2026-10-24
 
 - refactor: replace mod.rs with named module files
