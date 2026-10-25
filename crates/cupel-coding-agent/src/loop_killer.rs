@@ -1,23 +1,19 @@
-//! The loop killer: blocks a tool call that repeats backt-to-back with
-//! identical arguments more often than settings allow, and steers the
-//! model onto a new track va the error text it receives instead of a
-//! result.
+//! The loop killer: blocks a tool call that repeats backt-to-back with identical
+//! arguments more often than settings allow, and steers the model onto a new track via
+//! the error text it receives instead of a result.
 //!
-//! Detection is deliberately consecutive-only: `read x, edit x, read x`
-//! is a legitimate verification loop and must stay allowed. Any different
-//! call resets the chain. The canoncial key is `name + argumetns JSON`:
-//! this workspace's serde_json is built without preserve_order, so
-//! object keys serialize sorted and two structurally equal argument
-//! object always yield the same string, regardless of the field order
-//! the model streamed.
+//! Detection is deliberately consecutive-only: `read x, edit x, read x` is a legitimate
+//! verification loop and must stay allowed. Any different call resets the chain. The
+//! canoncial key is `name + argumetns JSON`. Sort object keys recursively before
+//! serializing: another workspace dependency can enable serde_json's preserve_order
+//! feature.
 //!
-//! Why a veto (and not the alternatives): injecting a steering message
-//! would be silently dropped (the Agent's RunHooks decorator does not
-//! forward steering_messages, yet), and should_stop_after_turn would
-//! end the run without any event, causing a silent stop the user cannot
-//! distinguish from a finished answer. The before_tool_call veto is
-//! the machnism the bash guard already proves out: the model sees an
-//! error tool result and the run continues, redirected.
+//! Why a veto (and not the alternatives): injecting a steering message would be
+//! silently dropped (the Agent's RunHooks decorator does not forward
+//! steering_messages, yet), and should_stop_after_turn would end the run without any
+//! event, causing a silent stop the user cannot distinguish from a finished answer.
+//! The before_tool_call veto is the machnism the bash guard already proves out: the
+//! model sees an error tool result and the run continues, redirected.
 
 use std::sync::Mutex;
 
@@ -58,7 +54,9 @@ impl LoopKiller {
     pub fn note_call(&self, tool_call: &ToolCall) -> Option<String> {
         // Disabled killer: not even the bookkeeping runs.
         let limit = self.limit?;
-        let key = format!("{}\n{}", tool_call.name, tool_call.arguments);
+        let mut arguments = tool_call.arguments.clone();
+        arguments.sort_all_objects();
+        let key = format!("{}\n{arguments}", tool_call.name);
         let seen = {
             // Tight lock scope: compare-and-count only, no I/O, no await.
             let mut state = self.state.lock().expect("loop killer state poisoned");
@@ -131,9 +129,15 @@ mod tests {
     #[test]
     fn key_ignores_argument_order_and_call_id() {
         let killer = LoopKiller::new(Some(1));
-        let mut first = call("grep", serde_json::json!({"pattern": "x", "path": "src"}));
+        let mut first = call(
+            "grep",
+            serde_json::json!({"pattern": "x", "path": "src", "nested": [{"a": 1, "b": 2}]}),
+        );
         first.id = "call_1".into();
-        let mut second = call("grep", serde_json::json!({"path": "src", "pattern": "x"}));
+        let mut second = call(
+            "grep",
+            serde_json::json!({"nested": [{"b": 2, "a": 1}], "path": "src", "pattern": "x"}),
+        );
         second.id = "call_2".into();
         assert!(killer.note_call(&first).is_none());
         assert!(

@@ -105,7 +105,12 @@ fn generate(raw: &str) -> Result<(Vec<Model>, String), String> {
     // (not inside build_models) so the join stays a pure function of the
     // curation table.
     models.extend(openai_codex_models());
-    let models = with_ultrafast_twins(models, ULTRAFAST_BASES)?;
+    let mut models = with_ultrafast_twins(models, ULTRAFAST_BASES)?;
+    // JSON-valued fields must keep their historical ordering even when another
+    // workspace member enables serde_json/preserve_order.
+    for compat in models.iter_mut().filter_map(|model| model.compat.as_mut()) {
+        compat.sort_all_objects();
+    }
     validate(&models)?;
 
     let json = to_pretty_json(&models)?;
@@ -134,9 +139,11 @@ fn curated_snapshot(raw: &str) -> Result<String, String> {
             .iter()
             .map(|row| {
                 let model = entry.model(provider.models_dev_id, row.id)?;
-                let value = serde_json::to_value(model).map_err(|error| {
+                let mut value = serde_json::to_value(model).map_err(|error| {
                     format!("serialize {}/{}: {error}", provider.models_dev_id, row.id)
                 })?;
+                // Keep snapshots deterministic with serde_json/preserve_order enabled.
+                value.sort_all_objects();
                 Ok((row.id.to_string(), value))
             })
             .collect::<Result<BTreeMap<_, _>, String>>()?;

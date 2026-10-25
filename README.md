@@ -21,6 +21,9 @@ A cupel is a small vessel for refining precious metals. This project borrows tha
   - [Themes](#themes)
   - [Local models](#local-models)
   - [Guardrails](#guardrails)
+- [ACP clients](#acp-clients)
+  - [Zed IDE](#zed-ide)
+  - [OpenHands](#openhands)
 - [Appendix](#appendix)
 
 ## Workspace crates
@@ -29,6 +32,7 @@ A cupel is a small vessel for refining precious metals. This project borrows tha
 - **`cupel-agent`** — the agent loop: wires system prompt, message history, and tool definitions into repeated inference calls, executes tool calls, and feeds the results back. Includes context-compaction hooks and the `AgentHooks` extension point.
 - **`cupel-coding-agent`** — the coding-agent library: slash commands, prompt templates from `prompts/<name>.md`, project context from `AGENTS.md`/`CLAUDE.md`, sessions, the line-based plain mode, and the built-in tools `read`, `grep` (backed by the `grep` crate family), `apply_patch`, and `bash`. It has no UI dependency, so other programs can embed it.
 - **`cupel-tui`** — the `ratatui` TUI with `@file-path` fuzzy referencing, built on `cupel-coding-agent`. Ships the `cupel` CLI.
+- **`cupel-acp`** — ACP v1 over stdio for OpenHands and other ACP clients; text prompts, tool activity, cancellation, session restoration, and usage updates.
 
 ## Install
 
@@ -257,6 +261,85 @@ For `llama-server`, use the same entry with `"baseUrl": "http://localhost:8080/v
     "maxRepeats": 3
   }
 }
+```
+
+## ACP clients
+
+Build the separate protocol frontend with `cargo install --locked --path crates/cupel-acp`.
+Configure the client's custom ACP command as `cupel-acp`, optionally followed by
+`--model <id>` and `--thinking <level>`. The binary and Cupel's credentials must
+be available in the environment where the client launches the agent. The client
+supplies each session's absolute working directory; there is no `--cwd` flag.
+
+The frontend keeps Cupel's tools, providers, project trust, hooks, and JSONL
+transcripts. It supports text prompts, streamed tool results, cancellation,
+multiple sessions, history replay, and context/cost updates. Only one session on
+a connection may run in a given canonical directory at a time. Closing the
+connection stops active work and settles lifecycle hooks.
+
+Model selection is configured at process startup. Injected MCP servers, images,
+structured user questions, and interactive login are unsupported; non-text
+prompts and nonempty MCP server lists receive explicit errors. Ordinary assistant
+questions work across chat turns. Trust a project through the ordinary Cupel TUI
+before using its project hooks or sensitive model overrides; ACP never grants
+trust automatically.
+
+### Zed IDE
+
+Following Zed's [External Agents documentation](https://zed.dev/docs/ai/external-agents#custom-agents),
+run `agent: open settings` from the Command Palette, open **External Agents**, and
+choose **Add Agent → Add Custom Agent**. Zed opens your settings file.
+
+Merge the [settings example](crates/cupel-acp/examples/zed-settings.json) into your
+existing settings without replacing other entries:
+
+```json
+{
+  "agent_servers": {
+    "Cupel": {
+      "type": "custom",
+      "command": "/absolute/path/to/cupel-acp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+Replace `command` with the absolute path printed by `command -v cupel-acp` after
+installation. This avoids differences between your shell's and Zed's `PATH`.
+Leave `args` empty to use Cupel's default model, or set it to
+`["--model", "<id>", "--thinking", "medium"]`, replacing `<id>` with a Cupel catalog
+model ID. If needed, set `CUPEL_HOME` in `env` to the absolute path of your Cupel
+home directory. Configure provider credentials in Cupel's home or the agent's
+environment; Zed's own LLM provider settings do not configure Cupel. Complete
+interactive login and project trust in the Cupel TUI beforehand.
+
+Open your project in Zed, then select **Cupel** from the Agent Panel's new-thread
+menu. For SSH or container projects, ensure the binary, credentials, and project
+path are available wherever Zed launches the agent.
+
+Zed can forward configured MCP servers to external agents, but Cupel currently
+rejects nonempty MCP server lists. If starting a thread reports
+`MCP server injection is not supported by cupel-acp`, disable those MCP servers
+in Zed for this setup. Run `dev: open acp logs` from the Command Palette to inspect
+the protocol exchange when troubleshooting.
+
+### OpenHands
+
+OpenHands' Agent Server must have `cupel-acp` and Cupel's credentials available in
+its execution environment; installing only on your laptop is not sufficient for
+a remote or containerized Agent Server.
+
+For a deterministic OpenHands integration check, run the
+[smoke-test example](crates/cupel-acp/examples/openhands_smoke.py) from the repository
+root with `uv` installed. It uses the real OpenHands SDK with local fake inference,
+requires no model credentials, and verifies two turns with retained history:
+
+```bash
+cargo build --locked -p cupel-acp
+uv run --python 3.13 --with openhands-sdk==1.58.1 \
+  crates/cupel-acp/examples/openhands_smoke.py target/debug/cupel-acp
 ```
 
 ## Appendix
