@@ -1,6 +1,6 @@
 # Release pipeline: push a tag like `v0.1.0` and this builds per-platform
-# binaries and attaches them to a GitHub Release. Users install with the
-# repo's install.sh (or by downloading an archive) - no Rust required.
+# cupel and cupel-acp binaries and attaches them to a GitHub Release. Users
+# install with the repo's install.sh (or download an archive) - no Rust required.
 # After the release, CHANGELOG.md and workspace versions are updated on main
 # (see `changelog` job) and the Homebrew tap is bumped (see `homebrew` job).
 #
@@ -43,6 +43,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
 
       - name: Set workspace version from release tag
         env:
@@ -77,23 +80,31 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          cargo build --release -p cupel-tui --target aarch64-apple-darwin
-          cargo build --release -p cupel-tui --target x86_64-apple-darwin
-          lipo -create \
-            target/aarch64-apple-darwin/release/cupel \
-            target/x86_64-apple-darwin/release/cupel \
-            -output cupel
+          cargo build --locked --release -p cupel-tui -p cupel-acp --target aarch64-apple-darwin
+          cargo build --locked --release -p cupel-tui -p cupel-acp --target x86_64-apple-darwin
+          for binary in cupel cupel-acp; do
+            lipo -create \
+              target/aarch64-apple-darwin/release/$binary \
+              target/x86_64-apple-darwin/release/$binary \
+              -output "$binary"
+            lipo -verify_arch arm64 x86_64 "$binary"
+          done
 
       - name: Build (Linux musl)
         if: runner.os == 'Linux'
         run: |
           rustup target add ${{ matrix.target }}
-          cargo build --release -p cupel-tui --target ${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/cupel cupel
+          cargo build --locked --release -p cupel-tui -p cupel-acp --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/{cupel,cupel-acp} .
 
       - name: Package
         run: |
-          tar -czf ${{ matrix.artifact }}.tar.gz cupel LICENSE README.md
+          tar -czf ${{ matrix.artifact }}.tar.gz cupel cupel-acp LICENSE README.md \
+            -C crates/cupel-acp examples
+          shasum -a 256 ${{ matrix.artifact }}.tar.gz > sha256sums.txt
+
+      - name: Verify release archive and clean installation
+        run: python3 packaging/check-release.py ${{ matrix.artifact }}.tar.gz sha256sums.txt
 
       - uses: actions/upload-artifact@v7
         with:
