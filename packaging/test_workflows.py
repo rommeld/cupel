@@ -1,4 +1,4 @@
-"""Offline regression tests for release ordering and retry behavior."""
+"""Offline regression tests for release builds, ordering, and retry behavior."""
 
 import argparse
 import importlib.util
@@ -7,12 +7,48 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 PACKAGING = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("version_order", PACKAGING / "version-order.py")
 version_order = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(version_order)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "requires Apple's clang and lipo")
+class MacOSUniversalBuildTests(unittest.TestCase):
+    def test_workflow_creates_and_verifies_both_universal_binaries(self):
+        workflow = (PACKAGING.parent / ".github/workflows/release.yml").read_text()
+        start = workflow.index("          for binary in cupel cupel-acp; do\n")
+        end = workflow.index("          done\n", start) + len("          done\n")
+        loop = textwrap.dedent(workflow[start:end])
+
+        with tempfile.TemporaryDirectory(prefix="cupel-lipo-test-") as directory:
+            root = Path(directory)
+            for target, arch in (
+                ("aarch64-apple-darwin", "arm64"), ("x86_64-apple-darwin", "x86_64"),
+            ):
+                output = root / "target" / target / "release"
+                output.mkdir(parents=True)
+                for binary in ("cupel", "cupel-acp"):
+                    subprocess.run(
+                        ["xcrun", "clang", "-arch", arch, "-x", "c", "-c", "-o", str(output / binary), "-"],
+                        input="int main(void) { return 0; }\n", text=True,
+                        capture_output=True, check=True, timeout=30,
+                    )
+
+            result = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", loop], cwd=root,
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for binary in ("cupel", "cupel-acp"):
+                archs = subprocess.run(
+                    ["lipo", binary, "-archs"], cwd=root,
+                    capture_output=True, text=True, check=True, timeout=10,
+                )
+                self.assertEqual(set(archs.stdout.split()), {"arm64", "x86_64"})
 
 
 class VersionOrderTests(unittest.TestCase):
