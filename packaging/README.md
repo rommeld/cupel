@@ -1,19 +1,18 @@
 # Releasing and packaging cupel
 
-Current state: `v0.1.3-beta` (adds `@path` file references in the TUI) is
-live on GitHub Releases with all three platform archives, and the
-`install.sh` one-liner resolves against it via `releases/latest/download/`.
+Each release has three platform archives. Starting with the ACP packaging
+release, each contains `cupel`, `cupel-acp`, `LICENSE`, `README.md`, and ACP client
+examples under `examples/`. Archive names and the published `sha256sums.txt`
+stay unchanged, so existing Cupel installers and `/update` remain compatible.
 
 ## Cutting a release
 
 Pre-flight, in order:
 
 1. CI is green on `main` (`.github/workflows/ci.yml` - fmt, clippy, tests
-   on Ubuntu AND macOS; the Ubuntu leg is the only Linux coverage cupel
-   gets before release).
-2. Optionally bump the crate `version` fields in `crates/*/Cargo.toml` to
-   match the tag. The binaries don't read it, but drift is confusing
-   (tags are at 0.1.3-beta while the crates still say 0.1.0).
+   and packaging checks on Ubuntu x86_64, Ubuntu aarch64, and macOS).
+2. Choose a `vX.Y.Z` or `vX.Y.Z-prerelease` tag. The release workflow sets the
+   inherited workspace version from it before building both executables.
 
 Then the tag IS the release (scheme in use: `vX.Y.Z-beta`):
 
@@ -21,8 +20,8 @@ Then the tag IS the release (scheme in use: `vX.Y.Z-beta`):
 git tag v0.1.4-beta && git push origin v0.1.4-beta
 ```
 
-`.github/workflows/release.yml` builds the macOS universal binary and both
-Linux musl binaries, and publishes a GitHub Release with the archives and a
+`.github/workflows/release.yml` builds both executables as macOS universal
+binaries and Linux musl binaries, and publishes a GitHub Release with the archives and a
 `sha256sums.txt`. The release is created as a FULL release (not a
 prerelease), which is what makes `releases/latest/download/` - and
 therefore `install.sh` - point at it. Users install with:
@@ -30,6 +29,31 @@ therefore `install.sh` - point at it. Users install with:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
+
+Both executables go into `${CUPEL_INSTALL_DIR:-${CUPEL_HOME:-$HOME/.cupel}/bin}`.
+The installer preserves compatibility with older `cupel`-only archives and
+warns that ACP needs a newer release. Re-running it updates both executables;
+the TUI's `/update` still updates only `cupel`.
+
+### Artifact verification
+
+Before upload, every release runner verifies the actual archive's checksum,
+both executable files and their `--help`, installation into a clean default and
+custom home/bin directory without Rust, and an ACP initialize/session/prompt
+exchange using loopback fake inference. macOS also checks both universal slices.
+All three build/run checks must pass before the release can be published.
+CI exercises the same checker on native debug builds before a tag is cut.
+
+To repeat the checks locally on a matching host (Python 3.12+, no Python packages):
+
+```sh
+python3 -m unittest discover -s packaging -p 'test_*.py' -v
+python3 packaging/check-release.py /path/to/cupel-<platform>.tar.gz /path/to/sha256sums.txt
+```
+
+The installer test serves local fixtures through a fake `curl`; it never fetches
+GitHub releases or uses real credentials. The packaged `examples/stdio_smoke.py`
+can also run directly against an installed `cupel-acp` using only Python's stdlib.
 
 ## Homebrew tap (automated)
 
@@ -42,9 +66,9 @@ One-time setup (until then the job skips with a notice, never failing a
 release):
 
 1. Create a GitHub repository named `homebrew-tap`; copy
-   `packaging/homebrew/cupel.rb` to `Formula/cupel.rb` in it (the formula
-   here carries the real checksums for the current release, so the first
-   copy is publishable as-is).
+   `packaging/homebrew/cupel.rb` to `Formula/cupel.rb` in it after regenerating
+   its version/checksums for a release containing both binaries. The template's
+   checked-in historical checksums predate ACP and must not be published as-is.
 2. Create a fine-grained personal access token with `Contents:
    Read and write` permission on ONLY the `homebrew-tap` repository. The
    workflow's default `GITHUB_TOKEN` cannot push to other repos - that's

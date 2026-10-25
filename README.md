@@ -44,6 +44,15 @@ No Rust required. macOS (Intel & Silicon) and Linux (x86_64/aarch64, static musl
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
+Starting with the next release containing ACP packaging, each platform archive
+includes **both `cupel` and `cupel-acp`**, covered by `sha256sums.txt`. The installer
+puts both in `~/.cupel/bin` (`$CUPEL_HOME/bin`, or `$CUPEL_INSTALL_DIR` when set).
+Run `~/.cupel/bin/cupel-acp --help` to verify the ACP executable. Older releases
+still install `cupel` and warn when they do not yet include `cupel-acp`.
+Homebrew installs both with `brew install rommeld/tap/cupel` after that release.
+Re-run the installer, or use `brew upgrade cupel`, to update both binaries;
+Cupel's existing `/update` command updates only `cupel`.
+
 ### From source
 
 Requires a recent stable Rust toolchain:
@@ -52,6 +61,7 @@ Requires a recent stable Rust toolchain:
 git clone https://github.com/rommeld/cupel.git
 cd cupel
 cargo install --path crates/cupel-tui
+cargo install --path crates/cupel-acp
 ```
 
 ## Usage
@@ -265,7 +275,9 @@ For `llama-server`, use the same entry with `"baseUrl": "http://localhost:8080/v
 
 ## ACP clients
 
-Build the separate protocol frontend with `cargo install --locked --path crates/cupel-acp`.
+Install the packaged `cupel-acp` through the [prebuilt installer](#prebuilt-binary)
+or Homebrew; no separate Rust installation is needed. For source builds, use
+`cargo install --locked --path crates/cupel-acp`.
 Configure the client's custom ACP command as `cupel-acp`, optionally followed by
 `--model <id>` and `--thinking <level>`. The binary and Cupel's credentials must
 be available in the environment where the client launches the agent. The client
@@ -337,10 +349,18 @@ root with `uv` installed. It uses the real OpenHands SDK with local fake inferen
 requires no model credentials, and verifies two turns with retained history:
 
 ```bash
-cargo build --locked -p cupel-acp
 uv run --python 3.13 --with openhands-sdk==1.58.1 \
-  crates/cupel-acp/examples/openhands_smoke.py target/debug/cupel-acp
+  crates/cupel-acp/examples/openhands_smoke.py "$(command -v cupel-acp)"
 ```
+
+For a stdlib-only ACP check (no SDK or `uv`), run
+`python3 crates/cupel-acp/examples/stdio_smoke.py "$(command -v cupel-acp)"`.
+Both scripts are included under `examples/` in the release archive; see the
+[client examples](crates/cupel-acp/examples/README.md) for launch and credential setup.
+In a remote workspace or container, run the installer **inside that environment**
+and configure the client with its absolute `cupel-acp` path there. Provide that
+environment with the existing provider variables or Cupel home configuration;
+do not assume it inherits your laptop's credentials or binaries.
 
 ## Appendix
 

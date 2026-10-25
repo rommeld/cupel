@@ -10,7 +10,8 @@
 #   brew install rommeld/tap/cupel
 #
 # The checksums below are the REAL values for v0.1.3-beta, fetched from that
-# release's sha256sums.txt - this formula is publishable as-is.
+# release's sha256sums.txt. Regenerate them for a release containing cupel-acp
+# before publishing this updated template (see packaging/README.md).
 
 class Cupel < Formula
   desc "Lean Rust coding agent with provider-neutral inference and a TUI"
@@ -35,10 +36,11 @@ class Cupel < Formula
   end
 
   def install
-    bin.install "cupel"
+    bin.install "cupel", "cupel-acp"
   end
 
   test do
     assert_match "usage: cupel", shell_output("#{bin}/cupel --help")
+    assert_match "usage: cupel-acp", shell_output("#{bin}/cupel-acp --help 2>&1")
   end
 end

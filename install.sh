@@ -1,5 +1,5 @@
 #!/bin/sh
-# cupel installer - downloads the latest release binary for this platform.
+# cupel installer - downloads the latest release binaries for this platform.
 #
 #   curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 #
@@ -8,6 +8,7 @@
 #
 #   ~/.cupel/
 #   ├── bin/cupel      the binary (this dir goes on PATH)
+#   ├── bin/cupel-acp  ACP stdio frontend for editor/agent clients
 #   ├── bin/.cupel-installer   tells cupel's /update it may replace the binary
 #   ├── AGENTS.md      global context, loaded into every session (optional)
 #   ├── prompts/*.md   global /command prompt templates
@@ -87,6 +88,13 @@ fi
 tar -xzf "$tmp/$asset.tar.gz" -C "$tmp"
 mkdir -p "$INSTALL_DIR"
 install -m 755 "$tmp/cupel" "$INSTALL_DIR/cupel"
+# Keep installs from older releases working until the first bundled ACP release.
+if [ -f "$tmp/cupel-acp" ]; then
+    install -m 755 "$tmp/cupel-acp" "$INSTALL_DIR/cupel-acp"
+    echo "installed cupel-acp to $INSTALL_DIR/cupel-acp"
+else
+    echo "warning: this release predates cupel-acp packaging; rerun this installer after the next release" >&2
+fi
 # cupel's /update replaces only a binary that this script installed. The marker
 # says so; Homebrew and builds from source have none.
 echo "cupel's install.sh put the cupel binary here; /update may replace it" \
