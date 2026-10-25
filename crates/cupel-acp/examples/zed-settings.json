@@ -1,0 +1,10 @@
+{
+  "agent_servers": {
+    "Cupel": {
+      "type": "custom",
+      "command": "/absolute/path/to/cupel-acp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
