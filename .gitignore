@@ -30,4 +30,8 @@
 !/.github/**
 
 !/packaging/
-!/packaging/**
+!/packaging/**.py
+!/packaging/**.sh
+!/packaging/homebrew/
+!/packaging/homebrew/**
+!/packaging/README.md
