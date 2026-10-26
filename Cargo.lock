@@ -979,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-acp"
-version = "0.33.8"
+version = "0.33.9"
 dependencies = [
  "agent-client-protocol",
  "cupel-agent",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-agent"
-version = "0.33.8"
+version = "0.33.9"
 dependencies = [
  "async-trait",
  "cupel-core",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-coding-agent"
-version = "0.33.8"
+version = "0.33.9"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1038,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-core"
-version = "0.33.8"
+version = "0.33.9"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-tui"
-version = "0.33.8"
+version = "0.33.9"
 dependencies = [
  "base64 0.22.1",
  "cupel-agent",
@@ -3409,9 +3409,12 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "similar"
-version = "2.7.0"
+version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
+checksum = "d2f8bec09ae8fae0f4f265a4559a9334be3929d8504e9b536df0a41302bd1733"
+dependencies = [
+ "bstr",
+]
 
 [[package]]
 name = "siphasher"
