@@ -60,7 +60,7 @@ fn render_sidebar(frame: &mut Frame<'_>, sessions: &mut Sessions, area: Rect, th
             Status::Asking => "?",
             Status::Done => "✓",
             Status::Failed => "✗",
-            Status::New => "○",
+            Status::New | Status::Cancelled => "○",
         };
         let count = sessions.conflict_count(index);
         let badge = if count == 0 {
@@ -3980,6 +3980,141 @@ pub(crate) mod tests {
             .find(|text| text.contains("does not take an API key"))
             .expect("key refusal notice");
         assert!(notice.contains("openai-codex"), "{notice}");
+    }
+
+    #[tokio::test]
+    async fn program_status_tracks_work_question_resume_and_success() {
+        use crate::app::Activity;
+        use cupel_coding_agent::program_status::{BlockedKind, State};
+        let mut app = test_app();
+        assert_eq!(app.program_status(), (State::Idle, None));
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        app.run_events = Some(events);
+        assert_eq!(app.program_status().0, State::Working);
+        let answer = open_question(&mut app);
+        assert_eq!(
+            app.program_status().0,
+            State::Blocked(BlockedKind::Question)
+        );
+        assert_eq!(
+            app.program_status().1.as_deref(),
+            Some("Where should presets live?")
+        );
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(answer.await.unwrap(), Answer::Picked(1));
+        assert_eq!(app.program_status().0, State::Working);
+        for activity in [
+            Activity::Retrying,
+            Activity::Compacting,
+            Activity::Running("bash".into()),
+        ] {
+            app.activity = activity;
+            assert_eq!(app.program_status().0, State::Working);
+        }
+        app.on_agent_event(Some(AgentEvent::MessageEnd {
+            message: assistant_message("ok", cupel_core::types::StopReason::Stop, 1),
+        }))
+        .await;
+        assert_eq!(
+            app.program_status().0,
+            State::Working,
+            "not done until AgentEnd"
+        );
+        app.on_agent_event(Some(AgentEvent::AgentEnd {
+            messages: Vec::new(),
+        }))
+        .await;
+        assert_eq!(app.program_status(), (State::Done, None));
+    }
+
+    #[tokio::test]
+    async fn program_status_cancellation_is_not_failure_even_with_late_events() {
+        use cupel_coding_agent::program_status::State;
+        for reason in [
+            cupel_core::types::StopReason::Aborted,
+            cupel_core::types::StopReason::Error,
+        ] {
+            let mut app = test_app();
+            let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+            app.run_events = Some(events);
+            let _answer = open_question(&mut app);
+            press(&mut app, KeyCode::Esc);
+            assert_eq!(app.program_status(), (State::Idle, None));
+            app.on_agent_event(Some(AgentEvent::MessageEnd {
+                message: assistant_message("", reason, 1),
+            }))
+            .await;
+            app.on_agent_event(Some(AgentEvent::AgentEnd {
+                messages: Vec::new(),
+            }))
+            .await;
+            assert_eq!(app.program_status(), (State::Idle, None));
+            app.start_run("again");
+            assert_eq!(app.program_status().0, State::Working);
+            while app.is_running() {
+                let event = app.next_event().await;
+                app.on_event(event).await;
+            }
+            assert_eq!(app.program_status().0, State::Error);
+        }
+    }
+
+    #[tokio::test]
+    async fn program_status_login_wait_and_completion_restore_actual_state() {
+        use crate::login::{LoginEvent, LoginState};
+        use cupel_coding_agent::program_status::{BlockedKind, State};
+        let mut app = test_app();
+        let (flow, _events, _cancel, _code) = crate::login::stub_flow();
+        app.login = Some(flow);
+        assert_eq!(app.program_status().0, State::Working);
+        app.on_login_event(Some(LoginEvent::Progress(
+            LoginState::Waiting,
+            "open browser".into(),
+        )));
+        assert_eq!(app.program_status().0, State::Blocked(BlockedKind::Auth));
+        app.on_login_event(Some(LoginEvent::Progress(
+            LoginState::Working,
+            "exchanging".into(),
+        )));
+        assert_eq!(app.program_status().0, State::Working);
+        app.on_login_event(Some(LoginEvent::Done(Ok("logged in".into()))));
+        assert_eq!(app.program_status().0, State::Idle);
+
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        app.run_events = Some(events);
+        let (flow, _events, _cancel, _code) = crate::login::stub_flow();
+        app.login = Some(flow);
+        app.on_login_event(Some(LoginEvent::Progress(
+            LoginState::Waiting,
+            "enter code".into(),
+        )));
+        assert_eq!(app.program_status().0, State::Blocked(BlockedKind::Auth));
+        app.on_login_event(Some(LoginEvent::Done(Ok("logged in".into()))));
+        assert_eq!(app.program_status().0, State::Working);
+
+        let (flow, _events, _cancel, _code) = crate::login::stub_flow();
+        app.login = Some(flow);
+        app.on_login_event(Some(LoginEvent::Progress(
+            LoginState::Waiting,
+            "enter code".into(),
+        )));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(
+            app.program_status().0,
+            State::Working,
+            "login cancellation resumes the run"
+        );
+    }
+
+    #[tokio::test]
+    async fn program_status_unexpected_stream_close_is_failure() {
+        use cupel_coding_agent::program_status::State;
+        let mut app = test_app();
+        app.last_answer = Status::Done;
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        app.run_events = Some(events);
+        app.on_agent_event(None).await;
+        assert_eq!(app.program_status().0, State::Error);
     }
 
     #[tokio::test]

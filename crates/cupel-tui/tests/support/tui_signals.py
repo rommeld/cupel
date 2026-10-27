@@ -93,6 +93,11 @@ try:
         assert termios.tcgetattr(slave) == original_termios, "terminal stayed in raw mode"
         for sequence in [b"\x1b[?1049l", b"\x1b[?1000l", b"\x1b[?1006l", b"\x1b[?2004l", b"\x1b[<1u"]:
             assert sequence in output, f"terminal restoration missing {sequence!r}"
+        reports = [part.split(b"\x1b\\", 1)[0] for part in output.split(b"\x1b]7501;")[1:]]
+        assert reports and reports[0].startswith(b"state=idle:"), reports
+        if mode == "running":
+            assert any(report.startswith(b"state=working:") for report in reports), reports
+        assert reports[-1].startswith(b"state=idle:"), "shutdown left stale work or auth wait"
     if tool_pid is not None:
         try:
             os.killpg(tool_pid, 0)

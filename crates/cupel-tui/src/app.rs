@@ -13,6 +13,7 @@ use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
 use cupel_coding_agent::bootstrap::Frontend;
 use cupel_coding_agent::commands;
 use cupel_coding_agent::modes::SessionMeta;
+use cupel_coding_agent::program_status::{BlockedKind, State as ProgramState};
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
 use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
@@ -125,6 +126,7 @@ pub enum Status {
     Asking,
     Done,
     Failed,
+    Cancelled,
 }
 
 /// What a new session takes over from the session that opens it. The model with its
@@ -435,6 +437,36 @@ impl App {
             Status::Running
         } else {
             self.last_answer
+        }
+    }
+
+    /// Protocol state is independent of which session is on screen. Stable
+    /// activity labels avoid emitting a report for every token/reasoning headline.
+    #[must_use]
+    pub fn program_status(&self) -> (ProgramState, Option<String>) {
+        if let Some(login) = &self.login {
+            return match login.state() {
+                login::LoginState::Working => (ProgramState::Working, Some("logging in".into())),
+                login::LoginState::Waiting => (
+                    ProgramState::Blocked(BlockedKind::Auth),
+                    Some("complete login".into()),
+                ),
+            };
+        }
+        if self.last_answer == Status::Cancelled {
+            return (ProgramState::Idle, None);
+        }
+        if let Some(question) = &self.question {
+            return (
+                ProgramState::Blocked(BlockedKind::Question),
+                Some(question.pending.question().question.clone()),
+            );
+        }
+        match self.status() {
+            Status::Running => (ProgramState::Working, Some(self.activity.to_string())),
+            Status::Done => (ProgramState::Done, None),
+            Status::Failed => (ProgramState::Error, None),
+            Status::New | Status::Asking | Status::Cancelled => (ProgramState::Idle, None),
         }
     }
 
@@ -1078,7 +1110,8 @@ impl App {
     /// into the input box first. An aborted run never reaches the point
     /// where it would take them, so they would sit in the agent's queues
     /// until the next run ends.
-    fn abort_run(&mut self) {
+    pub(crate) fn abort_run(&mut self) {
+        self.last_answer = Status::Cancelled;
         self.question = None;
         self.restore_queued();
         self.agent.abort();
@@ -1159,9 +1192,12 @@ impl App {
         });
         match self.agent.prompt_text(text) {
             Ok(events) => self.begin_run(events),
-            Err(err) => self.transcript.cells.push(Cell::Error {
-                text: err.to_string(),
-            }),
+            Err(err) => {
+                self.last_answer = Status::Failed;
+                self.transcript.cells.push(Cell::Error {
+                    text: err.to_string(),
+                });
+            }
         }
     }
 
@@ -1170,6 +1206,7 @@ impl App {
         self.run_events = Some(events);
         self.run_started = Some(Instant::now());
         self.activity = Activity::Waiting;
+        self.last_answer = Status::New;
     }
 
     /// The title's words: the headline of the reasoning while the model
@@ -1192,6 +1229,9 @@ impl App {
         // Reported tokens are spent event if the response subsequently failed.
         self.usage_by_model.record(assistant);
         self.totals = self.usage_by_model.totals();
+        if self.last_answer == Status::Cancelled {
+            return;
+        }
         // Steering cut this reply short on purpose. No error. The run goes on with
         // the steered prompt. Esc empties `steering` before it aborts, so an Esc never
         // lands here.
@@ -1717,6 +1757,12 @@ impl App {
     pub fn on_login_event(&mut self, event: Option<login::LoginEvent>) {
         match event {
             Some(login::LoginEvent::Notice(text)) => self.notice(text),
+            Some(login::LoginEvent::Progress(state, text)) => {
+                if let Some(flow) = &mut self.login {
+                    flow.on_progress(state);
+                }
+                self.notice(text);
+            }
             Some(login::LoginEvent::Done(Ok(summary))) => {
                 self.login = None;
                 self.notice(format!(
@@ -1742,6 +1788,9 @@ impl App {
             self.questions = None;
             return;
         };
+        if self.last_answer == Status::Cancelled {
+            return;
+        }
         let selected = pending.question().recommended();
         self.question = Some(OpenQuestion { pending, selected });
         // The question builds on what the agent just wrote: show the end.
@@ -1812,6 +1861,9 @@ impl App {
     pub async fn on_agent_event(&mut self, event: Option<AgentEvent>) {
         let Some(event) = event else {
             // Stream closed without AgentEnd (shouldn't happen; be robust).
+            if self.last_answer != Status::Cancelled {
+                self.last_answer = Status::Failed;
+            }
             self.finish_run().await;
             return;
         };
@@ -1958,6 +2010,9 @@ impl App {
     }
 
     async fn finish_run(&mut self) {
+        if self.last_answer == Status::New {
+            self.last_answer = Status::Failed;
+        }
         // The trailing assistant prose was the run's fnal answer
         // promote it so the turn visibly ends with its results.
         self.transcript.promote_final_answer();
@@ -1989,9 +2044,12 @@ impl App {
         if let Some(messages) = next {
             match self.agent.prompt(messages) {
                 Ok(events) => self.begin_run(events),
-                Err(err) => self.transcript.cells.push(Cell::Error {
-                    text: err.to_string(),
-                }),
+                Err(err) => {
+                    self.last_answer = Status::Failed;
+                    self.transcript.cells.push(Cell::Error {
+                        text: err.to_string(),
+                    });
+                }
             }
         }
     }
