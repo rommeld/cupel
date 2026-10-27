@@ -133,7 +133,7 @@ pub fn select_model(
     }
     Err(
         "no credentials found: set ANTHROPIC_API_KEY, OPENAI_API_KEY, FIREWORKS_API_KEY, \
-        OPENTROUTER_API_KEY, or AWS credentials, add a key to ~/.cupel/settings.json, log in \
+        OPENROUTER_API_KEY, or AWS credentials, add a key to ~/.cupel/settings.json, log in \
         with a ChatGPT subscription (/login openai-codex in the TUI), start a local server \
         (ollama / llama-server - see README 'Local models'), or start with an explicit \
         `--model <id>` and enter a key in the TUI via `/provider <name> <api-key>`"
