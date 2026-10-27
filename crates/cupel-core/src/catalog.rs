@@ -173,6 +173,11 @@ mod tests {
                 Provider::AMAZON_BEDROCK,
                 Api::BEDROCK_CONVERSE_STREAM,
             ),
+            (
+                "anthropic/claude-fable-5.1",
+                Provider::OPENROUTER,
+                Api::OPENAI_COMPLETIONS,
+            ),
         ] {
             let model = models.iter().find(|m| m.id == id).expect("Fable 5.1 row");
             assert_eq!(model.provider.as_str(), provider, "{id}");
@@ -240,6 +245,119 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_default_stays_qwen38_max() {
+        let first = builtin_models()
+            .into_iter()
+            .find(|model| model.provider.as_str() == Provider::OPENROUTER)
+            .expect("OpenRouter rows");
+        assert_eq!(first.id, "qwen/qwen3.8-max-0902");
+    }
+
+    #[test]
+    fn shared_fireworks_and_openrouter_models_keep_independent_metadata() {
+        use crate::types::InputModality;
+
+        let models = builtin_models();
+        for (fireworks_id, openrouter_id, fireworks_limits, openrouter_limits, input, maps) in [
+            (
+                "accounts/fireworks/models/minimax-m3p1-flash",
+                "minimax/minimax-m3.1-flash",
+                (1_000_000, 512_000),
+                (1_048_576, 524_288),
+                vec![InputModality::Text, InputModality::Image],
+                [
+                    serde_json::json!({"minimal": null, "off": null}),
+                    serde_json::json!({"minimal": null, "off": null}),
+                ],
+            ),
+            (
+                "accounts/fireworks/models/qwen3p8-2p4t-a95b",
+                "qwen/qwen3.8-2.4t-a95b",
+                (262_144, 131_072),
+                (1_048_576, 909_000),
+                vec![InputModality::Text],
+                [
+                    serde_json::json!({"high": null, "max": null, "minimal": null, "off": "none"}),
+                    serde_json::json!({"high": null, "max": null, "minimal": null, "off": null}),
+                ],
+            ),
+        ] {
+            for (id, provider, url, limits, map) in [
+                (
+                    fireworks_id,
+                    Provider::FIREWORKS,
+                    "https://api.fireworks.ai/inference/v1",
+                    fireworks_limits,
+                    &maps[0],
+                ),
+                (
+                    openrouter_id,
+                    Provider::OPENROUTER,
+                    "https://openrouter.ai/api/v1",
+                    openrouter_limits,
+                    &maps[1],
+                ),
+            ] {
+                let model = models.iter().find(|model| model.id == id).expect(id);
+                assert_eq!(model.provider.as_str(), provider, "{id}");
+                assert_eq!(model.api.as_str(), Api::OPENAI_COMPLETIONS, "{id}");
+                assert_eq!(model.base_url, url, "{id}");
+                assert!(model.reasoning, "{id}");
+                assert_eq!(model.input, input, "{id}");
+                assert_eq!((model.context_window, model.max_tokens), limits, "{id}");
+                assert_eq!(
+                    serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+                    *map,
+                    "{id}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn expanded_openrouter_families_are_available() {
+        let models = builtin_models();
+        for id in [
+            "qwen/qwen3.8-max-prime",
+            "qwen/qwen3-coder-next",
+            "z-ai/glm-5.3-prime",
+            "z-ai/glm-5.3-flashx",
+            "anthropic/claude-fable-5.1",
+            "prism-ml/ternary-bonsai-2-9b",
+            "prism-ml/ternary-bonsai-2-27b",
+            "inclusionai/ling-3.1-flash",
+            "aion-labs/aion-3.5",
+            "upstage/solar-mini4",
+            "stepfun/step-5-preview",
+            "sakana/fugu-ultra-v2",
+            "nex-agi/nex-n2.5-pro",
+            "tencent/hy4-preview",
+            "ibm-granite/granite-4.2-8b",
+            "meituan/longcat-2.0",
+            "cohere/command-a-plus",
+            "bytedance-seed/seed-2-1-turbo",
+            "perceptron/perceptron-mk1.5",
+        ] {
+            let model = models.iter().find(|model| model.id == id).expect(id);
+            assert_eq!(model.provider.as_str(), Provider::OPENROUTER, "{id}");
+            assert!(
+                model.input.contains(&crate::types::InputModality::Text),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn openrouter_qwen_coder_next_does_not_enable_reasoning() {
+        let model = builtin_models()
+            .into_iter()
+            .find(|model| model.id == "qwen/qwen3-coder-next")
+            .expect("Qwen3 Coder Next");
+        assert!(!model.reasoning);
+        assert!(model.thinking_level_map.is_none());
+    }
+
+    #[test]
     fn openrouter_kimi31_pro_keeps_its_native_reasoning_and_image_input() {
         use crate::types::InputModality;
 
@@ -292,6 +410,23 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_free_variants_have_no_token_charges() {
+        for model in builtin_models().into_iter().filter(|model| {
+            model.provider.as_str() == Provider::OPENROUTER && model.id.ends_with(":free")
+        }) {
+            for price in [
+                model.cost.input,
+                model.cost.output,
+                model.cost.cached_read,
+                model.cost.cached_write,
+            ] {
+                assert!(price.abs() < f64::EPSILON, "{}", model.id);
+            }
+            assert!(model.cost.tiers.is_none(), "{}", model.id);
+        }
+    }
+
+    #[test]
     fn openrouter_deepseek_flash_uses_the_1017_snapshot_and_native_efforts() {
         use crate::types::InputModality;
 
@@ -336,7 +471,13 @@ mod tests {
                     && model.id.starts_with("openai/"))
                 || matches!(
                     model.id.as_str(),
-                    "claude-haiku-5-5" | "anthropic/claude-haiku-5.5"
+                    "claude-haiku-5-5"
+                        | "anthropic/claude-haiku-5.5"
+                        | "qwen/qwen3.7-plus"
+                        | "x-ai/grok-build-0.1"
+                        | "sakana/fugu-ultra-v2"
+                        | "bytedance-seed/seed-2.0-lite"
+                        | "bytedance-seed/seed-2.0-mini"
                 );
             if !plans_on_tier {
                 continue;
@@ -450,6 +591,14 @@ mod tests {
                 serde_json::json!({"minimal": null, "off": "none"}),
             ),
             (
+                "openai/gpt-6.1-terra",
+                Provider::OPENROUTER,
+                Api::OPENAI_COMPLETIONS,
+                272_000,
+                922_000,
+                serde_json::json!({"minimal": null, "off": "none"}),
+            ),
+            (
                 "codex/gpt-6.1-terra",
                 Provider::OPENAI_CODEX,
                 Api::OPENAI_CODEX_RESPONSES,
@@ -495,6 +644,32 @@ mod tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn openrouter_terra_pro_keeps_its_full_window_and_always_on_reasoning() {
+        use crate::types::InputModality;
+
+        let model = builtin_models()
+            .into_iter()
+            .find(|model| model.id == "openai/gpt-6.1-terra-pro")
+            .expect("OpenRouter Terra Pro");
+        assert_eq!(model.name, "GPT-6.1 Terra Pro");
+        assert_eq!(model.provider.as_str(), Provider::OPENROUTER);
+        assert_eq!(model.api.as_str(), Api::OPENAI_COMPLETIONS);
+        assert!(model.input.contains(&InputModality::Text));
+        assert!(model.input.contains(&InputModality::Image));
+        assert!(model.reasoning);
+        assert_eq!(model.context_window, 272_000);
+        assert_eq!(model.max_context_window, Some(1_050_000));
+        assert_eq!(model.max_tokens, 128_000);
+        assert_eq!(
+            serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+            serde_json::json!({"minimal": null, "off": null})
+        );
+        let compat = model.compat.expect("OpenRouter compat");
+        assert_eq!(compat["supportsTemperature"], false);
+        assert_eq!(compat["thinkingFormat"], "openrouter");
     }
 
     #[test]
