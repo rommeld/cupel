@@ -1,8 +1,9 @@
 # Release pipeline: push a tag like `v0.1.0` and this builds per-platform
 # cupel and cupel-acp binaries and attaches them to a GitHub Release. Users
 # install with the repo's install.sh (or download an archive) - no Rust required.
-# After the release, an auto-merge PR updates CHANGELOG.md and workspace versions
-# on main (see `changelog` job), and the Homebrew tap is bumped (see `homebrew` job).
+# After the release, the `changelog` job records CHANGELOG.md and the workspace
+# version on main by pushing directly (the release bot bypasses main's ruleset),
+# and the Homebrew tap is bumped (see `homebrew` job).
 #
 # Platform notes:
 # - macOS ships one universal binary (arm64 + x86_64 via lipo), so there is
@@ -63,18 +64,10 @@ jobs:
             echo "error: release tag '$RELEASE_TAG' must be vX.Y.Z or vX.Y.Z-prerelease" >&2
             exit 1
           fi
-          version=${RELEASE_TAG#v}
 
           # The tag is the source of truth for release binaries, including
           # CARGO_PKG_VERSION. Only rewrite the inherited workspace version.
-          awk -v v="$version" '
-            /^\[workspace\.package\]/ { inpkg = 1 }
-            /^\[/ && !/^\[workspace\.package\]/ { inpkg = 0 }
-            inpkg && /^version = / && !done { print "version = \"" v "\""; done = 1; next }
-            { print }
-            END { if (!done) exit 1 }
-          ' Cargo.toml > Cargo.toml.tmp
-          mv Cargo.toml.tmp Cargo.toml
+          sh packaging/set-workspace-version.sh "${RELEASE_TAG#v}"
 
           # Refresh workspace versions without upgrading locked dependencies.
           cargo update --workspace
@@ -151,16 +144,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: sh ../packaging/publish-release.sh "$GITHUB_REF_NAME"
 
-  # Auto-merge CHANGELOG.md and workspace version updates through a PR so main's
-  # protection rules remain enforced. Dispatch CI explicitly because PRs made
-  # with GITHUB_TOKEN do not trigger pull_request workflows.
+  # Record CHANGELOG.md and the workspace version on main by pushing straight to
+  # it: the GitHub Actions app is a bypass actor on main's ruleset, so no PR is
+  # needed. The job checks out main itself (a tag push would otherwise check out
+  # the tag) with full history and tags.
   changelog:
     needs: release
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: write
-      pull-requests: write
     concurrency:
       group: release-main-update
       cancel-in-progress: false
@@ -168,8 +160,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Base the release-update PR on main. Full history + tags let the
-          # script find the previous tag and list the commits in between.
+          # Commit onto main. Full history + tags let the script find the
+          # previous tag and list the commits in between. Default credentials
+          # persist so the final `git push` authenticates with GITHUB_TOKEN.
           ref: main
           fetch-depth: 0
           fetch-tags: true
@@ -180,11 +173,8 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show active-toolchain
 
-      - name: Open release update PR and enable auto-merge
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: sh packaging/open-release-update.sh "$GITHUB_REF_NAME"
+      - name: Record release on main
+        run: sh packaging/update-release-metadata.sh "$GITHUB_REF_NAME"
 
   # Bump the Homebrew tap to the release that was just published. Needs a
   # HOMEBREW_TAP_TOKEN repository secret (a fine-grained PAT with contents

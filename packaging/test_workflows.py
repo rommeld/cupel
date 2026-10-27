@@ -94,28 +94,8 @@ class ReleaseUpdateTests(unittest.TestCase):
         self.work = root / "checkout"
         self.work.mkdir()
         self.remote = root / "remote.git"
-        self.calls = root / "calls"
-        self.pr = root / "pr"
-        self.fail_dispatch = root / "fail-dispatch"
-        self.fail_auto_merge = root / "fail-auto-merge"
         tools = root / "tools"
         tools.mkdir()
-        gh = tools / "gh"
-        gh.write_text("""#!/bin/sh
-set -eu
-printf '%s\\n' "$*" >> "$CALLS"
-case "$1 $2" in
-    'pr list') if [ -f "$PR" ]; then echo 42; fi ;;
-    'pr create')
-        [ ! -f "$PR" ]
-        echo 42 > "$PR"
-        echo https://github.com/example/cupel/pull/42 ;;
-    'pr merge') [ -f "$PR" ] && [ ! -f "$FAIL_AUTO_MERGE" ] ;;
-    'workflow run') [ ! -f "$FAIL_DISPATCH" ] ;;
-    *) exit 1 ;;
-esac
-""")
-        gh.chmod(0o755)
         cargo = tools / "cargo"
         cargo.write_text("""#!/bin/sh
 set -eu
@@ -127,9 +107,6 @@ awk -F '"' '/^version = / { print $2; exit }' Cargo.toml > Cargo.lock
             **os.environ,
             "PATH": f"{tools}{os.pathsep}{os.defpath}",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "CALLS": str(self.calls), "PR": str(self.pr),
-            "FAIL_DISPATCH": str(self.fail_dispatch),
-            "FAIL_AUTO_MERGE": str(self.fail_auto_merge),
         }
         self.git("init", "--bare", "--initial-branch=main", str(self.remote))
         self.git("init", "--initial-branch=main")
@@ -149,14 +126,6 @@ awk -F '"' '/^version = / { print $2; exit }' Cargo.toml > Cargo.lock
         self.git("remote", "add", "origin", str(self.remote))
         self.git("push", "origin", "main", "--tags")
         self.main = self.git("rev-parse", "main")
-        hook = self.remote / "hooks/update"
-        hook.write_text("""#!/bin/sh
-if [ "$1" = refs/heads/main ]; then
-    echo 'GH013: Changes must be made through a pull request' >&2
-    exit 1
-fi
-""")
-        hook.chmod(0o755)
 
     def git(self, *args):
         return subprocess.run(
@@ -166,107 +135,51 @@ fi
 
     def update(self, tag="v0.33.8"):
         return subprocess.run(
-            ["sh", str(PACKAGING / "open-release-update.sh"), tag],
+            ["sh", str(PACKAGING / "update-release-metadata.sh"), tag],
             cwd=self.work, env=self.env, capture_output=True, text=True, timeout=30,
         )
 
-    def test_opens_pr_dispatches_ci_and_requests_auto_merge_without_pushing_main(self):
+    def test_records_release_and_pushes_main(self):
         result = self.update()
         self.assertEqual(result.returncode, 0, result.stderr)
-        branch = "release/changelog-v0.33.8"
-        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
+        head = self.git("rev-parse", "HEAD")
+        self.assertNotEqual(head, self.main)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], head)
+        self.assertEqual(self.git("log", "-1", "--format=%s"), "changelog: v0.33.8")
         self.assertEqual(
-            self.git("ls-remote", "origin", f"refs/heads/{branch}").split()[0],
-            self.git("rev-parse", branch),
-        )
-        self.assertEqual(
-            self.git("diff", "--name-only", f"main...{branch}").splitlines(),
+            self.git("diff", "--name-only", f"{self.main}..HEAD").splitlines(),
             ["CHANGELOG.md", "Cargo.lock", "Cargo.toml"],
         )
-        self.assertIn("## [v0.33.8]", self.git("show", f"{branch}:CHANGELOG.md"))
-        self.assertIn("- example change", self.git("show", f"{branch}:CHANGELOG.md"))
-        self.assertIn('version = "0.33.8"', self.git("show", f"{branch}:Cargo.toml"))
-        self.assertEqual(self.git("show", f"{branch}:Cargo.lock"), "0.33.8")
-        calls = self.calls.read_text().splitlines()
-        self.assertEqual(len(calls), 4)
-        self.assertTrue(calls[0].startswith("pr list --state open --base main --head " + branch))
-        self.assertTrue(calls[1].startswith("pr create --base main --head " + branch))
-        self.assertEqual(calls[2], "workflow run ci.yml --ref " + branch)
-        self.assertEqual(calls[3], (
-            f"pr merge {branch} --auto --squash --match-head-commit {self.git('rev-parse', branch)}"
-        ))
+        self.assertIn("## [v0.33.8]", self.git("show", "HEAD:CHANGELOG.md"))
+        self.assertIn("- example change", self.git("show", "HEAD:CHANGELOG.md"))
+        self.assertIn('version = "0.33.8"', self.git("show", "HEAD:Cargo.toml"))
+        self.assertEqual(self.git("show", "HEAD:Cargo.lock"), "0.33.8")
 
-    def test_retry_reuses_pr_after_failed_ci_dispatch(self):
-        self.fail_dispatch.touch()
-        self.assertNotEqual(self.update().returncode, 0)
-        self.assertNotIn("pr merge ", self.calls.read_text())
-        self.git("switch", "main")
-        self.fail_dispatch.unlink()
+    def test_already_recorded_release_is_a_noop(self):
+        self.assertEqual(self.update().returncode, 0)
+        recorded = self.git("rev-parse", "HEAD")
         result = self.update()
         self.assertEqual(result.returncode, 0, result.stderr)
-        calls = self.calls.read_text().splitlines()
-        self.assertEqual(sum(call.startswith("pr create ") for call in calls), 1)
-        self.assertEqual(sum(call.startswith("workflow run ") for call in calls), 2)
-        self.assertEqual(sum(call.startswith("pr merge ") for call in calls), 1)
-        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
-
-    def test_retry_reenables_auto_merge_on_existing_pr(self):
-        result = self.update()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.git("switch", "main")
-        result = self.update()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        calls = self.calls.read_text().splitlines()
-        self.assertEqual(sum(call.startswith("pr create ") for call in calls), 1)
-        self.assertEqual(sum(call.startswith("workflow run ") for call in calls), 2)
-        self.assertEqual(sum(call.startswith("pr merge ") for call in calls), 2)
-        self.assertEqual(calls[-1], (
-            "pr merge release/changelog-v0.33.8 --auto --squash --match-head-commit "
-            + self.git("rev-parse", "HEAD")
-        ))
-        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
-
-    def test_failed_auto_merge_is_reported_and_retry_reuses_pr(self):
-        self.fail_auto_merge.touch()
-        self.assertNotEqual(self.update().returncode, 0)
-        self.assertTrue(self.calls.read_text().splitlines()[-1].startswith("pr merge "))
-        self.git("switch", "main")
-        self.fail_auto_merge.unlink()
-        result = self.update()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        calls = self.calls.read_text().splitlines()
-        self.assertEqual(sum(call.startswith("pr create ") for call in calls), 1)
-        self.assertEqual(sum(call.startswith("workflow run ") for call in calls), 2)
-        self.assertEqual(sum(call.startswith("pr merge ") for call in calls), 2)
-        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
-
-    def test_retry_refuses_to_overwrite_a_concurrent_branch_change(self):
-        result = self.update()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.git("switch", "main")
-        branch = "release/changelog-v0.33.8"
-        self.git("--git-dir", str(self.remote), "update-ref", f"refs/heads/{branch}", self.main)
-        calls = self.calls.read_text()
-        self.assertNotEqual(self.update().returncode, 0)
-        self.assertEqual(self.git("ls-remote", "origin", f"refs/heads/{branch}").split()[0], self.main)
-        self.assertEqual(self.calls.read_text(), calls)
-
-    def test_already_recorded_release_does_not_open_pr_or_dispatch_ci(self):
-        result = self.update()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.git("switch", "main")
-        self.git("merge", "--ff-only", "release/changelog-v0.33.8")
-        self.calls.unlink()
-        result = self.update()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(self.calls.exists())
-        self.assertEqual(self.git("branch", "--show-current"), "main")
+        self.assertEqual(self.git("rev-parse", "HEAD"), recorded)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], recorded)
 
     def test_older_release_is_skipped(self):
         result = self.update("v0.33.5")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(self.calls.exists())
         self.assertEqual(self.git("rev-parse", "HEAD"), self.main)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
+
+    def test_concurrent_main_advance_is_not_clobbered(self):
+        # Someone else pushes to main after the job's checkout: the plain push
+        # is rejected instead of overwriting their commit.
+        (self.work / "OTHER.md").write_text("concurrent\n")
+        self.git("add", "OTHER.md")
+        self.git("commit", "-m", "concurrent change")
+        self.git("push", "origin", "HEAD:main")
+        concurrent = self.git("rev-parse", "HEAD")
+        self.git("reset", "--hard", self.main)
+        self.assertNotEqual(self.update().returncode, 0)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], concurrent)
 
 
 class PublishReleaseTests(unittest.TestCase):

@@ -34,33 +34,30 @@ curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 
 Release publication is retryable: an interrupted draft resumes its uploads;
 an already published release and its assets are left unchanged. After publication,
-the changelog job opens a `release/changelog-<tag>` PR with `CHANGELOG.md` and
-workspace version updates instead of pushing to protected `main`. It dispatches CI
-and enables squash auto-merge once all required checks and approvals are satisfied.
-No manual merge is needed; required reviews still need human approval. Retries
-refresh the same branch, reuse its open PR, and re-enable auto-merge for the exact
-commit pushed.
+the changelog job commits `CHANGELOG.md` and the workspace version onto `main`
+and pushes it directly - no PR, no auto-merge. It checks out `main` itself (a tag
+push would otherwise check out the tag) with full history and tags, and the push
+authenticates with the persisted `GITHUB_TOKEN`.
 
-Enable **Settings > General > Pull Requests > Allow auto-merge** and **Allow squash
-merging**, plus **Settings > Actions > General > Workflow permissions > Allow
-GitHub Actions to create and approve pull requests**. Keep `main` protected with
-the required CI checks. The job needs `contents: write`, `pull-requests: write`,
-and `actions: write`; it never approves its PR or bypasses branch protection.
-Because `GITHUB_TOKEN`-created PRs do not trigger ordinary PR workflows, the job
-explicitly dispatches `ci.yml` on the update branch to satisfy required checks.
+For that push to clear `main`'s ruleset, the **GitHub Actions** app must be a
+bypass actor on it. Add it once under **Settings > Rules > main > Bypass list**
+(or with `PUT /repos/{owner}/{repo}/rulesets/{id}`): actor type *Integration*,
+id `15368`, mode *Always*. Keep the pull-request and required-check rules in
+place for human contributors; the job only needs `contents: write` and never
+approves or merges anything. Because it pushes without a PR, a concurrent push
+to `main` makes it fail (never force-pushes) - re-run the job.
 
-Re-running failed jobs can finish PR creation, CI dispatch, auto-merge setup, or
-the Homebrew update after publication. If repository auto-merge is disabled, the
-changelog job fails; enable it and re-run the job. Updates to `main` and Homebrew
-are queued separately and compare SemVer precedence against their current version.
-Older tags still get a GitHub Release, but do not replace newer workspace versions,
-changelog sections, or formulas.
+Updates to `main` and Homebrew are queued separately and compare SemVer
+precedence against their current version. Older tags still get a GitHub Release,
+but do not replace newer workspace versions, changelog sections, or formulas.
 
-To recover bookkeeping for an already-published tag, run the current helper in
-a clean checkout of `main` with full history and tags and an authenticated `gh`:
+Re-running the failed `changelog` job from its run records the release. For a tag
+older than this workflow, run the helper in a clean checkout of `main` with full
+history and tags and push the result through a PR (the bypass only covers the
+Actions app):
 
 ```sh
-sh packaging/open-release-update.sh v0.33.8
+sh packaging/update-release-metadata.sh v0.33.8
 ```
 
 Re-running an old release run uses that tag's original workflow definition.
