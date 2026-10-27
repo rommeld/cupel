@@ -14,7 +14,33 @@ use cupel_core::types::{AssistantMessageEvent, Message, StopReason, ToolResultCo
 use crate::modes::SessionMeta;
 #[cfg(unix)]
 use crate::modes::TerminationSignals;
+use crate::program_status::{Record, RecordId, Reporter, State};
 use crate::session::SessionRecorder;
+
+struct PlainStatus {
+    reporter: Reporter,
+    record: Record,
+}
+
+impl PlainStatus {
+    fn new(meta: &SessionMeta, session_id: &str) -> Self {
+        Self {
+            reporter: Reporter::for_stdout(),
+            record: Record {
+                id: RecordId::session(session_id, &meta.cwd),
+                state: State::Idle,
+                title: None,
+                message: None,
+            },
+        }
+    }
+
+    fn set(&mut self, state: State) {
+        self.record.state = state;
+        self.reporter
+            .sync(&mut std::io::stdout().lock(), [self.record.clone()]);
+    }
+}
 
 enum PlainError {
     Run(String),
@@ -116,9 +142,21 @@ pub async fn run(
     mut recorder: SessionRecorder,
 ) -> Result<(), String> {
     let mut events = None;
-    let result = run_session(&mut agent, meta, &mut recorder, &mut events).await;
+    let mut status = PlainStatus::new(meta, recorder.session_id());
+    status.set(State::Idle);
+    let result = run_session(&mut agent, meta, &mut recorder, &mut events, &mut status).await;
     if result.is_err() {
         agent.abort();
+    }
+    match &result {
+        Ok(()) => {} // Leave the last done/error report intact at EOF or /quit.
+        Err(PlainError::Run(_)) => status.set(State::Error),
+        Err(PlainError::Output(error)) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+            status.set(State::Idle);
+        }
+        Err(PlainError::Output(_)) => status.set(State::Error),
+        #[cfg(unix)]
+        Err(PlainError::Signal(_)) => status.set(State::Idle),
     }
     // Cancellation must finish killing detached tool process groups before
     // exit. Keep the stream so finalized messages are not lost on shutdown.
@@ -151,6 +189,7 @@ async fn run_session(
     meta: &SessionMeta,
     recorder: &mut SessionRecorder,
     active_events: &mut Option<AgentEventStream>,
+    status: &mut PlainStatus,
 ) -> Result<(), PlainError> {
     output(format_args!(
         "cupel - {} ({})\n",
@@ -276,6 +315,7 @@ async fn run_session(
         // Transcript + hooks: creates the transcript lazily, settles any
         // pending stop hook, fires session-start (once) and
         // user-prompt-submit before the run begins.
+        status.set(State::Working);
         recorder.before_prompt(&prompt).await;
 
         *active_events = Some(
@@ -301,7 +341,10 @@ async fn run_session(
             };
             #[cfg(not(unix))]
             let event = events.next().await;
-            let Some(event) = event else { break };
+            let Some(event) = event else {
+                last_run_error = Some("agent event stream closed before completion".into());
+                break;
+            };
             match event {
                 // Every finalized message (user, assistant, tool result)
                 // rides into the transcript; display still renders from the
@@ -446,6 +489,11 @@ async fn run_session(
             }
         }
         agent.wait_for_idle().await;
+        status.set(if last_run_error.is_some() {
+            State::Error
+        } else {
+            State::Done
+        });
         output(format_args!("\n"))?;
     }
 

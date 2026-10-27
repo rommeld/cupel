@@ -124,6 +124,10 @@ mod tests {
                 .expect("ACP response timeout")
                 .unwrap()
                 .expect("unexpected ACP EOF");
+            assert!(
+                !line.contains("\x1b]7501;"),
+                "ACP must never emit terminal status"
+            );
             serde_json::from_str(&line).expect("stdout must contain only ACP JSON")
         }
 

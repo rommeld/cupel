@@ -4,6 +4,7 @@
 
 use cupel_agent::AgentMessage;
 use cupel_coding_agent::commands::SpinoffCommand;
+use cupel_coding_agent::program_status::{Record, RecordId};
 use cupel_coding_agent::session;
 use cupel_coding_agent::spinoff::{
     self, Conflict, Group, MergeOutcome, Side, Spinoff, SpinoffError, SpinoffName,
@@ -74,6 +75,20 @@ impl Sessions {
 
     pub fn active_mut(&mut self) -> &mut App {
         &mut self.list[self.active].app
+    }
+
+    /// A transcript and checkout identify a session, not its sidebar index, label,
+    /// or selection. Reloading a different transcript replaces/clears the old id.
+    pub fn status_records(&self) -> impl Iterator<Item = Record> + '_ {
+        self.list.iter().map(|session| {
+            let (state, message) = session.app.program_status();
+            Record {
+                id: RecordId::session(session.app.recorder.session_id(), &session.app.meta.cwd),
+                state,
+                title: Some(session.label.clone()),
+                message,
+            }
+        })
     }
 
     /// Input goes to the session on screen, except the keys and clicks that switch
@@ -199,8 +214,10 @@ impl Sessions {
     pub async fn shutdown(&mut self) {
         for session in &mut self.list {
             if session.app.is_running() {
-                session.app.agent.abort();
+                session.app.abort_run();
             }
+            session.app.login = None;
+            session.app.question = None;
             session.app.agent.wait_for_idle().await;
             session.app.recorder.end_session().await;
         }
@@ -806,6 +823,101 @@ mod tests {
     use crate::ui::tests::{test_app, test_app_with_home};
 
     const BINARY: &str = "/tmp/new/cupel";
+
+    #[test]
+    fn status_ids_survive_selection_and_renaming_and_removed_records_are_cleared() {
+        use cupel_coding_agent::program_status::{Reporter, State};
+        let mut sessions = Sessions::new(test_app());
+        let mut background = test_app();
+        background.meta.cwd = "/background".into();
+        background.last_answer = crate::app::Status::Failed;
+        sessions.list.push(Session {
+            label: "worker".into(),
+            app: background,
+        });
+        let before: Vec<_> = sessions.status_records().collect();
+        assert_ne!(before[0].id, before[1].id);
+        assert_eq!(before[1].state, State::Error);
+        let mut reporter = Reporter::new(true);
+        let mut output = Vec::new();
+        reporter.sync(&mut output, sessions.status_records());
+        output.clear();
+        sessions.switch_to(1);
+        reporter.sync(&mut output, sessions.status_records());
+        assert!(
+            output.is_empty(),
+            "switching sessions must not overwrite records"
+        );
+        sessions.list[1].label = "renamed".into();
+        let renamed: Vec<_> = sessions.status_records().collect();
+        assert_eq!(before[1].id, renamed[1].id);
+        reporter.sync(&mut output, renamed);
+        assert_eq!(
+            String::from_utf8_lossy(&output)
+                .matches("\x1b]7501;")
+                .count(),
+            1
+        );
+        output.clear();
+        sessions.list.remove(1);
+        reporter.sync(&mut output, sessions.status_records());
+        let cleared = String::from_utf8(output).unwrap();
+        assert_eq!(cleared.matches("state=clear:").count(), 1);
+        assert!(
+            !cleared.contains("state=idle:"),
+            "origin record is untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_preserves_completed_records_but_cancels_work_and_login() {
+        use cupel_coding_agent::program_status::{Reporter, State};
+        let mut sessions = Sessions::new(test_app());
+        sessions.list[0].app.last_answer = crate::app::Status::Done;
+        let mut failed = test_app();
+        failed.meta.cwd = "/failed".into();
+        failed.last_answer = crate::app::Status::Failed;
+        sessions.list.push(Session {
+            label: "failed".into(),
+            app: failed,
+        });
+        let mut busy = test_app();
+        busy.meta.cwd = "/busy".into();
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        busy.run_events = Some(events);
+        let (flow, _events, _cancel, _code) = crate::login::stub_flow();
+        busy.login = Some(flow);
+        sessions.list.push(Session {
+            label: "busy".into(),
+            app: busy,
+        });
+        let mut reporter = Reporter::new(true);
+        let mut output = Vec::new();
+        reporter.sync(&mut output, sessions.status_records());
+        output.clear();
+        sessions.shutdown().await;
+        let records: Vec<_> = sessions.status_records().collect();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.state)
+                .collect::<Vec<_>>(),
+            [State::Done, State::Error, State::Idle]
+        );
+        reporter.sync(&mut output, records);
+        let final_report = String::from_utf8_lossy(&output);
+        assert_eq!(final_report.matches("\x1b]7501;").count(), 1);
+        assert!(final_report.contains("state=idle:"));
+        output.clear();
+        reporter.clear(&mut output);
+        assert_eq!(
+            String::from_utf8_lossy(&output)
+                .matches("state=clear:")
+                .count(),
+            3,
+            "restart clears every owned record"
+        );
+    }
 
     fn version() -> Version {
         Version::new(99, 0, 0)
