@@ -3,6 +3,20 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.10] - 2026-10-27
+
+- feat: report agent status through OSC 7501
+- feat(providers): support Anthropic and Bedrock gateways
+- fix(deps): preserve similar 3 in sha2 upgrade
+- ci: auto-merge release bookkeeping PRs
+- update .gitignore
+- chore(deps): bump getrandom from 0.3.4 to 0.4.3
+- chore(deps): bump sha2 from 0.10.9 to 0.11.0
+- chore(deps): bump serde from 1.0.228 to 1.0.229
+- chore(deps): bump async-trait from 0.1.89 to 0.1.92
+- chore(deps): bump similar from 2.7.0 to 3.2.0
+- chore(deps): bump actions/download-artifact from 4.3.0 to 8.0.2
+
 ## [v0.33.9] - 2026-10-25
 
 - fix(ci): propose release metadata through pull requests
