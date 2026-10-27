@@ -281,13 +281,14 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models_dev_id: "openai",
         cupel_id: Provider::OPENAI,
         models: &[
-            openai("gpt-6-astra", None),
-            openai("gpt-6-sol", None),
+            // First row = the `/provider openai` default.
             // Unlike Sol and Luna, GPT-6.1 Sol has no "none" effort (OpenAI's
             // model page: "none" and "minimal" are not supported). The
             // derived map therefore gives off -> null, and the provider
             // leaves `reasoning` out, as it does for Astra.
             openai("gpt-6.1-sol", None),
+            openai("gpt-6-astra", None),
+            openai("gpt-6-sol", None),
             openai("gpt-6.1-terra", None),
             openai("gpt-6-luna", None),
         ],
@@ -527,20 +528,9 @@ pub struct PinnedCodex {
 const CODEX_LEVELS_TO_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Row order = catalog order: the first row is the `/provider
-/// openai-codex` default. gpt-6-sol leads by choice; the remaining
+/// openai-codex` default. gpt-6.1-sol leads by choice; the remaining
 /// models keep their relative order. Other providers keep their defaults.
 pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
-    PinnedCodex {
-        id: "gpt-6-sol",
-        name: "GPT-6 Sol",
-        vision: true,
-        cost: (2.0, 10.0, 0.2, 2.5),
-        long_context_tier: true,
-        context_window: 272_000,
-        max_context_window: Some(872_000),
-        levels: CODEX_LEVELS_TO_MAX,
-        temperature: false,
-    },
     // The model card lists the same standard input/output prices as Sol
     // but $0.10/M cached input. Codex CLI's models.json gives GPT-6.1 Sol
     // the same ceiling and effort scale as Sol (checked 2026-10-08).
@@ -558,6 +548,17 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (2.0, 10.0, 0.1, 2.5),
         long_context_tier: true,
         context_window: 500_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
+    PinnedCodex {
+        id: "gpt-6-sol",
+        name: "GPT-6 Sol",
+        vision: true,
+        cost: (2.0, 10.0, 0.2, 2.5),
+        long_context_tier: true,
+        context_window: 272_000,
         max_context_window: Some(872_000),
         levels: CODEX_LEVELS_TO_MAX,
         temperature: false,

@@ -142,7 +142,7 @@ A preset names a model, a thinking level, and optionally an additional system pr
   "model": {
     "default": {
       "provider": "openai-codex",
-      "model": "codex/gpt-6-sol",
+      "model": "codex/gpt-6.1-sol",
       "thinkingLevel": "high"
     },
     "fast": {

@@ -810,8 +810,8 @@ mod tests {
         assert_eq!(
             models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
             [
-                "codex/gpt-6-sol",
                 "codex/gpt-6.1-sol",
+                "codex/gpt-6-sol",
                 "codex/gpt-6.1-terra",
                 "codex/gpt-6-astra",
                 "codex/gpt-6-luna",
@@ -830,7 +830,7 @@ mod tests {
             assert_eq!(model.provider.as_str(), Provider::OPENAI_CODEX);
         }
         assert_eq!(
-            models[0].id, "codex/gpt-6-sol",
+            models[0].id, "codex/gpt-6.1-sol",
             "first row = /provider default"
         );
         // Spot checks against the pinned catalog values.
@@ -884,9 +884,9 @@ mod tests {
             [
                 "gpt-6-astra",
                 "gpt-6-astra-ultrafast",
-                "codex/gpt-6-sol",
                 "codex/gpt-6.1-sol",
                 "codex/gpt-6.1-sol-ultrafast",
+                "codex/gpt-6-sol",
             ]
         );
 
@@ -902,7 +902,7 @@ mod tests {
         );
 
         // The Codex twin keeps the backend name, not its namespaced id.
-        let (base, twin) = (&models[3], &models[4]);
+        let (base, twin) = (&models[2], &models[3]);
         assert_eq!(
             twin.compat,
             Some(serde_json::json!({
