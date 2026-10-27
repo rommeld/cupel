@@ -1,16 +1,15 @@
 #!/bin/sh
-# Prepend a release section to CHANGELOG.md from git history:
+# Prepend a release section to CHANGELOG.md from git history, before tagging:
 #
 #   packaging/update-changelog.sh v0.1.8-beta [CHANGELOG.md]
 #
-# The section lists the commit subjects between the previous tag and <tag>,
-# dated from the tag's commit. Used by the `publish` job in
-# .github/workflows/release.yml after every release, and runnable by hand
-# for a backfill. POSIX sh + awk only, same as update-formula.sh.
+# The section lists commit subjects since the previous tag through HEAD.
+# An existing tag can also be used to backfill a past release. POSIX sh + awk
+# only, same as update-formula.sh.
 #
 # Two behaviors worth knowing:
-# - Idempotent: a section for <tag> already in the file means a re-run
-#   (re-tagged release), so it exits 0 without touching anything.
+# - Idempotent: a section for <tag> already in the file means a re-run,
+#   so it exits 0 without touching anything.
 # - A hand-maintained "## [Unreleased]" section is replaced by the new
 #   tagged section: its commits are part of the generated list anyway, so
 #   keeping both would say everything twice.
@@ -25,30 +24,28 @@ fi
 TAG="$1"
 CHANGELOG="${2:-CHANGELOG.md}"
 
-git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || {
-    echo "error: tag $TAG not found" >&2
-    exit 1
-}
-
-if grep -q "^## \[$TAG\]" "$CHANGELOG"; then
+if grep -Fq "## [$TAG]" "$CHANGELOG"; then
     echo "$CHANGELOG already has a $TAG section - nothing to do"
     exit 0
 fi
 
-# The previous release is the nearest tag reachable from the commit before
-# this one (`TAG^` so `describe` cannot answer with TAG itself). The very
-# first tag has no predecessor: log the whole history instead of a range.
-PREV="$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)"
-RANGE="${PREV:+$PREV..}$TAG"
+# For a planned release use HEAD; for a backfill exclude the tag itself when
+# finding its predecessor. A first release logs the whole history.
+REF=HEAD
+PREVIOUS_REF=HEAD
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+    REF=$TAG
+    PREVIOUS_REF="$TAG^"
+fi
+PREV="$(git describe --tags --abbrev=0 "$PREVIOUS_REF" 2>/dev/null || true)"
+RANGE="${PREV:+$PREV..}$REF"
 
-DATE="$(git log -1 --format=%cd --date=short "$TAG")"
+DATE="$(git log -1 --format=%cd --date=short "$REF")"
 
 # The commit list goes through a temp file, not `awk -v`: -v values get
 # backslash-escape processing, which would mangle commit subjects that
-# happen to contain backslashes. The bot's own `changelog: vX.Y.Z` commits
-# (one per past release, pushed to main by the release workflow) are
-# noise, so they are filtered out; `|| true` keeps `set -e` happy when
-# grep filters everything.
+# happen to contain backslashes. Metadata-only `changelog: vX.Y.Z` commits
+# are filtered out; `|| true` keeps `set -e` happy when grep filters everything.
 SECTION="$(mktemp)"
 trap 'rm -f "$SECTION"' EXIT
 git log --format='- %s' --no-merges "$RANGE" | grep -v '^- changelog: v' > "$SECTION" || true

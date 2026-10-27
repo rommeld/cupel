@@ -7,20 +7,25 @@ stay unchanged, so existing Cupel installers and `/update` remain compatible.
 
 ## Cutting a release
 
-Pre-flight, in order:
-
-1. CI is green on `main` (`.github/workflows/ci.yml` - fmt, strict Clippy, Rust
-   tests, and packaging tests on Ubuntu and macOS). The release workflow runs
-   the same checks on the tagged commit before publication. Rust and Clippy use
-   `rust-toolchain.toml`.
-2. Choose a `vX.Y.Z` or `vX.Y.Z-prerelease` tag. The release workflow sets the
-   inherited workspace version from it before building both executables.
-
-Then the tag IS the release (scheme in use: `vX.Y.Z-beta`):
+Prepare the changelog and workspace version on a branch with full git history
+and tags. The helper only edits `CHANGELOG.md`, `Cargo.toml`, and `Cargo.lock`;
+it does not commit, push, or create a tag:
 
 ```sh
-git tag v0.1.4-beta && git push origin v0.1.4-beta
+sh packaging/prepare-release.sh v0.33.11
 ```
+
+Review and commit those files in the release PR. CI runs formatting, strict
+Clippy, Rust tests, and packaging tests on Ubuntu and macOS using the pinned
+`rust-toolchain.toml`. Once that PR is green and merged, tag the merged commit:
+
+```sh
+git switch main && git pull --ff-only
+git tag v0.33.11 && git push origin v0.33.11
+```
+
+The tag must match the committed workspace version and have a changelog section;
+release builds check both. Tests run in the PR, not again for the tag.
 
 `.github/workflows/release.yml` builds both executables as macOS universal
 binaries and Linux musl binaries, and publishes a GitHub Release with the archives and a
@@ -33,31 +38,9 @@ curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
 Release publication is retryable: an interrupted draft resumes its uploads.
-The same publish job then commits `CHANGELOG.md` and the workspace version onto
-`main` and updates Homebrew - no PR or auto-merge. It checks out `main` itself
-(a tag push would otherwise check out the tag) with full history and tags, and
-the push authenticates with the persisted `GITHUB_TOKEN`.
-
-For that push to clear `main`'s ruleset, the **GitHub Actions** app must be a
-bypass actor on it. Add it once under **Settings > Rules > main > Bypass list**
-(or with `PUT /repos/{owner}/{repo}/rulesets/{id}`): actor type *Integration*,
-id `15368`, mode *Always*. Keep the pull-request and required-check rules in
-place for human contributors; the job only needs `contents: write` and never
-approves or merges anything. Because it pushes without a PR, a concurrent push
-to `main` makes it fail (never force-pushes) - re-run the job.
-
-Publishing is serialized and both updates compare SemVer precedence against
-their current version. Older tags still get a GitHub Release, but do not replace
-newer workspace versions, changelog sections, or formulas.
-
-Re-running the failed `publish` job from its run records the release. For a tag
-older than this workflow, run the helper in a clean checkout of `main` with full
-history and tags and push the result through a PR (the bypass only covers the
-Actions app):
-
-```sh
-sh packaging/update-release-metadata.sh v0.33.8
-```
+Publishing is serialized, and only GitHub's latest release updates Homebrew.
+The workflow never writes to `main`, opens bookkeeping PRs, or bypasses branch
+protection: metadata is already committed in the tested release PR.
 
 Re-running an old release run uses that tag's original workflow definition.
 It does not pick up workflow fixes merged later.

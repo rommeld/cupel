@@ -1,7 +1,6 @@
 #!/bin/sh
-# Rewrite the inherited [workspace.package] version in Cargo.toml. Shared by
-# the release build (which pins the version to the tag before compiling) and
-# the publish job (which records it on main). Usage:
+# Rewrite the inherited [workspace.package] version in Cargo.toml, used by
+# prepare-release.sh before opening a release PR. Usage:
 #
 #   packaging/set-workspace-version.sh 0.33.10
 #
