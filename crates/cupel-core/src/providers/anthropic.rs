@@ -60,6 +60,7 @@ struct AnthropicCompat {
     /// a session's requests to the same cache shard. Without it requests
     /// still succeed, but prompt-cache hit rates suffer.
     send_session_affinity_headers: bool,
+    bearer_auth: bool,
     /// Preserved thinking (Opus 5.5, Sonnet 5.5, Haiku 5.5): every thinking
     /// block is bound to the conversation that produced it (system prompt,
     /// tools, earlier messages). After an edit there (a resumed session's
@@ -80,6 +81,7 @@ impl Default for AnthropicCompat {
             supports_long_cache_retention: true,
             allow_empty_signature: false,
             send_session_affinity_headers: false,
+            bearer_auth: false,
             prefix_mismatch_behavior: None,
         }
     }
@@ -211,7 +213,11 @@ async fn run(
             .header("anthropic-beta", oauth_betas.join(","))
             .header("x-app", "cli");
     } else {
-        req = req.header("x-api-key", &api_key);
+        req = if compat.bearer_auth {
+            req.header("authorization", format!("Bearer {api_key}"))
+        } else {
+            req.header("x-api-key", &api_key)
+        };
         if !betas.is_empty() {
             req = req.header("anthropic-beta", betas.join(","));
         }
@@ -1189,6 +1195,69 @@ mod tests {
         assert_eq!(message.stop_reason, StopReason::Stop);
         assert_eq!(message.response_id.as_deref(), Some("msg_test"));
         assert!(message.content.is_empty());
+    }
+
+    async fn request_head(compat: Option<Value>) -> String {
+        use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = socket.into_split();
+            let mut reader = tokio::io::BufReader::new(reader);
+            let mut head = String::new();
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                assert!(reader.read_line(&mut line).await.unwrap() > 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    content_length = value.trim().parse::<usize>().unwrap();
+                }
+                head.push_str(&line);
+            }
+            reader
+                .read_exact(&mut vec![0; content_length])
+                .await
+                .unwrap();
+            writer
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            head
+        });
+        let mut model = catalog_model("claude-haiku-5-5");
+        model.base_url = format!("http://{address}");
+        model.compat = compat;
+        let options = StreamOptions {
+            api_key: Some("test-key".into()),
+            timeout_ms: Some(5_000),
+            ..StreamOptions::default()
+        };
+        let _ = AnthropicProvider::new()
+            .stream(&model, hello(), options)
+            .result()
+            .await;
+        server.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn bearer_auth_moves_the_key_into_the_authorization_header() {
+        let head = request_head(None).await;
+        assert!(head.contains("\r\nx-api-key: test-key\r\n"), "{head}");
+        assert!(!head.contains("authorization:"), "{head}");
+
+        let head = request_head(Some(json!({"bearerAuth": true}))).await;
+        assert!(
+            head.contains("\r\nauthorization: Bearer test-key\r\n"),
+            "{head}"
+        );
+        assert!(!head.contains("x-api-key:"), "{head}");
     }
 
     #[tokio::test]

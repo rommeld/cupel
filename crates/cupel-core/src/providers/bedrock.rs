@@ -1,14 +1,18 @@
 //! AWS Bedrock `ConverseStream` provider.
 //!
 //! Unlike Anthropic/`OpenAI`, Bedrock does not speak SSE:
-//! responses use AWS's binary event-stream encoding, and requests
-//! must be SigV4-signed. Rather than hand-rolling
+//! responses use AWS's binary event-stream encoding, and requests use
+//! SigV4 signing or bearer-token auth. Rather than hand-rolling
 //! either (both are security-sensitive and finicky), we use the official
 //! `aws-sdk-bedrockruntime` crate. The SDK also gives us the standard
 //! credential chain (env vars, `~/.aws/credentials`, SSO, IMDS) for free.
+//! It also reads two variables an LLM gateway (LiteLLM's `/bedrock` route)
+//! needs: `AWS_BEARER_TOKEN_BEDROCK` replaces signing with
+//! `Authorization: Bearer <token>`, and `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`
+//! points every request at the gateway.
 //!
 //! Intentional first-iteration simplifications (documented, not
-//! forgotten): no bearer-token auth, no HTTP proxy override, no GovCloud
+//! forgotten): no HTTP proxy override, no GovCloud
 //! schema workaround, no 1h cache TTL (the Rust SDK exposes cache points but
 //! not their TTL yet).
 
@@ -522,7 +526,8 @@ async fn build_client(model: &Model, options: &StreamOptions) -> aws_sdk_bedrock
 
     // Custom endpoints (VPC endpoints, proxies) are configured via the
     // model's base_url. Standard bedrock-runtime hosts are left to the SDK
-    // so region config stays authoritative.
+    // so region config stays authoritative. A row without a base_url keeps
+    // the endpoint the SDK read from AWS_ENDPOINT_URL_BEDROCK_RUNTIME.
     if !model.base_url.is_empty() && !is_standard_bedrock_endpoint(&model.base_url) {
         builder = builder.endpoint_url(&model.base_url);
     }

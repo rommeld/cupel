@@ -97,6 +97,7 @@ class ReleaseUpdateTests(unittest.TestCase):
         self.calls = root / "calls"
         self.pr = root / "pr"
         self.fail_dispatch = root / "fail-dispatch"
+        self.fail_auto_merge = root / "fail-auto-merge"
         tools = root / "tools"
         tools.mkdir()
         gh = tools / "gh"
@@ -109,6 +110,7 @@ case "$1 $2" in
         [ ! -f "$PR" ]
         echo 42 > "$PR"
         echo https://github.com/example/cupel/pull/42 ;;
+    'pr merge') [ -f "$PR" ] && [ ! -f "$FAIL_AUTO_MERGE" ] ;;
     'workflow run') [ ! -f "$FAIL_DISPATCH" ] ;;
     *) exit 1 ;;
 esac
@@ -127,6 +129,7 @@ awk -F '"' '/^version = / { print $2; exit }' Cargo.toml > Cargo.lock
             "PYTHONDONTWRITEBYTECODE": "1",
             "CALLS": str(self.calls), "PR": str(self.pr),
             "FAIL_DISPATCH": str(self.fail_dispatch),
+            "FAIL_AUTO_MERGE": str(self.fail_auto_merge),
         }
         self.git("init", "--bare", "--initial-branch=main", str(self.remote))
         self.git("init", "--initial-branch=main")
@@ -167,7 +170,7 @@ fi
             cwd=self.work, env=self.env, capture_output=True, text=True, timeout=30,
         )
 
-    def test_opens_pr_and_dispatches_ci_without_pushing_protected_main(self):
+    def test_opens_pr_dispatches_ci_and_requests_auto_merge_without_pushing_main(self):
         result = self.update()
         self.assertEqual(result.returncode, 0, result.stderr)
         branch = "release/changelog-v0.33.8"
@@ -185,13 +188,18 @@ fi
         self.assertIn('version = "0.33.8"', self.git("show", f"{branch}:Cargo.toml"))
         self.assertEqual(self.git("show", f"{branch}:Cargo.lock"), "0.33.8")
         calls = self.calls.read_text().splitlines()
+        self.assertEqual(len(calls), 4)
         self.assertTrue(calls[0].startswith("pr list --state open --base main --head " + branch))
         self.assertTrue(calls[1].startswith("pr create --base main --head " + branch))
         self.assertEqual(calls[2], "workflow run ci.yml --ref " + branch)
+        self.assertEqual(calls[3], (
+            f"pr merge {branch} --auto --squash --match-head-commit {self.git('rev-parse', branch)}"
+        ))
 
     def test_retry_reuses_pr_after_failed_ci_dispatch(self):
         self.fail_dispatch.touch()
         self.assertNotEqual(self.update().returncode, 0)
+        self.assertNotIn("pr merge ", self.calls.read_text())
         self.git("switch", "main")
         self.fail_dispatch.unlink()
         result = self.update()
@@ -199,6 +207,37 @@ fi
         calls = self.calls.read_text().splitlines()
         self.assertEqual(sum(call.startswith("pr create ") for call in calls), 1)
         self.assertEqual(sum(call.startswith("workflow run ") for call in calls), 2)
+        self.assertEqual(sum(call.startswith("pr merge ") for call in calls), 1)
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
+
+    def test_retry_reenables_auto_merge_on_existing_pr(self):
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.git("switch", "main")
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls.read_text().splitlines()
+        self.assertEqual(sum(call.startswith("pr create ") for call in calls), 1)
+        self.assertEqual(sum(call.startswith("workflow run ") for call in calls), 2)
+        self.assertEqual(sum(call.startswith("pr merge ") for call in calls), 2)
+        self.assertEqual(calls[-1], (
+            "pr merge release/changelog-v0.33.8 --auto --squash --match-head-commit "
+            + self.git("rev-parse", "HEAD")
+        ))
+        self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
+
+    def test_failed_auto_merge_is_reported_and_retry_reuses_pr(self):
+        self.fail_auto_merge.touch()
+        self.assertNotEqual(self.update().returncode, 0)
+        self.assertTrue(self.calls.read_text().splitlines()[-1].startswith("pr merge "))
+        self.git("switch", "main")
+        self.fail_auto_merge.unlink()
+        result = self.update()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls.read_text().splitlines()
+        self.assertEqual(sum(call.startswith("pr create ") for call in calls), 1)
+        self.assertEqual(sum(call.startswith("workflow run ") for call in calls), 2)
+        self.assertEqual(sum(call.startswith("pr merge ") for call in calls), 2)
         self.assertEqual(self.git("ls-remote", "origin", "refs/heads/main").split()[0], self.main)
 
     def test_retry_refuses_to_overwrite_a_concurrent_branch_change(self):

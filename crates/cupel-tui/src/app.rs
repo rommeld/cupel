@@ -1312,9 +1312,9 @@ impl App {
                     } else {
                         "key entered this session".to_string()
                     }
-                } else if cupel_coding_agent::providers::env_api_key(&provider).is_some() {
-                    let var =
-                        cupel_coding_agent::providers::env_var_name(&provider).unwrap_or("env");
+                } else if let Some((var, _)) =
+                    cupel_coding_agent::providers::exported_key(&provider)
+                {
                     if self.meta.settings.api_key(&provider).is_some() {
                         format!("{var} exported (overrides settings.json)")
                     } else {
@@ -1395,11 +1395,8 @@ impl App {
             "local endpoint - no key required".to_string()
         } else if self.session_keys.contains_key(&provider) {
             "using the key entered this session".to_string()
-        } else if cupel_coding_agent::providers::env_api_key(&provider).is_some() {
-            format!(
-                "using exported {}",
-                cupel_coding_agent::providers::env_var_name(&provider).unwrap_or("env")
-            )
+        } else if let Some((var, _)) = cupel_coding_agent::providers::exported_key(&provider) {
+            format!("using exported {var}")
         } else if self.meta.settings.api_key(&provider).is_some() {
             "using the key from settings.json".to_string()
         } else {
