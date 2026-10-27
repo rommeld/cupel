@@ -436,6 +436,68 @@ mod tests {
     }
 
     #[test]
+    fn gpt_61_terra_rows_keep_provider_specific_limits_and_efforts() {
+        use crate::types::{CostTier, InputModality, ModelCost};
+
+        let models = builtin_models();
+        for (id, provider, api, window, ceiling, map) in [
+            (
+                "gpt-6.1-terra",
+                Provider::OPENAI,
+                Api::OPENAI_RESPONSES,
+                272_000,
+                922_000,
+                serde_json::json!({"minimal": null, "off": "none"}),
+            ),
+            (
+                "codex/gpt-6.1-terra",
+                Provider::OPENAI_CODEX,
+                Api::OPENAI_CODEX_RESPONSES,
+                500_000,
+                872_000,
+                serde_json::json!({"minimal": "low", "off": null}),
+            ),
+        ] {
+            let model = models.iter().find(|m| m.id == id).expect(id);
+            assert_eq!(model.name, "GPT-6.1 Terra", "{id}");
+            assert_eq!(model.provider.as_str(), provider, "{id}");
+            assert_eq!(model.api.as_str(), api, "{id}");
+            assert!(model.reasoning, "{id}");
+            assert_eq!(model.input, vec![InputModality::Text, InputModality::Image]);
+            assert_eq!(model.context_window, window, "{id}");
+            assert_eq!(model.max_context_window, Some(ceiling), "{id}");
+            assert_eq!(model.max_tokens, 128_000, "{id}");
+            assert_eq!(
+                serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+                map,
+                "{id}"
+            );
+            assert_eq!(
+                model.compat.as_ref().expect("compat")["supportsTemperature"],
+                false,
+                "{id}"
+            );
+            assert_eq!(
+                model.cost,
+                ModelCost {
+                    input: 1.0,
+                    output: 5.0,
+                    cached_read: 0.05,
+                    cached_write: 1.25,
+                    tiers: Some(vec![CostTier {
+                        context_over: 272_000,
+                        input: 2.0,
+                        output: 7.5,
+                        cached_read: 0.1,
+                        cached_write: 2.5,
+                    }]),
+                },
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
     fn gpt_61_sol_ultrafast_rows_follow_sol_at_six_times_the_price() {
         use crate::types::{CostTier, ModelCost};
 
@@ -759,7 +821,7 @@ mod tests {
                 model.id
             );
         }
-        assert_eq!(seen, 5, "only supported Codex models belong in the catalog");
+        assert_eq!(seen, 6, "only supported Codex models belong in the catalog");
     }
 
     #[test]
