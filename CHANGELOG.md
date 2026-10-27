@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.12] - 2026-10-27
+
+- feat(catalog): add GPT-6.1 Terra for OpenAI and Codex
+
 ## [v0.33.11] - 2026-10-27
 
 - ci: prepare release metadata before tagging

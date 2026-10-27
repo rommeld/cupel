@@ -294,6 +294,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             // derived map therefore gives off -> null, and the provider
             // leaves `reasoning` out, as it does for Astra.
             openai("gpt-6.1-sol", None),
+            openai("gpt-6.1-terra", None),
             openai("gpt-6-luna", None),
         ],
     },
@@ -484,6 +485,20 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         name: "GPT-6.1 Sol",
         vision: true,
         cost: (2.0, 10.0, 0.1, 2.5),
+        long_context_tier: true,
+        context_window: 500_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
+    // Prices and temperature support: models.dev's openai/gpt-6.1-terra.
+    // Codex windows and efforts (no "none"), checked 2026-10-27:
+    // https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json
+    PinnedCodex {
+        id: "gpt-6.1-terra",
+        name: "GPT-6.1 Terra",
+        vision: true,
+        cost: (1.0, 5.0, 0.05, 1.25),
         long_context_tier: true,
         context_window: 500_000,
         max_context_window: Some(872_000),
