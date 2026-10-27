@@ -17,16 +17,25 @@ use cupel_core::oauth::openai_codex::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginState {
+    Working,
+    Waiting,
+}
+
 /// What a login task reports back to the UI.
 pub enum LoginEvent {
     /// Progress worth a transcript notice (the URL, the device code, ...).
     Notice(String),
+    /// Explicit state, rather than inferring an auth wait from notice text.
+    Progress(LoginState, String),
     /// Terminal: the flow finished. Ok carries a success summary.
     Done(Result<String, String>),
 }
 
 /// A running login attempt, owned by the App.
 pub struct LoginFlow {
+    state: LoginState,
     events: tokio::sync::mpsc::UnboundedReceiver<LoginEvent>,
     cancel: CancellationToken,
     /// The manual-paste channel (browser flow only). `take`n on first use.
@@ -34,6 +43,15 @@ pub struct LoginFlow {
 }
 
 impl LoginFlow {
+    #[must_use]
+    pub fn state(&self) -> LoginState {
+        self.state
+    }
+
+    pub fn on_progress(&mut self, state: LoginState) {
+        self.state = state;
+    }
+
     /// The next event from the background task; None = channel closed.
     pub async fn next_event(&mut self) -> Option<LoginEvent> {
         self.events.recv().await
@@ -43,7 +61,13 @@ impl LoginFlow {
     /// flow cannot take one (device flow, or a code already arrived).
     pub fn submit_manual_code(&mut self, input: &str) -> bool {
         match self.manual_code.take() {
-            Some(sender) => sender.send(input.to_string()).is_ok(),
+            Some(sender) => {
+                let sent = sender.send(input.to_string()).is_ok();
+                if sent {
+                    self.state = LoginState::Working;
+                }
+                sent
+            }
             None => false,
         }
     }
@@ -80,6 +104,7 @@ pub fn spawn_browser(home: Option<PathBuf>) -> LoginFlow {
         events,
         cancel,
         manual_code: Some(code_tx),
+        state: LoginState::Working,
     }
 }
 
@@ -101,6 +126,7 @@ pub fn spawn_device(home: Option<PathBuf>) -> LoginFlow {
         events,
         cancel,
         manual_code: None,
+        state: LoginState::Working,
     }
 }
 
@@ -135,15 +161,15 @@ async fn browser_flow(
     if server.is_some() {
         open_browser(&flow.url);
     }
-    notify(
-        events,
+    let _ = events.send(LoginEvent::Progress(
+        LoginState::Waiting,
         format!(
             "complete the ChatGPT login in your browser:\n  {}\n(nothing opened? open the \
              URL yourself; redirect cannot load? paste it: /login openai-codex <url>; esc \
              cancels)",
             flow.url
         ),
-    );
+    ));
 
     // The callback server and manual entry race: whichever produces a code
     // first settles the login.
@@ -164,10 +190,10 @@ async fn browser_flow(
         }
     };
 
-    notify(
-        events,
-        "authorization code received - exchanging for tokens...",
-    );
+    let _ = events.send(LoginEvent::Progress(
+        LoginState::Working,
+        "authorization code received - exchanging for tokens...".into(),
+    ));
     let http = reqwest::Client::new();
     let credential = openai_codex::exchange_code(&http, &code, &flow.verifier, REDIRECT_URI)
         .await
@@ -183,14 +209,14 @@ async fn device_flow(
     let device = openai_codex::start_device_auth(&http)
         .await
         .map_err(|e| e.to_string())?;
-    notify(
-        events,
+    let _ = events.send(LoginEvent::Progress(
+        LoginState::Waiting,
         format!(
             "on any device, open {DEVICE_VERIFICATION_URI}\nand enter the code: {}\n\
              (waiting up to 15 minutes; esc cancels)",
             device.user_code
         ),
-    );
+    ));
     // poll_device_auth polls until the user finishes, then exchanges the
     // code (the verifier comes back from the server in this flow).
     let credential = openai_codex::poll_device_auth(&http, &device)
@@ -268,6 +294,7 @@ pub(crate) fn stub_flow() -> (
         events,
         cancel: cancel.clone(),
         manual_code: Some(code_tx),
+        state: LoginState::Working,
     };
     (flow, event_tx, cancel, code_rx)
 }
@@ -309,6 +336,7 @@ mod tests {
             events,
             cancel: CancellationToken::new(),
             manual_code: Some(code_tx),
+            state: LoginState::Working,
         };
         assert!(flow.submit_manual_code("first"), "first paste is accepted");
         assert_eq!(code_rx.try_recv().unwrap(), "first");
@@ -320,6 +348,7 @@ mod tests {
             events,
             cancel: CancellationToken::new(),
             manual_code: None,
+            state: LoginState::Working,
         };
         assert!(!device.submit_manual_code("anything"));
     }
@@ -333,6 +362,7 @@ mod tests {
             events,
             cancel,
             manual_code: None,
+            state: LoginState::Working,
         };
         assert!(!observed.is_cancelled());
         drop(flow);

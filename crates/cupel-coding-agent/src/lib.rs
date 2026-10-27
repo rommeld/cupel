@@ -13,6 +13,7 @@ pub mod models;
 pub mod modes;
 pub mod ollama;
 mod process;
+pub mod program_status;
 pub mod project_trust;
 pub mod providers;
 pub mod resources;

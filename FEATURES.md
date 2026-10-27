@@ -242,6 +242,11 @@ Additional tooling features:
 - Distinguish planning windows, optional maximum context ceilings, and assumed
   discovery limits in the footer.
 - Animated working indicators and terminal-state restoration on exit.
+- Program Status Protocol (OSC 7501, revision 0.4) reports to supporting terminals
+  such as Rex: idle, working, question/login waits, completion, and failure.
+  Each TUI session has an independent record, including background spinoffs.
+  Terminal-attached plain mode reports too; redirected output and ACP stay
+  escape-free. Cancellation returns to idle; completion/failure survives exit.
 
 ### Themes
 

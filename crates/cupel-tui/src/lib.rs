@@ -41,6 +41,7 @@ mod usage_tests;
 
 use cupel_agent::Agent;
 use cupel_coding_agent::modes::{SessionMeta, TerminationSignals};
+use cupel_coding_agent::program_status::Reporter;
 use cupel_coding_agent::tools::ask_user::QuestionReceiver;
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
@@ -154,8 +155,10 @@ async fn event_loop(
     // The spinner's clock lives outside the loop.
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut status = Reporter::for_stdout();
 
     let result = loop {
+        status.sync(terminal.backend_mut(), sessions.status_records());
         if let Err(error) = terminal.draw(|frame| ui::render_sessions(frame, &mut sessions)) {
             break Err(error);
         }
@@ -267,6 +270,13 @@ async fn event_loop(
     // Abort and let each session settle so the terminal restore doesn't race provider
     // output. Then drain the hook chains and announce session-end.
     sessions.shutdown().await;
+    if matches!(&result, Ok(Exit::Restart(_))) {
+        status.clear(terminal.backend_mut());
+    } else {
+        // Keep done/error across normal exit, but never leave working/auth waits
+        // behind after cancellation, a signal, or a failed terminal draw.
+        status.sync(terminal.backend_mut(), sessions.status_records());
+    }
     result
 }
 
