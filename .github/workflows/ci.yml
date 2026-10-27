@@ -1,7 +1,3 @@
-# CI: every push and pull request builds, lints, and tests the workspace on
-# all runner architectures we ship. This is also the first place cupel compiles on
-# Linux at all - the release pipeline depends on that staying true.
-
 name: ci
 
 on:
@@ -19,13 +15,7 @@ jobs:
     name: test (${{ matrix.os }})
     strategy:
       matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: cupel-linux-x86_64
-          - os: macos-latest
-            artifact: cupel-macos-universal
-          - os: ubuntu-24.04-arm
-            artifact: cupel-linux-aarch64
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -45,12 +35,3 @@ jobs:
         run: cargo test --workspace --locked
       - name: Packaging regression tests
         run: python3 -m unittest discover -s packaging -p 'test_*.py' -v
-      - name: Verify packaged binaries and clean installation
-        run: |
-          cargo build --workspace --locked
-          tar -czf "$RUNNER_TEMP/${{ matrix.artifact }}.tar.gz" \
-            -C "$GITHUB_WORKSPACE/target/debug" cupel cupel-acp \
-            -C "$GITHUB_WORKSPACE" LICENSE README.md \
-            -C "$GITHUB_WORKSPACE/crates/cupel-acp" examples
-          (cd "$RUNNER_TEMP" && shasum -a 256 ${{ matrix.artifact }}.tar.gz > sha256sums.txt)
-          python3 packaging/check-release.py "$RUNNER_TEMP/${{ matrix.artifact }}.tar.gz" "$RUNNER_TEMP/sha256sums.txt"

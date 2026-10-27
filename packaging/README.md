@@ -9,10 +9,10 @@ stay unchanged, so existing Cupel installers and `/update` remain compatible.
 
 Pre-flight, in order:
 
-1. CI is green on `main` (`.github/workflows/ci.yml` - fmt, strict Clippy, tests
-   and packaging checks on Ubuntu x86_64, Ubuntu aarch64, and macOS). The release
-   workflow also runs this same CI workflow on the tagged commit and requires
-   it to pass before publication. Rust and Clippy use `rust-toolchain.toml`.
+1. CI is green on `main` (`.github/workflows/ci.yml` - fmt, strict Clippy, Rust
+   tests, and packaging tests on Ubuntu and macOS). The release workflow runs
+   the same checks on the tagged commit before publication. Rust and Clippy use
+   `rust-toolchain.toml`.
 2. Choose a `vX.Y.Z` or `vX.Y.Z-prerelease` tag. The release workflow sets the
    inherited workspace version from it before building both executables.
 
@@ -32,12 +32,11 @@ therefore `install.sh` - point at it. Users install with:
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
-Release publication is retryable: an interrupted draft resumes its uploads;
-an already published release and its assets are left unchanged. After publication,
-the changelog job commits `CHANGELOG.md` and the workspace version onto `main`
-and pushes it directly - no PR, no auto-merge. It checks out `main` itself (a tag
-push would otherwise check out the tag) with full history and tags, and the push
-authenticates with the persisted `GITHUB_TOKEN`.
+Release publication is retryable: an interrupted draft resumes its uploads.
+The same publish job then commits `CHANGELOG.md` and the workspace version onto
+`main` and updates Homebrew - no PR or auto-merge. It checks out `main` itself
+(a tag push would otherwise check out the tag) with full history and tags, and
+the push authenticates with the persisted `GITHUB_TOKEN`.
 
 For that push to clear `main`'s ruleset, the **GitHub Actions** app must be a
 bypass actor on it. Add it once under **Settings > Rules > main > Bypass list**
@@ -47,11 +46,11 @@ place for human contributors; the job only needs `contents: write` and never
 approves or merges anything. Because it pushes without a PR, a concurrent push
 to `main` makes it fail (never force-pushes) - re-run the job.
 
-Updates to `main` and Homebrew are queued separately and compare SemVer
-precedence against their current version. Older tags still get a GitHub Release,
-but do not replace newer workspace versions, changelog sections, or formulas.
+Publishing is serialized and both updates compare SemVer precedence against
+their current version. Older tags still get a GitHub Release, but do not replace
+newer workspace versions, changelog sections, or formulas.
 
-Re-running the failed `changelog` job from its run records the release. For a tag
+Re-running the failed `publish` job from its run records the release. For a tag
 older than this workflow, run the helper in a clean checkout of `main` with full
 history and tags and push the result through a PR (the bypass only covers the
 Actions app):
@@ -75,7 +74,6 @@ both executable files and their `--help`, installation into a clean default and
 custom home/bin directory without Rust, and an ACP initialize/session/prompt
 exchange using loopback fake inference. macOS also checks both universal slices.
 All three build/run checks must pass before the release can be published.
-CI exercises the same checker on native debug builds before a tag is cut.
 
 To repeat the checks locally on a matching host (Python 3.12+, no Python packages):
 
@@ -90,7 +88,7 @@ can also run directly against an installed `cupel-acp` using only Python's stdli
 
 ## Homebrew tap (automated)
 
-The formula bump is AUTOMATED: after every release, the `homebrew` job in
+The formula bump is AUTOMATED: after every release, the `publish` job in
 `release.yml` regenerates `cupel.rb` (via `packaging/update-formula.sh`)
 with the new version + checksums and pushes it to the tap repository.
 Users install with `brew install rommeld/tap/cupel`.

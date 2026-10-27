@@ -1,23 +1,6 @@
-# Release pipeline: push a tag like `v0.1.0` and this builds per-platform
-# cupel and cupel-acp binaries and attaches them to a GitHub Release. Users
-# install with the repo's install.sh (or download an archive) - no Rust required.
-# After the release, the `changelog` job records CHANGELOG.md and the workspace
-# version on main by pushing directly (the release bot bypasses main's ruleset),
-# and the Homebrew tap is bumped (see `homebrew` job).
-#
-# Platform notes:
-# - macOS ships one universal binary (arm64 + x86_64 via lipo), so there is
-#   no "which Mac do I have" question.
-# - Linux builds against musl, statically linking libc: one binary runs on
-#   any distro regardless of glibc version.
-# - aarch64 Linux builds natively on GitHub's free arm runners
-#   (ubuntu-24.04-arm) instead of cross-compiling - no cross toolchain to
-#   maintain.
-# - No Windows yet: the bash tool is Unix-only (process groups, `kill`).
-#
-# Maintenance alternative: `cargo-dist` generates this whole pipeline plus
-# installers from Cargo.toml metadata. This file is hand-rolled so the
-# machinery stays visible; migrating later is a drop-in replacement.
+# Push a version tag to test, build, and publish a release. The publish job
+# also records the changelog on main and updates the Homebrew tap. Linux
+# binaries use musl; macOS binaries contain both Apple Silicon and Intel slices.
 
 name: release
 
@@ -115,19 +98,25 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-  release:
+  publish:
     needs: [validate, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     concurrency:
-      group: release-publish-${{ github.ref_name }}
+      group: release-publish
       cancel-in-progress: false
-      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          persist-credentials: false
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.13"
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           merge-multiple: true
@@ -137,67 +126,25 @@ jobs:
         working-directory: dist
         run: sha256sum cupel-*.tar.gz > sha256sums.txt
 
-      - name: Publish or resume GitHub Release
+      - name: Publish GitHub release
         working-directory: dist
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: sh ../packaging/publish-release.sh "$GITHUB_REF_NAME"
-
-  # Record CHANGELOG.md and the workspace version on main by pushing straight to
-  # it: the GitHub Actions app is a bypass actor on main's ruleset, so no PR is
-  # needed. The job checks out main itself (a tag push would otherwise check out
-  # the tag) with full history and tags.
-  changelog:
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency:
-      group: release-main-update
-      cancel-in-progress: false
-      queue: max
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          # Commit onto main. Full history + tags let the script find the
-          # previous tag and list the commits in between. Default credentials
-          # persist so the final `git push` authenticates with GITHUB_TOKEN.
-          ref: main
-          fetch-depth: 0
-          fetch-tags: true
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "3.13"
-      - name: Install Rust toolchain
-        run: rustup show active-toolchain
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --draft \
+              --title "cupel $GITHUB_REF_NAME" --generate-notes --verify-tag
+          fi
+          gh release upload "$GITHUB_REF_NAME" cupel-*.tar.gz sha256sums.txt --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false
 
       - name: Record release on main
         run: sh packaging/update-release-metadata.sh "$GITHUB_REF_NAME"
 
-  # Bump the Homebrew tap to the release that was just published. Needs a
-  # HOMEBREW_TAP_TOKEN repository secret (a fine-grained PAT with contents
-  # read/write on the `homebrew-tap` repo) - the default GITHUB_TOKEN is
-  # scoped to this repo and cannot push elsewhere. Without the secret this
-  # job skips with a notice instead of failing the release.
-  homebrew:
-    needs: release
-    runs-on: ubuntu-latest
-    concurrency:
-      group: release-homebrew-update
-      cancel-in-progress: false
-      queue: max
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: "3.13"
       - name: Update Homebrew tap
         env:
-          GH_TOKEN: ${{ github.token }}
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
@@ -215,9 +162,7 @@ jobs:
               exit 0
             fi
           fi
-          gh release download "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" -p sha256sums.txt
-          sh packaging/update-formula.sh "${GITHUB_REF_NAME#v}" sha256sums.txt
+          sh packaging/update-formula.sh "${GITHUB_REF_NAME#v}" dist/sha256sums.txt
 
           mkdir -p tap/Formula
           cp packaging/homebrew/cupel.rb tap/Formula/cupel.rb

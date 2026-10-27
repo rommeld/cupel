@@ -4,7 +4,7 @@
 #
 #   packaging/update-formula.sh 0.1.4-beta sha256sums.txt
 #
-# Used by the `homebrew` job in .github/workflows/release.yml after every
+# Used by the `publish` job in .github/workflows/release.yml after every
 # release, and runnable by hand for a manual bump. POSIX sh + awk only.
 #
 # The awk pass keys each `sha256` line off the asset named in the `url`
