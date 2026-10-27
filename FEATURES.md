@@ -86,6 +86,9 @@ scope, not a roadmap or a guarantee that every feature is in a published release
 - Bounded Codex refresh requests, reuse of still-valid tokens after refresh
   failures, and adoption of credentials rotated by another session.
 - Login cancellation and logout.
+- LLM gateways such as LiteLLM in both formats: `ANTHROPIC_BASE_URL` with
+  `ANTHROPIC_AUTH_TOKEN` (sent as a bearer token), and Bedrock through
+  `AWS_BEARER_TOKEN_BEDROCK` with `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`.
 - AWS credential-chain integration, including profile and region configuration.
 - Keyless local endpoints.
 - Atomic credential/settings replacement and owner-only Unix file permissions.
