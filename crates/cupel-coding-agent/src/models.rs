@@ -14,6 +14,10 @@
 //!    discovered one. This is the user's override channel for context
 //!    window, reasoning, and compat flags).
 //!
+//! Before discovery, Claude Code's gateway variables (`ANTHROPIC_BASE_URL`,
+//! `ANTHROPIC_AUTH_TOKEN`) rewrite every `anthropic` row, see
+//! `AnthropicEnv`. Exported variables beat file config, as for keys.
+//!
 //! The catalog is resolved once at startup in `main::run()` (discovery is a
 //! network call; the TUI's key handlers are synchronous) and threaded to
 //! the frontends via `SessionMeta.models`.
@@ -203,6 +207,41 @@ pub fn filter_registered(
         .collect()
 }
 
+#[derive(Debug, Default)]
+struct AnthropicEnv {
+    base_url: Option<String>,
+    bearer: bool,
+}
+
+impl AnthropicEnv {
+    fn from_env() -> Self {
+        Self {
+            base_url: std::env::var("ANTHROPIC_BASE_URL")
+                .ok()
+                .filter(|url| !url.is_empty()),
+            bearer: crate::providers::env_token_var_name(cupel_core::types::Provider::ANTHROPIC)
+                .is_some_and(|var| std::env::var(var).is_ok()),
+        }
+    }
+
+    fn apply(&self, models: &mut [Model]) {
+        let anthropic = models
+            .iter_mut()
+            .filter(|model| model.provider.as_str() == cupel_core::types::Provider::ANTHROPIC);
+        for model in anthropic {
+            if let Some(base_url) = &self.base_url {
+                model.base_url.clone_from(base_url);
+            }
+            if self.bearer {
+                let compat = model.compat.get_or_insert_with(|| serde_json::json!({}));
+                if let Some(knobs) = compat.as_object_mut() {
+                    knobs.insert("bearerAuth".to_string(), serde_json::Value::Bool(true));
+                }
+            }
+        }
+    }
+}
+
 /// The full startup catalog: built-ins, user layers, then ollama
 /// discovery for ids not already defined. Async because discovery is a
 /// (bounded, fail-soft) network probe. Returns the catalog and load warnings.
@@ -216,6 +255,7 @@ pub async fn build_catalog(
     let mut layers = vec![cupel_core::catalog::builtin_models()];
     layers.extend(load_user_models(home, cwd, settings, &mut warnings));
     let mut merged = merge_models(layers);
+    AnthropicEnv::from_env().apply(&mut merged);
 
     // Discovered models rank below everything explicit: only ids nobody
     // defined get appended.
@@ -563,5 +603,38 @@ mod tests {
         ] {
             assert!(!is_loopback_endpoint(url), "{url}");
         }
+    }
+
+    #[test]
+    fn anthropic_env_points_only_anthropic_rows_at_the_gateway() {
+        let mut models = cupel_core::catalog::builtin_models();
+        let env = AnthropicEnv {
+            base_url: Some("https://gateway.invalid".into()),
+            bearer: true,
+        };
+        env.apply(&mut models);
+
+        for model in &models {
+            let bearer = model.compat.as_ref().and_then(|c| c.get("bearerAuth"));
+            if model.provider.as_str() == "anthropic" {
+                assert_eq!(model.base_url, "https://gateway.invalid", "{}", model.id);
+                assert_eq!(bearer, Some(&serde_json::json!(true)), "{}", model.id);
+            } else {
+                assert_ne!(model.base_url, "https://gateway.invalid", "{}", model.id);
+                assert_eq!(bearer, None, "{}", model.id);
+            }
+        }
+        let sonnet = models.iter().find(|m| m.id == "claude-sonnet-5-5").unwrap();
+        assert_eq!(
+            sonnet.compat.as_ref().unwrap()["forceAdaptiveThinking"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn no_anthropic_env_changes_nothing() {
+        let mut models = cupel_core::catalog::builtin_models();
+        AnthropicEnv::default().apply(&mut models);
+        assert_eq!(models, cupel_core::catalog::builtin_models());
     }
 }

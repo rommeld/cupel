@@ -1,5 +1,5 @@
 #!/bin/sh
-# Propose release bookkeeping through a PR instead of pushing to protected main.
+# Auto-merge release bookkeeping through a PR, respecting protected main.
 # Run from a clean checkout of main with full history and tags.
 # GH_REPO and GH_TOKEN select and authenticate the repository.
 set -eu
@@ -46,9 +46,13 @@ git push --force-with-lease origin "HEAD:refs/heads/$branch"
 pr=$(gh pr list --state open --base main --head "$branch" --json number --jq '.[0].number // empty')
 if [ -z "$pr" ]; then
     gh pr create --base main --head "$branch" --title "changelog: $TAG" \
-        --body "Update CHANGELOG.md and workspace versions for release $TAG. Merge after the required CI checks pass."
+        --body "Update CHANGELOG.md and workspace versions for release $TAG. Auto-merge after required checks and approvals are satisfied."
 fi
 
 # GITHUB_TOKEN-created PRs do not trigger pull_request workflows. Dispatch CI
 # explicitly so the protected branch's required status checks can run.
 gh workflow run ci.yml --ref "$branch"
+
+# Enable on both new PRs and retries. Never bypass branch protection, and only
+# allow the exact commit we pushed to be merged.
+gh pr merge "$branch" --auto --squash --match-head-commit "$(git rev-parse HEAD)"

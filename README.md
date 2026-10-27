@@ -120,6 +120,19 @@ Built-in providers:
 
 `/provider` lists every provider, `/provider <name>` switches to it (model and matching key together), and `/provider <name> <api-key>` supplies a key when nothing is exported. Keys live in session memory and are saved to `~/.cupel/settings.json` (atomic write, owner-only permissions); they are never echoed. Resolution order: session key > environment variable > `~/.cupel/settings.json`. Switching models across providers via `/model` re-resolves the key the same way.
 
+#### LLM gateways
+
+An LLM gateway such as LiteLLM usually serves two formats. Configure either or both, then switch between them with `/provider anthropic` and `/provider amazon-bedrock`:
+
+| Format | Variables | Effect |
+| --- | --- | --- |
+| Anthropic Messages | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` | Every `anthropic` model posts to `<ANTHROPIC_BASE_URL>/v1/messages` and sends the token as `Authorization: Bearer`. The token wins over `ANTHROPIC_API_KEY`, which would go out as `x-api-key`. |
+| Bedrock ConverseStream | `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` (for LiteLLM `https://<gateway>/bedrock`), `AWS_REGION` | Every `amazon-bedrock` model without its own `baseUrl` posts to `<endpoint>/model/<id>/converse-stream` and sends the token as `Authorization: Bearer`. No AWS keys or profile are needed. |
+
+The Anthropic variables are the ones Claude Code reads, so a machine set up for Claude Code works as it is. For the Bedrock format, cupel reads the AWS SDK's standard variables rather than Claude Code's `CLAUDE_CODE_USE_BEDROCK` and `ANTHROPIC_BEDROCK_BASE_URL`.
+
+Model ids go to the gateway unchanged. If it names its models differently, add `models.json` rows with `"provider": "anthropic"` (or `"amazon-bedrock"`) and the gateway's name as `id`, and copy `reasoning`, `thinkingLevelMap`, and `compat` from the matching row in `crates/cupel-core/src/catalog.json`.
+
 ### Presets
 
 A preset names a model, a thinking level, and optionally an additional system prompt. Define presets in the `model` section of `settings.json`:

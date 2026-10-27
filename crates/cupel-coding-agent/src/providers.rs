@@ -26,10 +26,35 @@ pub fn env_var_name(provider: &str) -> Option<&'static str> {
     }
 }
 
+/// The bearer-token variable a provider reads before its API-key variable.
+#[must_use]
+pub fn env_token_var_name(provider: &str) -> Option<&'static str> {
+    match provider {
+        "anthropic" => Some("ANTHROPIC_AUTH_TOKEN"),
+        _ => None,
+    }
+}
+
+/// The exported key and its source variable, preferring the bearer token.
+#[must_use]
+pub fn exported_key(provider: &str) -> Option<(&'static str, String)> {
+    exported_key_with(provider, |var| std::env::var(var).ok())
+}
+
+fn exported_key_with(
+    provider: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Option<(&'static str, String)> {
+    [env_token_var_name(provider), env_var_name(provider)]
+        .into_iter()
+        .flatten()
+        .find_map(|var| lookup(var).map(|key| (var, key)))
+}
+
 /// The exported API key for a provider, if any.
 #[must_use]
 pub fn env_api_key(provider: &str) -> Option<String> {
-    std::env::var(env_var_name(provider)?).ok()
+    exported_key(provider).map(|(_, key)| key)
 }
 
 /// The pure precedence core: an exported env var beats the settings file.
@@ -50,10 +75,14 @@ pub fn resolve_api_key(provider: &str, settings: &crate::settings::Settings) -> 
 
 /// Whether the AWS credential chain has anything to work with. (Bedrock
 /// resolves credentials inside the provider; this only decides whether to
-/// offer Bedrock as a usable default.)
+/// offer Bedrock as a usable default.) `AWS_BEARER_TOKEN_BEDROCK` counts:
+/// with it the SDK sends a bearer token (a Bedrock API key, or an LLM
+/// gateway's key) and needs no other AWS credentials.
 #[must_use]
 pub fn has_aws_credentials() -> bool {
-    std::env::var("AWS_ACCESS_KEY_ID").is_ok() || std::env::var("AWS_PROFILE").is_ok()
+    std::env::var("AWS_ACCESS_KEY_ID").is_ok()
+        || std::env::var("AWS_PROFILE").is_ok()
+        || std::env::var("AWS_BEARER_TOKEN_BEDROCK").is_ok()
 }
 
 /// The distinct providers of the given catalog, in catalog order, each
@@ -131,6 +160,28 @@ mod tests {
         // Bedrock has no key variable because the AWS chain handles it.
         assert_eq!(env_var_name("amazon-bedrock"), None);
         assert_eq!(env_var_name("unknown"), None);
+    }
+
+    #[test]
+    fn the_bearer_token_beats_the_api_key() {
+        let everything = |var: &str| Some(format!("value of {var}"));
+        assert_eq!(
+            exported_key_with("anthropic", everything),
+            Some((
+                "ANTHROPIC_AUTH_TOKEN",
+                "value of ANTHROPIC_AUTH_TOKEN".to_string()
+            ))
+        );
+        let key_only = |var: &str| (var == "ANTHROPIC_API_KEY").then(|| "sk-key".to_string());
+        assert_eq!(
+            exported_key_with("anthropic", key_only),
+            Some(("ANTHROPIC_API_KEY", "sk-key".to_string()))
+        );
+        assert_eq!(
+            exported_key_with("openai", everything).map(|(var, _)| var),
+            Some("OPENAI_API_KEY")
+        );
+        assert_eq!(exported_key_with("anthropic", |_| None), None);
     }
 
     #[test]
