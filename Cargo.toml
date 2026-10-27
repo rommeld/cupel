@@ -12,7 +12,7 @@ members = [
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/rommeld/cupel"
-version = "0.33.12"
+version = "0.33.13"
 
 [workspace.dependencies]
 cupel-core = { path = "crates/cupel-core" }

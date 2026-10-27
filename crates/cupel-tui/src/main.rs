@@ -604,7 +604,7 @@ mod tests {
         cupel_coding_agent::auth::save_credential(Some(&home), "openai-codex", &credential)
             .unwrap();
         let (model, key) = select_model(&args, &catalog, &settings, Some(&home)).unwrap();
-        assert_eq!(model.id, "codex/gpt-6-sol");
+        assert_eq!(model.id, "codex/gpt-6.1-sol");
         assert!(key.is_none());
 
         // Explicit --model still overrides the Codex default.
@@ -612,6 +612,26 @@ mod tests {
         let (model, key) = select_model(&args, &catalog, &settings, Some(&home)).unwrap();
         assert_eq!(model.id, "cloud-1");
         assert_eq!(key.as_deref(), Some("key"));
+    }
+
+    #[test]
+    fn select_model_defaults_to_gpt_61_sol_with_an_openai_key() {
+        let catalog = cupel_core::catalog::builtin_models()
+            .into_iter()
+            .filter(|model| model.provider.as_str() == "openai")
+            .collect::<Vec<_>>();
+        let mut settings = Settings::default();
+        settings
+            .providers
+            .insert("openai".into(), "test-key".into());
+
+        let (model, key) = select_model(&parse(&[]).unwrap(), &catalog, &settings, None).unwrap();
+        assert_eq!(model.id, "gpt-6.1-sol");
+        assert!(key.is_some());
+
+        let args = parse(&["--model", "gpt-6-astra"]).unwrap();
+        let (model, _) = select_model(&args, &catalog, &settings, None).unwrap();
+        assert_eq!(model.id, "gpt-6-astra", "explicit choices still win");
     }
 
     #[test]
@@ -648,7 +668,7 @@ mod tests {
         let codex = cupel_core::catalog::builtin_models()
             .into_iter()
             .find(|m| m.id == "codex/gpt-6-sol")
-            .expect("shipped Codex default");
+            .expect("shipped GPT-6 Sol model");
         let other_codex = cupel_core::catalog::builtin_models()
             .into_iter()
             .find(|m| m.id == "codex/gpt-6-astra")

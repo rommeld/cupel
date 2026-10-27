@@ -237,18 +237,12 @@ const fn openrouter(id: &'static str, thinking: Thinking) -> Curated {
     }
 }
 
-/// OpenAI's GPT-6 family through OpenRouter: the same completions row
-/// as `openrouter`, but planned against the 272k price tier like the
-/// direct openai rows (Window::PriceTier instead of ModelsDev).
-const fn openrouter_openai(id: &'static str) -> Curated {
+/// Plan below the first long-context price tier, retaining the full window
+/// as an explicit opt-in. Applies to GPT-6 and other tier-priced models.
+const fn openrouter_tiered(id: &'static str) -> Curated {
     Curated {
-        id,
-        rename: None,
-        api: Api::OPENAI_COMPLETIONS,
-        base_url: OPENROUTER_COMPLETIONS_BASE_URL,
-        thinking: Thinking::FromEffort,
-        compat: Compat::OpenrouterCompletions,
         window: Window::PriceTier,
+        ..openrouter(id, Thinking::FromEffort)
     }
 }
 
@@ -287,13 +281,14 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models_dev_id: "openai",
         cupel_id: Provider::OPENAI,
         models: &[
-            openai("gpt-6-astra", None),
-            openai("gpt-6-sol", None),
+            // First row = the `/provider openai` default.
             // Unlike Sol and Luna, GPT-6.1 Sol has no "none" effort (OpenAI's
             // model page: "none" and "minimal" are not supported). The
             // derived map therefore gives off -> null, and the provider
             // leaves `reasoning` out, as it does for Astra.
             openai("gpt-6.1-sol", None),
+            openai("gpt-6-astra", None),
+            openai("gpt-6-sol", None),
             openai("gpt-6.1-terra", None),
             openai("gpt-6-luna", None),
         ],
@@ -335,7 +330,17 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             fireworks_anthropic("accounts/fireworks/models/deepseek-v4p1-flash-1017"),
             fireworks_anthropic("accounts/fireworks/routers/deepseek-flash-latest"),
             fireworks_anthropic("accounts/fireworks/models/minimax-m3"),
+            // These models expose native effort scales through completions.
+            // Keep their independent OpenRouter rows too: limits can differ.
+            fireworks_completions(
+                "accounts/fireworks/models/minimax-m3p1-flash",
+                Thinking::FromEffort,
+            ),
             fireworks_anthropic("accounts/fireworks/models/qwen3p8-max"),
+            fireworks_completions(
+                "accounts/fireworks/models/qwen3p8-2p4t-a95b",
+                Thinking::FromEffort,
+            ),
             fireworks_anthropic("accounts/fireworks/models/kimi-k3"),
             fireworks_anthropic("accounts/fireworks/routers/kimi-k3-fast"),
             // Fireworks' own model, built on Kimi K3 and trained to reason in
@@ -364,6 +369,13 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         cupel_id: Provider::OPENROUTER,
         models: &[
             openrouter("qwen/qwen3.8-max-0902", Thinking::FromEffort),
+            openrouter("qwen/qwen3.8-max-prime", Thinking::FromEffort),
+            openrouter("qwen/qwen3.8-2.4t-a95b", Thinking::FromEffort),
+            openrouter("qwen/qwen3.8-27b", Thinking::FromEffort),
+            openrouter("qwen/qwen3.8-flash", Thinking::FromEffort),
+            openrouter("qwen/qwen3.8-omni-flash", Thinking::FromEffort),
+            openrouter_tiered("qwen/qwen3.7-plus"),
+            openrouter("qwen/qwen3-coder-next", Thinking::FromEffort),
             openrouter(
                 "moonshotai/kimi-k2.7-code",
                 Thinking::Explicit(KIMI_K27_CODE_OPENROUTER_THINKING),
@@ -371,39 +383,61 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("moonshotai/kimi-k3", Thinking::FromEffort),
             openrouter("moonshotai/kimi-k3.1-pro", Thinking::FromEffort),
             openrouter("z-ai/glm-5.3", Thinking::FromEffort),
+            openrouter("z-ai/glm-5.3-prime", Thinking::FromEffort),
             openrouter("z-ai/glm-5.3-flash", Thinking::FromEffort),
+            openrouter("z-ai/glm-5.3-flashx", Thinking::FromEffort),
+            openrouter("z-ai/glm-5v-turbo", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-pro", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-pro-0813", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-flash-0731", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4.1-flash-1017", Thinking::FromEffort),
             openrouter("x-ai/grok-4.6", Thinking::FromEffort),
             openrouter("x-ai/grok-4.7", Thinking::FromEffort),
+            openrouter_tiered("x-ai/grok-build-0.1"),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
             openrouter("google/gemini-3.8-flash", Thinking::FromEffort),
+            openrouter("google/gemini-3.5-flash-lite", Thinking::FromEffort),
             openrouter("google/gemini-4-argon", Thinking::FromEffort),
-            openrouter_openai("openai/gpt-6-astra"),
-            openrouter_openai("openai/gpt-6-astra-pro"),
-            openrouter_openai("openai/gpt-6-sol"),
-            openrouter_openai("openai/gpt-6-sol-pro"),
-            openrouter_openai("openai/gpt-6.1-sol"),
-            openrouter_openai("openai/gpt-6.1-sol-pro"),
-            openrouter_openai("openai/gpt-6-luna"),
-            openrouter_openai("openai/gpt-6-luna-pro"),
+            openrouter("google/gemma-4-31b-it", Thinking::FromEffort),
+            openrouter("google/gemma-4-31b-it:free", Thinking::FromEffort),
+            openrouter("google/gemma-4-26b-a4b-it", Thinking::FromEffort),
+            openrouter("google/gemma-4-26b-a4b-it:free", Thinking::FromEffort),
+            openrouter_tiered("openai/gpt-6-astra"),
+            openrouter_tiered("openai/gpt-6-astra-pro"),
+            openrouter_tiered("openai/gpt-6-sol"),
+            openrouter_tiered("openai/gpt-6-sol-pro"),
+            openrouter_tiered("openai/gpt-6.1-sol"),
+            openrouter_tiered("openai/gpt-6.1-sol-pro"),
+            openrouter_tiered("openai/gpt-6.1-terra"),
+            openrouter_tiered("openai/gpt-6.1-terra-pro"),
+            openrouter_tiered("openai/gpt-6-luna"),
+            openrouter_tiered("openai/gpt-6-luna-pro"),
             openrouter("anthropic/claude-sonnet-5.5", Thinking::FromEffort),
+            openrouter("anthropic/claude-sonnet-5", Thinking::FromEffort),
             openrouter("anthropic/claude-opus-5.5", Thinking::FromEffort),
+            openrouter("anthropic/claude-opus-5", Thinking::FromEffort),
+            openrouter("anthropic/claude-fable-5", Thinking::FromEffort),
+            openrouter("anthropic/claude-fable-5.1", Thinking::FromEffort),
             Curated {
                 window: Window::PriceTier,
                 ..openrouter("anthropic/claude-haiku-5.5", Thinking::FromEffort)
             },
             openrouter("meta/muse-spark-1.3", Thinking::FromEffort),
+            openrouter("meta/muse-spark-1.3-contributor", Thinking::FromEffort),
             openrouter("meta/muse-wonder", Thinking::FromEffort),
             openrouter("meta/muse-spark-open", Thinking::FromEffort),
+            openrouter("meta/muse-glimmer-30b", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling", Thinking::FromEffort),
+            openrouter("thinkingmachines/inkling:free", Thinking::FromEffort),
+            openrouter("thinkingmachines/inkling-small", Thinking::FromEffort),
+            openrouter("thinkingmachines/inkling-small:free", Thinking::FromEffort),
             openrouter("poolside/laguna-s-2.1", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-pro", Thinking::FromEffort),
+            openrouter("xiaomi/mimo-v2.6-pro-ultraspeed", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-flash", Thinking::FromEffort),
             openrouter("fireworks/ember-1", Thinking::FromEffort),
             openrouter("recursive/flint-v1.0:free", Thinking::FromEffort),
+            openrouter("minimax/minimax-m3", Thinking::FromEffort),
             openrouter("minimax/minimax-m3.1-flash", Thinking::FromEffort),
             openrouter("elorian/glimpse", Thinking::FromEffort),
             openrouter("xingchen-agi/xing4.0-29b-a4b:free", Thinking::FromEffort),
@@ -413,9 +447,47 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("~unbiased/pareto-latest", Thinking::FromEffort),
             openrouter("nvidia/nemotron-3.5-super-vl", Thinking::FromEffort),
             openrouter("nvidia/nemotron-3.5-super-vl:free", Thinking::FromEffort),
+            openrouter("nvidia/nemotron-3.5-lightning", Thinking::FromEffort),
+            openrouter("nvidia/nemotron-3.5-lightning:free", Thinking::FromEffort),
+            openrouter("nvidia/nemotron-3-ultra-550b-a55b", Thinking::FromEffort),
+            openrouter(
+                "nvidia/nemotron-3-ultra-550b-a55b:free",
+                Thinking::FromEffort,
+            ),
+            openrouter(
+                "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+                Thinking::FromEffort,
+            ),
             openrouter("liquid/lfm-2.5-24b-a2b", Thinking::FromEffort),
+            openrouter("liquid/lfm-2.5-2.6b", Thinking::FromEffort),
+            openrouter("liquid/lfm-2.5-2.6b:free", Thinking::FromEffort),
             openrouter("mistralai/mistral-large-4-0", Thinking::FromEffort),
+            openrouter("mistralai/mistral-medium-3-5", Thinking::FromEffort),
+            openrouter("mistralai/mistral-small-2603", Thinking::FromEffort),
             openrouter("reflection/beam-1.0-501b-a23b", Thinking::FromEffort),
+            openrouter("prism-ml/ternary-bonsai-2-9b", Thinking::FromEffort),
+            openrouter("prism-ml/ternary-bonsai-2-27b", Thinking::FromEffort),
+            openrouter("inclusionai/ling-3.1-flash", Thinking::FromEffort),
+            openrouter("inclusionai/ling-3.0-flash-vl", Thinking::FromEffort),
+            openrouter("aion-labs/aion-3.5", Thinking::FromEffort),
+            openrouter("aion-labs/aion-3.5-mini", Thinking::FromEffort),
+            openrouter("upstage/solar-pro4", Thinking::FromEffort),
+            openrouter("upstage/solar-mini4", Thinking::FromEffort),
+            openrouter("stepfun/step-5-preview", Thinking::FromEffort),
+            openrouter("stepfun/step-3.7-flash", Thinking::FromEffort),
+            openrouter_tiered("sakana/fugu-ultra-v2"),
+            openrouter("sakana/fugu-max", Thinking::FromEffort),
+            openrouter("sakana/sakana-namazu", Thinking::FromEffort),
+            openrouter("nex-agi/nex-n2.5-pro", Thinking::FromEffort),
+            openrouter("tencent/hy4-preview", Thinking::FromEffort),
+            openrouter("ibm-granite/granite-4.2-8b", Thinking::FromEffort),
+            openrouter("meituan/longcat-2.0", Thinking::FromEffort),
+            openrouter("cohere/command-a-plus", Thinking::FromEffort),
+            openrouter("cohere/north-mini-code:free", Thinking::FromEffort),
+            openrouter("bytedance-seed/seed-2-1-turbo", Thinking::FromEffort),
+            openrouter_tiered("bytedance-seed/seed-2.0-lite"),
+            openrouter_tiered("bytedance-seed/seed-2.0-mini"),
+            openrouter("perceptron/perceptron-mk1.5", Thinking::FromEffort),
         ],
     },
 ];
@@ -456,20 +528,9 @@ pub struct PinnedCodex {
 const CODEX_LEVELS_TO_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Row order = catalog order: the first row is the `/provider
-/// openai-codex` default. gpt-6-sol leads by choice; the remaining
+/// openai-codex` default. gpt-6.1-sol leads by choice; the remaining
 /// models keep their relative order. Other providers keep their defaults.
 pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
-    PinnedCodex {
-        id: "gpt-6-sol",
-        name: "GPT-6 Sol",
-        vision: true,
-        cost: (2.0, 10.0, 0.2, 2.5),
-        long_context_tier: true,
-        context_window: 272_000,
-        max_context_window: Some(872_000),
-        levels: CODEX_LEVELS_TO_MAX,
-        temperature: false,
-    },
     // The model card lists the same standard input/output prices as Sol
     // but $0.10/M cached input. Codex CLI's models.json gives GPT-6.1 Sol
     // the same ceiling and effort scale as Sol (checked 2026-10-08).
@@ -487,6 +548,17 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         cost: (2.0, 10.0, 0.1, 2.5),
         long_context_tier: true,
         context_window: 500_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
+    PinnedCodex {
+        id: "gpt-6-sol",
+        name: "GPT-6 Sol",
+        vision: true,
+        cost: (2.0, 10.0, 0.2, 2.5),
+        long_context_tier: true,
+        context_window: 272_000,
         max_context_window: Some(872_000),
         levels: CODEX_LEVELS_TO_MAX,
         temperature: false,

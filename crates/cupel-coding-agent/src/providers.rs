@@ -199,6 +199,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn openai_and_codex_default_to_gpt_61_sol() {
+        let providers = catalog_providers(&cupel_core::catalog::builtin_models());
+        for (provider, id) in [
+            ("openai", "gpt-6.1-sol"),
+            ("openai-codex", "codex/gpt-6.1-sol"),
+        ] {
+            let (_, model) = providers
+                .iter()
+                .find(|(name, _)| name == provider)
+                .expect("built-in provider");
+            assert_eq!(model.id, id, "{provider}");
+        }
+    }
+
     /// A local OpenAI-compatible row, the only API that honors `requiresApiKey`.
     fn completions_row() -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);

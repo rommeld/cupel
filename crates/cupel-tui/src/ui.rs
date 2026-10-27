@@ -3914,7 +3914,7 @@ pub(crate) mod tests {
         let notice = last_notice(&app);
         assert!(notice.contains("logged in with ChatGPT"), "{notice}");
         assert!(notice.contains("/provider openai-codex"), "{notice}");
-        assert!(notice.contains("default codex/gpt-6-sol"), "{notice}");
+        assert!(notice.contains("default codex/gpt-6.1-sol"), "{notice}");
     }
 
     #[test]
@@ -3956,16 +3956,16 @@ pub(crate) mod tests {
         let notice = last_notice(&app);
         assert!(
             notice.contains(
-                "openai-codex  - default codex/gpt-6-sol, not logged in - /login openai-codex"
+                "openai-codex  - default codex/gpt-6.1-sol, not logged in - /login openai-codex"
             ),
             "{notice}"
         );
         submit_command(&mut app, "/provider openai-codex");
         assert_eq!(app.meta.provider, "openai-codex");
-        assert_eq!(app.meta.model_name, "GPT-6 Sol");
+        assert_eq!(app.meta.model_name, "GPT-6.1 Sol");
         // Not the last notice: the test app runs with thinking off, which
-        // GPT-6 Sol cannot do, so the thinking notice follows this one.
-        assert!(has_notice(&app, "model codex/gpt-6-sol;"));
+        // GPT-6.1 Sol cannot do, so the thinking notice follows this one.
+        assert!(has_notice(&app, "model codex/gpt-6.1-sol;"));
         // And the key path is closed: codex takes logins, not keys.
         submit_command(&mut app, "/provider openai-codex sk-pasted");
         let notice = app
