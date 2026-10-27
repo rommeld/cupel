@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.33.13] - 2026-10-27
+
+- feat(models): default OpenAI and Codex to GPT-6.1 Sol
+- feat(catalog): expand Fireworks and OpenRouter models
+
 ## [v0.33.12] - 2026-10-27
 
 - feat(catalog): add GPT-6.1 Terra for OpenAI and Codex
