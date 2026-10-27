@@ -4,7 +4,7 @@
 #   packaging/update-changelog.sh v0.1.8-beta [CHANGELOG.md]
 #
 # The section lists the commit subjects between the previous tag and <tag>,
-# dated from the tag's commit. Used by the `changelog` job in
+# dated from the tag's commit. Used by the `publish` job in
 # .github/workflows/release.yml after every release, and runnable by hand
 # for a backfill. POSIX sh + awk only, same as update-formula.sh.
 #
