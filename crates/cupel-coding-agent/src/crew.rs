@@ -388,6 +388,15 @@ pub struct Crew {
     keys: Mutex<HashMap<String, String>>,
 }
 
+struct ScopedRequest {
+    name: String,
+    task: String,
+    parent: Option<CallScope>,
+    access: AccessScope,
+    cancel: CancellationToken,
+    shared: Option<Arc<TeamRuntime>>,
+}
+
 impl Crew {
     #[must_use]
     pub fn new(specs: Vec<AgentSpec>, setup: CrewSetup) -> Self {
@@ -639,41 +648,25 @@ impl Crew {
     ) -> Result<Reply, CrewError> {
         let owner = self.owner.lock().expect("crew owner poisoned").upgrade();
         if let Some(owner) = owner {
-            self.recover_usage()
-                .await
-                .map_err(|message| CrewError::Failed {
-                    name: name.into(),
-                    message,
-                    changes: Changes::ReadOnly,
-                })?;
             let spec = self
                 .spec(name)
                 .ok_or_else(|| CrewError::Unknown(name.into()))?;
-            let scope = self
-                .scheduler
-                .root(
-                    Participant::Helper(name.into()),
-                    if spec.definition.writes() {
-                        AccessScope::CanWrite
-                    } else {
-                        AccessScope::ReadOnly
-                    },
-                    task,
-                    cancel,
-                    if shared.is_some() {
-                        TaskVisibility::Shared
-                    } else {
-                        TaskVisibility::Private
-                    },
-                )
-                .await
-                .map_err(|message| CrewError::Failed {
-                    name: name.into(),
-                    message,
-                    changes: Changes::ReadOnly,
-                })?;
             return owner
-                .managed(scope, name.to_string(), task.to_string(), shared, progress)
+                .owned_request(
+                    ScopedRequest {
+                        name: name.into(),
+                        task: task.into(),
+                        parent: None,
+                        access: if spec.definition.writes() {
+                            AccessScope::CanWrite
+                        } else {
+                            AccessScope::ReadOnly
+                        },
+                        cancel,
+                        shared,
+                    },
+                    progress,
+                )
                 .await;
         }
         self.run_legacy(name, task, cancel, progress, shared, None)
@@ -697,23 +690,100 @@ impl Crew {
                 changes: Changes::ReadOnly,
             });
         }
-        let scope = self
-            .scheduler
-            .child(parent, name, task, access)
-            .await
-            .map_err(|message| CrewError::Failed {
+        self.owned_request(
+            ScopedRequest {
                 name: name.into(),
-                message,
-                changes: Changes::ReadOnly,
-            })?;
-        self.managed(
-            scope,
-            name.into(),
-            task.into(),
-            self.shared_team(name),
+                task: task.into(),
+                parent: Some(parent.clone()),
+                access,
+                cancel: parent.cancellation_token().child_token(),
+                shared: self.shared_team(name),
+            },
             &|_| {},
         )
         .await
+    }
+
+    async fn owned_request(
+        self: &Arc<Self>,
+        request: ScopedRequest,
+        progress: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<Reply, CrewError> {
+        let stop = request.cancel.child_token();
+        let worker_stop = stop.clone();
+        let crew = Arc::clone(self);
+        let name = request.name.clone();
+        let (sender, receipt) = tokio::sync::oneshot::channel();
+        let (updates, mut update_events) = tokio::sync::mpsc::unbounded_channel();
+        // Admission itself is owned: dropping a caller while the journal is loading
+        // must not strand a queue reservation before a managed worker exists.
+        tokio::spawn(async move {
+            let result = async {
+                let failed = |message: String| CrewError::Failed {
+                    name: request.name.clone(),
+                    message,
+                    changes: Changes::ReadOnly,
+                };
+                crew.recover_usage().await.map_err(failed)?;
+                let scope = match &request.parent {
+                    Some(parent) => {
+                        crew.scheduler
+                            .child(parent, &request.name, &request.task, request.access)
+                            .await
+                    }
+                    None => {
+                        crew.scheduler
+                            .root(
+                                Participant::Helper(request.name.clone()),
+                                request.access,
+                                &request.task,
+                                worker_stop.clone(),
+                                if request.shared.is_some() {
+                                    TaskVisibility::Shared
+                                } else {
+                                    TaskVisibility::Private
+                                },
+                            )
+                            .await
+                    }
+                }
+                .map_err(failed)?;
+                if worker_stop.is_cancelled() {
+                    scope.cancellation_token().cancel();
+                }
+                let progress = move |text| {
+                    let _ = updates.send(text);
+                };
+                let run = crew.managed(
+                    scope.clone(),
+                    request.name,
+                    request.task,
+                    request.shared,
+                    &progress,
+                );
+                tokio::pin!(run);
+                tokio::select! {biased;
+                    ()=worker_stop.cancelled()=>{scope.cancellation_token().cancel();run.await}
+                    result=&mut run=>result,
+                }
+            }
+            .await;
+            let _ = sender.send(result);
+        });
+        struct StopOnDrop(CancellationToken);
+        impl Drop for StopOnDrop {
+            fn drop(&mut self) {
+                self.0.cancel();
+            }
+        }
+        let _stop = StopOnDrop(stop);
+        tokio::pin!(receipt);
+        loop {
+            tokio::select! {
+                result=&mut receipt=>return result.map_err(|error|CrewError::Failed{name,message:format!("admission worker stopped: {error}"),changes:Changes::Unknown})?,
+                Some(text)=update_events.recv()=>progress(text),
+            }
+        }
     }
 
     async fn managed(
