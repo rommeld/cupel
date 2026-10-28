@@ -71,6 +71,11 @@ pub async fn agent_loop(
     cancel: CancellationToken,
     sink: AgentEventSink,
 ) -> Vec<AgentMessage> {
+    let cancel = cancel.child_token();
+    let _bridge = CancellationBridge(hooks.cancellation_token().map(|scoped| {
+        let cancel = cancel.clone();
+        tokio::spawn(async move { tokio::select! { () = scoped.cancelled() => cancel.cancel(), () = cancel.cancelled() => {} } })
+    }));
     let mut new_messages: Vec<AgentMessage> = prompts.clone();
     context.messages.extend(prompts.iter().cloned());
 
@@ -95,6 +100,15 @@ pub async fn agent_loop(
         messages: new_messages.clone(),
     });
     new_messages
+}
+
+struct CancellationBridge(Option<tokio::task::JoinHandle<()>>);
+impl Drop for CancellationBridge {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.0 {
+            handle.abort();
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -146,12 +160,22 @@ async fn run_loop(
 
             // Compact before the request that would overflow, not after it
             // fails: cheaper (no wasted request) and invisible to the model.
-            let estimate = compaction::estimate_context_tokens(&context);
+            let request_messages = hooks.request_messages().await;
+            let estimate = compaction::estimate_request_tokens(&context, &request_messages);
+            let mut private_config = config.clone();
+            if config.model.context_window > 0 {
+                let reserved: u64 = request_messages
+                    .iter()
+                    .map(compaction::estimate_message_tokens)
+                    .sum();
+                private_config.model.context_window =
+                    config.model.context_window.saturating_sub(reserved).max(1);
+            }
             if compaction::should_compact(estimate, config.model.context_window, &config.compaction)
             {
                 run_compaction(
                     &mut context,
-                    &config,
+                    &private_config,
                     &hooks,
                     &registry,
                     &cancel,
@@ -167,9 +191,16 @@ async fn run_loop(
             // still stops everything) but can also be cancelled alone. Steering does
             // that, and the run goes on.
             let turn = cancel.child_token();
-            let message =
-                stream_assistant_response(&mut context, &config, &hooks, &registry, &turn, sink)
-                    .await;
+            let message = stream_assistant_response(
+                &mut context,
+                &config,
+                &hooks,
+                &registry,
+                &turn,
+                sink,
+                &request_messages,
+            )
+            .await;
             new_messages.push(AgentMessage::Llm(Message::Assistant(message.clone())));
 
             // Steering cut this reply short. The partial reply stays in the transcript
@@ -215,7 +246,7 @@ async fn run_loop(
                 {
                     let compacted = run_compaction(
                         &mut context,
-                        &config,
+                        &private_config,
                         &hooks,
                         &registry,
                         &cancel,
@@ -384,19 +415,16 @@ async fn run_compaction(
     }
 
     sink.emit(AgentEvent::CompactionStart { reason });
-    let api_key = hooks
-        .api_key(config.model.provider.as_str())
-        .await
-        .or_else(|| config.api_key.clone());
     let tokens_before = compaction::estimate_context_tokens(context);
 
-    match compaction::compact(
+    match compaction::compact_with_hooks(
         context,
         registry,
         &config.model,
-        api_key,
+        config.api_key.clone(),
         &config.compaction,
         cancel,
+        hooks.as_ref(),
     )
     .await
     {
@@ -414,6 +442,7 @@ async fn run_compaction(
                 tokens_after: outcome.tokens_after,
                 error: None,
                 summary: outcome.summary,
+                usage: outcome.usage,
                 messages: context.messages.clone(),
             });
             true
@@ -425,6 +454,7 @@ async fn run_compaction(
                 tokens_after: compaction::estimate_context_tokens(context),
                 error: Some(err.to_string()),
                 summary: None,
+                usage: err.usage().cloned(),
                 messages: context.messages.clone(),
             });
             false
@@ -465,9 +495,19 @@ async fn stream_assistant_response(
     registry: &Registry,
     cancel: &CancellationToken,
     sink: &AgentEventSink,
+    request_messages: &[AgentMessage],
 ) -> AssistantMessage {
+    if let Some(problem) = hooks.model_request_problem().await {
+        let message = error_assistant_message(config, &InferenceError::Config(problem));
+        emit_final_message(context, sink, message.clone(), false);
+        return message;
+    }
     // AgentMessage[] -> (transform hook) -> convert -> Message[]
-    let transformed = hooks.transform_context(context.messages.clone()).await;
+    let mut transformed = hooks.transform_context(context.messages.clone()).await;
+    if !request_messages.is_empty() {
+        compaction::invalidate_usage_anchors(&mut transformed);
+    }
+    transformed.extend_from_slice(request_messages);
     let llm_messages = hooks.convert_to_llm(&transformed).await;
 
     let llm_context = Context {
@@ -487,10 +527,15 @@ async fn stream_assistant_response(
     };
 
     // Resolve the API key fresh for every call (expiring OAuth tokens).
-    let api_key = hooks
-        .api_key(config.model.provider.as_str())
-        .await
-        .or_else(|| config.api_key.clone());
+    let api_key = tokio::select! {
+        biased;
+        () = cancel.cancelled() => {
+            let message = error_assistant_message(config, &InferenceError::Aborted);
+            emit_final_message(context, sink, message.clone(), false);
+            return message;
+        }
+        key = hooks.api_key(config.model.provider.as_str()) => key.or_else(|| config.api_key.clone()),
+    };
 
     let options = StreamOptions {
         temperature: config.temperature,
@@ -557,6 +602,7 @@ async fn stream_assistant_response(
             &InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
         )
     });
+    hooks.observe_usage(Some(&message.usage)).await;
     emit_final_message(context, sink, message.clone(), started);
     message
 }

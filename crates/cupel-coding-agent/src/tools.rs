@@ -23,10 +23,13 @@
 pub mod apply_patch;
 pub mod ask_user;
 pub mod bash;
+pub mod checkout_write;
 pub mod file_queue;
 pub mod grep;
 pub mod grep_rank;
 pub mod patch_parser;
 pub mod patch_update;
 pub mod read;
+pub mod team;
+pub mod team_conversation;
 pub mod text_diff;

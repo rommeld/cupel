@@ -175,6 +175,28 @@ fn usage_history_handles_no_home_and_a_missing_sessions_directory_without_writin
     assert_eq!(load_history(None, None).warnings.len(), 1);
 }
 
+#[test]
+fn team_journals_are_metadata_not_usage_transcripts() {
+    let home = TempHome::new();
+    transcript(&home.0, "p/session.jsonl", 1, 10);
+    transcript(&home.0, "p/session/helper.jsonl", 1, 20);
+    let journal = home.0.join("sessions/p/session/team");
+    std::fs::create_dir_all(&journal).unwrap();
+    std::fs::write(
+        journal.join("conversation.jsonl"),
+        "{\"schemaVersion\":1}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        journal.join("conversation-00000001.jsonl"),
+        "{\"schemaVersion\":1}\n",
+    )
+    .unwrap();
+    let history = load_history(Some(&home.0), None);
+    assert_eq!(history.usage.totals().input, 30);
+    assert!(history.warnings.is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn usage_history_does_not_follow_symlinks_or_count_linked_transcripts_twice() {

@@ -86,6 +86,8 @@ Supported providers: Anthropic, OpenAI (Responses), OpenAI (Codex), AWS Bedrock,
 | `/preset <name>` | Switch model, thinking level, and prompt to a preset (no argument lists them) |
 | `/themes [id]` | Switch the color theme (no argument lists them) |
 | `/review [path...]` | Bundle the project, specific paths, or a `--diff` into a code-review prompt |
+| `/agent <name> [task]` | Call a configured helper directly; without a task, send it your next prompt |
+| `/team [add\|remove <name>...\|clear]` | List configured helpers or change who the lead may call |
 | `/usage` | Open current-session and all-history token/cost tables by model; close with `Esc` or the top-left `X` |
 | `/session-id` | Show the current session ID and list this project's sessions |
 | `/hot-reload [session-id]` | Reload `.cupel` config into the running or another session |
@@ -156,6 +158,120 @@ A preset names a model, a thinking level, and optionally an additional system pr
 ```
 
 `provider`, `model` (an id from `/model`), and `thinkingLevel` (`off` ... `max`) are required. `prompt` is appended to the system prompt while the preset is active. `/preset fast` switches all three at once. The `default` preset also applies at startup.
+
+### Helper agents
+
+Helpers are entirely user-defined: cupel ships no agent definitions or reserved
+names. Define them in `~/.cupel/settings.json` or a trusted project's
+`.cupel/settings.json`. These names are examples, not built-ins:
+
+```json
+{
+  "agents": {
+    "scout": {
+      "provider": "openai-codex",
+      "model": "codex/gpt-6.1-sol",
+      "thinkingLevel": "low",
+      "description": "Finds the files and functions relevant to a question.",
+      "remember": false
+    },
+    "critic": {
+      "provider": "openai-codex",
+      "model": "codex/gpt-6.1-sol",
+      "thinkingLevel": "high",
+      "description": "Reviews diffs for correctness bugs.",
+      "tools": ["read", "grep", "bash"],
+      "maxTurns": 20,
+      "prompt": "Report actionable findings with file paths."
+    }
+  },
+  "agentCommands": {"review": "critic"}
+}
+```
+
+Model fields follow presets. Names use `a-z`, `0-9`, `-`, and `_`. An omitted
+`tools` grants only `read` and `grep`; available tools are `read`, `grep`, `bash`,
+and `apply_patch`. Both `bash` and `apply_patch` count as write access, not a
+filesystem sandbox. `maxTurns` must be positive. Helpers remember their private
+history unless `remember` is false. A missing description makes a helper
+manual-only: `/agent` and explicit command mappings can reach it, but it cannot
+join a team. Project definitions replace same-name home definitions whole;
+untrusted project definitions **and command mappings** are ignored with warnings.
+
+`/agent scout find the parser` runs that helper without a lead turn. `/agent scout`
+arms it for one prompt; Esc disarms it. While a direct helper runs, lead prompts
+and one further helper call can wait. Esc cancels work, not edits already made.
+Successful and failed exchanges inform the lead of answers and observed changes;
+change reports also include concurrent user edits and explicitly report uncertainty.
+
+Fresh teams start empty unless eligible definitions explicitly set `"team": true`.
+Missing or false does not prevent explicit additions. `/team add scout critic` enables `ask` for read-only
+members and `delegate` for writers; `/team remove <name>...` and `/team clear`
+remove them. Eligibility alone does not add a member. Changing the tool schemas
+affects prompt caching from the next lead run. During lead delegation, the first
+Esc stops outstanding helpers; a second stops the lead. Restored sessions retain
+their saved choices, including an empty team.
+
+Start the normal TUI with one of `cupel --team [--add <name>...]`,
+`cupel --agent <name> [task]`, or `cupel --review`. These mutually exclusive
+forms use the same handlers as slash commands and do not exit automatically.
+Use `--` before flag-shaped task words. They require terminal input and output;
+`--plain` is not supported. `/new` and fresh spinoffs use their own settings'
+defaults; resumed sessions and in-place reloads retain saved choices instead.
+Default membership alone does not write a transcript until the first interaction.
+
+`agentCommands` routes `/review` and prompt templates explicitly, independently of
+team membership. Explicit choices always win. Invalid mappings warn and fall back
+to the lead, not an armed helper or another discovered candidate. Mappings cannot
+reroute non-prompt built-ins such as `/model`.
+
+Without a mapping, `/review` and role-named prompt templates can select a unique,
+sufficiently supported current teammate. `/team roles` explains evidence from
+trusted names and descriptions for `review`, `research`, `implement`, and `test`.
+Matching is deterministic and makes no model request. Name-only hints, negated
+capabilities, uncertain descriptions and ambiguous candidates do not auto-run.
+Use an explicit mapping or name to resolve ambiguity. Discovery neither adds
+members nor grants tools, and queued selections are revalidated before execution.
+The task journal records the selected role and runtime-derived evidence.
+Models can pass exactly one `agent` or `role` to `ask`/`delegate`; roles still obey
+the caller's access ceiling, actual tool permissions, ancestry and live roster.
+
+No helper Agent or model request is created until its first call. Startup can
+still inspect credentials and reject unknown models. Each helper has its own
+guard, loop killer and provider history. Helper transcripts are loaded lazily
+under `<session-id>/<name>.jsonl` beside the lead transcript and archived with it.
+The lead gets bounded task excerpts and answers; long answers are saved to files
+when persistence is available. `/team` shows helper spend; the footer and the
+`/usage` helper breakdown include incurred helper usage, even from failed calls.
+The existing model-table popup remains the lead's current-session table.
+
+The team shares an ordered, persistent discussion, not private system prompts,
+thinking, or raw tool histories. `team_read` pages through it; `team_post` posts
+or replies without waking another model. `/team conversation [after <id>]`
+inspects it in the UI. Runtime-assigned authors and task references identify
+each contribution. Posts are limited to 30 lines/1 KB; request-time snapshots
+are bounded to 60 lines/4 KB and never accumulate in private histories.
+On-team outcomes use this thread instead of duplicate legacy exchange notes;
+off-team direct calls remain private to the caller and lead. Removed members
+immediately lose thread tools. Clearing membership does not erase the discussion:
+the lead retains bounded awareness of earlier outcomes. The log lives under
+`<session-id>/team/conversation*.jsonl`, archives with the session, and falls back
+to memory with a visible warning if persistence fails.
+
+Active teammates can themselves `ask` or `delegate` to other current members.
+Every descendant shares its root's limits: three helper levels, 16 helper calls,
+64 provider requests (including retries and summarization), and a ten-minute
+deadline. Read-only subtrees cannot acquire write access. Calls to busy helpers
+queue in order; ancestor calls and dependency cycles are rejected before waiting.
+Actual `bash`/`apply_patch` execution shares a checkout-wide write gate, released
+before any caller waits for a child. This coordination is not a filesystem sandbox.
+`/team tasks [root-id]` shows task states, parents, changes, and own versus subtree
+costs; `/team cancel <id>` stops a subtree without rolling back edits or spend.
+Interrupted tasks restore as interrupted, not runnable work. Usage checkpoints
+retain known interrupted-call spend and flag incomplete observations.
+
+Helper commands are interactive TUI features; plain mode is unchanged. Models
+are not guaranteed to delegate just because a matching helper is available.
 
 ### Themes
 

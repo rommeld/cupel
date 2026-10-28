@@ -114,7 +114,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         .map(|line| transcript::wrap_line(line, inner_width).len())
         .sum::<usize>()
         .clamp(1, 5) as u16;
-    let waiting = app.steering.len() + app.queued.len();
+    let waiting = app.steering.len() + app.queued.len() + usize::from(app.waiting_helper.is_some());
     let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
     // Reserve the editor, model status, footer, queues and one transcript row first.
     // The pane itself uses at most half the screen; its outside gaps are separate rows.
@@ -473,14 +473,19 @@ fn question_lines(app: &App, width: usize, theme: &Theme) -> QuestionLines {
 /// then "Follow-up:" rows, oldest first. The first line of each prompt, then the key
 /// that takes them back.
 fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
-    if app.steering.is_empty() && app.queued.is_empty() {
+    if app.steering.is_empty() && app.queued.is_empty() && app.waiting_helper.is_none() {
         return;
     }
     let first_line = |text: &String| text.lines().next().unwrap_or_default().to_string();
     let lines: Vec<Line<'_>> = app
-        .steering
+        .waiting_helper
         .iter()
-        .map(|text| format!(" Steer: {}", first_line(text)))
+        .map(|call| format!(" Agent: @{} {}", call.name, first_line(&call.task)))
+        .chain(
+            app.steering
+                .iter()
+                .map(|text| format!(" Steer: {}", first_line(text))),
+        )
         .chain(
             app.queued
                 .iter()
@@ -562,6 +567,11 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
         .padding(Padding::horizontal(INPUT_PADDING));
     if app.question.is_some() {
         block = block.title(Span::styled(" Your answer ", theme.chrome));
+    } else if let Some(name) = &app.armed {
+        block = block.title(Span::styled(
+            format!(" next prompt → {name} (esc cancels) "),
+            theme.chrome,
+        ));
     } else if app.is_running() {
         let elapsed = app
             .run_started
@@ -639,13 +649,14 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let maximum_segment = maximum.map_or_else(String::new, |max| format!(" · max {}k", max / 1000));
     // The session id sits in the always-visible left half so `--resume
     // <id>` (or /hot-reload <id>) can be typed from what's on screen.
+    let totals = app.session_totals();
     let left = format!(
         " {} | {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k{window_label} ({percent}%){maximum_segment}",
         app.recorder.session_id(),
-        app.totals.input,
-        app.totals.output,
-        app.totals.cache_read,
-        app.totals.cost,
+        totals.input,
+        totals.output,
+        totals.cache_read,
+        totals.cost,
         app.context_tokens / 1000,
         window / 1000,
     );
@@ -2359,6 +2370,7 @@ pub(crate) mod tests {
             tokens_after: 12_000,
             error: None,
             summary: None,
+            usage: None,
             messages: Vec::new(),
         }))
         .await;
@@ -2488,6 +2500,7 @@ pub(crate) mod tests {
             tokens_after: 12_000,
             error: None,
             summary: Some("## Goal\nfix the retry backoff".into()),
+            usage: None,
             messages: Vec::new(),
         }))
         .await;

@@ -5,6 +5,7 @@
 //! the `App` currently says. No state lives in the widgets that's the
 //! immediate-mode contract that keeps ratatui apps easy to reason about.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt as _;
@@ -12,11 +13,21 @@ use futures_util::StreamExt as _;
 use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
 use cupel_coding_agent::bootstrap::Frontend;
 use cupel_coding_agent::commands;
+use cupel_coding_agent::crew::{self, Changes, Crew, CrewError, CrewSetup, Reply};
 use cupel_coding_agent::modes::SessionMeta;
 use cupel_coding_agent::program_status::{BlockedKind, State as ProgramState};
+use cupel_coding_agent::roles::{AccessFilter, CommandRoute, RoleSelection, command_route};
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
+use cupel_coding_agent::team_conversation::{
+    EntryReceipt, Participant, TaskPhase, TeamRuntime, TeamUpdate,
+};
+use cupel_coding_agent::team_runtime::ConversationHooks;
+use cupel_coding_agent::team_scheduler::{AccessScope, RunContext, TaskState};
 use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
+use cupel_coding_agent::tools::checkout_write::{CheckoutWriteTool, WriteGate};
+use cupel_coding_agent::tools::team::{TEAM_TOOL_NAMES, team_tools};
+use cupel_coding_agent::tools::team_conversation::{CONVERSATION_TOOL_NAMES, conversation_tools};
 use cupel_coding_agent::usage::{HistoryUsage, UsageByModel, UsageTotals};
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
@@ -26,10 +37,12 @@ use ratatui::crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
+use tokio_util::sync::CancellationToken;
 
 use crate::autocomplete::{Autocomplete, Candidate};
 use crate::input::InputState;
 use crate::login;
+use crate::startup::{StartupCommand, TeamInitialization};
 use crate::theme::Theme;
 use crate::transcript::{Cell, ToolOutcome, Transcript};
 
@@ -76,7 +89,56 @@ pub struct App {
     pub run_started: Option<Instant>,
     pub questions: Option<QuestionReceiver>,
     pub question: Option<OpenQuestion>,
+    pub crew: Arc<Crew>,
+    pub armed: Option<String>,
+    pub helper: Option<HelperRun>,
+    pub waiting_helper: Option<HelperCall>,
+    pub routes: std::collections::BTreeMap<String, String>,
+    pub team: std::collections::BTreeSet<String>,
+    pub initial_team_pending: bool,
+    pub team_runtime: Arc<TeamRuntime>,
+    pub team_events: Option<tokio::sync::mpsc::UnboundedReceiver<TeamUpdate>>,
+    pub pending_team_read: Option<Option<u64>>,
+    pub team_seen: u64,
+    pub lead_team_entry: Option<EntryReceipt>,
+    pub base_hooks: Arc<dyn cupel_agent::AgentHooks>,
+    pub base_tools: Vec<Arc<dyn cupel_agent::AgentTool>>,
+    pub pending_task_action: Option<TaskAction>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelperCall {
+    pub name: String,
+    pub task: String,
+    pub selection: Option<RoleSelection>,
+}
+
+pub struct HelperRun {
+    pub call: HelperCall,
+    pub cell_id: String,
+    pub events: tokio::sync::mpsc::UnboundedReceiver<HelperEvent>,
+    pub cancel: CancellationToken,
+    pub shared: bool,
+}
+
+impl Drop for HelperRun {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+pub enum HelperEvent {
+    Progress(String),
+    Done(Result<Reply, CrewError>),
+}
+
+pub enum TaskAction {
+    Inspect(Option<u64>),
+    Cancel(u64),
+}
+
+const HELPER_SPEND_KIND: &str = "cupel.helper-spend";
+const TEAM_KIND: &str = "team";
 
 /// A question from the `ask_user` tool, on screen until it is answered.
 pub struct OpenQuestion {
@@ -150,6 +212,8 @@ pub enum AppEvent {
     Login(Option<login::LoginEvent>),
     Question(Option<PendingQuestion>),
     Usage(Result<HistoryUsage, tokio::task::JoinError>),
+    Helper(Option<HelperEvent>),
+    Team(Option<TeamUpdate>),
 }
 
 /// What `/new` or `/hot-reload` asked for.
@@ -170,7 +234,7 @@ pub enum ThemeRequest {
 
 impl App {
     #[must_use]
-    pub fn new(agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
+    pub fn new(mut agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
         let mut command_candidates: Vec<Candidate> = commands::BUILTIN_COMMANDS
             .iter()
             .map(|c| Candidate {
@@ -261,6 +325,55 @@ impl App {
             value: "openai-codex".to_string(),
             is_dir: false,
         }];
+        let (specs, crew_warnings) =
+            crew::resolve(&meta.settings, &meta.models, meta.home.as_deref());
+        let crew = Arc::new(Crew::new(
+            specs,
+            CrewSetup {
+                cwd: std::path::PathBuf::from(&meta.cwd),
+                home: meta.home.clone(),
+                registry: agent.registry(),
+                settings: meta.settings.clone(),
+                context_files: meta.context_files.clone(),
+                session_id: recorder.session_id().into(),
+            },
+        ));
+        let agent_candidates = crew
+            .specs()
+            .map(|spec| Candidate {
+                display: format!(
+                    "{}  - {}",
+                    spec.name,
+                    spec.definition.description().unwrap_or("manual only")
+                ),
+                value: spec.name.clone(),
+                is_dir: false,
+            })
+            .collect();
+        let (routes, route_warnings) = crew::routes(&meta.settings, &crew, &meta.templates);
+        let path = recorder.sessions_dir().map(|dir| {
+            dir.join(recorder.session_id())
+                .join("team/conversation.jsonl")
+        });
+        let (team_runtime, team_events) = TeamRuntime::new(path);
+        crew.set_team_runtime(Arc::clone(&team_runtime));
+        let base_hooks = agent.hooks();
+        let base_tools = agent.tools().to_vec();
+        agent.set_tools(
+            base_tools
+                .iter()
+                .cloned()
+                .map(|tool| CheckoutWriteTool::wrap(tool, &crew.write_gate()))
+                .collect(),
+        );
+        agent.set_hooks(Arc::new(
+            ConversationHooks::new(
+                Arc::clone(&base_hooks),
+                Arc::clone(&team_runtime),
+                Participant::Lead,
+            )
+            .with_scope(crew.scheduler(), crew.lead_context()),
+        ));
         // `/hot-reload <id>` completes from the transcripts on disk. Only
         // file stems are read (no parsing) App::new must stay fast.
         let session_candidates: Vec<Candidate> = recorder
@@ -276,10 +389,43 @@ impl App {
             .with_command_args("provider", provider_candidates)
             .with_command_args("login", login_candidates)
             .with_command_args("logout", logout_candidates)
+            .with_command_args("agent", agent_candidates)
+            .with_command_args(
+                "team",
+                [
+                    "add",
+                    "remove",
+                    "clear",
+                    "roles",
+                    "conversation",
+                    "tasks",
+                    "cancel",
+                ]
+                .into_iter()
+                .map(|name| Candidate {
+                    display: name.into(),
+                    value: name.into(),
+                    is_dir: false,
+                })
+                .collect(),
+            )
             .with_command_args("hot-reload", session_candidates);
         // Restored history (a --resume session) exists before the App does;
         // snapshot it so the transcript can replay it as cells.
         let history = agent.state().messages;
+        if let Some(payload) = history.iter().rev().find_map(|message| match message {
+            AgentMessage::Custom { kind, payload, .. } if kind == HELPER_SPEND_KIND => {
+                Some(payload.clone())
+            }
+            _ => None,
+        }) {
+            if let Ok(checkpoint) = serde_json::from_value::<crew::UsageCheckpoint>(payload.clone())
+            {
+                crew.restore_checkpoint(checkpoint);
+            } else if let Ok(spend) = serde_json::from_value(payload) {
+                crew.restore_spend(spend);
+            }
+        }
         let mut app = Self {
             agent,
             meta,
@@ -321,9 +467,37 @@ impl App {
             run_started: None,
             question: None,
             questions: None,
+            crew,
+            armed: None,
+            helper: None,
+            waiting_helper: None,
+            routes,
+            team: std::collections::BTreeSet::new(),
+            initial_team_pending: false,
+            team_runtime,
+            team_events: Some(team_events),
+            pending_team_read: None,
+            team_seen: 0,
+            lead_team_entry: None,
+            base_hooks,
+            base_tools,
+            pending_task_action: None,
         };
+        if let Some(names) = history.iter().rev().find_map(|message| match message {
+            AgentMessage::Custom { kind, payload, .. } if kind == TEAM_KIND => Some(
+                serde_json::from_value::<Vec<String>>(payload["members"].clone())
+                    .unwrap_or_default(),
+            ),
+            _ => None,
+        }) {
+            app.restore_team(names);
+        }
         app.replay_history(&history);
-        for warning in std::mem::take(&mut app.meta.warnings) {
+        for warning in std::mem::take(&mut app.meta.warnings)
+            .into_iter()
+            .chain(crew_warnings)
+            .chain(route_warnings)
+        {
             app.notice(warning);
         }
         for warning in theme_warnings {
@@ -336,6 +510,44 @@ impl App {
         }
         app.note_thinking_level();
         app
+    }
+
+    pub fn initialize_team(&mut self, initialization: TeamInitialization) {
+        let has_saved = self.agent.state().messages.iter().any(
+            |message| matches!(message, AgentMessage::Custom { kind, .. } if kind == TEAM_KIND),
+        );
+        if initialization == TeamInitialization::Restore || has_saved {
+            return;
+        }
+        let defaults = self
+            .crew
+            .specs()
+            .filter(|spec| spec.definition.joins_team_by_default())
+            .map(|spec| spec.name.clone())
+            .collect();
+        self.restore_team(defaults);
+        self.initial_team_pending = !self.team.is_empty();
+    }
+
+    pub fn apply_startup(&mut self, startup: StartupCommand) {
+        match startup {
+            StartupCommand::Team(command) => self.handle_team_command(command),
+            StartupCommand::Agent { name, task } => {
+                self.handle_agent_command(
+                    &task.map_or(name.clone(), |task| format!("{name} {task}")),
+                );
+            }
+            StartupCommand::Review => {
+                self.handle_builtin("review");
+            }
+        }
+    }
+
+    fn flush_initial_team(&mut self) {
+        if self.initial_team_pending {
+            self.initial_team_pending = false;
+            self.record_team();
+        }
     }
 
     /// Say so when the model cannot do the thinking level that was asked for.
@@ -380,7 +592,13 @@ impl App {
                         Some(summary) => Cell::Summary {
                             text: summary.trim_start().to_string(),
                         },
-                        None => Cell::User { text },
+                        None => match crew::parse_exchange(&text) {
+                            Some((name, body)) => Cell::Agent {
+                                name: name.into(),
+                                text: body.into(),
+                            },
+                            None => Cell::User { text },
+                        },
                     };
                     self.transcript.cells.push(cell);
                 }
@@ -418,6 +636,16 @@ impl App {
                     );
                 }
                 // Custom messages are internal bookkeeping, not display.
+                AgentMessage::Custom { kind, payload, .. } if kind == "cupel.compaction-usage" => {
+                    if let (Some(provider), Some(model), Ok(usage)) = (
+                        payload["provider"].as_str(),
+                        payload["model"].as_str(),
+                        serde_json::from_value(payload["usage"].clone()),
+                    ) {
+                        self.usage_by_model.record_usage(provider, model, &usage);
+                        self.totals = self.usage_by_model.totals();
+                    }
+                }
                 AgentMessage::Custom { .. } => {}
             }
         }
@@ -425,7 +653,7 @@ impl App {
 
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.run_events.is_some()
+        self.run_events.is_some() || self.helper.is_some()
     }
 
     /// Session's state for the sidebar.
@@ -626,6 +854,11 @@ impl App {
                 self.login = None; // Drop cancels the background task.
                 self.notice("login cancelled");
             }
+            (KeyCode::Esc, ..) if self.armed.is_some() => {
+                if let Some(name) = self.armed.take() {
+                    self.notice(format!("{name} no longer gets your next prompt"));
+                }
+            }
             (KeyCode::Esc, ..) if self.is_running() => self.abort_run(),
             // Esc while idle drops the click selection (harmless no-op
             // when nothing is selected).
@@ -762,6 +995,7 @@ impl App {
             timestamp += 1;
         };
         let mut app = self.reload_session(cwd, session_id, Vec::new()).await;
+        app.initialize_team(TeamInitialization::ConfiguredDefaults);
         app.notice(format!("new session {}", app.recorder.session_id()));
         app
     }
@@ -834,9 +1068,26 @@ impl App {
         // The session continues: retain its open transcript, started state,
         // and pending hook chain rather than creating a fresh recorder.
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, self.recorder);
+        app.team_runtime = self.team_runtime;
+        app.team_events = self.team_events;
+        app.team_seen = self.team_seen;
+        app.crew.set_team_runtime(Arc::clone(&app.team_runtime));
+        app.agent.set_hooks(Arc::new(
+            ConversationHooks::new(
+                Arc::clone(&app.base_hooks),
+                Arc::clone(&app.team_runtime),
+                Participant::Lead,
+            )
+            .with_scope(app.crew.scheduler(), app.crew.lead_context()),
+        ));
+        app.set_write_gate(self.crew.write_gate());
         app.questions = ingredients.questions;
+        app.crew.remember_keys(&self.session_keys);
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
+        app.crew.restore_checkpoint(self.crew.usage_checkpoint());
+        app.restore_team(self.team.into_iter().collect());
+        app.initial_team_pending = self.initial_team_pending;
         if let Some(message) = delta_message {
             // The transcript file gets the update too a later --resume
             // replays the same conversation the model saw.
@@ -980,6 +1231,7 @@ impl App {
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
         app.questions = ingredients.questions;
+        app.crew.remember_keys(&carry.session_keys);
         app.session_keys = carry.session_keys;
         app.mouse_captured = carry.mouse_captured;
         app
@@ -1031,7 +1283,7 @@ impl App {
             self.transcript
                 .cells
                 .iter()
-                .rposition(|cell| matches!(cell, Cell::Answer { .. }))
+                .rposition(|cell| matches!(cell, Cell::Answer { .. } | Cell::Agent { .. }))
         });
         let Some(index) = index else {
             self.notice("nothing to copy - click a block, or finish a turn for an answer");
@@ -1084,11 +1336,59 @@ impl App {
             }
             let expanded = commands::expand_prompt_template(&trimmed, &self.meta.templates);
             if let Some(expanded) = expanded {
-                self.send(&expanded, delivery);
+                let name = rest.split_whitespace().next().unwrap_or_default();
+                self.prompt_for(name, expanded, delivery);
                 return;
             }
         }
-        self.send(&trimmed, delivery);
+        self.prompt_or_call(trimmed, delivery);
+    }
+
+    fn prompt_for(&mut self, command: &str, text: String, delivery: Delivery) {
+        match command_route(
+            command,
+            self.meta.settings.agent_commands.contains_key(command),
+            self.routes.get(command),
+            self.crew.roles(),
+            &self.crew.members(),
+        ) {
+            CommandRoute::Explicit(name) => self.call_helper(HelperCall {
+                name,
+                task: text,
+                selection: None,
+            }),
+            CommandRoute::Discovered(selection) => {
+                self.notice(format!(
+                    "/{command} → {} (discovered {}: {})",
+                    selection.agent,
+                    selection.role,
+                    selection.evidence.join("; ")
+                ));
+                self.call_helper(HelperCall {
+                    name: selection.agent.clone(),
+                    task: text,
+                    selection: Some(selection),
+                });
+            }
+            CommandRoute::Lead(reason) => {
+                if let Some(reason) = reason {
+                    self.notice(reason);
+                }
+                self.send(&text, delivery);
+            }
+            CommandRoute::Ordinary => self.prompt_or_call(text, delivery),
+        }
+    }
+
+    fn prompt_or_call(&mut self, text: String, delivery: Delivery) {
+        match self.armed.take() {
+            Some(name) => self.call_helper(HelperCall {
+                name,
+                task: text,
+                selection: None,
+            }),
+            None => self.send(&text, delivery),
+        }
     }
 
     /// Enter on an open question. Typed text is the answer; with nothing typed, the
@@ -1111,6 +1411,17 @@ impl App {
     /// where it would take them, so they would sit in the agent's queues
     /// until the next run ends.
     pub(crate) fn abort_run(&mut self) {
+        if let Some(helper) = &self.helper {
+            helper.cancel.cancel();
+        }
+        let stopped = self.crew.stop_running();
+        if !stopped.is_empty() && self.run_events.is_some() {
+            self.notice(format!(
+                "stopped {} - the lead goes on (esc again stops it too)",
+                stopped.join(", ")
+            ));
+            return;
+        }
         self.last_answer = Status::Cancelled;
         self.question = None;
         self.restore_queued();
@@ -1126,8 +1437,13 @@ impl App {
         self.agent.clear_steering();
         self.agent.clear_follow_ups();
         // mem::take moves each list out and leaves an empty Vec behind.
-        let queued: Vec<String> = core::mem::take(&mut self.steering)
+        let waiting = self
+            .waiting_helper
+            .take()
+            .map(|call| format!("/agent {} {}", call.name, call.task));
+        let queued: Vec<String> = waiting
             .into_iter()
+            .chain(core::mem::take(&mut self.steering))
             .chain(core::mem::take(&mut self.queued))
             .collect();
         let restored = queued.len();
@@ -1150,6 +1466,7 @@ impl App {
     /// Route a prompt to the agent: new run when idle, queued or steered
     /// when busy.
     pub fn send(&mut self, text: &str, delivery: Delivery) {
+        self.flush_initial_team();
         // A prompt is headed for the agent the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately not at
         // startup (launching + quitting cupel must leave no trace), and not
@@ -1171,6 +1488,18 @@ impl App {
                 }
             }
             self.recorder.on_queued_prompt(text);
+            if self.run_events.is_some()
+                && self.crew.lead_context().current().is_some()
+                && let Err(problem) = self.team_runtime.task(
+                    Participant::User,
+                    TaskPhase::Started,
+                    None,
+                    text,
+                    "accepted user update within the active root",
+                )
+            {
+                self.notice(problem);
+            }
         } else {
             // Not started here: the event loop takes it via
             // `take_pending_prompt`, awaits the prompt-path hooks
@@ -1185,6 +1514,17 @@ impl App {
 
     /// Start the agent run for a prompt (the async half of `send`).
     pub fn start_run(&mut self, text: &str) {
+        self.flush_initial_team();
+        self.prepare_team_root(text);
+        if !self.team.is_empty() {
+            match self
+                .team_runtime
+                .task(Participant::User, TaskPhase::Started, None, text, "")
+            {
+                Ok(receipt) => self.lead_team_entry = Some(receipt),
+                Err(problem) => self.notice(problem),
+            }
+        }
         // The task leads the turn. `start_run`is the single funnel every
         // prompt goes through (typed prompts, expanded templates, /review bundles).
         self.transcript.cells.push(Cell::User {
@@ -1202,6 +1542,32 @@ impl App {
     }
 
     /// A run started: keep its events, start its clock, and wait for the model.
+    fn prepare_team_root(&self, text: &str) {
+        let context = self.crew.lead_context();
+        if self.team.is_empty() {
+            context.clear();
+        } else {
+            context.set(RunContext::root(
+                Participant::Lead,
+                AccessScope::CanWrite,
+                text.into(),
+                CancellationToken::new(),
+            ));
+        }
+    }
+
+    pub fn set_write_gate(&mut self, gate: WriteGate) {
+        self.crew.set_write_gate(Arc::clone(&gate));
+        self.agent.set_tools(
+            self.base_tools
+                .iter()
+                .cloned()
+                .map(|tool| CheckoutWriteTool::wrap(tool, &gate))
+                .collect(),
+        );
+        self.apply_team();
+    }
+
     fn begin_run(&mut self, events: AgentEventStream) {
         self.run_events = Some(events);
         self.run_started = Some(Instant::now());
@@ -1213,6 +1579,16 @@ impl App {
     /// thinks (when it writes headlines), otherwise the activity.
     #[must_use]
     pub fn activity_label(&self) -> String {
+        if let Some(helper) = &self.helper {
+            return format!(
+                "{} working · esc stops {}",
+                helper.call.name, helper.call.name
+            );
+        }
+        let helpers = self.crew.running_names();
+        if !helpers.is_empty() {
+            return format!("{} working · esc stops them", helpers.join(", "));
+        }
         if self.question.is_some() {
             return "waiting for your answer".to_string();
         }
@@ -1395,6 +1771,7 @@ impl App {
                 // even if the disk save below fails. Deliberately never
                 // echoed back into the transcript.
                 self.session_keys.insert(provider.clone(), key.to_string());
+                self.crew.remember_key(&provider, key);
                 // Persist. save_provider_key re-reads the file itself and
                 // refuses to clobber a malformed one; the in-memory mirror
                 // is updated only on sucess
@@ -1495,6 +1872,415 @@ impl App {
         self.note_thinking_level();
     }
 
+    #[must_use]
+    pub fn session_totals(&self) -> UsageTotals {
+        let helpers = self.crew.total_spend();
+        let mut totals = self.totals;
+        totals.input += helpers.input;
+        totals.output += helpers.output;
+        totals.cache_read += helpers.cache_read;
+        totals.cost += helpers.cost;
+        totals
+    }
+
+    fn show_helper_usage(&mut self) {
+        if self.crew.total_spend().calls == 0 {
+            return;
+        }
+        let totals = self.session_totals();
+        let mut lines = vec![format!(
+            "session including helpers: {} in / {} out / {} cached, ${:.4}",
+            totals.input, totals.output, totals.cache_read, totals.cost
+        )];
+        lines.push(format!(
+            "  lead: {} in / {} out, ${:.4}",
+            self.totals.input, self.totals.output, self.totals.cost
+        ));
+        for (name, spend) in self.crew.spend_snapshot() {
+            lines.push(format!(
+                "  {name}: {} calls, {} in / {} out / {} cached, ${:.4}",
+                spend.calls, spend.input, spend.output, spend.cache_read, spend.cost
+            ));
+        }
+        self.notice(lines.join("\n"));
+    }
+
+    fn handle_agent_command(&mut self, args: &str) {
+        let (name, task) = args
+            .split_once(char::is_whitespace)
+            .map_or((args, ""), |(name, task)| (name, task.trim()));
+        if name.is_empty() {
+            self.list_team();
+            return;
+        }
+        if self.crew.spec(name).is_none() {
+            self.notice(format!("no agent named {name} (/team lists them)"));
+            return;
+        }
+        if task.is_empty() {
+            self.armed = Some(name.into());
+            self.notice(format!("your next prompt goes to {name} (esc cancels)"));
+        } else {
+            self.call_helper(HelperCall {
+                name: name.into(),
+                task: task.into(),
+                selection: None,
+            });
+        }
+    }
+
+    fn list_team(&mut self) {
+        let mut lines = vec![
+            "agents (* on the lead's team; /team add <name>, /agent <name> [task]):".to_string(),
+        ];
+        for spec in self.crew.specs() {
+            let tools = spec
+                .definition
+                .tools()
+                .iter()
+                .map(|tool| tool.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            lines.push(format!(
+                "{} {} - {}/{}, thinking {}, tools {tools}, {}, from {}",
+                if self.team.contains(&spec.name) {
+                    "*"
+                } else {
+                    " "
+                },
+                spec.name,
+                spec.model.provider.as_str(),
+                spec.model.id,
+                spec.definition.preset.thinking_level.as_str(),
+                if spec.definition.writes() {
+                    "can write"
+                } else {
+                    "read-only"
+                },
+                spec.definition.origin.as_str()
+            ));
+            lines.push(format!(
+                "      {}",
+                spec.definition
+                    .description()
+                    .unwrap_or("manual only: no description")
+            ));
+            let commands = self
+                .routes
+                .iter()
+                .filter(|(_, agent)| **agent == spec.name)
+                .map(|(command, _)| format!("/{command}"))
+                .collect::<Vec<_>>();
+            if !commands.is_empty() {
+                lines.push(format!("      answers {}", commands.join(", ")));
+            }
+            if let Some(max) = spec.definition.max_turns {
+                lines.push(format!("      max {max} turns"));
+            }
+            if !spec.definition.remembers() {
+                lines.push("      forgets between calls".into());
+            }
+            let spend = self.crew.spend_of(&spec.name);
+            lines.push(if spend.calls > 0 {
+                format!(
+                    "      {} calls, {} in / {} out, ${:.4}",
+                    spend.calls, spend.input, spend.output, spend.cost
+                )
+            } else {
+                "      not called yet".into()
+            });
+        }
+        if self.crew.specs().next().is_none() {
+            self.notice("no agents defined - add an \"agents\" section to ~/.cupel/settings.json or .cupel/settings.json");
+        } else {
+            self.notice(lines.join("\n"));
+        }
+    }
+
+    fn handle_team_command(&mut self, command: commands::TeamCommand) {
+        let before = self.team.clone();
+        match command {
+            commands::TeamCommand::List => {
+                self.list_team();
+                return;
+            }
+            commands::TeamCommand::Roles => {
+                self.notice(self.crew.roles().describe(&self.crew.members()));
+                return;
+            }
+            commands::TeamCommand::Conversation(after) => {
+                self.pending_team_read = Some(after);
+                return;
+            }
+            commands::TeamCommand::Tasks(root) => {
+                self.pending_task_action = Some(TaskAction::Inspect(root));
+                return;
+            }
+            commands::TeamCommand::Cancel(id) => {
+                self.pending_task_action = Some(TaskAction::Cancel(id));
+                return;
+            }
+            commands::TeamCommand::Add(names) => {
+                for name in names {
+                    if let Some(problem) = crew::team_member_problem(&self.crew, &name) {
+                        self.notice(problem);
+                    } else {
+                        self.team.insert(name);
+                    }
+                }
+            }
+            commands::TeamCommand::Remove(names) => {
+                for name in names {
+                    if !self.team.remove(&name) {
+                        self.notice(format!("{name} is not on the team"));
+                    }
+                }
+            }
+            commands::TeamCommand::Clear => self.team.clear(),
+        }
+        if self.team == before {
+            return;
+        }
+        self.apply_team();
+        self.initial_team_pending = false;
+        self.record_team();
+        self.notice(format!("team: {} (from the lead's next request on; changed tool schemas affect prompt caching)", if self.team.is_empty() { "empty - the lead works alone".into() } else { self.team.iter().cloned().collect::<Vec<_>>().join(", ") }));
+    }
+
+    fn restore_team(&mut self, names: Vec<String>) {
+        self.team.clear();
+        for name in names {
+            if let Some(problem) = crew::team_member_problem(&self.crew, &name) {
+                self.notice(format!("cannot restore team member: {problem}"));
+            } else {
+                self.team.insert(name);
+            }
+        }
+        self.apply_team();
+    }
+
+    fn apply_team(&mut self) {
+        self.team_runtime.set_members(self.team.clone());
+        let mut tools = self
+            .agent
+            .tools()
+            .iter()
+            .filter(|tool| {
+                !TEAM_TOOL_NAMES.contains(&tool.name())
+                    && !CONVERSATION_TOOL_NAMES.contains(&tool.name())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        tools.extend(team_tools(&self.crew, &self.team));
+        tools.extend(conversation_tools(&self.team_runtime, Participant::Lead));
+        self.agent.set_tools(tools);
+    }
+
+    fn record_team(&mut self) {
+        let message = AgentMessage::Custom {
+            kind: TEAM_KIND.into(),
+            payload: serde_json::json!({"members":self.team}),
+            timestamp: cupel_core::types::now_ms(),
+        };
+        self.recorder.record(&message);
+        self.agent.push_message(message);
+    }
+
+    fn call_helper(&mut self, call: HelperCall) {
+        cupel_coding_agent::resources::ensure_project_dot_cupel(std::path::Path::new(
+            &self.meta.cwd,
+        ));
+        if !self.is_running() {
+            self.start_helper(call);
+        } else if self.waiting_helper.is_none() {
+            self.notice(format!("{} starts when the current run is done", call.name));
+            self.waiting_helper = Some(call);
+        } else {
+            self.notice(
+                "another agent call is waiting already - send this one when it has started",
+            );
+        }
+        self.scroll_from_bottom = 0;
+    }
+
+    fn start_helper(&mut self, mut call: HelperCall) {
+        if let Some(selection) = &call.selection {
+            match self
+                .crew
+                .roles()
+                .resolve(selection.role, &self.crew.members(), AccessFilter::Any)
+                .selection(selection.role)
+            {
+                Ok(selection) => {
+                    call.name = selection.agent.clone();
+                    call.selection = Some(selection);
+                }
+                Err(reason) => {
+                    self.notice(format!("{reason}; using the lead"));
+                    self.send(&call.task, Delivery::Queue);
+                    return;
+                }
+            }
+        }
+        self.flush_initial_team();
+        self.transcript.cells.push(Cell::User {
+            text: format!("@{} {}", call.name, call.task),
+        });
+        let cell_id = format!("helper-{}", self.transcript.cells.len());
+        self.transcript.cells.push(Cell::Tool {
+            id: cell_id.clone(),
+            name: call.name.clone(),
+            call: format!(
+                "{}: {}",
+                call.name,
+                call.task.lines().next().unwrap_or_default()
+            ),
+            expanded: self.tools_expanded,
+            started_at: Some(Instant::now()),
+            live: None,
+            result: None,
+        });
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let run_cancel = cancel.clone();
+        let crew = Arc::clone(&self.crew);
+        let (name, task) = (call.name.clone(), call.task.clone());
+        let selection = call.selection.clone();
+        let shared_team = self.crew.shared_team(&call.name);
+        let shared = shared_team.is_some();
+        tokio::spawn(async move {
+            let progress_sender = sender.clone();
+            let progress = move |lines| {
+                let _ = progress_sender.send(HelperEvent::Progress(lines));
+            };
+            let result = match selection {
+                Some(selection) => {
+                    crew.run_selected_direct(selection, &task, run_cancel, shared_team, &progress)
+                        .await
+                }
+                None => {
+                    crew.run_with_team(&name, &task, run_cancel, &progress, shared_team)
+                        .await
+                }
+            };
+            let _ = sender.send(HelperEvent::Done(result));
+        });
+        self.run_started = Some(Instant::now());
+        self.last_answer = Status::New;
+        self.helper = Some(HelperRun {
+            call,
+            cell_id,
+            events,
+            cancel,
+            shared,
+        });
+    }
+
+    pub fn on_helper_event(&mut self, event: Option<HelperEvent>) {
+        match event {
+            Some(HelperEvent::Progress(lines)) => {
+                if let Some(run) = &self.helper {
+                    self.transcript.attach_tool_progress(&run.cell_id, lines);
+                }
+            }
+            Some(HelperEvent::Done(result)) => {
+                if let Some(run) = self.helper.take() {
+                    self.finish_helper(&run, result);
+                }
+            }
+            None => {
+                if let Some(run) = self.helper.take() {
+                    run.cancel.cancel();
+                    let error = CrewError::Failed { name: run.call.name.clone(), message: "helper task ended without reporting; inspect the working tree before continuing".into(), changes: Changes::Unknown };
+                    self.finish_helper(&run, Err(error));
+                }
+            }
+        }
+    }
+
+    fn finish_helper(&mut self, run: &HelperRun, result: Result<Reply, CrewError>) {
+        self.run_started = None;
+        match result {
+            Ok(reply) => {
+                self.transcript.attach_tool_result(
+                    &run.cell_id,
+                    ToolOutcome {
+                        text: format!("{} tool calls{}", reply.tool_calls, reply.changes),
+                        is_error: false,
+                        diff: None,
+                        took: None,
+                    },
+                );
+                self.transcript.cells.push(Cell::Agent {
+                    name: reply.name.clone(),
+                    text: reply.answer.clone(),
+                });
+                self.transcript.cells.push(Cell::Usage {
+                    text: format!(
+                        "[{} in / {} out / {} cached, ${:.4}]",
+                        reply.spend.input,
+                        reply.spend.output,
+                        reply.spend.cache_read,
+                        reply.spend.cost
+                    ),
+                });
+                let note = AgentMessage::user_text(crew::exchange_note(&run.call.task, &reply));
+                if !run.shared {
+                    self.recorder.record(&note);
+                    self.agent.push_message(note);
+                }
+                self.last_answer = Status::Done;
+            }
+            Err(error) => {
+                self.transcript.attach_tool_result(
+                    &run.cell_id,
+                    ToolOutcome {
+                        text: error.to_string(),
+                        is_error: true,
+                        diff: None,
+                        took: None,
+                    },
+                );
+                let note = AgentMessage::user_text(format!(
+                    "{} {}\nThe helper call did not finish successfully:\n{}",
+                    crew::EXCHANGE_MARKER,
+                    run.call.name,
+                    error
+                ));
+                if !run.shared {
+                    self.recorder.record(&note);
+                    self.agent.push_message(note);
+                }
+                if matches!(error, CrewError::Stopped { .. }) {
+                    self.last_answer = Status::Cancelled;
+                    self.notice(error.to_string());
+                } else {
+                    self.last_answer = Status::Failed;
+                    self.transcript.cells.push(Cell::Error {
+                        text: error.to_string(),
+                    });
+                }
+            }
+        }
+        self.record_helper_spend();
+        self.run_finished = true;
+        self.start_waiting();
+    }
+
+    fn record_helper_spend(&mut self) {
+        let spend = self.crew.spend_snapshot();
+        if spend.is_empty() {
+            return;
+        }
+        let message = AgentMessage::Custom {
+            kind: HELPER_SPEND_KIND.into(),
+            payload: serde_json::json!(self.crew.usage_checkpoint()),
+            timestamp: cupel_core::types::now_ms(),
+        };
+        self.recorder.record(&message);
+        self.agent.push_message(message);
+    }
+
     /// Handle a built-in `/command`. Returns false when the name isn't a
     /// built-in (the caller then tries prompt templates).
     fn handle_builtin(&mut self, rest: &str) -> bool {
@@ -1567,11 +2353,12 @@ impl App {
                     std::path::Path::new(&self.meta.cwd),
                     &review_args,
                 ) {
-                    Ok(prompt) => self.send(&prompt, Delivery::Queue),
+                    Ok(prompt) => self.prompt_for("review", prompt, Delivery::Queue),
                     Err(e) => self.notice(e),
                 }
             }
             "usage" => {
+                self.show_helper_usage();
                 // Derive the identiy even if a recorder write failure cleared its path.
                 let exclude = cupel_coding_agent::session::sessions_dir(
                     self.meta.home.as_deref(),
@@ -1612,6 +2399,11 @@ impl App {
                 }
             }
             "provider" => self.handle_provider_command(args),
+            "agent" => self.handle_agent_command(args),
+            "team" => match args.parse::<commands::TeamCommand>() {
+                Ok(command) => self.handle_team_command(command),
+                Err(usage) => self.notice(usage),
+            },
             "preset" => self.handle_preset_command(args),
             "login" => self.handle_login_command(args),
             "logout" => self.handle_logout_command(args),
@@ -1817,7 +2609,16 @@ impl App {
         let login = &mut self.login;
         let questions = &mut self.questions;
         let usage_popup = &mut self.usage_popup;
+        let helper = &mut self.helper;
+        let team_events = &mut self.team_events;
         tokio::select! {
+            event = async { match team_events { Some(events) => events.recv().await, None => std::future::pending().await } } => AppEvent::Team(event),
+            event = async {
+                match helper {
+                    Some(run) => run.events.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => AppEvent::Helper(event),
             event = async {
                 match run_events {
                     Some(events) => events.next().await,
@@ -1847,8 +2648,10 @@ impl App {
 
     pub async fn on_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::Team(event) => self.on_team_update(event),
             AppEvent::Agent(event) => self.on_agent_event(event).await,
             AppEvent::Login(event) => self.on_login_event(event),
+            AppEvent::Helper(event) => self.on_helper_event(event),
             AppEvent::Question(question) => self.on_question(question),
             AppEvent::Usage(result) => {
                 if let Some(popup) = &mut self.usage_popup {
@@ -1971,8 +2774,22 @@ impl App {
                 tokens_after,
                 error,
                 summary,
+                usage,
                 ..
             } => {
+                if let Some(usage) = usage {
+                    let model = self.agent.state().model;
+                    self.usage_by_model
+                        .record_usage(model.provider.as_str(), &model.id, &usage);
+                    self.totals = self.usage_by_model.totals();
+                    let message = AgentMessage::Custom {
+                        kind: "cupel.compaction-usage".into(),
+                        payload: serde_json::json!({"provider":model.provider.as_str(),"model":model.id,"usage":usage}),
+                        timestamp: cupel_core::types::now_ms(),
+                    };
+                    self.recorder.record(&message);
+                    self.agent.push_message(message);
+                }
                 let text = match error {
                     None => {
                         self.context_tokens = tokens_after;
@@ -2031,7 +2848,168 @@ impl App {
         self.recorder.on_agent_end();
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
+        if let Some(run) = self.crew.lead_context().current() {
+            match run.scope(&self.crew.scheduler()).await {
+                Ok(scope) => {
+                    let answer = self
+                        .agent
+                        .state()
+                        .messages
+                        .iter()
+                        .rev()
+                        .find_map(|message| match message {
+                            AgentMessage::Llm(Message::Assistant(assistant)) => {
+                                Some(assistant.error_message.clone().unwrap_or_else(|| {
+                                    assistant
+                                        .content
+                                        .iter()
+                                        .filter_map(|part| match part {
+                                            AssistantContent::Text(text) => {
+                                                Some(text.text.as_str())
+                                            }
+                                            _ => None,
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                }))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| "lead ended without a final message".into());
+                    let changes = run
+                        .observed_changes(std::path::Path::new(&self.meta.cwd))
+                        .await;
+                    self.crew
+                        .scheduler()
+                        .finish(
+                            &scope,
+                            match self.last_answer {
+                                Status::Cancelled => TaskState::Cancelled,
+                                Status::Failed => TaskState::Failed("lead failed".into()),
+                                _ => TaskState::Succeeded,
+                            },
+                            &answer,
+                            changes,
+                        )
+                        .await;
+                }
+                Err(problem) => self.notice(problem),
+            }
+            self.crew.lead_context().clear();
+        }
         self.run_finished = true;
+        if let Some(receipt) = self.lead_team_entry.take() {
+            let start = match self.team_runtime.receive(receipt).await {
+                Ok(entry) => Some(entry.id),
+                Err(problem) => {
+                    self.notice(problem);
+                    None
+                }
+            };
+            let state = self.agent.state();
+            let last = state
+                .messages
+                .iter()
+                .rev()
+                .find_map(|message| match message {
+                    AgentMessage::Llm(Message::Assistant(message)) => Some(message),
+                    _ => None,
+                });
+            let (phase, text) = match last {
+                Some(message) => {
+                    let phase = match message.stop_reason {
+                        StopReason::Aborted | StopReason::Length => TaskPhase::Stopped,
+                        StopReason::Error => TaskPhase::Failed,
+                        _ => TaskPhase::Succeeded,
+                    };
+                    let text = message.error_message.clone().unwrap_or_else(|| {
+                        message
+                            .content
+                            .iter()
+                            .filter_map(|part| match part {
+                                AssistantContent::Text(text) => Some(text.text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    });
+                    (phase, text)
+                }
+                None => (
+                    TaskPhase::Failed,
+                    "lead ended without a final message".into(),
+                ),
+            };
+            match self
+                .team_runtime
+                .task(Participant::Lead, phase, start, &text, "")
+            {
+                Ok(receipt) => {
+                    if let Err(problem) = self.team_runtime.receive(receipt).await {
+                        self.notice(problem);
+                    }
+                }
+                Err(problem) => self.notice(problem),
+            }
+        }
+        self.record_helper_spend();
+        self.start_waiting();
+    }
+
+    pub async fn read_team_conversation(&mut self, after: Option<u64>) {
+        match self.team_runtime.inspect(after).await {
+            Ok(page) => self.notice(page.render(after.is_none())),
+            Err(problem) => self.notice(problem),
+        }
+    }
+
+    pub async fn apply_task_action(&mut self, action: TaskAction) {
+        let scheduler = self.crew.scheduler();
+        if let Err(problem) = scheduler.initialize().await {
+            self.notice(problem);
+            return;
+        }
+        match action {
+            TaskAction::Inspect(root) => {
+                let text =
+                    scheduler.describe_root(root.map(cupel_coding_agent::team_scheduler::CallId));
+                self.notice(if text.is_empty() {
+                    "no recorded team tasks".into()
+                } else {
+                    text
+                });
+            }
+            TaskAction::Cancel(id) => match scheduler
+                .cancel(cupel_coding_agent::team_scheduler::CallId(id))
+                .await
+            {
+                Ok(()) => self.notice(format!(
+                    "cancelling task {id}; edits and incurred spend remain"
+                )),
+                Err(problem) => self.notice(problem),
+            },
+        }
+    }
+
+    fn on_team_update(&mut self, event: Option<TeamUpdate>) {
+        match event {
+            Some(TeamUpdate::Entry(entry)) if entry.id > self.team_seen => {
+                self.team_seen = entry.id;
+                self.transcript.cells.push(Cell::Team {
+                    text: entry.display(),
+                });
+            }
+            Some(TeamUpdate::Warning(problem)) => self.notice(problem),
+            Some(TeamUpdate::Entry(_)) => {}
+            None => self.team_events = None,
+        }
+    }
+
+    fn start_waiting(&mut self) {
+        if let Some(call) = self.waiting_helper.take() {
+            self.start_helper(call);
+            return;
+        }
         // A waiting prompt can outlive its run. Submitted after the loop's last look at
         // the queues, or waiting behind a run that failed. Steered prompts go first,
         // all together, as they would have in the run.
@@ -2042,6 +3020,7 @@ impl App {
             Some(steering)
         };
         if let Some(messages) = next {
+            self.prepare_team_root("queued prompt");
             match self.agent.prompt(messages) {
                 Ok(events) => self.begin_run(events),
                 Err(err) => {

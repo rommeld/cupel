@@ -172,6 +172,26 @@ impl Agent {
         self.api_key = api_key;
     }
 
+    #[must_use]
+    pub fn tools(&self) -> &[Arc<dyn AgentTool>] {
+        &self.tools
+    }
+
+    #[must_use]
+    pub fn hooks(&self) -> Arc<dyn AgentHooks> {
+        Arc::clone(&self.hooks)
+    }
+
+    pub fn set_hooks(&mut self, hooks: Arc<dyn AgentHooks>) {
+        self.hooks = hooks;
+    }
+
+    /// Changes apply to the next run and invalidate the prior usage anchor.
+    pub fn set_tools(&mut self, tools: Vec<Arc<dyn AgentTool>>) {
+        self.tools = tools;
+        self.unverified_usage.store(true, Ordering::SeqCst);
+    }
+
     /// The fallback API key future runs will use. This is the read half of
     /// [`Agent::set_api_key`], so frontends and tests can verify which
     /// credential a reload or switch resolved without sending a request.
@@ -278,6 +298,15 @@ impl Agent {
             state.error_message = None;
         }
         self.unverified_usage.store(false, Ordering::SeqCst);
+    }
+
+    /// Append an external exchange between runs for the next request.
+    pub fn push_message(&self, message: AgentMessage) {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .messages
+            .push(message);
     }
 
     /// Queue a message to run once the agent would otherwise stop.
@@ -533,6 +562,19 @@ struct RunHooks {
 
 #[async_trait::async_trait]
 impl AgentHooks for RunHooks {
+    async fn model_request_problem(&self) -> Option<String> {
+        self.inner.model_request_problem().await
+    }
+    fn cancellation_token(&self) -> Option<CancellationToken> {
+        self.inner.cancellation_token()
+    }
+    async fn observe_usage(&self, usage: Option<&cupel_core::types::Usage>) {
+        self.inner.observe_usage(usage).await;
+    }
+    async fn request_messages(&self) -> Vec<AgentMessage> {
+        self.inner.request_messages().await
+    }
+
     async fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<Message> {
         self.inner.convert_to_llm(messages).await
     }

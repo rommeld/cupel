@@ -52,14 +52,19 @@ pub struct UsageByModel {
 impl UsageByModel {
     /// Count reported usage even on an errored or aborted reply.
     pub fn record(&mut self, assistant: &AssistantMessage) {
+        self.record_usage(
+            assistant.provider.as_str(),
+            &assistant.model,
+            &assistant.usage,
+        );
+    }
+
+    pub fn record_usage(&mut self, provider: &str, model: &str, usage: &Usage) {
         let key = ModelKey {
-            provider: assistant.provider.as_str().to_string(),
-            model: assistant.model.clone(),
+            provider: provider.to_string(),
+            model: model.to_string(),
         };
-        self.models
-            .entry(key)
-            .or_default()
-            .add_usage(&assistant.usage);
+        self.models.entry(key).or_default().add_usage(usage);
     }
 
     pub fn merge(&mut self, other: &Self) {
@@ -142,6 +147,7 @@ fn scan_dir(dir: &Path, exclude: Option<&Path>, history: &mut HistoryUsage) {
         } else if kind.is_file()
             && path.extension().is_some_and(|ext| ext == "jsonl")
             && exclude != Some(path.as_path())
+            && !is_team_journal(&path)
         {
             match read_usage(&path) {
                 Ok((usage, warnings)) => {
@@ -155,6 +161,16 @@ fn scan_dir(dir: &Path, exclude: Option<&Path>, history: &mut HistoryUsage) {
             }
         }
     }
+}
+
+fn is_team_journal(path: &Path) -> bool {
+    path.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "team")
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "conversation.jsonl" || name.starts_with("conversation-"))
 }
 
 /// Stream one file; do not retain its conversation content in memory.
@@ -186,6 +202,15 @@ fn read_usage(path: &Path) -> Result<(UsageByModel, Vec<String>), String> {
         }
         match serde_json::from_str::<AgentMessage>(&line) {
             Ok(AgentMessage::Llm(Message::Assistant(assistant))) => usage.record(&assistant),
+            Ok(AgentMessage::Custom { kind, payload, .. }) if kind == "cupel.compaction-usage" => {
+                if let (Some(provider), Some(model), Ok(tokens)) = (
+                    payload["provider"].as_str(),
+                    payload["model"].as_str(),
+                    serde_json::from_value::<Usage>(payload["usage"].clone()),
+                ) {
+                    usage.record_usage(provider, model, &tokens);
+                }
+            }
             Ok(_) => {}
             Err(error) => {
                 warnings.push(format!("Skipped {}:{line_number}: {error}", path.display()));

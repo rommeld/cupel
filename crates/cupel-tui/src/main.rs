@@ -24,6 +24,7 @@ use cupel_coding_agent::modes::{self, SessionMeta};
 use cupel_coding_agent::settings::{DEFAULT_PRESET, Preset, Settings};
 use cupel_coding_agent::startup::ThinkingChoice;
 use cupel_core::types::{Model, ThinkingLevel};
+use cupel_tui::startup::{StartupCommand, TeamInitialization};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -88,6 +89,7 @@ struct CliArgs {
     thinking: ThinkingChoice,
     plain: bool,
     resume: Option<ResumeTarget>,
+    startup: Option<StartupCommand>,
 }
 
 /// Parameterized on the iterator (instead of reading `std::env::args`
@@ -98,6 +100,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
         thinking: ThinkingChoice::Default,
         plain: false,
         resume: None,
+        startup: None,
     };
     let mut iter = args.peekable();
     while let Some(arg) = iter.next() {
@@ -110,6 +113,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                 parsed.thinking = value.parse()?;
             }
             "--plain" => parsed.plain = true,
+            "--team" | "--add" | "--agent" | "--review" => {
+                StartupCommand::parse(&arg, &mut iter, &mut parsed.startup)?;
+            }
             // The id is optional: a bare `--resume` (next arg missing or
             // another flag) means "the newest session of this project".
             "--resume" | "-r" => {
@@ -122,7 +128,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [id]] [--plain]\n\navailable models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [id]] [--plain]\ninteractive startup: --team [--add <name>...] | --agent <name> [task] | --review\n\navailable models:\n",
                 );
                 // Built-ins + models.json layers; deliberately not the
                 // ollama probe because help must be instant and never touch the
@@ -147,6 +153,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             other => return Err(format!("unknown argument: {other}")),
         }
+    }
+    if parsed.plain && parsed.startup.is_some() {
+        return Err("--team, --agent and --review require the interactive TUI".into());
     }
     Ok(parsed)
 }
@@ -216,6 +225,11 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
         std::io::stdin().is_terminal(),
         std::io::stdout().is_terminal(),
     );
+    if use_plain && args.startup.is_some() {
+        return Err(AppError::Arguments(
+            "startup agent commands require terminal stdin and stdout".into(),
+        ));
+    }
     if let Some(log_path) = init_tracing(!use_plain) {
         // Announced before the TUI takes the screen; visible in scrollback.
         eprintln!("logging to {}", log_path.display());
@@ -371,9 +385,21 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
             .map_err(AppError::PlainMode)?;
         return Ok(None);
     }
-    let exit = cupel_tui::run(agent, meta, recorder, ingredients.questions)
-        .await
-        .map_err(AppError::InteractiveMode)?;
+    let initialization = if args.resume.is_some() {
+        TeamInitialization::Restore
+    } else {
+        TeamInitialization::ConfiguredDefaults
+    };
+    let exit = cupel_tui::run(
+        agent,
+        meta,
+        recorder,
+        ingredients.questions,
+        initialization,
+        args.startup,
+    )
+    .await
+    .map_err(AppError::InteractiveMode)?;
     Ok(match exit {
         cupel_tui::Exit::Quit => None,
         cupel_tui::Exit::Restart(restart) => Some(restart),
@@ -518,6 +544,34 @@ mod tests {
     fn unknown_arguments_still_error() {
         assert!(parse(&["--bogus"]).is_err());
         assert!(parse(&["--model"]).is_err(), "--model needs a value");
+    }
+
+    #[test]
+    fn startup_flags_preserve_globals_and_reject_plain_mode() {
+        let parsed = parse(&[
+            "--team",
+            "--add",
+            "custom_42",
+            "--model",
+            "model",
+            "--resume",
+        ])
+        .unwrap();
+        assert_eq!(
+            parsed.startup,
+            Some(StartupCommand::Team(
+                cupel_coding_agent::commands::TeamCommand::Add(vec!["custom_42".into()])
+            ))
+        );
+        assert_eq!(parsed.model.as_deref(), Some("model"));
+        assert!(matches!(parsed.resume, Some(ResumeTarget::Latest)));
+        for invalid in [
+            &["--plain", "--review"][..],
+            &["--agent", "custom_42", "--team"],
+            &["--add", "custom_42"],
+        ] {
+            assert!(parse(invalid).is_err());
+        }
     }
 
     /// A keyless local model (the ollama-discovery shape). Tests use only

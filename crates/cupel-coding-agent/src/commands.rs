@@ -226,6 +226,14 @@ pub struct BuiltinCommand {
 
 pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
+        name: "agent",
+        description: "Give a user-defined helper a task: /agent <name> [task]; without a task, send it your next prompt",
+    },
+    BuiltinCommand {
+        name: "team",
+        description: "Manage teammates: /team add|remove <name>..., /team clear; inspect /team roles, /team conversation [after-id], /team tasks [root-id], or stop /team cancel <call-id>",
+    },
+    BuiltinCommand {
         name: "help",
         description: "List all commands and prompt templates",
     },
@@ -334,6 +342,52 @@ impl core::str::FromStr for SpinoffCommand {
                     /spinoff drop <name> (no argument lists the spinoffs)"
                     .to_string(),
             )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TeamCommand {
+    List,
+    Conversation(Option<u64>),
+    Roles,
+    Tasks(Option<u64>),
+    Cancel(u64),
+    Add(Vec<String>),
+    Remove(Vec<String>),
+    Clear,
+}
+
+impl core::str::FromStr for TeamCommand {
+    type Err = String;
+
+    fn from_str(args: &str) -> Result<Self, Self::Err> {
+        let words = args.split_whitespace().collect::<Vec<_>>();
+        let owned = |names: &[&str]| names.iter().map(|name| (*name).to_string()).collect();
+        match words.as_slice() {
+            [] => Ok(Self::List),
+            ["conversation"] => Ok(Self::Conversation(None)),
+            ["roles"]=>Ok(Self::Roles),
+            ["conversation",id]=>id.parse().map(|id|Self::Conversation(Some(id))).map_err(|error|format!("invalid conversation entry ID: {error}")),
+            ["tasks"] => Ok(Self::Tasks(None)),
+            ["tasks", id] => id
+                .parse()
+                .map(|id| Self::Tasks(Some(id)))
+                .map_err(|error| format!("invalid task ID: {error}")),
+            ["cancel", id] => id
+                .parse()
+                .map(Self::Cancel)
+                .map_err(|error| format!("invalid task ID: {error}")),
+            ["conversation", "after", id] => id
+                .parse::<u64>()
+                .map(|id| Self::Conversation(Some(id)))
+                .map_err(|error| format!("invalid conversation entry ID: {error}")),
+            ["add", names @ ..] if !names.is_empty() => Ok(Self::Add(owned(names))),
+            ["remove", names @ ..] if !names.is_empty() => Ok(Self::Remove(owned(names))),
+            ["clear"] => Ok(Self::Clear),
+            _ => {
+                Err("usage: /team, /team roles, /team conversation [after-id], /team tasks [root-id], /team cancel <call-id>, /team add <name>..., /team remove <name>..., /team clear".into())
+            }
         }
     }
 }
