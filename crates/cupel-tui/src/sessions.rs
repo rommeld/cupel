@@ -216,9 +216,17 @@ impl Sessions {
             if session.app.is_running() {
                 session.app.abort_run();
             }
+            session.app.crew.stop_running();
+            session.app.agent.abort();
             session.app.login = None;
             session.app.question = None;
             session.app.agent.wait_for_idle().await;
+            // Drain a direct helper too, including one not yet polled at shutdown.
+            while session.app.helper.is_some() {
+                let event = session.app.next_event().await;
+                session.app.on_event(event).await;
+            }
+            session.app.crew.wait_for_idle().await;
             session.app.recorder.end_session().await;
         }
     }

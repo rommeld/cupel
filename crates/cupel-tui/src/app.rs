@@ -5,6 +5,7 @@
 //! the `App` currently says. No state lives in the widgets that's the
 //! immediate-mode contract that keeps ratatui apps easy to reason about.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt as _;
@@ -12,6 +13,7 @@ use futures_util::StreamExt as _;
 use cupel_agent::{Agent, AgentEvent, AgentEventStream, AgentMessage};
 use cupel_coding_agent::bootstrap::Frontend;
 use cupel_coding_agent::commands;
+use cupel_coding_agent::crew::{self, Changes, Crew, CrewError, CrewSetup, Reply};
 use cupel_coding_agent::modes::SessionMeta;
 use cupel_coding_agent::program_status::{BlockedKind, State as ProgramState};
 use cupel_coding_agent::session::SessionRecorder;
@@ -26,6 +28,7 @@ use ratatui::crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
+use tokio_util::sync::CancellationToken;
 
 use crate::autocomplete::{Autocomplete, Candidate};
 use crate::input::InputState;
@@ -76,7 +79,37 @@ pub struct App {
     pub run_started: Option<Instant>,
     pub questions: Option<QuestionReceiver>,
     pub question: Option<OpenQuestion>,
+    pub crew: Arc<Crew>,
+    pub armed: Option<String>,
+    pub helper: Option<HelperRun>,
+    pub waiting_helper: Option<HelperCall>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelperCall {
+    pub name: String,
+    pub task: String,
+}
+
+pub struct HelperRun {
+    pub call: HelperCall,
+    pub cell_id: String,
+    pub events: tokio::sync::mpsc::UnboundedReceiver<HelperEvent>,
+    pub cancel: CancellationToken,
+}
+
+impl Drop for HelperRun {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+pub enum HelperEvent {
+    Progress(String),
+    Done(Result<Reply, CrewError>),
+}
+
+const HELPER_SPEND_KIND: &str = "cupel.helper-spend";
 
 /// A question from the `ask_user` tool, on screen until it is answered.
 pub struct OpenQuestion {
@@ -150,6 +183,7 @@ pub enum AppEvent {
     Login(Option<login::LoginEvent>),
     Question(Option<PendingQuestion>),
     Usage(Result<HistoryUsage, tokio::task::JoinError>),
+    Helper(Option<HelperEvent>),
 }
 
 /// What `/new` or `/hot-reload` asked for.
@@ -261,6 +295,31 @@ impl App {
             value: "openai-codex".to_string(),
             is_dir: false,
         }];
+        let (specs, crew_warnings) =
+            crew::resolve(&meta.settings, &meta.models, meta.home.as_deref());
+        let crew = Arc::new(Crew::new(
+            specs,
+            CrewSetup {
+                cwd: std::path::PathBuf::from(&meta.cwd),
+                home: meta.home.clone(),
+                registry: agent.registry(),
+                settings: meta.settings.clone(),
+                context_files: meta.context_files.clone(),
+                session_id: recorder.session_id().into(),
+            },
+        ));
+        let agent_candidates = crew
+            .specs()
+            .map(|spec| Candidate {
+                display: format!(
+                    "{}  - {}",
+                    spec.name,
+                    spec.definition.description().unwrap_or("manual only")
+                ),
+                value: spec.name.clone(),
+                is_dir: false,
+            })
+            .collect();
         // `/hot-reload <id>` completes from the transcripts on disk. Only
         // file stems are read (no parsing) App::new must stay fast.
         let session_candidates: Vec<Candidate> = recorder
@@ -276,10 +335,19 @@ impl App {
             .with_command_args("provider", provider_candidates)
             .with_command_args("login", login_candidates)
             .with_command_args("logout", logout_candidates)
+            .with_command_args("agent", agent_candidates)
             .with_command_args("hot-reload", session_candidates);
         // Restored history (a --resume session) exists before the App does;
         // snapshot it so the transcript can replay it as cells.
         let history = agent.state().messages;
+        if let Some(spend) = history.iter().rev().find_map(|message| match message {
+            AgentMessage::Custom { kind, payload, .. } if kind == HELPER_SPEND_KIND => {
+                serde_json::from_value(payload.clone()).ok()
+            }
+            _ => None,
+        }) {
+            crew.restore_spend(spend);
+        }
         let mut app = Self {
             agent,
             meta,
@@ -321,9 +389,16 @@ impl App {
             run_started: None,
             question: None,
             questions: None,
+            crew,
+            armed: None,
+            helper: None,
+            waiting_helper: None,
         };
         app.replay_history(&history);
-        for warning in std::mem::take(&mut app.meta.warnings) {
+        for warning in std::mem::take(&mut app.meta.warnings)
+            .into_iter()
+            .chain(crew_warnings)
+        {
             app.notice(warning);
         }
         for warning in theme_warnings {
@@ -380,7 +455,13 @@ impl App {
                         Some(summary) => Cell::Summary {
                             text: summary.trim_start().to_string(),
                         },
-                        None => Cell::User { text },
+                        None => match crew::parse_exchange(&text) {
+                            Some((name, body)) => Cell::Agent {
+                                name: name.into(),
+                                text: body.into(),
+                            },
+                            None => Cell::User { text },
+                        },
                     };
                     self.transcript.cells.push(cell);
                 }
@@ -425,7 +506,7 @@ impl App {
 
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.run_events.is_some()
+        self.run_events.is_some() || self.helper.is_some()
     }
 
     /// Session's state for the sidebar.
@@ -625,6 +706,11 @@ impl App {
             (KeyCode::Esc, ..) if self.login.is_some() => {
                 self.login = None; // Drop cancels the background task.
                 self.notice("login cancelled");
+            }
+            (KeyCode::Esc, ..) if self.armed.is_some() => {
+                if let Some(name) = self.armed.take() {
+                    self.notice(format!("{name} no longer gets your next prompt"));
+                }
             }
             (KeyCode::Esc, ..) if self.is_running() => self.abort_run(),
             // Esc while idle drops the click selection (harmless no-op
@@ -835,6 +921,7 @@ impl App {
         // and pending hook chain rather than creating a fresh recorder.
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, self.recorder);
         app.questions = ingredients.questions;
+        app.crew.remember_keys(&self.session_keys);
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
         if let Some(message) = delta_message {
@@ -980,6 +1067,7 @@ impl App {
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
         app.questions = ingredients.questions;
+        app.crew.remember_keys(&carry.session_keys);
         app.session_keys = carry.session_keys;
         app.mouse_captured = carry.mouse_captured;
         app
@@ -1031,7 +1119,7 @@ impl App {
             self.transcript
                 .cells
                 .iter()
-                .rposition(|cell| matches!(cell, Cell::Answer { .. }))
+                .rposition(|cell| matches!(cell, Cell::Answer { .. } | Cell::Agent { .. }))
         });
         let Some(index) = index else {
             self.notice("nothing to copy - click a block, or finish a turn for an answer");
@@ -1084,11 +1172,18 @@ impl App {
             }
             let expanded = commands::expand_prompt_template(&trimmed, &self.meta.templates);
             if let Some(expanded) = expanded {
-                self.send(&expanded, delivery);
+                self.prompt_or_call(expanded, delivery);
                 return;
             }
         }
-        self.send(&trimmed, delivery);
+        self.prompt_or_call(trimmed, delivery);
+    }
+
+    fn prompt_or_call(&mut self, text: String, delivery: Delivery) {
+        match self.armed.take() {
+            Some(name) => self.call_helper(HelperCall { name, task: text }),
+            None => self.send(&text, delivery),
+        }
     }
 
     /// Enter on an open question. Typed text is the answer; with nothing typed, the
@@ -1111,6 +1206,17 @@ impl App {
     /// where it would take them, so they would sit in the agent's queues
     /// until the next run ends.
     pub(crate) fn abort_run(&mut self) {
+        if let Some(helper) = &self.helper {
+            helper.cancel.cancel();
+        }
+        let stopped = self.crew.stop_running();
+        if !stopped.is_empty() && self.run_events.is_some() {
+            self.notice(format!(
+                "stopped {} - the lead goes on (esc again stops it too)",
+                stopped.join(", ")
+            ));
+            return;
+        }
         self.last_answer = Status::Cancelled;
         self.question = None;
         self.restore_queued();
@@ -1126,8 +1232,13 @@ impl App {
         self.agent.clear_steering();
         self.agent.clear_follow_ups();
         // mem::take moves each list out and leaves an empty Vec behind.
-        let queued: Vec<String> = core::mem::take(&mut self.steering)
+        let waiting = self
+            .waiting_helper
+            .take()
+            .map(|call| format!("/agent {} {}", call.name, call.task));
+        let queued: Vec<String> = waiting
             .into_iter()
+            .chain(core::mem::take(&mut self.steering))
             .chain(core::mem::take(&mut self.queued))
             .collect();
         let restored = queued.len();
@@ -1213,6 +1324,16 @@ impl App {
     /// thinks (when it writes headlines), otherwise the activity.
     #[must_use]
     pub fn activity_label(&self) -> String {
+        if let Some(helper) = &self.helper {
+            return format!(
+                "{} working · esc stops {}",
+                helper.call.name, helper.call.name
+            );
+        }
+        let helpers = self.crew.running_names();
+        if !helpers.is_empty() {
+            return format!("{} working · esc stops them", helpers.join(", "));
+        }
         if self.question.is_some() {
             return "waiting for your answer".to_string();
         }
@@ -1395,6 +1516,7 @@ impl App {
                 // even if the disk save below fails. Deliberately never
                 // echoed back into the transcript.
                 self.session_keys.insert(provider.clone(), key.to_string());
+                self.crew.remember_key(&provider, key);
                 // Persist. save_provider_key re-reads the file itself and
                 // refuses to clobber a malformed one; the in-memory mirror
                 // is updated only on sucess
@@ -1495,6 +1617,273 @@ impl App {
         self.note_thinking_level();
     }
 
+    #[must_use]
+    pub fn session_totals(&self) -> UsageTotals {
+        let helpers = self.crew.total_spend();
+        let mut totals = self.totals;
+        totals.input += helpers.input;
+        totals.output += helpers.output;
+        totals.cache_read += helpers.cache_read;
+        totals.cost += helpers.cost;
+        totals
+    }
+
+    fn show_helper_usage(&mut self) {
+        if self.crew.total_spend().calls == 0 {
+            return;
+        }
+        let totals = self.session_totals();
+        let mut lines = vec![format!(
+            "session including helpers: {} in / {} out / {} cached, ${:.4}",
+            totals.input, totals.output, totals.cache_read, totals.cost
+        )];
+        lines.push(format!(
+            "  lead: {} in / {} out, ${:.4}",
+            self.totals.input, self.totals.output, self.totals.cost
+        ));
+        for (name, spend) in self.crew.spend_snapshot() {
+            lines.push(format!(
+                "  {name}: {} calls, {} in / {} out / {} cached, ${:.4}",
+                spend.calls, spend.input, spend.output, spend.cache_read, spend.cost
+            ));
+        }
+        self.notice(lines.join("\n"));
+    }
+
+    fn handle_agent_command(&mut self, args: &str) {
+        let (name, task) = args
+            .split_once(char::is_whitespace)
+            .map_or((args, ""), |(name, task)| (name, task.trim()));
+        if name.is_empty() {
+            self.list_team();
+            return;
+        }
+        if self.crew.spec(name).is_none() {
+            self.notice(format!("no agent named {name} (/team lists them)"));
+            return;
+        }
+        if task.is_empty() {
+            self.armed = Some(name.into());
+            self.notice(format!("your next prompt goes to {name} (esc cancels)"));
+        } else {
+            self.call_helper(HelperCall {
+                name: name.into(),
+                task: task.into(),
+            });
+        }
+    }
+
+    fn list_team(&mut self) {
+        let mut lines = vec!["agents (/agent <name> [task]):".to_string()];
+        for spec in self.crew.specs() {
+            let tools = spec
+                .definition
+                .tools()
+                .iter()
+                .map(|tool| tool.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            lines.push(format!(
+                "  {} - {}/{}, thinking {}, tools {tools}, {}, from {}",
+                spec.name,
+                spec.model.provider.as_str(),
+                spec.model.id,
+                spec.definition.preset.thinking_level.as_str(),
+                if spec.definition.writes() {
+                    "can write"
+                } else {
+                    "read-only"
+                },
+                spec.definition.origin.as_str()
+            ));
+            lines.push(format!(
+                "      {}",
+                spec.definition
+                    .description()
+                    .unwrap_or("manual only: no description")
+            ));
+            if let Some(max) = spec.definition.max_turns {
+                lines.push(format!("      max {max} turns"));
+            }
+            if !spec.definition.remembers() {
+                lines.push("      forgets between calls".into());
+            }
+            let spend = self.crew.spend_of(&spec.name);
+            lines.push(if spend.calls > 0 {
+                format!(
+                    "      {} calls, {} in / {} out, ${:.4}",
+                    spend.calls, spend.input, spend.output, spend.cost
+                )
+            } else {
+                "      not called yet".into()
+            });
+        }
+        if self.crew.specs().next().is_none() {
+            self.notice("no agents defined - add an \"agents\" section to ~/.cupel/settings.json or .cupel/settings.json");
+        } else {
+            self.notice(lines.join("\n"));
+        }
+    }
+
+    fn call_helper(&mut self, call: HelperCall) {
+        cupel_coding_agent::resources::ensure_project_dot_cupel(std::path::Path::new(
+            &self.meta.cwd,
+        ));
+        if !self.is_running() {
+            self.start_helper(call);
+        } else if self.waiting_helper.is_none() {
+            self.notice(format!("{} starts when the current run is done", call.name));
+            self.waiting_helper = Some(call);
+        } else {
+            self.notice(
+                "another agent call is waiting already - send this one when it has started",
+            );
+        }
+        self.scroll_from_bottom = 0;
+    }
+
+    fn start_helper(&mut self, call: HelperCall) {
+        self.transcript.cells.push(Cell::User {
+            text: format!("@{} {}", call.name, call.task),
+        });
+        let cell_id = format!("helper-{}", self.transcript.cells.len());
+        self.transcript.cells.push(Cell::Tool {
+            id: cell_id.clone(),
+            name: call.name.clone(),
+            call: format!(
+                "{}: {}",
+                call.name,
+                call.task.lines().next().unwrap_or_default()
+            ),
+            expanded: self.tools_expanded,
+            started_at: Some(Instant::now()),
+            live: None,
+            result: None,
+        });
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let run_cancel = cancel.clone();
+        let crew = Arc::clone(&self.crew);
+        let (name, task) = (call.name.clone(), call.task.clone());
+        tokio::spawn(async move {
+            let progress_sender = sender.clone();
+            let progress = move |lines| {
+                let _ = progress_sender.send(HelperEvent::Progress(lines));
+            };
+            let result = crew.run(&name, &task, run_cancel, &progress).await;
+            let _ = sender.send(HelperEvent::Done(result));
+        });
+        self.run_started = Some(Instant::now());
+        self.last_answer = Status::New;
+        self.helper = Some(HelperRun {
+            call,
+            cell_id,
+            events,
+            cancel,
+        });
+    }
+
+    pub fn on_helper_event(&mut self, event: Option<HelperEvent>) {
+        match event {
+            Some(HelperEvent::Progress(lines)) => {
+                if let Some(run) = &self.helper {
+                    self.transcript.attach_tool_progress(&run.cell_id, lines);
+                }
+            }
+            Some(HelperEvent::Done(result)) => {
+                if let Some(run) = self.helper.take() {
+                    self.finish_helper(&run, result);
+                }
+            }
+            None => {
+                if let Some(run) = self.helper.take() {
+                    run.cancel.cancel();
+                    let error = CrewError::Failed { name: run.call.name.clone(), message: "helper task ended without reporting; inspect the working tree before continuing".into(), changes: Changes::Unknown };
+                    self.finish_helper(&run, Err(error));
+                }
+            }
+        }
+    }
+
+    fn finish_helper(&mut self, run: &HelperRun, result: Result<Reply, CrewError>) {
+        self.run_started = None;
+        match result {
+            Ok(reply) => {
+                self.transcript.attach_tool_result(
+                    &run.cell_id,
+                    ToolOutcome {
+                        text: format!("{} tool calls{}", reply.tool_calls, reply.changes),
+                        is_error: false,
+                        diff: None,
+                        took: None,
+                    },
+                );
+                self.transcript.cells.push(Cell::Agent {
+                    name: reply.name.clone(),
+                    text: reply.answer.clone(),
+                });
+                self.transcript.cells.push(Cell::Usage {
+                    text: format!(
+                        "[{} in / {} out / {} cached, ${:.4}]",
+                        reply.spend.input,
+                        reply.spend.output,
+                        reply.spend.cache_read,
+                        reply.spend.cost
+                    ),
+                });
+                let note = AgentMessage::user_text(crew::exchange_note(&run.call.task, &reply));
+                self.recorder.record(&note);
+                self.agent.push_message(note);
+                self.last_answer = Status::Done;
+            }
+            Err(error) => {
+                self.transcript.attach_tool_result(
+                    &run.cell_id,
+                    ToolOutcome {
+                        text: error.to_string(),
+                        is_error: true,
+                        diff: None,
+                        took: None,
+                    },
+                );
+                let note = AgentMessage::user_text(format!(
+                    "{} {}\nThe helper call did not finish successfully:\n{}",
+                    crew::EXCHANGE_MARKER,
+                    run.call.name,
+                    error
+                ));
+                self.recorder.record(&note);
+                self.agent.push_message(note);
+                if matches!(error, CrewError::Stopped { .. }) {
+                    self.last_answer = Status::Cancelled;
+                    self.notice(error.to_string());
+                } else {
+                    self.last_answer = Status::Failed;
+                    self.transcript.cells.push(Cell::Error {
+                        text: error.to_string(),
+                    });
+                }
+            }
+        }
+        self.record_helper_spend();
+        self.run_finished = true;
+        self.start_waiting();
+    }
+
+    fn record_helper_spend(&mut self) {
+        let spend = self.crew.spend_snapshot();
+        if spend.is_empty() {
+            return;
+        }
+        let message = AgentMessage::Custom {
+            kind: HELPER_SPEND_KIND.into(),
+            payload: serde_json::json!(spend),
+            timestamp: cupel_core::types::now_ms(),
+        };
+        self.recorder.record(&message);
+        self.agent.push_message(message);
+    }
+
     /// Handle a built-in `/command`. Returns false when the name isn't a
     /// built-in (the caller then tries prompt templates).
     fn handle_builtin(&mut self, rest: &str) -> bool {
@@ -1572,6 +1961,7 @@ impl App {
                 }
             }
             "usage" => {
+                self.show_helper_usage();
                 // Derive the identiy even if a recorder write failure cleared its path.
                 let exclude = cupel_coding_agent::session::sessions_dir(
                     self.meta.home.as_deref(),
@@ -1612,6 +2002,8 @@ impl App {
                 }
             }
             "provider" => self.handle_provider_command(args),
+            "agent" => self.handle_agent_command(args),
+            "team" => self.list_team(),
             "preset" => self.handle_preset_command(args),
             "login" => self.handle_login_command(args),
             "logout" => self.handle_logout_command(args),
@@ -1817,7 +2209,14 @@ impl App {
         let login = &mut self.login;
         let questions = &mut self.questions;
         let usage_popup = &mut self.usage_popup;
+        let helper = &mut self.helper;
         tokio::select! {
+            event = async {
+                match helper {
+                    Some(run) => run.events.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => AppEvent::Helper(event),
             event = async {
                 match run_events {
                     Some(events) => events.next().await,
@@ -1849,6 +2248,7 @@ impl App {
         match event {
             AppEvent::Agent(event) => self.on_agent_event(event).await,
             AppEvent::Login(event) => self.on_login_event(event),
+            AppEvent::Helper(event) => self.on_helper_event(event),
             AppEvent::Question(question) => self.on_question(question),
             AppEvent::Usage(result) => {
                 if let Some(popup) = &mut self.usage_popup {
@@ -2032,6 +2432,15 @@ impl App {
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
         self.run_finished = true;
+        self.record_helper_spend();
+        self.start_waiting();
+    }
+
+    fn start_waiting(&mut self) {
+        if let Some(call) = self.waiting_helper.take() {
+            self.start_helper(call);
+            return;
+        }
         // A waiting prompt can outlive its run. Submitted after the loop's last look at
         // the queues, or waiting behind a run that failed. Steered prompts go first,
         // all together, as they would have in the run.

@@ -346,6 +346,15 @@ impl Crew {
     }
 
     #[must_use]
+    pub fn spend_snapshot(&self) -> BTreeMap<String, Spend> {
+        self.spend.lock().expect("crew lock poisoned").clone()
+    }
+
+    pub fn restore_spend(&self, spend: BTreeMap<String, Spend>) {
+        *self.spend.lock().expect("crew lock poisoned") = spend;
+    }
+
+    #[must_use]
     pub fn total_spend(&self) -> Spend {
         self.spend
             .lock()

@@ -280,6 +280,15 @@ impl Agent {
         self.unverified_usage.store(false, Ordering::SeqCst);
     }
 
+    /// Append an external exchange between runs for the next request.
+    pub fn push_message(&self, message: AgentMessage) {
+        self.state
+            .lock()
+            .expect("agent state lock poisoned")
+            .messages
+            .push(message);
+    }
+
     /// Queue a message to run once the agent would otherwise stop.
     /// Meant to be called while a run is active. The loop takes one
     /// queued message each time the model has finished, so every

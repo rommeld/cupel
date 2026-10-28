@@ -226,6 +226,14 @@ pub struct BuiltinCommand {
 
 pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
+        name: "agent",
+        description: "Give a user-defined helper a task: /agent <name> [task]; without a task, send it your next prompt",
+    },
+    BuiltinCommand {
+        name: "team",
+        description: "List the helper agents from settings.json",
+    },
+    BuiltinCommand {
         name: "help",
         description: "List all commands and prompt templates",
     },
