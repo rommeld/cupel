@@ -7,6 +7,7 @@
 //! `--resume` in session.rs.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
 use cupel_core::types::{Model, ThinkingLevel};
@@ -28,6 +29,12 @@ pub struct Settings {
     pub check_for_updates: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// User-defined helper agents, merged by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, AgentDefinition>,
+    /// Explicit prompt-command to helper mappings.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_commands: BTreeMap<String, String>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
     #[serde(skip)]
@@ -112,6 +119,105 @@ impl ThinkingSetting {
     }
 }
 
+/// A user-defined helper's model, instructions and permissions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDefinition {
+    #[serde(flatten)]
+    pub preset: Preset,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ToolName>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<NonZeroU32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remember: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<bool>,
+    #[serde(skip)]
+    pub origin: AgentOrigin,
+}
+
+const READ_ONLY: &[ToolName] = &[ToolName::Read, ToolName::Grep];
+
+impl AgentDefinition {
+    #[must_use]
+    pub fn description(&self) -> Option<&str> {
+        self.description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    #[must_use]
+    pub fn tools(&self) -> &[ToolName] {
+        self.tools.as_deref().unwrap_or(READ_ONLY)
+    }
+
+    #[must_use]
+    pub fn writes(&self) -> bool {
+        self.tools().iter().any(|tool| tool.writes())
+    }
+
+    #[must_use]
+    pub fn remembers(&self) -> bool {
+        self.remember.unwrap_or(true)
+    }
+
+    #[must_use]
+    pub fn joins_team_by_default(&self) -> bool {
+        self.team.unwrap_or(false)
+    }
+}
+
+/// Coding tools that can be granted to a helper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolName {
+    Read,
+    Grep,
+    Bash,
+    ApplyPatch,
+}
+
+impl ToolName {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Grep => "grep",
+            Self::Bash => "bash",
+            Self::ApplyPatch => "apply_patch",
+        }
+    }
+
+    #[must_use]
+    pub fn writes(self) -> bool {
+        matches!(self, Self::Bash | Self::ApplyPatch)
+    }
+}
+
+/// The settings layer that supplied the effective definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentOrigin {
+    #[default]
+    Home,
+    Project,
+    ProjectOverHome,
+}
+
+impl AgentOrigin {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Home => "home",
+            Self::Project => "project",
+            Self::ProjectOverHome => "project, overrides home",
+        }
+    }
+}
+
 /// Loop-killer configuration: how many times the same tool call (same
 /// name, identical arguments) may run back-to-back before the repeat is
 /// blocked and the model is steered onto a new track (see
@@ -153,6 +259,8 @@ impl Settings {
     /// - checkForUpdates: home only, like the keys.
     /// - theme: home only. `/themes` saves there; a project value must not
     /// override the saved choice on the next start.
+    /// - agents: merged by name, with project definitions replacing home whole.
+    /// - agentCommands: merged by command, project wins.
     /// extra: the home copy rides along because it exists for the save
     /// round-trip, which only ever writes the home file.
     #[must_use]
@@ -167,12 +275,25 @@ impl Settings {
                 .invalid_default_preset
                 .or(home.invalid_default_preset)
         };
+        let mut agents = home.agents;
+        for (name, mut agent) in project.agents {
+            agent.origin = if agents.contains_key(&name) {
+                AgentOrigin::ProjectOverHome
+            } else {
+                AgentOrigin::Project
+            };
+            agents.insert(name, agent);
+        }
+        let mut agent_commands = home.agent_commands;
+        agent_commands.extend(project.agent_commands);
         Settings {
             providers: home.providers,
             loop_killer: project.loop_killer.or(home.loop_killer),
             presets,
             check_for_updates: home.check_for_updates,
             theme: home.theme,
+            agents,
+            agent_commands,
             extra: home.extra,
             invalid_default_preset,
         }
@@ -192,6 +313,8 @@ impl core::fmt::Debug for Settings {
             .field("model", &self.presets.keys().collect::<Vec<_>>())
             .field("checkForUpdates", &self.check_for_updates)
             .field("theme", &self.theme)
+            .field("agents", &self.agents.keys().collect::<Vec<_>>())
+            .field("agentCommands", &self.agent_commands)
             .finish_non_exhaustive()
     }
 }
@@ -239,6 +362,8 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
     let loop_killer = take_section(&mut value, "loopKiller");
     let check_for_updates = take_section(&mut value, "checkForUpdates");
     let theme = take_section(&mut value, "theme");
+    let agents = take_section(&mut value, "agents");
+    let agent_commands = take_section(&mut value, "agentCommands");
     let mut settings: Settings = serde_json::from_value(value)
         .map_err(|e| format!("{} has invalid settings data: {e}", path.display()))?;
     let file = path.display();
@@ -308,7 +433,54 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
             "warning: ignoring theme in {file}: expected a theme id string"
         )),
     }
+    match agents {
+        Some(serde_json::Value::Object(agents)) => {
+            for (name, value) in agents {
+                if let Some(problem) = agent_name_problem(&name) {
+                    warnings.push(format!(
+                        "warning: ignoring agent {name:?} in {file}: {problem}"
+                    ));
+                    continue;
+                }
+                match serde_json::from_value(value) {
+                    Ok(agent) => {
+                        settings.agents.insert(name, agent);
+                    }
+                    Err(error) => warnings.push(format!(
+                        "warning: ignoring agent {name:?} in {file}: {error}"
+                    )),
+                }
+            }
+        }
+        Some(_) => warnings.push(format!(
+            "warning: ignoring agents in {file}: expected an object"
+        )),
+        None => {}
+    }
+    match agent_commands {
+        Some(serde_json::Value::Object(commands)) => {
+            for (command, value) in commands {
+                let command = command.trim_start_matches('/').to_string();
+                match value {
+                    serde_json::Value::String(agent) => { settings.agent_commands.insert(command, agent); }
+                    _ => warnings.push(format!("warning: ignoring agentCommands entry {command:?} in {file}: the value must be an agent name")),
+                }
+            }
+        }
+        Some(_) => warnings.push(format!(
+            "warning: ignoring agentCommands in {file}: expected an object"
+        )),
+        None => {}
+    }
     Ok((settings, warnings))
+}
+
+fn agent_name_problem(name: &str) -> Option<&'static str> {
+    let plain = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    (!plain).then_some("an agent name uses only a-z, 0-9, - and _")
 }
 
 /// Remove one top-level section from the parsed file, if the file is an object.
@@ -1197,6 +1369,93 @@ mod tests {
         // Right id, wrong provider: not found.
         preset.provider = "openrouter".into();
         assert!(preset.find_model(&catalog).is_none());
+    }
+
+    #[test]
+    fn agents_parse_individually_and_keep_optional_fields_on_save() {
+        let home = temp_root("agents-m1");
+        let path = settings_path(&home);
+        std::fs::write(&path, r#"{
+            "providers": {"mock": "key"},
+            "agents": {
+                "good": {"provider":"mock","model":"m","thinkingLevel":"low"},
+                "writer": {"provider":"mock","model":"m","thinkingLevel":"high",
+                           "description":" Reviews. ","tools":["bash"],"maxTurns":2,"remember":false},
+                "Bad name": {"provider":"mock","model":"m","thinkingLevel":"off"},
+                "bad-tool": {"provider":"mock","model":"m","thinkingLevel":"off","tools":["edit"]},
+                "zero": {"provider":"mock","model":"m","thinkingLevel":"off","maxTurns":0}
+            },
+            "agentCommands": {"/review":"writer", "bad":7}
+        }"#).unwrap();
+        let (settings, warnings) = load_settings_with_warnings(&path).unwrap();
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        assert_eq!(settings.api_key("mock"), Some("key"));
+        assert_eq!(
+            settings.agents["good"].tools(),
+            [ToolName::Read, ToolName::Grep]
+        );
+        assert!(settings.agents["good"].remembers());
+        assert!(!settings.agents["good"].writes());
+        assert!(settings.agents["writer"].writes());
+        assert!(!settings.agents["writer"].remembers());
+        assert_eq!(settings.agents["writer"].description(), Some("Reviews."));
+        assert_eq!(
+            settings.agents["writer"].max_turns.map(NonZeroU32::get),
+            Some(2)
+        );
+        assert_eq!(settings.agent_commands["review"], "writer");
+
+        // Strict saving refuses invalid hand-written entries rather than erasing them.
+        assert!(save_provider_key(Some(&home), "mock", "new").is_err());
+        std::fs::write(&path, r#"{"agents":{"good":{"provider":"mock","model":"m","thinkingLevel":"off"}},"agentCommands":{"review":"good"}}"#).unwrap();
+        save_provider_key(Some(&home), "mock", "new").unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert!(saved["agents"]["good"].get("tools").is_none());
+        assert!(saved["agents"]["good"].get("team").is_none());
+        assert_eq!(saved["agentCommands"]["review"], "good");
+    }
+
+    #[test]
+    fn project_agents_replace_home_definitions_whole() {
+        let definition = |model: &str, description: Option<&str>| AgentDefinition {
+            preset: Preset {
+                provider: "mock".into(),
+                model: model.into(),
+                thinking_level: ThinkingSetting::Off,
+                prompt: None,
+            },
+            description: description.map(str::to_string),
+            tools: None,
+            max_turns: None,
+            remember: None,
+            team: None,
+            origin: AgentOrigin::Home,
+        };
+        let mut home = Settings::default();
+        home.agents
+            .insert("reviewer".into(), definition("home", Some("review")));
+        home.agent_commands
+            .insert("review".into(), "reviewer".into());
+        let mut project = Settings::default();
+        project
+            .agents
+            .insert("reviewer".into(), definition("project", None));
+        project
+            .agents
+            .insert("other".into(), definition("other", None));
+        project
+            .agent_commands
+            .insert("review".into(), "other".into());
+        let merged = Settings::layered(home, project);
+        assert_eq!(merged.agents["reviewer"].preset.model, "project");
+        assert_eq!(merged.agents["reviewer"].description(), None);
+        assert_eq!(
+            merged.agents["reviewer"].origin,
+            AgentOrigin::ProjectOverHome
+        );
+        assert_eq!(merged.agents["other"].origin, AgentOrigin::Project);
+        assert_eq!(merged.agent_commands["review"], "other");
     }
 
     #[test]
