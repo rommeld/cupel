@@ -610,4 +610,136 @@ mod tests {
         );
         assert!(contexts[0].messages.iter().all(|message| !matches!(message, Message::User(user) if matches!(&user.content, UserContentBody::Text(text) if text.contains("attributed finding")))));
     }
+
+    fn review_app(explicit: Option<&str>, ambiguous: bool) -> (App, Arc<Mock>) {
+        let (app, mock) = app();
+        let mut meta = app.meta;
+        meta.settings
+            .agents
+            .get_mut("custom_42")
+            .unwrap()
+            .description = Some("Reviews diffs for correctness bugs.".into());
+        if ambiguous {
+            meta.settings.agents.insert(
+                "other-lens".into(),
+                meta.settings.agents["custom_42"].clone(),
+            );
+        }
+        if let Some(target) = explicit {
+            meta.settings
+                .agent_commands
+                .insert("review".into(), target.into());
+        }
+        std::fs::write(
+            std::path::Path::new(&meta.cwd).join("sample.rs"),
+            "pub fn answer() -> u8 { 42 }\n",
+        )
+        .unwrap();
+        (App::new(app.agent, meta, app.recorder), mock)
+    }
+
+    #[tokio::test]
+    async fn unique_discovered_review_is_routed_and_records_runtime_evidence() {
+        use cupel_coding_agent::roles::Role;
+        let (mut app, _) = review_app(None, false);
+        submit(&mut app, "/team add custom_42");
+        submit(&mut app, "/team roles");
+        assert!(!app.crew.is_built("custom_42"));
+        submit(&mut app, "/review sample.rs");
+        idle(&mut app).await;
+        assert_eq!(app.totals.input, 0);
+        assert_eq!(app.crew.spend_of("custom_42").calls, 1);
+        let snapshots = app.crew.scheduler().snapshots();
+        let selected = snapshots
+            .iter()
+            .find_map(|task| task.selection.as_ref())
+            .unwrap();
+        assert_eq!(selected.role, Role::Review);
+        assert_eq!(selected.agent, "custom_42");
+        assert!(
+            selected
+                .evidence
+                .iter()
+                .any(|evidence| evidence.contains("Reviews diffs"))
+        );
+    }
+
+    #[test]
+    fn ambiguous_or_invalid_explicit_review_uses_the_lead_not_an_armed_helper() {
+        for (explicit, ambiguous) in [(None, true), (Some("missing"), false)] {
+            let (mut app, _) = review_app(explicit, ambiguous);
+            submit(&mut app, "/team add custom_42 other-lens");
+            submit(&mut app, "/agent custom_42");
+            submit(&mut app, "/review sample.rs");
+            assert!(app.helper.is_none());
+            assert!(app.pending_prompt.is_some());
+            assert_eq!(app.armed.as_deref(), Some("custom_42"));
+            assert!(app.transcript.cells.iter().any(|cell|matches!(cell,Cell::Notice{text}if text.contains(if ambiguous{"ambiguous"}else{"invalid explicit"}))));
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_discovery_is_revalidated_after_membership_changes() {
+        let (mut app, _) = review_app(None, false);
+        submit(&mut app, "/team add custom_42");
+        submit(&mut app, "/agent custom_42 hang");
+        submit(&mut app, "/review sample.rs");
+        assert!(app.waiting_helper.as_ref().unwrap().selection.is_some());
+        submit(&mut app, "/team clear");
+        app.helper.as_ref().unwrap().cancel.cancel();
+        idle(&mut app).await;
+        assert!(app.helper.is_none());
+        assert!(
+            app.pending_prompt.is_some(),
+            "removed targets fall back to the lead"
+        );
+    }
+
+    #[tokio::test]
+    async fn role_task_selector_keeps_actual_permissions_and_provenance() {
+        use cupel_coding_agent::team_conversation::Participant;
+        use cupel_coding_agent::team_scheduler::{AccessScope, RunContext, TaskState};
+        let (mut app, _) = review_app(None, false);
+        submit(&mut app, "/team add custom_42");
+        let ask = Arc::clone(
+            app.agent
+                .tools()
+                .iter()
+                .find(|tool| tool.name() == "ask")
+                .unwrap(),
+        );
+        app.crew.lead_context().set(RunContext::root(
+            Participant::Lead,
+            AccessScope::CanWrite,
+            "review task".into(),
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        ask.execute(
+            "by-role",
+            serde_json::json!({"role":"review","task":"check the fixture"}),
+            tokio_util::sync::CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(app.crew.total_spend().calls, 1);
+        let nodes = app.crew.scheduler().snapshots();
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.selection.is_some() && node.access == AccessScope::ReadOnly)
+        );
+        let run = app.crew.lead_context().current().unwrap();
+        let root = run.scope(&app.crew.scheduler()).await.unwrap();
+        app.crew
+            .scheduler()
+            .finish(
+                &root,
+                TaskState::Succeeded,
+                "done",
+                cupel_coding_agent::crew::Changes::ReadOnly,
+            )
+            .await;
+        app.crew.lead_context().clear();
+    }
 }

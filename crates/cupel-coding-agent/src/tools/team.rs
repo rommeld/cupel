@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::crew::{AgentSpec, Crew};
+use crate::roles::{AccessFilter, Role};
 use crate::team_scheduler::{AccessScope, CallContext};
 
 pub const TEAM_TOOL_NAMES: [&str; 2] = ["ask", "delegate"];
@@ -65,9 +66,21 @@ pub struct TeamTool {
 }
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+enum Call {
+    Agent(NamedCall),
+    Role(RoleCall),
+}
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Call {
+struct NamedCall {
     agent: String,
+    task: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoleCall {
+    role: String,
     task: String,
 }
 
@@ -101,13 +114,23 @@ impl TeamTool {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let hints = crate::truncate::truncate_head(
+            &crew
+                .roles()
+                .tool_hints(&members.iter().map(|spec| spec.name.clone()).collect()),
+            crate::truncate::TruncationOptions {
+                max_lines: Some(20),
+                max_bytes: Some(2048),
+            },
+        )
+        .content;
         Self {
             context: crew.lead_context(),
             crew: Arc::downgrade(&crew),
             mode,
             members: members.iter().map(|spec| spec.name.clone()).collect(),
             description: format!(
-                "{intro}\n\nA helper has its own context, not this conversation. Include the goal, file paths and constraints in the task. Call a helper only when the task clearly matches its description, or when the user names it; otherwise do the work yourself. Verify uncertain or high-risk claims.\n\nYour team:\n{roster}"
+                "{intro}\n\nA helper has private history and shared discussion, not your private conversation. Include goal, paths and constraints. Call a helper only when the task clearly matches its description, or when the user names it; otherwise do the work yourself. Verify uncertain or high-risk claims.\n\nYour team:\n{roster}\n\nUse exactly one agent name or role (review/research/implement/test). Roles are inferred hints, not permissions. Uncertain or ambiguous roles do not run automatically.\n{hints}"
             ),
         }
     }
@@ -133,8 +156,9 @@ impl AgentTool for TeamTool {
     fn parameters(&self) -> Value {
         serde_json::json!({"type":"object","properties":{
             "agent":{"type":"string","enum":self.members,"description":"Who gets the task"},
+            "role":{"type":"string","enum":["review","research","implement","test"],"description":"A unique supported teammate role; mutually exclusive with agent"},
             "task":{"type":"string","description":"Task with the context the helper needs"}
-        },"required":["agent","task"],"additionalProperties":false})
+        },"required":["task"],"oneOf":[{"required":["agent"]},{"required":["role"]}],"additionalProperties":false})
     }
     fn execution_mode(&self) -> Option<ToolExecutionMode> {
         match self.mode {
@@ -143,7 +167,11 @@ impl AgentTool for TeamTool {
         }
     }
     fn describe_call(&self, args: &Value) -> String {
-        let agent = args.get("agent").and_then(Value::as_str).unwrap_or("?");
+        let agent = args
+            .get("agent")
+            .or_else(|| args.get("role"))
+            .and_then(Value::as_str)
+            .unwrap_or("?");
         let task = args.get("task").and_then(Value::as_str).unwrap_or_default();
         format!(
             "{} {agent}: {}",
@@ -159,13 +187,19 @@ impl AgentTool for TeamTool {
         on_update: Option<ToolUpdateFn>,
     ) -> Result<AgentToolResult, ToolError> {
         let call: Call = serde_json::from_value(args)?;
-        if call.task.trim().is_empty() {
+        let (agent, role, task) = match call {
+            Call::Agent(call) => (Some(call.agent), None, call.task),
+            Call::Role(call) => (None, Some(call.role), call.task),
+        };
+        if task.trim().is_empty() {
             return Err("task must not be empty".into());
         }
-        if !self.members.contains(&call.agent) {
+        if let Some(agent) = &agent
+            && !self.members.contains(agent)
+        {
             return Err(format!(
                 "{} is not on your team for {}; these are: {}",
-                call.agent,
+                agent,
                 self.name(),
                 self.members.join(", ")
             )
@@ -175,9 +209,6 @@ impl AgentTool for TeamTool {
             .crew
             .upgrade()
             .ok_or("the helper crew is no longer available")?;
-        if crew.shared_team(&call.agent).is_none() {
-            return Err(format!("{} is no longer on the current team", call.agent).into());
-        }
         let run = self
             .context
             .current()
@@ -187,7 +218,51 @@ impl AgentTool for TeamTool {
             Mode::Ask => AccessScope::ReadOnly,
             Mode::Delegate => AccessScope::CanWrite,
         };
-        let child = crew.run_child(&parent, &call.agent, &call.task, access);
+        let live = self
+            .members
+            .iter()
+            .filter(|name| crew.shared_team(name).is_some() && parent.can_call(name))
+            .cloned()
+            .collect();
+        let selection = role
+            .map(|role| {
+                let role = role.parse::<Role>()?;
+                crew.roles()
+                    .resolve(
+                        role,
+                        &live,
+                        if self.mode == Mode::Ask {
+                            AccessFilter::ReadOnly
+                        } else {
+                            AccessFilter::Writer
+                        },
+                    )
+                    .selection(role)
+            })
+            .transpose()?;
+        let name = selection
+            .as_ref()
+            .map(|selection| selection.agent.clone())
+            .or(agent)
+            .ok_or("provide exactly one agent or role")?;
+        if crew.shared_team(&name).is_none() {
+            return Err(format!("{name} is no longer on the current team").into());
+        }
+        if crew
+            .spec(&name)
+            .is_none_or(|spec| spec.definition.writes() != (self.mode == Mode::Delegate))
+        {
+            return Err("helper permissions do not match this task tool".into());
+        }
+        let child = async {
+            match selection {
+                Some(selection) => {
+                    crew.run_selected_child(&parent, selection, &task, access)
+                        .await
+                }
+                None => crew.run_child(&parent, &name, &task, access).await,
+            }
+        };
         tokio::pin!(child);
         let reply = tokio::select! { biased; ()=cancel.cancelled()=>return Err("delegation caller stopped; child cleanup continues".into()),result=&mut child=>result? };
         if let Some(update) = on_update {
@@ -197,5 +272,26 @@ impl AgentTool for TeamTool {
             )));
         }
         Ok(AgentToolResult::text(reply.for_lead()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn role_selectors_are_exclusive_and_cannot_supply_runtime_evidence() {
+        for value in [
+            serde_json::json!({"agent":"lens","task":"review"}),
+            serde_json::json!({"role":"review","task":"review"}),
+        ] {
+            assert!(serde_json::from_value::<crate::tools::team::Call>(value).is_ok());
+        }
+        for value in [
+            serde_json::json!({"agent":"lens","role":"review","task":"review"}),
+            serde_json::json!({"task":"review"}),
+            serde_json::json!({"role":"review","task":"review","evidence":["forged"]}),
+            serde_json::json!({"role":"review","task":"review","access":"canWrite"}),
+        ] {
+            assert!(serde_json::from_value::<crate::tools::team::Call>(value).is_err());
+        }
     }
 }

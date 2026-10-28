@@ -221,8 +221,20 @@ defaults; resumed sessions and in-place reloads retain saved choices instead.
 Default membership alone does not write a transcript until the first interaction.
 
 `agentCommands` routes `/review` and prompt templates explicitly, independently of
-team membership. Invalid mappings warn and fall back to the lead, not an armed
-helper. Mappings cannot reroute non-prompt built-ins such as `/model`.
+team membership. Explicit choices always win. Invalid mappings warn and fall back
+to the lead, not an armed helper or another discovered candidate. Mappings cannot
+reroute non-prompt built-ins such as `/model`.
+
+Without a mapping, `/review` and role-named prompt templates can select a unique,
+sufficiently supported current teammate. `/team roles` explains evidence from
+trusted names and descriptions for `review`, `research`, `implement`, and `test`.
+Matching is deterministic and makes no model request. Name-only hints, negated
+capabilities, uncertain descriptions and ambiguous candidates do not auto-run.
+Use an explicit mapping or name to resolve ambiguity. Discovery neither adds
+members nor grants tools, and queued selections are revalidated before execution.
+The task journal records the selected role and runtime-derived evidence.
+Models can pass exactly one `agent` or `role` to `ask`/`delegate`; roles still obey
+the caller's access ceiling, actual tool permissions, ancestry and live roster.
 
 No helper Agent or model request is created until its first call. Startup can
 still inspect credentials and reject unknown models. Each helper has its own

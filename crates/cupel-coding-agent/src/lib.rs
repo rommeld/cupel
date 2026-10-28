@@ -19,6 +19,7 @@ pub mod project_trust;
 pub mod providers;
 pub mod resources;
 pub mod review;
+pub mod roles;
 pub mod search;
 pub mod session;
 pub mod settings;

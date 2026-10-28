@@ -1,6 +1,7 @@
 //! Root budgets and cycle-free, per-helper queues. No lock is held across inference.
 
 use crate::crew::{Changes, Spend};
+use crate::roles::RoleSelection;
 use crate::team_conversation::{Participant, TeamBody, TeamRuntime};
 use crate::truncate::{TruncationOptions, truncate_head};
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,8 @@ pub struct TaskSnapshot {
     pub requests: u32,
     pub artifact: Option<std::path::PathBuf>,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<RoleSelection>,
 }
 
 impl TaskSnapshot {
@@ -92,6 +95,16 @@ impl TaskSnapshot {
             TaskState::Interrupted => "previous process ended; changes and usage may be incomplete",
             _ => "",
         };
+        let selection = self
+            .selection
+            .as_ref()
+            .map_or_else(String::new, |selection| {
+                format!(
+                    "discovered {}: {}\n",
+                    selection.role,
+                    selection.evidence.join("; ")
+                )
+            });
         format!(
             "call={} root={} parent={} {} depth={} {} {}\n{}\n{}\n{}{}",
             self.id.0,
@@ -103,7 +116,7 @@ impl TaskSnapshot {
             self.state.label(),
             reason,
             self.changes,
-            self.summary,
+            format_args!("{selection}{}", self.summary),
             self.artifact
                 .as_ref()
                 .map_or_else(String::new, |path| format!(
@@ -165,6 +178,14 @@ impl CallScope {
     #[must_use]
     pub fn id(&self) -> CallId {
         self.id
+    }
+    #[must_use]
+    pub fn parent_id(&self) -> Option<CallId> {
+        self.parent
+    }
+    #[must_use]
+    pub fn can_call(&self, name: &str) -> bool {
+        !self.ancestry.iter().any(|ancestor| ancestor == name)
     }
     #[must_use]
     pub fn access(&self) -> AccessScope {
@@ -629,6 +650,18 @@ impl TeamScheduler {
     pub async fn publish(&self, id: CallId) {
         self.publish_answer(id, None).await;
     }
+    pub async fn annotate_selection(&self, id: CallId, selection: RoleSelection) {
+        if let Some(node) = self
+            .state
+            .lock()
+            .expect("scheduler poisoned")
+            .nodes
+            .get_mut(&id)
+        {
+            node.snapshot.selection = Some(selection);
+        }
+        self.publish(id).await;
+    }
     async fn publish_answer(&self, id: CallId, answer: Option<&str>) {
         let snapshot = self.snapshots().into_iter().find(|node| node.id == id);
         if let (Some(journal), Some(snapshot)) = (self.journal(), snapshot) {
@@ -776,6 +809,7 @@ fn insert(state: &mut State, scope: &CallScope, task: &str) {
                 requests: 0,
                 artifact: None,
                 truncated: false,
+                selection: None,
             },
             scope: Some(scope.clone()),
         },

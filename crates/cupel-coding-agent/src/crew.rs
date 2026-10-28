@@ -26,6 +26,7 @@ use crate::commands::PromptTemplate;
 use crate::guard::BashGuard;
 use crate::loop_killer::LoopKiller;
 use crate::resources::ContextFile;
+use crate::roles::{AccessFilter, RoleIndex, RoleSelection};
 use crate::session::SessionRecorder;
 use crate::settings::{AgentDefinition, Settings};
 use crate::system_prompt::{build_system_prompt, with_preset_prompt};
@@ -381,6 +382,7 @@ pub struct Crew {
     write_gate: Mutex<WriteGate>,
     checkpoint_through: Mutex<Option<CallId>>,
     recovering: tokio::sync::Mutex<bool>,
+    roles: RoleIndex,
     helpers: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<Helper>>>>,
     running: Mutex<BTreeMap<u64, (String, CancellationToken)>>,
     next_call: AtomicU64,
@@ -395,12 +397,14 @@ struct ScopedRequest {
     access: AccessScope,
     cancel: CancellationToken,
     shared: Option<Arc<TeamRuntime>>,
+    selection: Option<(RoleSelection, AccessFilter)>,
 }
 
 impl Crew {
     #[must_use]
     pub fn new(specs: Vec<AgentSpec>, setup: CrewSetup) -> Self {
         let scheduler = TeamScheduler::new(TeamLimits::default());
+        let roles = RoleIndex::new(specs.iter());
         scheduler.set_cwd(setup.cwd.clone());
         Self {
             specs: specs
@@ -415,6 +419,7 @@ impl Crew {
             write_gate: Mutex::new(Arc::new(tokio::sync::Mutex::new(()))),
             checkpoint_through: Mutex::new(None),
             recovering: tokio::sync::Mutex::new(false),
+            roles,
             helpers: Mutex::new(BTreeMap::new()),
             running: Mutex::new(BTreeMap::new()),
             next_call: AtomicU64::new(0),
@@ -426,6 +431,30 @@ impl Crew {
     #[must_use]
     pub fn spec(&self, name: &str) -> Option<&AgentSpec> {
         self.specs.get(name)
+    }
+    #[must_use]
+    pub fn roles(&self) -> &RoleIndex {
+        &self.roles
+    }
+
+    fn validate_selection(
+        &self,
+        selection: &RoleSelection,
+        filter: AccessFilter,
+        parent: Option<&CallScope>,
+    ) -> Result<RoleSelection, String> {
+        let mut members = self.members();
+        if let Some(parent) = parent {
+            members.retain(|name| parent.can_call(name));
+        }
+        let current = self
+            .roles
+            .resolve(selection.role, &members, filter)
+            .selection(selection.role)?;
+        if current.agent != selection.agent {
+            return Err("discovered target changed while queued; select again".into());
+        }
+        Ok(current)
     }
 
     pub fn set_team_runtime(self: &Arc<Self>, team: Arc<TeamRuntime>) {
@@ -664,6 +693,7 @@ impl Crew {
                         },
                         cancel,
                         shared,
+                        selection: None,
                     },
                     progress,
                 )
@@ -698,15 +728,82 @@ impl Crew {
                 access,
                 cancel: parent.cancellation_token().child_token(),
                 shared: self.shared_team(name),
+                selection: None,
             },
             &|_| {},
         )
         .await
     }
 
+    pub async fn run_selected_child(
+        self: &Arc<Self>,
+        parent: &CallScope,
+        selection: RoleSelection,
+        task: &str,
+        access: AccessScope,
+    ) -> Result<Reply, CrewError> {
+        self.owned_request(
+            ScopedRequest {
+                name: selection.agent.clone(),
+                task: task.into(),
+                parent: Some(parent.clone()),
+                access,
+                cancel: parent.cancellation_token().child_token(),
+                shared: self.shared_team(&selection.agent),
+                selection: Some((
+                    selection,
+                    if access == AccessScope::ReadOnly {
+                        AccessFilter::ReadOnly
+                    } else {
+                        AccessFilter::Writer
+                    },
+                )),
+            },
+            &|_| {},
+        )
+        .await
+    }
+
+    pub async fn run_selected_direct(
+        self: &Arc<Self>,
+        selection: RoleSelection,
+        task: &str,
+        cancel: CancellationToken,
+        shared: Option<Arc<TeamRuntime>>,
+        progress: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<Reply, CrewError> {
+        let spec = self
+            .spec(&selection.agent)
+            .ok_or_else(|| CrewError::Unknown(selection.agent.clone()))?;
+        if shared.is_none() {
+            return Err(CrewError::Failed {
+                name: selection.agent,
+                message: "discovered target is no longer on the team".into(),
+                changes: Changes::ReadOnly,
+            });
+        }
+        self.owned_request(
+            ScopedRequest {
+                name: selection.agent.clone(),
+                task: task.into(),
+                parent: None,
+                access: if spec.definition.writes() {
+                    AccessScope::CanWrite
+                } else {
+                    AccessScope::ReadOnly
+                },
+                cancel,
+                shared,
+                selection: Some((selection, AccessFilter::Any)),
+            },
+            progress,
+        )
+        .await
+    }
+
     async fn owned_request(
         self: &Arc<Self>,
-        request: ScopedRequest,
+        mut request: ScopedRequest,
         progress: &(dyn Fn(String) + Send + Sync),
     ) -> Result<Reply, CrewError> {
         let stop = request.cancel.child_token();
@@ -725,6 +822,12 @@ impl Crew {
                     changes: Changes::ReadOnly,
                 };
                 crew.recover_usage().await.map_err(failed)?;
+                if let Some((selection, filter)) = &request.selection {
+                    let selection = crew
+                        .validate_selection(selection, *filter, request.parent.as_ref())
+                        .map_err(failed)?;
+                    request.selection = Some((selection, *filter));
+                }
                 let scope = match &request.parent {
                     Some(parent) => {
                         crew.scheduler
@@ -751,6 +854,11 @@ impl Crew {
                 if worker_stop.is_cancelled() {
                     scope.cancellation_token().cancel();
                 }
+                if let Some((selection, _)) = &request.selection {
+                    crew.scheduler
+                        .annotate_selection(scope.id(), selection.clone())
+                        .await;
+                }
                 let progress = move |text| {
                     let _ = updates.send(text);
                 };
@@ -760,6 +868,7 @@ impl Crew {
                     request.task,
                     request.shared,
                     &progress,
+                    request.selection,
                 );
                 tokio::pin!(run);
                 tokio::select! {biased;
@@ -793,6 +902,7 @@ impl Crew {
         task: String,
         shared: Option<Arc<TeamRuntime>>,
         progress: &(dyn Fn(String) + Send + Sync),
+        selection: Option<(RoleSelection, AccessFilter)>,
     ) -> Result<Reply, CrewError> {
         let (sender, receipt) = tokio::sync::oneshot::channel();
         let (updates, mut update_events) = tokio::sync::mpsc::unbounded_channel();
@@ -823,6 +933,18 @@ impl Crew {
                             }
                         }
                     })?;
+                if let Some((selection, filter)) = selection {
+                    let parent = inner_scope
+                        .parent_id()
+                        .and_then(|id| inner_crew.scheduler.scope(id));
+                    inner_crew
+                        .validate_selection(&selection, filter, parent.as_ref())
+                        .map_err(|message| CrewError::Failed {
+                            name: inner_name.clone(),
+                            message,
+                            changes: Changes::ReadOnly,
+                        })?;
+                }
                 inner_crew
                     .run_legacy(
                         &inner_name,

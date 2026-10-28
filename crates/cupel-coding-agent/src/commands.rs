@@ -231,7 +231,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "team",
-        description: "Who the lead may call: /team lists the agents, /team add|remove <name>... and /team clear change the team",
+        description: "Manage teammates: /team add|remove <name>..., /team clear; inspect /team roles, /team conversation [after-id], /team tasks [root-id], or stop /team cancel <call-id>",
     },
     BuiltinCommand {
         name: "help",
@@ -350,6 +350,7 @@ impl core::str::FromStr for SpinoffCommand {
 pub enum TeamCommand {
     List,
     Conversation(Option<u64>),
+    Roles,
     Tasks(Option<u64>),
     Cancel(u64),
     Add(Vec<String>),
@@ -366,6 +367,8 @@ impl core::str::FromStr for TeamCommand {
         match words.as_slice() {
             [] => Ok(Self::List),
             ["conversation"] => Ok(Self::Conversation(None)),
+            ["roles"]=>Ok(Self::Roles),
+            ["conversation",id]=>id.parse().map(|id|Self::Conversation(Some(id))).map_err(|error|format!("invalid conversation entry ID: {error}")),
             ["tasks"] => Ok(Self::Tasks(None)),
             ["tasks", id] => id
                 .parse()
@@ -383,7 +386,7 @@ impl core::str::FromStr for TeamCommand {
             ["remove", names @ ..] if !names.is_empty() => Ok(Self::Remove(owned(names))),
             ["clear"] => Ok(Self::Clear),
             _ => {
-                Err("usage: /team, /team add <name>..., /team remove <name>..., /team clear".into())
+                Err("usage: /team, /team roles, /team conversation [after-id], /team tasks [root-id], /team cancel <call-id>, /team add <name>..., /team remove <name>..., /team clear".into())
             }
         }
     }

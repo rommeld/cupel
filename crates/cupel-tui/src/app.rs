@@ -16,6 +16,7 @@ use cupel_coding_agent::commands;
 use cupel_coding_agent::crew::{self, Changes, Crew, CrewError, CrewSetup, Reply};
 use cupel_coding_agent::modes::SessionMeta;
 use cupel_coding_agent::program_status::{BlockedKind, State as ProgramState};
+use cupel_coding_agent::roles::{AccessFilter, CommandRoute, RoleSelection, command_route};
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
 use cupel_coding_agent::team_conversation::{
@@ -109,6 +110,7 @@ pub struct App {
 pub struct HelperCall {
     pub name: String,
     pub task: String,
+    pub selection: Option<RoleSelection>,
 }
 
 pub struct HelperRun {
@@ -388,6 +390,25 @@ impl App {
             .with_command_args("login", login_candidates)
             .with_command_args("logout", logout_candidates)
             .with_command_args("agent", agent_candidates)
+            .with_command_args(
+                "team",
+                [
+                    "add",
+                    "remove",
+                    "clear",
+                    "roles",
+                    "conversation",
+                    "tasks",
+                    "cancel",
+                ]
+                .into_iter()
+                .map(|name| Candidate {
+                    display: name.into(),
+                    value: name.into(),
+                    is_dir: false,
+                })
+                .collect(),
+            )
             .with_command_args("hot-reload", session_candidates);
         // Restored history (a --resume session) exists before the App does;
         // snapshot it so the transcript can replay it as cells.
@@ -1324,20 +1345,48 @@ impl App {
     }
 
     fn prompt_for(&mut self, command: &str, text: String, delivery: Delivery) {
-        match self.routes.get(command).cloned() {
-            Some(name) => self.call_helper(HelperCall { name, task: text }),
-            None if command == "review"
-                || self.meta.settings.agent_commands.contains_key(command) =>
-            {
+        match command_route(
+            command,
+            self.meta.settings.agent_commands.contains_key(command),
+            self.routes.get(command),
+            self.crew.roles(),
+            &self.crew.members(),
+        ) {
+            CommandRoute::Explicit(name) => self.call_helper(HelperCall {
+                name,
+                task: text,
+                selection: None,
+            }),
+            CommandRoute::Discovered(selection) => {
+                self.notice(format!(
+                    "/{command} → {} (discovered {}: {})",
+                    selection.agent,
+                    selection.role,
+                    selection.evidence.join("; ")
+                ));
+                self.call_helper(HelperCall {
+                    name: selection.agent.clone(),
+                    task: text,
+                    selection: Some(selection),
+                });
+            }
+            CommandRoute::Lead(reason) => {
+                if let Some(reason) = reason {
+                    self.notice(reason);
+                }
                 self.send(&text, delivery);
             }
-            None => self.prompt_or_call(text, delivery),
+            CommandRoute::Ordinary => self.prompt_or_call(text, delivery),
         }
     }
 
     fn prompt_or_call(&mut self, text: String, delivery: Delivery) {
         match self.armed.take() {
-            Some(name) => self.call_helper(HelperCall { name, task: text }),
+            Some(name) => self.call_helper(HelperCall {
+                name,
+                task: text,
+                selection: None,
+            }),
             None => self.send(&text, delivery),
         }
     }
@@ -1875,6 +1924,7 @@ impl App {
             self.call_helper(HelperCall {
                 name: name.into(),
                 task: task.into(),
+                selection: None,
             });
         }
     }
@@ -1952,6 +2002,10 @@ impl App {
         match command {
             commands::TeamCommand::List => {
                 self.list_team();
+                return;
+            }
+            commands::TeamCommand::Roles => {
+                self.notice(self.crew.roles().describe(&self.crew.members()));
                 return;
             }
             commands::TeamCommand::Conversation(after) => {
@@ -2049,7 +2103,25 @@ impl App {
         self.scroll_from_bottom = 0;
     }
 
-    fn start_helper(&mut self, call: HelperCall) {
+    fn start_helper(&mut self, mut call: HelperCall) {
+        if let Some(selection) = &call.selection {
+            match self
+                .crew
+                .roles()
+                .resolve(selection.role, &self.crew.members(), AccessFilter::Any)
+                .selection(selection.role)
+            {
+                Ok(selection) => {
+                    call.name = selection.agent.clone();
+                    call.selection = Some(selection);
+                }
+                Err(reason) => {
+                    self.notice(format!("{reason}; using the lead"));
+                    self.send(&call.task, Delivery::Queue);
+                    return;
+                }
+            }
+        }
         self.flush_initial_team();
         self.transcript.cells.push(Cell::User {
             text: format!("@{} {}", call.name, call.task),
@@ -2073,6 +2145,7 @@ impl App {
         let run_cancel = cancel.clone();
         let crew = Arc::clone(&self.crew);
         let (name, task) = (call.name.clone(), call.task.clone());
+        let selection = call.selection.clone();
         let shared_team = self.crew.shared_team(&call.name);
         let shared = shared_team.is_some();
         tokio::spawn(async move {
@@ -2080,9 +2153,16 @@ impl App {
             let progress = move |lines| {
                 let _ = progress_sender.send(HelperEvent::Progress(lines));
             };
-            let result = crew
-                .run_with_team(&name, &task, run_cancel, &progress, shared_team)
-                .await;
+            let result = match selection {
+                Some(selection) => {
+                    crew.run_selected_direct(selection, &task, run_cancel, shared_team, &progress)
+                        .await
+                }
+                None => {
+                    crew.run_with_team(&name, &task, run_cancel, &progress, shared_team)
+                        .await
+                }
+            };
             let _ = sender.send(HelperEvent::Done(result));
         });
         self.run_started = Some(Instant::now());
