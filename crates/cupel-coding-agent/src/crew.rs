@@ -22,6 +22,7 @@ use cupel_core::types::{
 };
 
 use crate::bootstrap::{SessionHooks, TOOL_SUMMARIES};
+use crate::commands::PromptTemplate;
 use crate::guard::BashGuard;
 use crate::loop_killer::LoopKiller;
 use crate::resources::ContextFile;
@@ -75,6 +76,32 @@ pub fn resolve(
         });
     }
     (specs, warnings)
+}
+
+/// Validate explicit routes without granting membership or constructing helpers.
+#[must_use]
+pub fn routes(
+    settings: &Settings,
+    crew: &Crew,
+    templates: &[PromptTemplate],
+) -> (BTreeMap<String, String>, Vec<String>) {
+    let mut routes = BTreeMap::new();
+    let mut warnings = Vec::new();
+    for (command, agent) in &settings.agent_commands {
+        let sends_prompt = command == "review"
+            || (!crate::commands::BUILTIN_COMMANDS
+                .iter()
+                .any(|builtin| builtin.name == command)
+                && templates.iter().any(|template| &template.name == command));
+        if !sends_prompt {
+            warnings.push(format!("warning: ignoring agentCommands entry {command}: only /review and prompt templates can go to an agent"));
+        } else if crew.spec(agent).is_none() {
+            warnings.push(format!("warning: ignoring agentCommands entry {command}: no agent named {agent}; /{command} falls back to the lead"));
+        } else {
+            routes.insert(command.clone(), agent.clone());
+        }
+    }
+    (routes, warnings)
 }
 
 /// Session ingredients shared with helpers, without constructing an Agent.

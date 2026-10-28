@@ -239,4 +239,70 @@ mod tests {
         assert!(app.input.text().contains("/agent custom_42 waiting task"));
         assert!(app.waiting_helper.is_none());
     }
+
+    fn routed_app(target: &str) -> (App, Arc<Mock>) {
+        let (app, mock) = app();
+        let mut meta = app.meta;
+        meta.templates
+            .push(cupel_coding_agent::commands::PromptTemplate {
+                name: "explain".into(),
+                description: "Explains".into(),
+                content: "Explain $1.".into(),
+                path: "explain.md".into(),
+            });
+        meta.settings
+            .agent_commands
+            .insert("explain".into(), target.into());
+        meta.settings
+            .agent_commands
+            .insert("review".into(), target.into());
+        (App::new(app.agent, meta, app.recorder), mock)
+    }
+
+    #[tokio::test]
+    async fn explicit_template_routes_run_without_a_lead_turn() {
+        let (mut app, mock) = routed_app("custom_42");
+        submit(&mut app, "/explain parser");
+        idle(&mut app).await;
+        assert_eq!(app.crew.total_spend().calls, 1);
+        assert_eq!(app.totals.input, 0);
+        assert_eq!(mock.contexts.lock().unwrap().len(), 1);
+        assert!(app.transcript.cells.iter().any(
+            |cell| matches!(cell, Cell::Agent { text, .. } if text.contains("Explain parser."))
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_explicit_mapping_falls_back_to_lead_not_armed_helper() {
+        let (mut app, mock) = routed_app("missing");
+        assert!(app.routes.is_empty());
+        submit(&mut app, "/agent custom_42");
+        submit(&mut app, "/explain parser");
+        assert!(app.helper.is_none());
+        assert_eq!(app.pending_prompt.as_deref(), Some("Explain parser."));
+        assert_eq!(app.armed.as_deref(), Some("custom_42"));
+        assert!(mock.contexts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn builtin_shadowing_templates_cannot_acquire_routes() {
+        let (mut app, _) = routed_app("custom_42");
+        app.meta
+            .templates
+            .push(cupel_coding_agent::commands::PromptTemplate {
+                name: "model".into(),
+                description: String::new(),
+                content: "shadow".into(),
+                path: "model.md".into(),
+            });
+        app.meta
+            .settings
+            .agent_commands
+            .insert("model".into(), "custom_42".into());
+        let (routes, warnings) =
+            cupel_coding_agent::crew::routes(&app.meta.settings, &app.crew, &app.meta.templates);
+        assert!(!routes.contains_key("model"));
+        assert_eq!(warnings.len(), 1);
+        assert!(!app.crew.is_built("custom_42"));
+    }
 }

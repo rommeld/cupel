@@ -83,6 +83,7 @@ pub struct App {
     pub armed: Option<String>,
     pub helper: Option<HelperRun>,
     pub waiting_helper: Option<HelperCall>,
+    pub routes: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,6 +321,7 @@ impl App {
                 is_dir: false,
             })
             .collect();
+        let (routes, route_warnings) = crew::routes(&meta.settings, &crew, &meta.templates);
         // `/hot-reload <id>` completes from the transcripts on disk. Only
         // file stems are read (no parsing) App::new must stay fast.
         let session_candidates: Vec<Candidate> = recorder
@@ -393,11 +395,13 @@ impl App {
             armed: None,
             helper: None,
             waiting_helper: None,
+            routes,
         };
         app.replay_history(&history);
         for warning in std::mem::take(&mut app.meta.warnings)
             .into_iter()
             .chain(crew_warnings)
+            .chain(route_warnings)
         {
             app.notice(warning);
         }
@@ -1172,11 +1176,24 @@ impl App {
             }
             let expanded = commands::expand_prompt_template(&trimmed, &self.meta.templates);
             if let Some(expanded) = expanded {
-                self.prompt_or_call(expanded, delivery);
+                let name = rest.split_whitespace().next().unwrap_or_default();
+                self.prompt_for(name, expanded, delivery);
                 return;
             }
         }
         self.prompt_or_call(trimmed, delivery);
+    }
+
+    fn prompt_for(&mut self, command: &str, text: String, delivery: Delivery) {
+        match self.routes.get(command).cloned() {
+            Some(name) => self.call_helper(HelperCall { name, task: text }),
+            None if command == "review"
+                || self.meta.settings.agent_commands.contains_key(command) =>
+            {
+                self.send(&text, delivery);
+            }
+            None => self.prompt_or_call(text, delivery),
+        }
     }
 
     fn prompt_or_call(&mut self, text: String, delivery: Delivery) {
@@ -1702,6 +1719,15 @@ impl App {
                     .description()
                     .unwrap_or("manual only: no description")
             ));
+            let commands = self
+                .routes
+                .iter()
+                .filter(|(_, agent)| **agent == spec.name)
+                .map(|(command, _)| format!("/{command}"))
+                .collect::<Vec<_>>();
+            if !commands.is_empty() {
+                lines.push(format!("      answers {}", commands.join(", ")));
+            }
             if let Some(max) = spec.definition.max_turns {
                 lines.push(format!("      max {max} turns"));
             }
@@ -1956,7 +1982,7 @@ impl App {
                     std::path::Path::new(&self.meta.cwd),
                     &review_args,
                 ) {
-                    Ok(prompt) => self.send(&prompt, Delivery::Queue),
+                    Ok(prompt) => self.prompt_for("review", prompt, Delivery::Queue),
                     Err(e) => self.notice(e),
                 }
             }
