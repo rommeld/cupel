@@ -1,7 +1,7 @@
 //! Task delegation tools for the session's explicitly selected team.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use cupel_agent::types::ToolUpdateFn;
 use cupel_agent::{AgentTool, AgentToolResult, ToolError, ToolExecutionMode};
@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::crew::{AgentSpec, Crew};
+use crate::team_scheduler::{AccessScope, CallContext};
 
 pub const TEAM_TOOL_NAMES: [&str; 2] = ["ask", "delegate"];
 
@@ -21,31 +22,43 @@ pub enum Mode {
 
 #[must_use]
 pub fn team_tools(crew: &Arc<Crew>, team: &BTreeSet<String>) -> Vec<Arc<dyn AgentTool>> {
+    scoped_team_tools(crew, team, crew.lead_context(), AccessScope::CanWrite, None)
+}
+
+#[must_use]
+pub fn scoped_team_tools(
+    crew: &Arc<Crew>,
+    team: &BTreeSet<String>,
+    context: Arc<CallContext>,
+    access: AccessScope,
+    caller: Option<&str>,
+) -> Vec<Arc<dyn AgentTool>> {
     let (writers, readers): (Vec<_>, Vec<_>) = team
         .iter()
         .filter_map(|name| crew.spec(name))
         .filter(|spec| spec.definition.description().is_some())
+        .filter(|spec| {
+            caller != Some(spec.name.as_str())
+                && (access == AccessScope::CanWrite || !spec.definition.writes())
+        })
         .partition(|spec| spec.definition.writes());
     let mut tools: Vec<Arc<dyn AgentTool>> = Vec::new();
     if !readers.is_empty() {
-        tools.push(Arc::new(TeamTool::new(
-            Arc::clone(crew),
-            Mode::Ask,
-            &readers,
-        )));
+        tools.push(Arc::new(
+            TeamTool::new(Arc::clone(crew), Mode::Ask, &readers).with_context(Arc::clone(&context)),
+        ));
     }
     if !writers.is_empty() {
-        tools.push(Arc::new(TeamTool::new(
-            Arc::clone(crew),
-            Mode::Delegate,
-            &writers,
-        )));
+        tools.push(Arc::new(
+            TeamTool::new(Arc::clone(crew), Mode::Delegate, &writers).with_context(context),
+        ));
     }
     tools
 }
 
 pub struct TeamTool {
-    crew: Arc<Crew>,
+    crew: Weak<Crew>,
+    context: Arc<CallContext>,
     mode: Mode,
     members: Vec<String>,
     description: String,
@@ -89,13 +102,20 @@ impl TeamTool {
             .collect::<Vec<_>>()
             .join("\n");
         Self {
-            crew,
+            context: crew.lead_context(),
+            crew: Arc::downgrade(&crew),
             mode,
             members: members.iter().map(|spec| spec.name.clone()).collect(),
             description: format!(
                 "{intro}\n\nA helper has its own context, not this conversation. Include the goal, file paths and constraints in the task. Call a helper only when the task clearly matches its description, or when the user names it; otherwise do the work yourself. Verify uncertain or high-risk claims.\n\nYour team:\n{roster}"
             ),
         }
+    }
+
+    #[must_use]
+    pub fn with_context(mut self, context: Arc<CallContext>) -> Self {
+        self.context = context;
+        self
     }
 }
 
@@ -151,18 +171,31 @@ impl AgentTool for TeamTool {
             )
             .into());
         }
-        if self.crew.shared_team(&call.agent).is_none() {
+        let crew = self
+            .crew
+            .upgrade()
+            .ok_or("the helper crew is no longer available")?;
+        if crew.shared_team(&call.agent).is_none() {
             return Err(format!("{} is no longer on the current team", call.agent).into());
         }
-        let progress = |lines| {
-            if let Some(update) = &on_update {
-                update(AgentToolResult::text(lines));
-            }
+        let run = self
+            .context
+            .current()
+            .ok_or("delegation requires a running parent task")?;
+        let parent = run.scope(&crew.scheduler()).await?;
+        let access = match self.mode {
+            Mode::Ask => AccessScope::ReadOnly,
+            Mode::Delegate => AccessScope::CanWrite,
         };
-        let reply = self
-            .crew
-            .run(&call.agent, &call.task, cancel, &progress)
-            .await?;
+        let child = crew.run_child(&parent, &call.agent, &call.task, access);
+        tokio::pin!(child);
+        let reply = tokio::select! { biased; ()=cancel.cancelled()=>return Err("delegation caller stopped; child cleanup continues".into()),result=&mut child=>result? };
+        if let Some(update) = on_update {
+            update(AgentToolResult::text(format!(
+                "{} tool calls",
+                reply.tool_calls
+            )));
+        }
         Ok(AgentToolResult::text(reply.for_lead()))
     }
 }

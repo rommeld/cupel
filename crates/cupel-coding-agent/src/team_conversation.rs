@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc as async_mpsc, oneshot};
 
+use crate::team_scheduler::{TaskSnapshot, TaskVisibility};
 use crate::truncate::{TruncationOptions, truncate_head};
 
 const POST: TruncationOptions = TruncationOptions {
@@ -59,13 +60,16 @@ impl core::fmt::Display for TaskPhase {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
 pub enum TeamBody {
+    Scheduled {
+        task: Box<TaskSnapshot>,
+    },
     Post {
         text: String,
         reply_to: Option<u64>,
@@ -80,7 +84,7 @@ pub enum TeamBody {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamEntry {
     pub id: u64,
@@ -101,6 +105,7 @@ impl TeamEntry {
             .collect::<String>();
         let prefix = format!("[team #{} {author}]", self.id);
         match &self.body {
+            TeamBody::Scheduled { task } => format!("{prefix}\n{}", task.display()),
             TeamBody::Post { text, reply_to } => format!(
                 "{prefix}{}\n{text}",
                 reply_to.map_or_else(String::new, |id| format!(" reply to #{id}"))
@@ -206,6 +211,7 @@ enum Command {
     Read {
         after: Option<u64>,
         limit: Option<usize>,
+        shared_only: bool,
         reply: oneshot::Sender<TeamPage>,
     },
 }
@@ -302,7 +308,7 @@ impl TeamRuntime {
         if *actor != Participant::Lead && !self.permits(actor) {
             return Err("shared conversation requires current team membership".into());
         }
-        let page = self.query(after, Some(60)).await?;
+        let page = self.query(after, Some(60), true).await?;
         if *actor != Participant::Lead && !self.permits(actor) {
             return Err("team access was removed while reading".into());
         }
@@ -310,15 +316,21 @@ impl TeamRuntime {
     }
 
     pub async fn inspect(&self, after: Option<u64>) -> Result<TeamPage, String> {
-        self.query(after, None).await
+        self.query(after, None, false).await
     }
 
-    async fn query(&self, after: Option<u64>, limit: Option<usize>) -> Result<TeamPage, String> {
+    async fn query(
+        &self,
+        after: Option<u64>,
+        limit: Option<usize>,
+        shared_only: bool,
+    ) -> Result<TeamPage, String> {
         let (reply, receipt) = oneshot::channel();
         self.commands
             .send(Command::Read {
                 after,
                 limit,
+                shared_only,
                 reply,
             })
             .map_err(|error| format!("team writer stopped: {error}"))?;
@@ -369,6 +381,23 @@ impl TeamRuntime {
             actor,
             body,
             (cut.truncated && phase != TaskPhase::Started).then(|| text.to_string()),
+            false,
+        )
+    }
+
+    pub fn scheduled(
+        &self,
+        task: TaskSnapshot,
+        answer: Option<&str>,
+    ) -> Result<EntryReceipt, String> {
+        let author = task.actor.clone();
+        let full = answer.filter(|_| task.truncated).map(str::to_string);
+        self.enqueue(
+            author,
+            TeamBody::Scheduled {
+                task: Box::new(task),
+            },
+            full,
             false,
         )
     }
@@ -504,11 +533,12 @@ impl Writer {
                 Command::Read {
                     after,
                     limit,
+                    shared_only,
                     reply,
                 } => {
                     let first =
                         after.map_or(0, |id| self.entries.partition_point(|entry| entry.id <= id));
-                    let candidates = &self.entries[first..];
+                    let candidates = self.entries[first..].iter().filter(|entry| !shared_only || !matches!(&entry.body, TeamBody::Scheduled { task } if task.visibility == TaskVisibility::Private)).cloned().collect::<Vec<_>>();
                     let available = candidates.len();
                     let count = limit.unwrap_or(available).min(available);
                     let selected = if after.is_none() {
@@ -566,8 +596,13 @@ impl Writer {
             .map_or(0, |entry| entry.id)
             .checked_add(1)
             .ok_or("team entry IDs exhausted")?;
-        if let (Some(answer), TeamBody::Task { artifact, .. }) = (answer, &mut body) {
-            *artifact = self.keep_answer(id, &answer);
+        if let Some(answer) = answer {
+            let path = self.keep_answer(id, &answer);
+            match &mut body {
+                TeamBody::Task { artifact, .. } => *artifact = path,
+                TeamBody::Scheduled { task } => task.artifact = path,
+                TeamBody::Post { .. } => {}
+            }
         }
         let mut entry = TeamEntry {
             id,

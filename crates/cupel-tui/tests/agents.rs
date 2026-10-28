@@ -38,8 +38,13 @@ mod tests {
                 .rev()
                 .find_map(|message| match message {
                     Message::User(user) => match &user.content {
-                        UserContentBody::Text(text) => Some(text.clone()),
-                        UserContentBody::Blocks(_) => None,
+                        UserContentBody::Text(text)
+                            if !text.starts_with("[Task ")
+                                && !text.starts_with("[Shared team conversation") =>
+                        {
+                            Some(text.clone())
+                        }
+                        UserContentBody::Text(_) | UserContentBody::Blocks(_) => None,
                     },
                     _ => None,
                 })
@@ -348,6 +353,14 @@ mod tests {
             );
         }
         assert!(!app.crew.is_built("custom_42"));
+        app.crew
+            .lead_context()
+            .set(cupel_coding_agent::team_scheduler::RunContext::root(
+                cupel_coding_agent::team_conversation::Participant::Lead,
+                cupel_coding_agent::team_scheduler::AccessScope::CanWrite,
+                "test parent".into(),
+                tokio_util::sync::CancellationToken::new(),
+            ));
         ask.execute(
             "ok",
             serde_json::json!({"agent":"custom_42","task":"task"}),
@@ -357,6 +370,19 @@ mod tests {
         .await
         .unwrap();
         assert!(app.crew.is_built("custom_42"));
+        if let Some(run) = app.crew.lead_context().current() {
+            let scope = run.scope(&app.crew.scheduler()).await.unwrap();
+            app.crew
+                .scheduler()
+                .finish(
+                    &scope,
+                    cupel_coding_agent::team_scheduler::TaskState::Succeeded,
+                    "done",
+                    cupel_coding_agent::crew::Changes::ReadOnly,
+                )
+                .await;
+            app.crew.lead_context().clear();
+        }
         submit(&mut app, "/team clear");
         assert!(app.team.is_empty());
         assert!(app.agent.tools().iter().all(|tool| tool.name() != "ask"));
@@ -497,7 +523,9 @@ mod tests {
         submit(&mut app, "/team add custom_42");
         submit(&mut app, "/agent custom_42 shared task");
         idle(&mut app).await;
-        let page = app.team_runtime.inspect(None).await.unwrap();
+        let mut page = app.team_runtime.inspect(None).await.unwrap();
+        page.entries
+            .retain(|entry| matches!(entry.body, TeamBody::Task { .. }));
         assert_eq!(page.entries.len(), 2);
         assert_eq!(
             page.entries[0].author,
@@ -507,7 +535,7 @@ mod tests {
             page.entries[1].body,
             TeamBody::Task {
                 phase: TaskPhase::Succeeded,
-                task_entry: Some(1),
+                task_entry: Some(_),
                 ..
             }
         ));
@@ -564,7 +592,12 @@ mod tests {
         submit(&mut app, "/agent custom_42 private task");
         idle(&mut app).await;
         assert_eq!(
-            app.team_runtime.inspect(None).await.unwrap().entries.len(),
+            app.team_runtime
+                .read(&Participant::Lead, None)
+                .await
+                .unwrap()
+                .entries
+                .len(),
             1
         );
         let contexts = mock.contexts.lock().unwrap();

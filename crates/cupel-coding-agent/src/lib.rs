@@ -27,6 +27,7 @@ pub mod startup;
 pub mod system_prompt;
 pub mod team_conversation;
 pub mod team_runtime;
+pub mod team_scheduler;
 pub mod themes;
 pub mod tools;
 pub mod truncate;

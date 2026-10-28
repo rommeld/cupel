@@ -246,6 +246,18 @@ the lead retains bounded awareness of earlier outcomes. The log lives under
 `<session-id>/team/conversation*.jsonl`, archives with the session, and falls back
 to memory with a visible warning if persistence fails.
 
+Active teammates can themselves `ask` or `delegate` to other current members.
+Every descendant shares its root's limits: three helper levels, 16 helper calls,
+64 provider requests (including retries and summarization), and a ten-minute
+deadline. Read-only subtrees cannot acquire write access. Calls to busy helpers
+queue in order; ancestor calls and dependency cycles are rejected before waiting.
+Actual `bash`/`apply_patch` execution shares a checkout-wide write gate, released
+before any caller waits for a child. This coordination is not a filesystem sandbox.
+`/team tasks [root-id]` shows task states, parents, changes, and own versus subtree
+costs; `/team cancel <id>` stops a subtree without rolling back edits or spend.
+Interrupted tasks restore as interrupted, not runnable work. Usage checkpoints
+retain known interrupted-call spend and flag incomplete observations.
+
 Helper commands are interactive TUI features; plain mode is unchanged. Models
 are not guaranteed to delegate just because a matching helper is available.
 

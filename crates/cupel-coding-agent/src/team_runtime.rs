@@ -1,6 +1,7 @@
 //! Request-time discussion projection without changing private history or hooks.
 
 use crate::team_conversation::{Participant, TeamRuntime};
+use crate::team_scheduler::{CallContext, TeamScheduler};
 use cupel_agent::types::BeforeToolCallResult;
 use cupel_agent::{AgentHooks, AgentMessage};
 use cupel_core::types::{AssistantMessage, Message, ToolCall, ToolResultMessage};
@@ -10,27 +11,93 @@ pub struct ConversationHooks {
     inner: Arc<dyn AgentHooks>,
     team: Arc<TeamRuntime>,
     actor: Participant,
+    scope: Option<(Arc<TeamScheduler>, Arc<CallContext>)>,
 }
 
 impl ConversationHooks {
     #[must_use]
     pub fn new(inner: Arc<dyn AgentHooks>, team: Arc<TeamRuntime>, actor: Participant) -> Self {
-        Self { inner, team, actor }
+        Self {
+            inner,
+            team,
+            actor,
+            scope: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_scope(mut self, scheduler: Arc<TeamScheduler>, context: Arc<CallContext>) -> Self {
+        self.scope = Some((scheduler, context));
+        self
     }
 }
 
 #[async_trait::async_trait]
 impl AgentHooks for ConversationHooks {
+    async fn model_request_problem(&self) -> Option<String> {
+        if let Some(problem) = self.inner.model_request_problem().await {
+            return Some(problem);
+        }
+        if let Some((scheduler, context)) = &self.scope
+            && let Some(run) = context.current()
+        {
+            return match run.scope(scheduler).await {
+                Ok(scope) => scope.request_problem(),
+                Err(problem) => Some(problem),
+            };
+        }
+        None
+    }
+    fn cancellation_token(&self) -> Option<tokio_util::sync::CancellationToken> {
+        self.scope
+            .as_ref()
+            .and_then(|(_, context)| context.current())
+            .map(|run| run.cancellation_token())
+            .or_else(|| self.inner.cancellation_token())
+    }
+    async fn observe_usage(&self, usage: Option<&cupel_core::types::Usage>) {
+        self.inner.observe_usage(usage).await;
+        if let Some((scheduler, context)) = &self.scope
+            && let Some(run) = context.current()
+            && let Ok(scope) = run.scope(scheduler).await
+        {
+            scope.observe_usage(usage);
+            scheduler.publish(scope.id()).await;
+        }
+    }
     async fn request_messages(&self) -> Vec<AgentMessage> {
         let mut messages = self.inner.request_messages().await;
+        let mut projection = String::new();
+        if let Some((scheduler, context)) = &self.scope
+            && let Some(run) = context.current()
+        {
+            run.observe_start(scheduler).await;
+            match run.scope(scheduler).await {
+                Ok(scope) => projection = scope.facts(),
+                Err(problem) => self.team.warn(problem),
+            }
+        }
         match self.team.read(&self.actor, None).await {
             Ok(page) if !page.entries.is_empty() => {
-                messages.push(AgentMessage::user_text(page.render(true)));
+                projection.push('\n');
+                projection.push_str(&page.render(true));
             }
             Err(problem) if self.actor == Participant::Lead || self.team.permits(&self.actor) => {
                 self.team.warn(problem);
             }
             Ok(_) | Err(_) => {}
+        }
+        if !projection.is_empty() {
+            messages.push(AgentMessage::user_text(
+                crate::truncate::truncate_head(
+                    &projection,
+                    crate::truncate::TruncationOptions {
+                        max_lines: Some(60),
+                        max_bytes: Some(4096),
+                    },
+                )
+                .content,
+            ));
         }
         messages
     }

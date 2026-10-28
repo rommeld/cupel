@@ -344,8 +344,23 @@ fn serialize_conversation(messages: &[AgentMessage]) -> String {
 pub enum CompactionError {
     #[error("nothing to compact")]
     NothingToCompact,
-    #[error("summarization failed: {0}")]
-    SummarizationFailed(String),
+    #[error("summarization failed: {message}")]
+    SummarizationFailed {
+        message: String,
+        usage: Option<Box<cupel_core::types::Usage>>,
+    },
+    #[error("summarization refused: {0}")]
+    Refused(String),
+}
+
+impl CompactionError {
+    #[must_use]
+    pub fn usage(&self) -> Option<&cupel_core::types::Usage> {
+        match self {
+            Self::SummarizationFailed { usage, .. } => usage.as_deref(),
+            Self::NothingToCompact | Self::Refused(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -355,6 +370,7 @@ pub struct CompactionOutcome {
     pub summarized_messages: usize,
     pub pruned_tool_results: usize,
     pub summary: Option<String>,
+    pub usage: Option<cupel_core::types::Usage>,
 }
 
 /// Compact `context.messages` in place, cheapest tier first:
@@ -369,6 +385,27 @@ pub async fn compact(
     api_key: Option<String>,
     config: &CompactionConfig,
     cancel: &CancellationToken,
+) -> Result<CompactionOutcome, CompactionError> {
+    compact_with_hooks(
+        context,
+        registry,
+        model,
+        api_key,
+        config,
+        cancel,
+        &crate::types::NoHooks,
+    )
+    .await
+}
+
+pub async fn compact_with_hooks(
+    context: &mut AgentContext,
+    registry: &Arc<Registry>,
+    model: &Model,
+    api_key: Option<String>,
+    config: &CompactionConfig,
+    cancel: &CancellationToken,
+    hooks: &dyn crate::types::AgentHooks,
 ) -> Result<CompactionOutcome, CompactionError> {
     let tokens_before = estimate_context_tokens(context);
     let cut = cut_index(context, model.context_window, config)
@@ -396,6 +433,7 @@ pub async fn compact(
                 summarized_messages: 0,
                 pruned_tool_results,
                 summary: None,
+                usage: None,
             });
         }
     }
@@ -442,6 +480,14 @@ pub async fn compact(
         })],
         tools: None,
     };
+    if let Some(problem) = hooks.model_request_problem().await {
+        return Err(CompactionError::Refused(problem));
+    }
+    let api_key = tokio::select! {
+        biased;
+        () = cancel.cancelled() => return Err(CompactionError::Refused("cancelled while resolving credentials".into())),
+        key = hooks.api_key(model.provider.as_str()) => key.or(api_key),
+    };
     let options = StreamOptions {
         api_key,
         max_tokens: Some(max_tokens),
@@ -449,10 +495,26 @@ pub async fn compact(
         ..StreamOptions::default()
     };
 
-    let response = registry
+    let response = match registry
         .complete(model, summarization_context, options)
         .await
-        .map_err(|e| CompactionError::SummarizationFailed(e.to_string()))?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let usage = match &error {
+                cupel_core::error::InferenceError::Stream(
+                    cupel_core::error::MessageStreamError::ProviderError { message, .. },
+                ) => Some(message.usage.clone()),
+                _ => None,
+            };
+            hooks.observe_usage(usage.as_ref()).await;
+            return Err(CompactionError::SummarizationFailed {
+                message: error.to_string(),
+                usage: usage.map(Box::new),
+            });
+        }
+    };
+    hooks.observe_usage(Some(&response.usage)).await;
     let summary: String = response
         .content
         .iter()
@@ -463,9 +525,10 @@ pub async fn compact(
         .collect::<Vec<_>>()
         .join("\n");
     if summary.trim().is_empty() {
-        return Err(CompactionError::SummarizationFailed(
-            "summarization produced no text".to_string(),
-        ));
+        return Err(CompactionError::SummarizationFailed {
+            message: "summarization produced no text".into(),
+            usage: Some(Box::new(response.usage)),
+        });
     }
 
     // Splice the transcript
@@ -483,6 +546,7 @@ pub async fn compact(
         summarized_messages,
         pruned_tool_results,
         summary: Some(summary),
+        usage: Some(response.usage),
     })
 }
 
@@ -829,9 +893,50 @@ mod tests {
         )
         .await
         .expect_err("still over threshold - summarization attempted");
-        assert!(matches!(err, CompactionError::SummarizationFailed(_)));
+        assert!(matches!(err, CompactionError::SummarizationFailed { .. }));
         // Tier 1 still did its (kept) work before tier 2 failed.
         assert_eq!(result_text(&context.messages[1]), ELIDED_TOOL_RESULT);
+    }
+
+    struct RefuseRequests;
+    #[async_trait::async_trait]
+    impl crate::types::AgentHooks for RefuseRequests {
+        async fn model_request_problem(&self) -> Option<String> {
+            Some("budget exhausted".into())
+        }
+        async fn api_key(&self, _: &str) -> Option<String> {
+            panic!("refused requests must not refresh credentials")
+        }
+    }
+
+    #[tokio::test]
+    async fn summarization_obeys_provider_admission_before_credentials() {
+        let mut context = AgentContext {
+            system_prompt: String::new(),
+            messages: vec![
+                user(&"x".repeat(40_000)),
+                tool_result(10_000),
+                user("recent"),
+            ],
+            tools: Vec::new(),
+        };
+        let config = CompactionConfig {
+            enabled: true,
+            reserve_tokens: 1000,
+            keep_recent_tokens: 100,
+        };
+        let error = compact_with_hooks(
+            &mut context,
+            &Arc::new(Registry::new()),
+            &model_with_window(6000),
+            None,
+            &config,
+            &CancellationToken::new(),
+            &RefuseRequests,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, CompactionError::Refused(_)));
     }
 
     #[test]

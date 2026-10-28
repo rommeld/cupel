@@ -350,6 +350,8 @@ impl core::str::FromStr for SpinoffCommand {
 pub enum TeamCommand {
     List,
     Conversation(Option<u64>),
+    Tasks(Option<u64>),
+    Cancel(u64),
     Add(Vec<String>),
     Remove(Vec<String>),
     Clear,
@@ -364,6 +366,15 @@ impl core::str::FromStr for TeamCommand {
         match words.as_slice() {
             [] => Ok(Self::List),
             ["conversation"] => Ok(Self::Conversation(None)),
+            ["tasks"] => Ok(Self::Tasks(None)),
+            ["tasks", id] => id
+                .parse()
+                .map(|id| Self::Tasks(Some(id)))
+                .map_err(|error| format!("invalid task ID: {error}")),
+            ["cancel", id] => id
+                .parse()
+                .map(Self::Cancel)
+                .map_err(|error| format!("invalid task ID: {error}")),
             ["conversation", "after", id] => id
                 .parse::<u64>()
                 .map(|id| Self::Conversation(Some(id)))

@@ -161,6 +161,9 @@ async fn event_loop(
     let mut app = app::App::new(agent, meta, recorder);
     app.questions = questions;
     app.initialize_team(initialization);
+    if let Err(problem) = app.crew.recover_usage().await {
+        app.notice(problem);
+    }
     if let Some(startup) = startup {
         app.apply_startup(startup);
     }
@@ -179,6 +182,9 @@ async fn event_loop(
     let result = loop {
         // Startup prompts use the same hooks as typed prompts, before blocking.
         let app = sessions.active_mut();
+        if let Some(action) = app.pending_task_action.take() {
+            app.apply_task_action(action).await;
+        }
         if let Some(after) = app.pending_team_read.take() {
             app.read_team_conversation(after).await;
         }

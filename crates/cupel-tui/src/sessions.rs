@@ -35,6 +35,7 @@ pub struct Sessions {
     pub quit_armed: bool,
     pub conflicts: Vec<Conflict>,
     pub theme: Arc<Theme>,
+    pub checkout_gates: std::sync::Mutex<cupel_coding_agent::tools::checkout_write::CheckoutGates>,
 }
 
 /// How cupel starts again on a new release: the binary, its arguments, and what to
@@ -49,6 +50,9 @@ pub struct Restart {
 impl Sessions {
     #[must_use]
     pub fn new(mut origin: App) -> Self {
+        let mut checkout_gates =
+            cupel_coding_agent::tools::checkout_write::CheckoutGates::default();
+        origin.set_write_gate(checkout_gates.gate(Path::new(&origin.meta.cwd)));
         let theme =
             crate::theme::from_settings(&origin.themes, origin.meta.settings.theme.as_deref())
                 .unwrap_or_else(|warning| {
@@ -65,6 +69,7 @@ impl Sessions {
             quit_armed: false,
             conflicts: Vec::new(),
             theme,
+            checkout_gates: std::sync::Mutex::new(checkout_gates),
         }
     }
 
@@ -176,7 +181,13 @@ impl Sessions {
     /// put it back in its place.
     pub async fn reload(&mut self, target: ReloadTarget) {
         let Session { label, app } = self.list.remove(self.active);
-        let app = app.hot_reload(target).await;
+        let mut app = app.hot_reload(target).await;
+        let gate = self
+            .checkout_gates
+            .lock()
+            .expect("checkout gates poisoned")
+            .gate(Path::new(&app.meta.cwd));
+        app.set_write_gate(gate);
         self.list.insert(self.active, Session { label, app });
         // Show the active theme's new version after re-reading the files.
         // If its file disappeared or broke, keep the current look until a switch.
@@ -412,6 +423,12 @@ impl Sessions {
         let trust_warning = copy_trust(home.as_deref(), &origin_dir, &spinoff.path);
         let session_id = format!("cupel-{}", cupel_core::types::now_ms());
         let mut app = App::open(&spinoff.path, home, registry, carry, session_id, Vec::new()).await;
+        app.set_write_gate(
+            self.checkout_gates
+                .lock()
+                .expect("checkout gates poisoned")
+                .gate(&spinoff.path),
+        );
         app.initialize_team(crate::startup::TeamInitialization::ConfiguredDefaults);
 
         // `create` refuses a detached HEAD, so the origin has a branch.
@@ -519,6 +536,12 @@ impl Sessions {
         }
         let registry = origin.agent.registry();
         let mut app = App::open(&spinoff.path, home, registry, carry, session_id, history).await;
+        app.set_write_gate(
+            self.checkout_gates
+                .lock()
+                .expect("checkout gates poisoned")
+                .gate(&spinoff.path),
+        );
         app.initialize_team(initialization);
         for note in notes {
             app.notice(note);

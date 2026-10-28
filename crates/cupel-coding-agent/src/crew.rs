@@ -8,7 +8,7 @@ use std::io::Write as _;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use futures_util::StreamExt as _;
 use tokio_util::sync::CancellationToken;
@@ -31,6 +31,11 @@ use crate::settings::{AgentDefinition, Settings};
 use crate::system_prompt::{build_system_prompt, with_preset_prompt};
 use crate::team_conversation::{Participant, TaskPhase, TeamRuntime};
 use crate::team_runtime::ConversationHooks;
+use crate::team_scheduler::{
+    AccessScope, CallContext, CallId, CallScope, RunContext, TaskState, TaskVisibility, TeamLimits,
+    TeamScheduler,
+};
+use crate::tools::checkout_write::{CheckoutWriteTool, WriteGate};
 use crate::tools::team_conversation::{CONVERSATION_TOOL_NAMES, conversation_tools};
 use crate::truncate::{TruncationOptions, format_size, truncate_head};
 
@@ -140,10 +145,14 @@ pub struct Spend {
     pub cache_read: u64,
     pub cost: f64,
     pub calls: u32,
+    #[serde(default)]
+    pub unknown_usage: bool,
 }
 
 impl Spend {
-    fn add_usage(&mut self, usage: &Usage) {
+    pub fn add_usage(&mut self, usage: &Usage) {
+        self.unknown_usage |=
+            usage.input + usage.output + usage.cache_read + usage.cache_write == 0;
         self.input += usage.input;
         self.output += usage.output;
         self.cache_read += usage.cache_read;
@@ -156,7 +165,15 @@ impl Spend {
         self.cache_read += other.cache_read;
         self.cost += other.cost;
         self.calls += other.calls;
+        self.unknown_usage |= other.unknown_usage;
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UsageCheckpoint {
+    pub session: String,
+    pub through: Option<CallId>,
+    pub spend: BTreeMap<String, Spend>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,17 +223,48 @@ impl Reply {
 }
 
 /// Observed checkout changes, not exclusive attribution to a helper.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Changes {
     ReadOnly,
     Unknown,
     Files(Vec<String>),
+    Uncertain(Vec<String>),
+}
+
+impl Changes {
+    #[must_use]
+    pub fn merge(&self, other: &Self) -> Self {
+        let files = [self, other]
+            .into_iter()
+            .flat_map(|changes| match changes {
+                Self::Files(files) | Self::Uncertain(files) => files.as_slice(),
+                Self::ReadOnly | Self::Unknown => &[],
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if matches!(self, Self::Unknown | Self::Uncertain(_))
+            || matches!(other, Self::Unknown | Self::Uncertain(_))
+        {
+            Self::Uncertain(files)
+        } else if matches!((self, other), (Self::ReadOnly, Self::ReadOnly)) {
+            Self::ReadOnly
+        } else {
+            Self::Files(files)
+        }
+    }
 }
 
 impl core::fmt::Display for Changes {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::ReadOnly => Ok(()),
+            Self::Uncertain(files) => write!(
+                f,
+                "{}\n[additional changed files unknown]",
+                Self::Files(files.clone())
+            ),
             Self::Unknown => write!(
                 f,
                 "\n[changed files unknown: could not inspect git working tree]"
@@ -287,6 +335,7 @@ pub enum CrewError {
 
 struct HelperHooks {
     session: SessionHooks,
+    context: Arc<CallContext>,
     max_turns: Option<NonZeroU32>,
     turns: AtomicU32,
 }
@@ -326,6 +375,12 @@ pub struct Crew {
     specs: BTreeMap<String, AgentSpec>,
     setup: CrewSetup,
     team: Mutex<Option<Arc<TeamRuntime>>>,
+    owner: Mutex<Weak<Crew>>,
+    scheduler: Arc<TeamScheduler>,
+    lead_context: Arc<CallContext>,
+    write_gate: Mutex<WriteGate>,
+    checkpoint_through: Mutex<Option<CallId>>,
+    recovering: tokio::sync::Mutex<bool>,
     helpers: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<Helper>>>>,
     running: Mutex<BTreeMap<u64, (String, CancellationToken)>>,
     next_call: AtomicU64,
@@ -336,6 +391,8 @@ pub struct Crew {
 impl Crew {
     #[must_use]
     pub fn new(specs: Vec<AgentSpec>, setup: CrewSetup) -> Self {
+        let scheduler = TeamScheduler::new(TeamLimits::default());
+        scheduler.set_cwd(setup.cwd.clone());
         Self {
             specs: specs
                 .into_iter()
@@ -343,6 +400,12 @@ impl Crew {
                 .collect(),
             setup,
             team: Mutex::new(None),
+            owner: Mutex::new(Weak::new()),
+            scheduler,
+            lead_context: Arc::new(CallContext::default()),
+            write_gate: Mutex::new(Arc::new(tokio::sync::Mutex::new(()))),
+            checkpoint_through: Mutex::new(None),
+            recovering: tokio::sync::Mutex::new(false),
             helpers: Mutex::new(BTreeMap::new()),
             running: Mutex::new(BTreeMap::new()),
             next_call: AtomicU64::new(0),
@@ -356,8 +419,40 @@ impl Crew {
         self.specs.get(name)
     }
 
-    pub fn set_team_runtime(&self, team: Arc<TeamRuntime>) {
+    pub fn set_team_runtime(self: &Arc<Self>, team: Arc<TeamRuntime>) {
+        self.scheduler.attach(Arc::clone(&team));
+        *self.owner.lock().expect("crew owner poisoned") = Arc::downgrade(self);
         *self.team.lock().expect("crew team lock poisoned") = Some(team);
+    }
+
+    #[must_use]
+    pub fn with_team_limits(mut self, limits: TeamLimits) -> Self {
+        self.scheduler = TeamScheduler::new(limits);
+        self.scheduler.set_cwd(self.setup.cwd.clone());
+        self
+    }
+    #[must_use]
+    pub fn scheduler(&self) -> Arc<TeamScheduler> {
+        Arc::clone(&self.scheduler)
+    }
+    #[must_use]
+    pub fn lead_context(&self) -> Arc<CallContext> {
+        Arc::clone(&self.lead_context)
+    }
+    #[must_use]
+    pub fn write_gate(&self) -> WriteGate {
+        Arc::clone(&self.write_gate.lock().expect("write gate poisoned"))
+    }
+    pub fn set_write_gate(&self, gate: WriteGate) {
+        *self.write_gate.lock().expect("write gate poisoned") = gate;
+    }
+    #[must_use]
+    pub fn members(&self) -> BTreeSet<String> {
+        self.specs
+            .keys()
+            .filter(|name| self.shared_team(name).is_some())
+            .cloned()
+            .collect()
     }
 
     #[must_use]
@@ -414,6 +509,55 @@ impl Crew {
         *self.spend.lock().expect("crew lock poisoned") = spend;
     }
 
+    pub fn restore_checkpoint(&self, checkpoint: UsageCheckpoint) {
+        self.restore_spend(checkpoint.spend);
+        if checkpoint.session == self.setup.session_id {
+            *self.checkpoint_through.lock().expect("checkpoint poisoned") = checkpoint.through;
+            if let Some(id) = checkpoint.through {
+                self.scheduler.reserve_after(id);
+            }
+        }
+    }
+    #[must_use]
+    pub fn usage_checkpoint(&self) -> UsageCheckpoint {
+        UsageCheckpoint {
+            session: self.setup.session_id.clone(),
+            through: self
+                .scheduler
+                .snapshots()
+                .iter()
+                .map(|node| node.id)
+                .max()
+                .max(*self.checkpoint_through.lock().expect("checkpoint poisoned")),
+            spend: self.spend_snapshot(),
+        }
+    }
+    pub async fn recover_usage(&self) -> Result<(), String> {
+        let mut recovering = self.recovering.lock().await;
+        if *recovering {
+            return Ok(());
+        }
+        self.scheduler.initialize().await?;
+        let through = *self.checkpoint_through.lock().expect("checkpoint poisoned");
+        for node in self
+            .scheduler
+            .snapshots()
+            .into_iter()
+            .filter(|node| through.is_none_or(|id| node.id > id))
+        {
+            if let Participant::Helper(name) = node.actor {
+                self.spend
+                    .lock()
+                    .expect("crew lock poisoned")
+                    .entry(name)
+                    .or_default()
+                    .add(&node.usage);
+            }
+        }
+        *recovering = true;
+        Ok(())
+    }
+
     #[must_use]
     pub fn total_spend(&self) -> Spend {
         self.spend
@@ -440,6 +584,7 @@ impl Crew {
 
     /// Already-cancelled calls do not consume a second Esc intended for the lead.
     pub fn stop_running(&self) -> Vec<String> {
+        let scoped = self.scheduler.stop_helpers();
         self.running
             .lock()
             .expect("crew lock poisoned")
@@ -453,10 +598,14 @@ impl Crew {
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
+            .chain(scoped)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect()
     }
 
     pub async fn wait_for_idle(&self) {
+        self.scheduler.wait_for_idle().await;
         let helpers = self
             .helpers
             .lock()
@@ -488,6 +637,221 @@ impl Crew {
         progress: &(dyn Fn(String) + Send + Sync),
         shared: Option<Arc<TeamRuntime>>,
     ) -> Result<Reply, CrewError> {
+        let owner = self.owner.lock().expect("crew owner poisoned").upgrade();
+        if let Some(owner) = owner {
+            self.recover_usage()
+                .await
+                .map_err(|message| CrewError::Failed {
+                    name: name.into(),
+                    message,
+                    changes: Changes::ReadOnly,
+                })?;
+            let spec = self
+                .spec(name)
+                .ok_or_else(|| CrewError::Unknown(name.into()))?;
+            let scope = self
+                .scheduler
+                .root(
+                    Participant::Helper(name.into()),
+                    if spec.definition.writes() {
+                        AccessScope::CanWrite
+                    } else {
+                        AccessScope::ReadOnly
+                    },
+                    task,
+                    cancel,
+                    if shared.is_some() {
+                        TaskVisibility::Shared
+                    } else {
+                        TaskVisibility::Private
+                    },
+                )
+                .await
+                .map_err(|message| CrewError::Failed {
+                    name: name.into(),
+                    message,
+                    changes: Changes::ReadOnly,
+                })?;
+            return owner
+                .managed(scope, name.to_string(), task.to_string(), shared, progress)
+                .await;
+        }
+        self.run_legacy(name, task, cancel, progress, shared, None)
+            .await
+    }
+
+    pub async fn run_child(
+        self: &Arc<Self>,
+        parent: &CallScope,
+        name: &str,
+        task: &str,
+        access: AccessScope,
+    ) -> Result<Reply, CrewError> {
+        let spec = self
+            .spec(name)
+            .ok_or_else(|| CrewError::Unknown(name.into()))?;
+        if access == AccessScope::ReadOnly && spec.definition.writes() {
+            return Err(CrewError::Failed {
+                name: name.into(),
+                message: "a read-only subtree cannot call a writer".into(),
+                changes: Changes::ReadOnly,
+            });
+        }
+        let scope = self
+            .scheduler
+            .child(parent, name, task, access)
+            .await
+            .map_err(|message| CrewError::Failed {
+                name: name.into(),
+                message,
+                changes: Changes::ReadOnly,
+            })?;
+        self.managed(
+            scope,
+            name.into(),
+            task.into(),
+            self.shared_team(name),
+            &|_| {},
+        )
+        .await
+    }
+
+    async fn managed(
+        self: &Arc<Self>,
+        scope: CallScope,
+        name: String,
+        task: String,
+        shared: Option<Arc<TeamRuntime>>,
+        progress: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<Reply, CrewError> {
+        let (sender, receipt) = tokio::sync::oneshot::channel();
+        let (updates, mut update_events) = tokio::sync::mpsc::unbounded_channel();
+        let crew = Arc::clone(self);
+        let worker_scope = scope.clone();
+        let worker_name = name.clone();
+        // A worker owns inference, cleanup, observation and accounting even if its caller disappears.
+        tokio::spawn(async move {
+            let inner_crew = Arc::clone(&crew);
+            let inner_scope = worker_scope.clone();
+            let inner_name = worker_name.clone();
+            let worker = tokio::spawn(async move {
+                inner_crew
+                    .scheduler
+                    .acquire(&inner_scope)
+                    .await
+                    .map_err(|message| {
+                        if inner_scope.cancellation_token().is_cancelled() {
+                            CrewError::Stopped {
+                                name: inner_name.clone(),
+                                changes: Changes::ReadOnly,
+                            }
+                        } else {
+                            CrewError::Failed {
+                                name: inner_name.clone(),
+                                message,
+                                changes: Changes::ReadOnly,
+                            }
+                        }
+                    })?;
+                inner_crew
+                    .run_legacy(
+                        &inner_name,
+                        &task,
+                        inner_scope.cancellation_token(),
+                        &move |text| {
+                            let _ = updates.send(text);
+                        },
+                        shared,
+                        Some(&inner_scope),
+                    )
+                    .await
+            });
+            let result = match worker.await {
+                Ok(result) => result,
+                Err(error) => {
+                    worker_scope.cancellation_token().cancel();
+                    let helper = crew
+                        .helpers
+                        .lock()
+                        .expect("crew lock poisoned")
+                        .get(&worker_name)
+                        .cloned();
+                    if let Some(helper) = helper {
+                        helper.lock().await.agent.wait_for_idle().await;
+                    }
+                    let mut usage = worker_scope.usage();
+                    usage.unknown_usage = true;
+                    crew.spend
+                        .lock()
+                        .expect("crew lock poisoned")
+                        .entry(worker_name.clone())
+                        .or_default()
+                        .add(&usage);
+                    Err(CrewError::Failed {
+                        name: worker_name.clone(),
+                        message: format!("helper worker failed: {error}"),
+                        changes: Changes::Unknown,
+                    })
+                }
+            };
+            let (state, answer, changes) = match &result {
+                Ok(reply) => (
+                    if reply.stopped_after.is_some() {
+                        TaskState::Cancelled
+                    } else {
+                        TaskState::Succeeded
+                    },
+                    reply.answer.clone(),
+                    reply.changes.clone(),
+                ),
+                Err(error @ CrewError::Stopped { changes, .. }) => {
+                    (TaskState::Cancelled, error.to_string(), changes.clone())
+                }
+                Err(error @ CrewError::Failed { changes, .. }) => (
+                    if worker_scope.cancellation_token().is_cancelled() {
+                        TaskState::Cancelled
+                    } else {
+                        TaskState::Failed(error.to_string())
+                    },
+                    error.to_string(),
+                    changes.clone(),
+                ),
+                Err(error @ CrewError::Unknown(_)) => (
+                    TaskState::Failed(error.to_string()),
+                    error.to_string(),
+                    Changes::ReadOnly,
+                ),
+            };
+            crew.scheduler
+                .finish(&worker_scope, state, &answer, changes)
+                .await;
+            let _ = sender.send(result);
+        });
+        struct StopOnDrop(CancellationToken);
+        impl Drop for StopOnDrop {
+            fn drop(&mut self) {
+                self.0.cancel();
+            }
+        }
+        let _stop = StopOnDrop(scope.cancellation_token());
+        tokio::pin!(receipt);
+        loop {
+            tokio::select! {
+                result=&mut receipt=>return result.map_err(|error|CrewError::Failed{name,message:format!("helper supervisor stopped: {error}"),changes:Changes::Unknown})?,
+                Some(text)=update_events.recv()=>progress(text),
+            }
+        }
+    }
+
+    async fn run_legacy(
+        &self,
+        name: &str,
+        task: &str,
+        cancel: CancellationToken,
+        progress: &(dyn Fn(String) + Send + Sync),
+        shared: Option<Arc<TeamRuntime>>,
+        scope: Option<&CallScope>,
+    ) -> Result<Reply, CrewError> {
         let spec = self
             .specs
             .get(name)
@@ -516,7 +880,7 @@ impl Crew {
             }
         }
         let result = self
-            .run_call(spec, task, &stop, &mut on_duty, progress)
+            .run_call(spec, task, &stop, &mut on_duty, progress, scope)
             .await;
         if let Some(team) = shared {
             let (phase, text, changes) = match &result {
@@ -566,6 +930,7 @@ impl Crew {
         stop: &CancellationToken,
         on_duty: &mut OnDuty<'_>,
         progress: &(dyn Fn(String) + Send + Sync),
+        scope: Option<&CallScope>,
     ) -> Result<Reply, CrewError> {
         let name = spec.name.as_str();
         let stopped = || CrewError::Stopped {
@@ -593,21 +958,40 @@ impl Crew {
         if !spec.definition.remembers() {
             helper.agent.reset();
         }
+        if let Some(scope) = scope {
+            helper.hooks.context.set(RunContext::ready(scope.clone()));
+        }
         let mut tools = helper
             .agent
             .tools()
             .iter()
-            .filter(|tool| !CONVERSATION_TOOL_NAMES.contains(&tool.name()))
+            .filter(|tool| {
+                !CONVERSATION_TOOL_NAMES.contains(&tool.name())
+                    && !crate::tools::team::TEAM_TOOL_NAMES.contains(&tool.name())
+            })
             .cloned()
             .collect::<Vec<_>>();
         if let Some(team) = self.shared_team(name) {
             tools.extend(conversation_tools(&team, Participant::Helper(name.into())));
         }
+        if let Some(scope) = scope
+            && scope.visibility() == TaskVisibility::Shared
+            && let Some(owner) = self.owner.lock().expect("crew owner poisoned").upgrade()
+        {
+            tools.extend(crate::tools::team::scoped_team_tools(
+                &owner,
+                &self.members(),
+                Arc::clone(&helper.hooks.context),
+                scope.access(),
+                Some(name),
+            ));
+        }
         if tools.len() != helper.agent.tools().len()
-            || tools
-                .iter()
-                .zip(helper.agent.tools())
-                .any(|(a, b)| a.name() != b.name())
+            || tools.iter().zip(helper.agent.tools()).any(|(a, b)| {
+                a.name() != b.name()
+                    || a.description() != b.description()
+                    || a.parameters() != b.parameters()
+            })
         {
             helper.agent.set_tools(tools);
         }
@@ -664,11 +1048,19 @@ impl Crew {
                             last = Some(assistant);
                         }
                     }
+                    Some(AgentEvent::CompactionEnd{usage:Some(usage),..})=>{
+                        spend.add_usage(&usage);
+                        let note=AgentMessage::Custom{kind:"cupel.compaction-usage".into(),payload:serde_json::json!({"provider":spec.model.provider.as_str(),"model":spec.model.id,"usage":usage}),timestamp:cupel_core::types::now_ms()};
+                        helper.log.record(&note);
+                    }
                     Some(_) => {}
                 }
             }
         }
         helper.agent.wait_for_idle().await;
+        if let Some(scope) = scope {
+            spend = scope.usage();
+        }
         self.spend
             .lock()
             .expect("crew lock poisoned")
@@ -791,6 +1183,7 @@ impl Crew {
         let tools = crate::bootstrap::coding_tools(&setup.cwd)
             .into_iter()
             .filter(|tool| allows(tool.name()))
+            .map(|tool| CheckoutWriteTool::wrap(tool, &self.write_gate()))
             .collect();
         let summaries = TOOL_SUMMARIES
             .iter()
@@ -805,6 +1198,7 @@ impl Crew {
         let prompt = with_preset_prompt(&base, Some(&note));
         let (guard, _) = BashGuard::from_config(setup.home.as_deref(), &setup.cwd);
         let hooks = Arc::new(HelperHooks {
+            context: Arc::new(CallContext::default()),
             session: SessionHooks::new(
                 guard,
                 LoopKiller::new(setup.settings.loop_killer_max_repeats()),
@@ -837,11 +1231,10 @@ impl Crew {
         options.tools = tools;
         let inner = Arc::clone(&hooks) as Arc<dyn AgentHooks>;
         options.hooks = match self.team.lock().expect("crew team lock poisoned").clone() {
-            Some(team) => Arc::new(ConversationHooks::new(
-                inner,
-                team,
-                Participant::Helper(spec.name.clone()),
-            )),
+            Some(team) => Arc::new(
+                ConversationHooks::new(inner, team, Participant::Helper(spec.name.clone()))
+                    .with_scope(Arc::clone(&self.scheduler), Arc::clone(&hooks.context)),
+            ),
             None => inner,
         };
         options.thinking_level = spec.definition.preset.thinking_level.level();
@@ -887,7 +1280,7 @@ fn answer_text(message: &AssistantMessage) -> String {
         .to_string()
 }
 
-struct WorkingTree {
+pub(crate) struct WorkingTree {
     head: Option<String>,
     files: BTreeMap<String, Option<u64>>,
 }
@@ -938,12 +1331,21 @@ fn dirty_files(cwd: &Path) -> Option<WorkingTree> {
     Some(WorkingTree { head, files })
 }
 
-async fn snapshot(cwd: &Path) -> Option<WorkingTree> {
+pub(crate) async fn snapshot(cwd: &Path) -> Option<WorkingTree> {
     let cwd = cwd.to_path_buf();
     tokio::task::spawn_blocking(move || dirty_files(&cwd))
         .await
         .ok()
         .flatten()
+}
+
+pub(crate) async fn observe_changes(before: Option<WorkingTree>, cwd: &Path) -> Changes {
+    match (before, snapshot(cwd).await) {
+        (Some(before), Some(after)) if before.head == after.head => {
+            Changes::Files(changed(&before.files, &after.files))
+        }
+        _ => Changes::Unknown,
+    }
 }
 
 fn changed(
@@ -992,6 +1394,7 @@ mod tests {
         Long,
         WriteFail,
         WriteHang,
+        Nested,
     }
 
     struct Mock {
@@ -1024,6 +1427,14 @@ mod tests {
             tokio::spawn(async move {
                 let _ = sink.start();
                 let (content, stop) = match step {
+                    Step::Nested if call == 1 => (
+                        vec![AssistantContent::ToolCall(ToolCall {
+                            id: "child-1".into(),
+                            name: "ask".into(),
+                            arguments: serde_json::json!({"agent":"leaf","task":"find the answer"}),
+                        })],
+                        StopReason::ToolUse,
+                    ),
                     Step::Long => (
                         vec![AssistantContent::Text(TextContent::plain(
                             "long line\n".repeat(400),
@@ -1043,7 +1454,7 @@ mod tests {
                         signal.cancelled().await;
                         (Vec::new(), StopReason::Aborted)
                     }
-                    Step::Say => (
+                    Step::Say | Step::Nested => (
                         vec![AssistantContent::Text(TextContent::plain("answer"))],
                         StopReason::Stop,
                     ),
@@ -1375,6 +1786,150 @@ mod tests {
                 )
             );
         }
+    }
+
+    fn scoped_crew(step: Step, limits: TeamLimits) -> (Arc<Crew>, Arc<Mock>) {
+        let (mut crew, mock) = crew(step, serde_json::json!({}));
+        let inner = Arc::get_mut(&mut crew).unwrap();
+        inner.scheduler = TeamScheduler::new(limits);
+        inner.specs.get_mut("scout").unwrap().definition.description = Some("Finds answers".into());
+        let mut leaf = inner.specs["scout"].clone();
+        leaf.name = "leaf".into();
+        inner.specs.insert("leaf".into(), leaf);
+        let (team, _) = TeamRuntime::new(None);
+        team.set_members(["scout".into(), "leaf".into()].into_iter().collect());
+        crew.set_team_runtime(team);
+        (crew, mock)
+    }
+
+    #[tokio::test]
+    async fn helpers_can_delegate_with_shared_budgets_and_own_usage() {
+        let (crew, mock) = scoped_crew(Step::Nested, TeamLimits::default());
+        let reply = crew
+            .run(
+                "scout",
+                "integrate the answer",
+                CancellationToken::new(),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply.answer, "answer");
+        assert_eq!(mock.contexts.lock().unwrap().len(), 3);
+        assert_eq!(crew.spend_of("scout").input, 20);
+        assert_eq!(crew.spend_of("leaf").input, 10);
+        assert_eq!(crew.total_spend().input, 30);
+        assert_eq!(crew.total_spend().calls, 2);
+        let nodes = crew.scheduler.snapshots();
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes.iter().all(|node| node.state.terminal()));
+        let child = nodes.iter().find(|node| node.parent.is_some()).unwrap();
+        assert_eq!(child.root, nodes[0].id);
+        assert_eq!(child.access, AccessScope::ReadOnly);
+    }
+
+    #[tokio::test]
+    async fn recursive_provider_budget_stops_further_requests() {
+        let (crew, mock) = scoped_crew(
+            Step::Nested,
+            TeamLimits {
+                requests: 2,
+                ..TeamLimits::default()
+            },
+        );
+        let error = crew
+            .run("scout", "integrate", CancellationToken::new(), &|_| {})
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("provider-request budget"));
+        assert_eq!(mock.contexts.lock().unwrap().len(), 2);
+        assert_eq!(crew.total_spend().input, 20);
+        assert!(
+            crew.scheduler
+                .snapshots()
+                .iter()
+                .all(|node| node.state.terminal())
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_workers_finish_accounting_after_the_caller_is_dropped() {
+        let (crew, mock) = scoped_crew(Step::Hang, TeamLimits::default());
+        let call = spawn(&crew);
+        started(&mock, 1).await;
+        call.abort();
+        assert!(call.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(5), crew.wait_for_idle())
+            .await
+            .unwrap();
+        assert_eq!(crew.total_spend().input, 10);
+        assert_eq!(crew.total_spend().calls, 1);
+        assert!(
+            crew.scheduler
+                .snapshots()
+                .iter()
+                .all(|node| node.state.terminal())
+        );
+        let weak = Arc::downgrade(&crew);
+        drop(crew);
+        assert!(
+            weak.upgrade().is_none(),
+            "recursive tool ownership must not cycle back to the crew"
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoints_recover_unfinished_usage_without_double_counting_settled_calls() {
+        let (crew, _) = scoped_crew(Step::Nested, TeamLimits::default());
+        crew.run("scout", "integrate", CancellationToken::new(), &|_| {})
+            .await
+            .unwrap();
+        let checkpoint = crew.usage_checkpoint();
+        let scope = crew
+            .scheduler
+            .root(
+                Participant::Helper("scout".into()),
+                AccessScope::ReadOnly,
+                "unfinished",
+                CancellationToken::new(),
+                TaskVisibility::Shared,
+            )
+            .await
+            .unwrap();
+        crew.scheduler.acquire(&scope).await.unwrap();
+        assert!(scope.request_problem().is_none());
+        scope.observe_usage(Some(&Usage {
+            input: 12,
+            output: 3,
+            ..Usage::default()
+        }));
+        crew.scheduler.publish(scope.id()).await;
+        let resumed = Arc::new(Crew::new(
+            crew.specs().cloned().collect(),
+            CrewSetup {
+                cwd: crew.setup.cwd.clone(),
+                home: None,
+                registry: Arc::clone(&crew.setup.registry),
+                settings: crew.setup.settings.clone(),
+                context_files: Vec::new(),
+                session_id: crew.setup.session_id.clone(),
+            },
+        ));
+        resumed.set_team_runtime(crew.shared_team("scout").unwrap());
+        resumed.restore_checkpoint(checkpoint);
+        resumed.recover_usage().await.unwrap();
+        resumed.recover_usage().await.unwrap();
+        assert_eq!(resumed.total_spend().input, 42);
+        assert!(resumed.spend_of("scout").unknown_usage);
+        assert!(!resumed.is_built("scout"));
+        crew.scheduler
+            .finish(
+                &scope,
+                TaskState::Cancelled,
+                "interrupted",
+                Changes::Unknown,
+            )
+            .await;
     }
 
     #[test]

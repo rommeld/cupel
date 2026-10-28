@@ -2370,6 +2370,7 @@ pub(crate) mod tests {
             tokens_after: 12_000,
             error: None,
             summary: None,
+            usage: None,
             messages: Vec::new(),
         }))
         .await;
@@ -2499,6 +2500,7 @@ pub(crate) mod tests {
             tokens_after: 12_000,
             error: None,
             summary: Some("## Goal\nfix the retry backoff".into()),
+            usage: None,
             messages: Vec::new(),
         }))
         .await;

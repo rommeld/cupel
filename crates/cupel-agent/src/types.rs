@@ -166,6 +166,13 @@ pub struct AgentLoopConfig {
 /// so implementors override only what they need.
 #[async_trait::async_trait]
 pub trait AgentHooks: Send + Sync {
+    async fn model_request_problem(&self) -> Option<String> {
+        None
+    }
+    fn cancellation_token(&self) -> Option<CancellationToken> {
+        None
+    }
+    async fn observe_usage(&self, _usage: Option<&cupel_core::types::Usage>) {}
     /// Transient, budgeted request data; never persisted or compacted into history.
     async fn request_messages(&self) -> Vec<AgentMessage> {
         Vec::new()
@@ -271,6 +278,7 @@ pub enum AgentEvent {
         tokens_after: u64,
         error: Option<String>,
         summary: Option<String>,
+        usage: Option<cupel_core::types::Usage>,
         /// Effective context, including any pruning retained on failure.
         /// Replaces the agent's messages; does not rewrite the session log.
         messages: Vec<AgentMessage>,

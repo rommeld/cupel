@@ -100,6 +100,41 @@ impl cupel_agent::AgentHooks for ProjectionHooks {
     }
 }
 
+struct RequestBudget(std::sync::atomic::AtomicUsize);
+#[async_trait::async_trait]
+impl cupel_agent::AgentHooks for RequestBudget {
+    async fn model_request_problem(&self) -> Option<String> {
+        (self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0)
+            .then(|| "request budget exhausted".into())
+    }
+}
+
+#[tokio::test]
+async fn request_admission_stops_inference_before_another_provider_call() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = Registry::new();
+    registry.register(Arc::new(CapturingProvider {
+        contexts: Arc::clone(&contexts),
+    }));
+    let mut options = AgentOptions::new(mock_model(), Arc::new(registry));
+    options.hooks = Arc::new(RequestBudget(std::sync::atomic::AtomicUsize::new(0)));
+    let mut agent = Agent::new(options);
+    for _ in 0..2 {
+        let mut events = agent.prompt_text("task").unwrap();
+        while events.next().await.is_some() {}
+        agent.wait_for_idle().await;
+    }
+    assert_eq!(contexts.lock().unwrap().len(), 1);
+    assert!(
+        agent
+            .state()
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("budget exhausted")
+    );
+}
+
 #[tokio::test]
 async fn request_projection_reaches_provider_without_accumulating_in_history() {
     let contexts = Arc::new(Mutex::new(Vec::new()));

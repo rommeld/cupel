@@ -562,6 +562,15 @@ struct RunHooks {
 
 #[async_trait::async_trait]
 impl AgentHooks for RunHooks {
+    async fn model_request_problem(&self) -> Option<String> {
+        self.inner.model_request_problem().await
+    }
+    fn cancellation_token(&self) -> Option<CancellationToken> {
+        self.inner.cancellation_token()
+    }
+    async fn observe_usage(&self, usage: Option<&cupel_core::types::Usage>) {
+        self.inner.observe_usage(usage).await;
+    }
     async fn request_messages(&self) -> Vec<AgentMessage> {
         self.inner.request_messages().await
     }

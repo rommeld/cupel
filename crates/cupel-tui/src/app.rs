@@ -22,7 +22,9 @@ use cupel_coding_agent::team_conversation::{
     EntryReceipt, Participant, TaskPhase, TeamRuntime, TeamUpdate,
 };
 use cupel_coding_agent::team_runtime::ConversationHooks;
+use cupel_coding_agent::team_scheduler::{AccessScope, RunContext, TaskState};
 use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
+use cupel_coding_agent::tools::checkout_write::{CheckoutWriteTool, WriteGate};
 use cupel_coding_agent::tools::team::{TEAM_TOOL_NAMES, team_tools};
 use cupel_coding_agent::tools::team_conversation::{CONVERSATION_TOOL_NAMES, conversation_tools};
 use cupel_coding_agent::usage::{HistoryUsage, UsageByModel, UsageTotals};
@@ -99,6 +101,8 @@ pub struct App {
     pub team_seen: u64,
     pub lead_team_entry: Option<EntryReceipt>,
     pub base_hooks: Arc<dyn cupel_agent::AgentHooks>,
+    pub base_tools: Vec<Arc<dyn cupel_agent::AgentTool>>,
+    pub pending_task_action: Option<TaskAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +128,11 @@ impl Drop for HelperRun {
 pub enum HelperEvent {
     Progress(String),
     Done(Result<Reply, CrewError>),
+}
+
+pub enum TaskAction {
+    Inspect(Option<u64>),
+    Cancel(u64),
 }
 
 const HELPER_SPEND_KIND: &str = "cupel.helper-spend";
@@ -347,11 +356,22 @@ impl App {
         let (team_runtime, team_events) = TeamRuntime::new(path);
         crew.set_team_runtime(Arc::clone(&team_runtime));
         let base_hooks = agent.hooks();
-        agent.set_hooks(Arc::new(ConversationHooks::new(
-            Arc::clone(&base_hooks),
-            Arc::clone(&team_runtime),
-            Participant::Lead,
-        )));
+        let base_tools = agent.tools().to_vec();
+        agent.set_tools(
+            base_tools
+                .iter()
+                .cloned()
+                .map(|tool| CheckoutWriteTool::wrap(tool, &crew.write_gate()))
+                .collect(),
+        );
+        agent.set_hooks(Arc::new(
+            ConversationHooks::new(
+                Arc::clone(&base_hooks),
+                Arc::clone(&team_runtime),
+                Participant::Lead,
+            )
+            .with_scope(crew.scheduler(), crew.lead_context()),
+        ));
         // `/hot-reload <id>` completes from the transcripts on disk. Only
         // file stems are read (no parsing) App::new must stay fast.
         let session_candidates: Vec<Candidate> = recorder
@@ -372,13 +392,18 @@ impl App {
         // Restored history (a --resume session) exists before the App does;
         // snapshot it so the transcript can replay it as cells.
         let history = agent.state().messages;
-        if let Some(spend) = history.iter().rev().find_map(|message| match message {
+        if let Some(payload) = history.iter().rev().find_map(|message| match message {
             AgentMessage::Custom { kind, payload, .. } if kind == HELPER_SPEND_KIND => {
-                serde_json::from_value(payload.clone()).ok()
+                Some(payload.clone())
             }
             _ => None,
         }) {
-            crew.restore_spend(spend);
+            if let Ok(checkpoint) = serde_json::from_value::<crew::UsageCheckpoint>(payload.clone())
+            {
+                crew.restore_checkpoint(checkpoint);
+            } else if let Ok(spend) = serde_json::from_value(payload) {
+                crew.restore_spend(spend);
+            }
         }
         let mut app = Self {
             agent,
@@ -434,6 +459,8 @@ impl App {
             team_seen: 0,
             lead_team_entry: None,
             base_hooks,
+            base_tools,
+            pending_task_action: None,
         };
         if let Some(names) = history.iter().rev().find_map(|message| match message {
             AgentMessage::Custom { kind, payload, .. } if kind == TEAM_KIND => Some(
@@ -588,6 +615,16 @@ impl App {
                     );
                 }
                 // Custom messages are internal bookkeeping, not display.
+                AgentMessage::Custom { kind, payload, .. } if kind == "cupel.compaction-usage" => {
+                    if let (Some(provider), Some(model), Ok(usage)) = (
+                        payload["provider"].as_str(),
+                        payload["model"].as_str(),
+                        serde_json::from_value(payload["usage"].clone()),
+                    ) {
+                        self.usage_by_model.record_usage(provider, model, &usage);
+                        self.totals = self.usage_by_model.totals();
+                    }
+                }
                 AgentMessage::Custom { .. } => {}
             }
         }
@@ -1014,16 +1051,20 @@ impl App {
         app.team_events = self.team_events;
         app.team_seen = self.team_seen;
         app.crew.set_team_runtime(Arc::clone(&app.team_runtime));
-        app.agent.set_hooks(Arc::new(ConversationHooks::new(
-            Arc::clone(&app.base_hooks),
-            Arc::clone(&app.team_runtime),
-            Participant::Lead,
-        )));
+        app.agent.set_hooks(Arc::new(
+            ConversationHooks::new(
+                Arc::clone(&app.base_hooks),
+                Arc::clone(&app.team_runtime),
+                Participant::Lead,
+            )
+            .with_scope(app.crew.scheduler(), app.crew.lead_context()),
+        ));
+        app.set_write_gate(self.crew.write_gate());
         app.questions = ingredients.questions;
         app.crew.remember_keys(&self.session_keys);
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
-        app.crew.restore_spend(self.crew.spend_snapshot());
+        app.crew.restore_checkpoint(self.crew.usage_checkpoint());
         app.restore_team(self.team.into_iter().collect());
         app.initial_team_pending = self.initial_team_pending;
         if let Some(message) = delta_message {
@@ -1398,6 +1439,18 @@ impl App {
                 }
             }
             self.recorder.on_queued_prompt(text);
+            if self.run_events.is_some()
+                && self.crew.lead_context().current().is_some()
+                && let Err(problem) = self.team_runtime.task(
+                    Participant::User,
+                    TaskPhase::Started,
+                    None,
+                    text,
+                    "accepted user update within the active root",
+                )
+            {
+                self.notice(problem);
+            }
         } else {
             // Not started here: the event loop takes it via
             // `take_pending_prompt`, awaits the prompt-path hooks
@@ -1413,6 +1466,7 @@ impl App {
     /// Start the agent run for a prompt (the async half of `send`).
     pub fn start_run(&mut self, text: &str) {
         self.flush_initial_team();
+        self.prepare_team_root(text);
         if !self.team.is_empty() {
             match self
                 .team_runtime
@@ -1439,6 +1493,32 @@ impl App {
     }
 
     /// A run started: keep its events, start its clock, and wait for the model.
+    fn prepare_team_root(&self, text: &str) {
+        let context = self.crew.lead_context();
+        if self.team.is_empty() {
+            context.clear();
+        } else {
+            context.set(RunContext::root(
+                Participant::Lead,
+                AccessScope::CanWrite,
+                text.into(),
+                CancellationToken::new(),
+            ));
+        }
+    }
+
+    pub fn set_write_gate(&mut self, gate: WriteGate) {
+        self.crew.set_write_gate(Arc::clone(&gate));
+        self.agent.set_tools(
+            self.base_tools
+                .iter()
+                .cloned()
+                .map(|tool| CheckoutWriteTool::wrap(tool, &gate))
+                .collect(),
+        );
+        self.apply_team();
+    }
+
     fn begin_run(&mut self, events: AgentEventStream) {
         self.run_events = Some(events);
         self.run_started = Some(Instant::now());
@@ -1878,6 +1958,14 @@ impl App {
                 self.pending_team_read = Some(after);
                 return;
             }
+            commands::TeamCommand::Tasks(root) => {
+                self.pending_task_action = Some(TaskAction::Inspect(root));
+                return;
+            }
+            commands::TeamCommand::Cancel(id) => {
+                self.pending_task_action = Some(TaskAction::Cancel(id));
+                return;
+            }
             commands::TeamCommand::Add(names) => {
                 for name in names {
                     if let Some(problem) = crew::team_member_problem(&self.crew, &name) {
@@ -2106,7 +2194,7 @@ impl App {
         }
         let message = AgentMessage::Custom {
             kind: HELPER_SPEND_KIND.into(),
-            payload: serde_json::json!(spend),
+            payload: serde_json::json!(self.crew.usage_checkpoint()),
             timestamp: cupel_core::types::now_ms(),
         };
         self.recorder.record(&message);
@@ -2606,8 +2694,22 @@ impl App {
                 tokens_after,
                 error,
                 summary,
+                usage,
                 ..
             } => {
+                if let Some(usage) = usage {
+                    let model = self.agent.state().model;
+                    self.usage_by_model
+                        .record_usage(model.provider.as_str(), &model.id, &usage);
+                    self.totals = self.usage_by_model.totals();
+                    let message = AgentMessage::Custom {
+                        kind: "cupel.compaction-usage".into(),
+                        payload: serde_json::json!({"provider":model.provider.as_str(),"model":model.id,"usage":usage}),
+                        timestamp: cupel_core::types::now_ms(),
+                    };
+                    self.recorder.record(&message);
+                    self.agent.push_message(message);
+                }
                 let text = match error {
                     None => {
                         self.context_tokens = tokens_after;
@@ -2666,6 +2768,55 @@ impl App {
         self.recorder.on_agent_end();
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
+        if let Some(run) = self.crew.lead_context().current() {
+            match run.scope(&self.crew.scheduler()).await {
+                Ok(scope) => {
+                    let answer = self
+                        .agent
+                        .state()
+                        .messages
+                        .iter()
+                        .rev()
+                        .find_map(|message| match message {
+                            AgentMessage::Llm(Message::Assistant(assistant)) => {
+                                Some(assistant.error_message.clone().unwrap_or_else(|| {
+                                    assistant
+                                        .content
+                                        .iter()
+                                        .filter_map(|part| match part {
+                                            AssistantContent::Text(text) => {
+                                                Some(text.text.as_str())
+                                            }
+                                            _ => None,
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                }))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| "lead ended without a final message".into());
+                    let changes = run
+                        .observed_changes(std::path::Path::new(&self.meta.cwd))
+                        .await;
+                    self.crew
+                        .scheduler()
+                        .finish(
+                            &scope,
+                            match self.last_answer {
+                                Status::Cancelled => TaskState::Cancelled,
+                                Status::Failed => TaskState::Failed("lead failed".into()),
+                                _ => TaskState::Succeeded,
+                            },
+                            &answer,
+                            changes,
+                        )
+                        .await;
+                }
+                Err(problem) => self.notice(problem),
+            }
+            self.crew.lead_context().clear();
+        }
         self.run_finished = true;
         if let Some(receipt) = self.lead_team_entry.take() {
             let start = match self.team_runtime.receive(receipt).await {
@@ -2732,6 +2883,34 @@ impl App {
         }
     }
 
+    pub async fn apply_task_action(&mut self, action: TaskAction) {
+        let scheduler = self.crew.scheduler();
+        if let Err(problem) = scheduler.initialize().await {
+            self.notice(problem);
+            return;
+        }
+        match action {
+            TaskAction::Inspect(root) => {
+                let text =
+                    scheduler.describe_root(root.map(cupel_coding_agent::team_scheduler::CallId));
+                self.notice(if text.is_empty() {
+                    "no recorded team tasks".into()
+                } else {
+                    text
+                });
+            }
+            TaskAction::Cancel(id) => match scheduler
+                .cancel(cupel_coding_agent::team_scheduler::CallId(id))
+                .await
+            {
+                Ok(()) => self.notice(format!(
+                    "cancelling task {id}; edits and incurred spend remain"
+                )),
+                Err(problem) => self.notice(problem),
+            },
+        }
+    }
+
     fn on_team_update(&mut self, event: Option<TeamUpdate>) {
         match event {
             Some(TeamUpdate::Entry(entry)) if entry.id > self.team_seen => {
@@ -2761,6 +2940,7 @@ impl App {
             Some(steering)
         };
         if let Some(messages) = next {
+            self.prepare_team_root("queued prompt");
             match self.agent.prompt(messages) {
                 Ok(events) => self.begin_run(events),
                 Err(err) => {

@@ -71,6 +71,11 @@ pub async fn agent_loop(
     cancel: CancellationToken,
     sink: AgentEventSink,
 ) -> Vec<AgentMessage> {
+    let cancel = cancel.child_token();
+    let _bridge = CancellationBridge(hooks.cancellation_token().map(|scoped| {
+        let cancel = cancel.clone();
+        tokio::spawn(async move { tokio::select! { () = scoped.cancelled() => cancel.cancel(), () = cancel.cancelled() => {} } })
+    }));
     let mut new_messages: Vec<AgentMessage> = prompts.clone();
     context.messages.extend(prompts.iter().cloned());
 
@@ -95,6 +100,15 @@ pub async fn agent_loop(
         messages: new_messages.clone(),
     });
     new_messages
+}
+
+struct CancellationBridge(Option<tokio::task::JoinHandle<()>>);
+impl Drop for CancellationBridge {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.0 {
+            handle.abort();
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -401,19 +415,16 @@ async fn run_compaction(
     }
 
     sink.emit(AgentEvent::CompactionStart { reason });
-    let api_key = hooks
-        .api_key(config.model.provider.as_str())
-        .await
-        .or_else(|| config.api_key.clone());
     let tokens_before = compaction::estimate_context_tokens(context);
 
-    match compaction::compact(
+    match compaction::compact_with_hooks(
         context,
         registry,
         &config.model,
-        api_key,
+        config.api_key.clone(),
         &config.compaction,
         cancel,
+        hooks.as_ref(),
     )
     .await
     {
@@ -431,6 +442,7 @@ async fn run_compaction(
                 tokens_after: outcome.tokens_after,
                 error: None,
                 summary: outcome.summary,
+                usage: outcome.usage,
                 messages: context.messages.clone(),
             });
             true
@@ -442,6 +454,7 @@ async fn run_compaction(
                 tokens_after: compaction::estimate_context_tokens(context),
                 error: Some(err.to_string()),
                 summary: None,
+                usage: err.usage().cloned(),
                 messages: context.messages.clone(),
             });
             false
@@ -484,6 +497,11 @@ async fn stream_assistant_response(
     sink: &AgentEventSink,
     request_messages: &[AgentMessage],
 ) -> AssistantMessage {
+    if let Some(problem) = hooks.model_request_problem().await {
+        let message = error_assistant_message(config, &InferenceError::Config(problem));
+        emit_final_message(context, sink, message.clone(), false);
+        return message;
+    }
     // AgentMessage[] -> (transform hook) -> convert -> Message[]
     let mut transformed = hooks.transform_context(context.messages.clone()).await;
     if !request_messages.is_empty() {
@@ -509,10 +527,15 @@ async fn stream_assistant_response(
     };
 
     // Resolve the API key fresh for every call (expiring OAuth tokens).
-    let api_key = hooks
-        .api_key(config.model.provider.as_str())
-        .await
-        .or_else(|| config.api_key.clone());
+    let api_key = tokio::select! {
+        biased;
+        () = cancel.cancelled() => {
+            let message = error_assistant_message(config, &InferenceError::Aborted);
+            emit_final_message(context, sink, message.clone(), false);
+            return message;
+        }
+        key = hooks.api_key(config.model.provider.as_str()) => key.or_else(|| config.api_key.clone()),
+    };
 
     let options = StreamOptions {
         temperature: config.temperature,
@@ -579,6 +602,7 @@ async fn stream_assistant_response(
             &InferenceError::Stream(MessageStreamError::ClosedBeforeTerminalEvent),
         )
     });
+    hooks.observe_usage(Some(&message.usage)).await;
     emit_final_message(context, sink, message.clone(), started);
     message
 }
