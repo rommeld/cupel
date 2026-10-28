@@ -91,6 +91,40 @@ fn seed_messages() -> Vec<AgentMessage> {
     vec![user, assistant]
 }
 
+struct ProjectionHooks;
+
+#[async_trait::async_trait]
+impl cupel_agent::AgentHooks for ProjectionHooks {
+    async fn request_messages(&self) -> Vec<AgentMessage> {
+        vec![AgentMessage::user_text("TRANSIENT_TEAM_WINDOW")]
+    }
+}
+
+#[tokio::test]
+async fn request_projection_reaches_provider_without_accumulating_in_history() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = Registry::new();
+    registry.register(Arc::new(CapturingProvider {
+        contexts: Arc::clone(&contexts),
+    }));
+    let mut options = AgentOptions::new(mock_model(), Arc::new(registry));
+    options.hooks = Arc::new(ProjectionHooks);
+    let mut agent = Agent::new(options);
+    for _ in 0..3 {
+        let mut events = agent.prompt_text("question").unwrap();
+        while events.next().await.is_some() {}
+        agent.wait_for_idle().await;
+    }
+    let contexts = contexts.lock().unwrap();
+    for context in &*contexts {
+        let count = context.messages.iter().filter(|message| matches!(message,
+            Message::User(user) if matches!(&user.content, cupel_core::types::UserContentBody::Text(text) if text == "TRANSIENT_TEAM_WINDOW")
+        )).count();
+        assert_eq!(count, 1, "one immutable window per request");
+    }
+    assert_eq!(agent.state().messages.len(), 6);
+}
+
 #[tokio::test]
 async fn seeded_messages_reach_the_provider_and_survive_in_state() {
     let contexts = Arc::new(Mutex::new(Vec::new()));

@@ -166,6 +166,11 @@ pub struct AgentLoopConfig {
 /// so implementors override only what they need.
 #[async_trait::async_trait]
 pub trait AgentHooks: Send + Sync {
+    /// Transient, budgeted request data; never persisted or compacted into history.
+    async fn request_messages(&self) -> Vec<AgentMessage> {
+        Vec::new()
+    }
+
     /// Convert agent messages to LLM messages before each provider call.
     /// The default keeps LLM messages and drops custom ones.
     async fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<Message> {

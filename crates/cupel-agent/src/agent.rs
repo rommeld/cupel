@@ -177,6 +177,15 @@ impl Agent {
         &self.tools
     }
 
+    #[must_use]
+    pub fn hooks(&self) -> Arc<dyn AgentHooks> {
+        Arc::clone(&self.hooks)
+    }
+
+    pub fn set_hooks(&mut self, hooks: Arc<dyn AgentHooks>) {
+        self.hooks = hooks;
+    }
+
     /// Changes apply to the next run and invalidate the prior usage anchor.
     pub fn set_tools(&mut self, tools: Vec<Arc<dyn AgentTool>>) {
         self.tools = tools;
@@ -553,6 +562,10 @@ struct RunHooks {
 
 #[async_trait::async_trait]
 impl AgentHooks for RunHooks {
+    async fn request_messages(&self) -> Vec<AgentMessage> {
+        self.inner.request_messages().await
+    }
+
     async fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<Message> {
         self.inner.convert_to_llm(messages).await
     }

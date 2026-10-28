@@ -146,12 +146,22 @@ async fn run_loop(
 
             // Compact before the request that would overflow, not after it
             // fails: cheaper (no wasted request) and invisible to the model.
-            let estimate = compaction::estimate_context_tokens(&context);
+            let request_messages = hooks.request_messages().await;
+            let estimate = compaction::estimate_request_tokens(&context, &request_messages);
+            let mut private_config = config.clone();
+            if config.model.context_window > 0 {
+                let reserved: u64 = request_messages
+                    .iter()
+                    .map(compaction::estimate_message_tokens)
+                    .sum();
+                private_config.model.context_window =
+                    config.model.context_window.saturating_sub(reserved).max(1);
+            }
             if compaction::should_compact(estimate, config.model.context_window, &config.compaction)
             {
                 run_compaction(
                     &mut context,
-                    &config,
+                    &private_config,
                     &hooks,
                     &registry,
                     &cancel,
@@ -167,9 +177,16 @@ async fn run_loop(
             // still stops everything) but can also be cancelled alone. Steering does
             // that, and the run goes on.
             let turn = cancel.child_token();
-            let message =
-                stream_assistant_response(&mut context, &config, &hooks, &registry, &turn, sink)
-                    .await;
+            let message = stream_assistant_response(
+                &mut context,
+                &config,
+                &hooks,
+                &registry,
+                &turn,
+                sink,
+                &request_messages,
+            )
+            .await;
             new_messages.push(AgentMessage::Llm(Message::Assistant(message.clone())));
 
             // Steering cut this reply short. The partial reply stays in the transcript
@@ -215,7 +232,7 @@ async fn run_loop(
                 {
                     let compacted = run_compaction(
                         &mut context,
-                        &config,
+                        &private_config,
                         &hooks,
                         &registry,
                         &cancel,
@@ -465,9 +482,14 @@ async fn stream_assistant_response(
     registry: &Registry,
     cancel: &CancellationToken,
     sink: &AgentEventSink,
+    request_messages: &[AgentMessage],
 ) -> AssistantMessage {
     // AgentMessage[] -> (transform hook) -> convert -> Message[]
-    let transformed = hooks.transform_context(context.messages.clone()).await;
+    let mut transformed = hooks.transform_context(context.messages.clone()).await;
+    if !request_messages.is_empty() {
+        compaction::invalidate_usage_anchors(&mut transformed);
+    }
+    transformed.extend_from_slice(request_messages);
     let llm_messages = hooks.convert_to_llm(&transformed).await;
 
     let llm_context = Context {

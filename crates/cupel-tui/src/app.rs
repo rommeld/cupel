@@ -18,8 +18,13 @@ use cupel_coding_agent::modes::SessionMeta;
 use cupel_coding_agent::program_status::{BlockedKind, State as ProgramState};
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
+use cupel_coding_agent::team_conversation::{
+    EntryReceipt, Participant, TaskPhase, TeamRuntime, TeamUpdate,
+};
+use cupel_coding_agent::team_runtime::ConversationHooks;
 use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
 use cupel_coding_agent::tools::team::{TEAM_TOOL_NAMES, team_tools};
+use cupel_coding_agent::tools::team_conversation::{CONVERSATION_TOOL_NAMES, conversation_tools};
 use cupel_coding_agent::usage::{HistoryUsage, UsageByModel, UsageTotals};
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
@@ -88,6 +93,12 @@ pub struct App {
     pub routes: std::collections::BTreeMap<String, String>,
     pub team: std::collections::BTreeSet<String>,
     pub initial_team_pending: bool,
+    pub team_runtime: Arc<TeamRuntime>,
+    pub team_events: Option<tokio::sync::mpsc::UnboundedReceiver<TeamUpdate>>,
+    pub pending_team_read: Option<Option<u64>>,
+    pub team_seen: u64,
+    pub lead_team_entry: Option<EntryReceipt>,
+    pub base_hooks: Arc<dyn cupel_agent::AgentHooks>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +112,7 @@ pub struct HelperRun {
     pub cell_id: String,
     pub events: tokio::sync::mpsc::UnboundedReceiver<HelperEvent>,
     pub cancel: CancellationToken,
+    pub shared: bool,
 }
 
 impl Drop for HelperRun {
@@ -190,6 +202,7 @@ pub enum AppEvent {
     Question(Option<PendingQuestion>),
     Usage(Result<HistoryUsage, tokio::task::JoinError>),
     Helper(Option<HelperEvent>),
+    Team(Option<TeamUpdate>),
 }
 
 /// What `/new` or `/hot-reload` asked for.
@@ -210,7 +223,7 @@ pub enum ThemeRequest {
 
 impl App {
     #[must_use]
-    pub fn new(agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
+    pub fn new(mut agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
         let mut command_candidates: Vec<Candidate> = commands::BUILTIN_COMMANDS
             .iter()
             .map(|c| Candidate {
@@ -327,6 +340,18 @@ impl App {
             })
             .collect();
         let (routes, route_warnings) = crew::routes(&meta.settings, &crew, &meta.templates);
+        let path = recorder.sessions_dir().map(|dir| {
+            dir.join(recorder.session_id())
+                .join("team/conversation.jsonl")
+        });
+        let (team_runtime, team_events) = TeamRuntime::new(path);
+        crew.set_team_runtime(Arc::clone(&team_runtime));
+        let base_hooks = agent.hooks();
+        agent.set_hooks(Arc::new(ConversationHooks::new(
+            Arc::clone(&base_hooks),
+            Arc::clone(&team_runtime),
+            Participant::Lead,
+        )));
         // `/hot-reload <id>` completes from the transcripts on disk. Only
         // file stems are read (no parsing) App::new must stay fast.
         let session_candidates: Vec<Candidate> = recorder
@@ -403,6 +428,12 @@ impl App {
             routes,
             team: std::collections::BTreeSet::new(),
             initial_team_pending: false,
+            team_runtime,
+            team_events: Some(team_events),
+            pending_team_read: None,
+            team_seen: 0,
+            lead_team_entry: None,
+            base_hooks,
         };
         if let Some(names) = history.iter().rev().find_map(|message| match message {
             AgentMessage::Custom { kind, payload, .. } if kind == TEAM_KIND => Some(
@@ -979,6 +1010,15 @@ impl App {
         // The session continues: retain its open transcript, started state,
         // and pending hook chain rather than creating a fresh recorder.
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, self.recorder);
+        app.team_runtime = self.team_runtime;
+        app.team_events = self.team_events;
+        app.team_seen = self.team_seen;
+        app.crew.set_team_runtime(Arc::clone(&app.team_runtime));
+        app.agent.set_hooks(Arc::new(ConversationHooks::new(
+            Arc::clone(&app.base_hooks),
+            Arc::clone(&app.team_runtime),
+            Participant::Lead,
+        )));
         app.questions = ingredients.questions;
         app.crew.remember_keys(&self.session_keys);
         app.session_keys = self.session_keys;
@@ -1373,6 +1413,15 @@ impl App {
     /// Start the agent run for a prompt (the async half of `send`).
     pub fn start_run(&mut self, text: &str) {
         self.flush_initial_team();
+        if !self.team.is_empty() {
+            match self
+                .team_runtime
+                .task(Participant::User, TaskPhase::Started, None, text, "")
+            {
+                Ok(receipt) => self.lead_team_entry = Some(receipt),
+                Err(problem) => self.notice(problem),
+            }
+        }
         // The task leads the turn. `start_run`is the single funnel every
         // prompt goes through (typed prompts, expanded templates, /review bundles).
         self.transcript.cells.push(Cell::User {
@@ -1825,6 +1874,10 @@ impl App {
                 self.list_team();
                 return;
             }
+            commands::TeamCommand::Conversation(after) => {
+                self.pending_team_read = Some(after);
+                return;
+            }
             commands::TeamCommand::Add(names) => {
                 for name in names {
                     if let Some(problem) = crew::team_member_problem(&self.crew, &name) {
@@ -1865,14 +1918,19 @@ impl App {
     }
 
     fn apply_team(&mut self) {
+        self.team_runtime.set_members(self.team.clone());
         let mut tools = self
             .agent
             .tools()
             .iter()
-            .filter(|tool| !TEAM_TOOL_NAMES.contains(&tool.name()))
+            .filter(|tool| {
+                !TEAM_TOOL_NAMES.contains(&tool.name())
+                    && !CONVERSATION_TOOL_NAMES.contains(&tool.name())
+            })
             .cloned()
             .collect::<Vec<_>>();
         tools.extend(team_tools(&self.crew, &self.team));
+        tools.extend(conversation_tools(&self.team_runtime, Participant::Lead));
         self.agent.set_tools(tools);
     }
 
@@ -1927,12 +1985,16 @@ impl App {
         let run_cancel = cancel.clone();
         let crew = Arc::clone(&self.crew);
         let (name, task) = (call.name.clone(), call.task.clone());
+        let shared_team = self.crew.shared_team(&call.name);
+        let shared = shared_team.is_some();
         tokio::spawn(async move {
             let progress_sender = sender.clone();
             let progress = move |lines| {
                 let _ = progress_sender.send(HelperEvent::Progress(lines));
             };
-            let result = crew.run(&name, &task, run_cancel, &progress).await;
+            let result = crew
+                .run_with_team(&name, &task, run_cancel, &progress, shared_team)
+                .await;
             let _ = sender.send(HelperEvent::Done(result));
         });
         self.run_started = Some(Instant::now());
@@ -1942,6 +2004,7 @@ impl App {
             cell_id,
             events,
             cancel,
+            shared,
         });
     }
 
@@ -1994,8 +2057,10 @@ impl App {
                     ),
                 });
                 let note = AgentMessage::user_text(crew::exchange_note(&run.call.task, &reply));
-                self.recorder.record(&note);
-                self.agent.push_message(note);
+                if !run.shared {
+                    self.recorder.record(&note);
+                    self.agent.push_message(note);
+                }
                 self.last_answer = Status::Done;
             }
             Err(error) => {
@@ -2014,8 +2079,10 @@ impl App {
                     run.call.name,
                     error
                 ));
-                self.recorder.record(&note);
-                self.agent.push_message(note);
+                if !run.shared {
+                    self.recorder.record(&note);
+                    self.agent.push_message(note);
+                }
                 if matches!(error, CrewError::Stopped { .. }) {
                     self.last_answer = Status::Cancelled;
                     self.notice(error.to_string());
@@ -2375,7 +2442,9 @@ impl App {
         let questions = &mut self.questions;
         let usage_popup = &mut self.usage_popup;
         let helper = &mut self.helper;
+        let team_events = &mut self.team_events;
         tokio::select! {
+            event = async { match team_events { Some(events) => events.recv().await, None => std::future::pending().await } } => AppEvent::Team(event),
             event = async {
                 match helper {
                     Some(run) => run.events.recv().await,
@@ -2411,6 +2480,7 @@ impl App {
 
     pub async fn on_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::Team(event) => self.on_team_update(event),
             AppEvent::Agent(event) => self.on_agent_event(event).await,
             AppEvent::Login(event) => self.on_login_event(event),
             AppEvent::Helper(event) => self.on_helper_event(event),
@@ -2597,8 +2667,83 @@ impl App {
         // Joins the (already finished) run tasks so state flags settle.
         self.agent.wait_for_idle().await;
         self.run_finished = true;
+        if let Some(receipt) = self.lead_team_entry.take() {
+            let start = match self.team_runtime.receive(receipt).await {
+                Ok(entry) => Some(entry.id),
+                Err(problem) => {
+                    self.notice(problem);
+                    None
+                }
+            };
+            let state = self.agent.state();
+            let last = state
+                .messages
+                .iter()
+                .rev()
+                .find_map(|message| match message {
+                    AgentMessage::Llm(Message::Assistant(message)) => Some(message),
+                    _ => None,
+                });
+            let (phase, text) = match last {
+                Some(message) => {
+                    let phase = match message.stop_reason {
+                        StopReason::Aborted | StopReason::Length => TaskPhase::Stopped,
+                        StopReason::Error => TaskPhase::Failed,
+                        _ => TaskPhase::Succeeded,
+                    };
+                    let text = message.error_message.clone().unwrap_or_else(|| {
+                        message
+                            .content
+                            .iter()
+                            .filter_map(|part| match part {
+                                AssistantContent::Text(text) => Some(text.text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    });
+                    (phase, text)
+                }
+                None => (
+                    TaskPhase::Failed,
+                    "lead ended without a final message".into(),
+                ),
+            };
+            match self
+                .team_runtime
+                .task(Participant::Lead, phase, start, &text, "")
+            {
+                Ok(receipt) => {
+                    if let Err(problem) = self.team_runtime.receive(receipt).await {
+                        self.notice(problem);
+                    }
+                }
+                Err(problem) => self.notice(problem),
+            }
+        }
         self.record_helper_spend();
         self.start_waiting();
+    }
+
+    pub async fn read_team_conversation(&mut self, after: Option<u64>) {
+        match self.team_runtime.inspect(after).await {
+            Ok(page) => self.notice(page.render(after.is_none())),
+            Err(problem) => self.notice(problem),
+        }
+    }
+
+    fn on_team_update(&mut self, event: Option<TeamUpdate>) {
+        match event {
+            Some(TeamUpdate::Entry(entry)) if entry.id > self.team_seen => {
+                self.team_seen = entry.id;
+                self.transcript.cells.push(Cell::Team {
+                    text: entry.display(),
+                });
+            }
+            Some(TeamUpdate::Warning(problem)) => self.notice(problem),
+            Some(TeamUpdate::Entry(_)) => {}
+            None => self.team_events = None,
+        }
     }
 
     fn start_waiting(&mut self) {

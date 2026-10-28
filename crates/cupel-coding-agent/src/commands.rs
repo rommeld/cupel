@@ -349,6 +349,7 @@ impl core::str::FromStr for SpinoffCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TeamCommand {
     List,
+    Conversation(Option<u64>),
     Add(Vec<String>),
     Remove(Vec<String>),
     Clear,
@@ -362,6 +363,11 @@ impl core::str::FromStr for TeamCommand {
         let owned = |names: &[&str]| names.iter().map(|name| (*name).to_string()).collect();
         match words.as_slice() {
             [] => Ok(Self::List),
+            ["conversation"] => Ok(Self::Conversation(None)),
+            ["conversation", "after", id] => id
+                .parse::<u64>()
+                .map(|id| Self::Conversation(Some(id)))
+                .map_err(|error| format!("invalid conversation entry ID: {error}")),
             ["add", names @ ..] if !names.is_empty() => Ok(Self::Add(owned(names))),
             ["remove", names @ ..] if !names.is_empty() => Ok(Self::Remove(owned(names))),
             ["clear"] => Ok(Self::Clear),

@@ -25,6 +25,8 @@ pub mod settings;
 pub mod spinoff;
 pub mod startup;
 pub mod system_prompt;
+pub mod team_conversation;
+pub mod team_runtime;
 pub mod themes;
 pub mod tools;
 pub mod truncate;

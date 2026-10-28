@@ -151,6 +151,9 @@ impl AgentTool for TeamTool {
             )
             .into());
         }
+        if self.crew.shared_team(&call.agent).is_none() {
+            return Err(format!("{} is no longer on the current team", call.agent).into());
+        }
         let progress = |lines| {
             if let Some(update) = &on_update {
                 update(AgentToolResult::text(lines));

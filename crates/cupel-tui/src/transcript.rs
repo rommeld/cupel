@@ -64,6 +64,9 @@ pub enum Cell {
         name: String,
         text: String,
     },
+    Team {
+        text: String,
+    },
 }
 
 pub struct ToolOutcome {
@@ -246,7 +249,8 @@ impl Transcript {
             | Cell::Notice { text }
             | Cell::Usage { text }
             | Cell::Summary { text }
-            | Cell::Agent { text, .. } => Some(text),
+            | Cell::Agent { text, .. }
+            | Cell::Team { text } => Some(text),
             Cell::Tool { .. } => None,
         }
     }
@@ -290,6 +294,9 @@ fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         Cell::Agent { name, text } => {
             push_wrapped(&mut out, &format!("{name}:"), width, theme.tool_header);
             out.extend(crate::markdown::render(text, width, theme.answer, theme));
+        }
+        Cell::Team { text } => {
+            out.extend(crate::markdown::render(text, width, theme.notice, theme));
         }
         Cell::Tool { .. } => out.extend(tool_lines(cell, width, theme)),
     }

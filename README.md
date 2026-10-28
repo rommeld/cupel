@@ -233,6 +233,19 @@ when persistence is available. `/team` shows helper spend; the footer and the
 `/usage` helper breakdown include incurred helper usage, even from failed calls.
 The existing model-table popup remains the lead's current-session table.
 
+The team shares an ordered, persistent discussion, not private system prompts,
+thinking, or raw tool histories. `team_read` pages through it; `team_post` posts
+or replies without waking another model. `/team conversation [after <id>]`
+inspects it in the UI. Runtime-assigned authors and task references identify
+each contribution. Posts are limited to 30 lines/1 KB; request-time snapshots
+are bounded to 60 lines/4 KB and never accumulate in private histories.
+On-team outcomes use this thread instead of duplicate legacy exchange notes;
+off-team direct calls remain private to the caller and lead. Removed members
+immediately lose thread tools. Clearing membership does not erase the discussion:
+the lead retains bounded awareness of earlier outcomes. The log lives under
+`<session-id>/team/conversation*.jsonl`, archives with the session, and falls back
+to memory with a visible warning if persistence fails.
+
 Helper commands are interactive TUI features; plain mode is unchanged. Models
 are not guaranteed to delegate just because a matching helper is available.
 

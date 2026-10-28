@@ -489,4 +489,92 @@ mod tests {
         restored.initialize_team(TeamInitialization::ConfiguredDefaults);
         assert!(restored.team.is_empty());
     }
+
+    #[tokio::test]
+    async fn on_team_results_use_the_thread_once_and_remain_visible_after_clear() {
+        use cupel_coding_agent::team_conversation::{Participant, TaskPhase, TeamBody};
+        let (mut app, mock) = app();
+        submit(&mut app, "/team add custom_42");
+        submit(&mut app, "/agent custom_42 shared task");
+        idle(&mut app).await;
+        let page = app.team_runtime.inspect(None).await.unwrap();
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(
+            page.entries[0].author,
+            Participant::Helper("custom_42".into())
+        );
+        assert!(matches!(
+            page.entries[1].body,
+            TeamBody::Task {
+                phase: TaskPhase::Succeeded,
+                task_entry: Some(1),
+                ..
+            }
+        ));
+        assert!(!app.agent.state().messages.iter().any(|message| matches!(message, cupel_agent::AgentMessage::Llm(Message::User(user)) if matches!(&user.content, UserContentBody::Text(text) if text.starts_with("[agent exchange]")))));
+        {
+            let contexts = mock.contexts.lock().unwrap();
+            let tools = contexts[0].tools.as_ref().unwrap();
+            assert!(tools.iter().any(|tool| tool.name == "team_post"));
+            assert!(tools.iter().any(|tool| tool.name == "team_read"));
+        }
+        submit(&mut app, "/team clear");
+        app.start_run("what did the helper find?");
+        idle(&mut app).await;
+        let contexts = mock.contexts.lock().unwrap();
+        assert!(contexts[1].messages.iter().any(|message| matches!(message, Message::User(user) if matches!(&user.content, UserContentBody::Text(text) if text.contains("Shared team conversation") && text.contains("shared task")))));
+        assert!(
+            contexts[1]
+                .tools
+                .iter()
+                .flatten()
+                .all(|tool| tool.name != "team_post")
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_posting_is_not_a_scheduler_and_removed_ask_tools_are_revoked() {
+        use cupel_coding_agent::team_conversation::Participant;
+        let (mut app, mock) = app();
+        submit(&mut app, "/team add custom_42");
+        let ask = Arc::clone(
+            app.agent
+                .tools()
+                .iter()
+                .find(|tool| tool.name() == "ask")
+                .unwrap(),
+        );
+        app.team_runtime
+            .post(Participant::Lead, "an attributed finding".into(), None)
+            .await
+            .unwrap();
+        assert!(mock.contexts.lock().unwrap().is_empty());
+        assert!(!app.crew.is_built("custom_42"));
+        submit(&mut app, "/team clear");
+        assert!(
+            ask.execute(
+                "removed",
+                serde_json::json!({"agent":"custom_42","task":"task"}),
+                tokio_util::sync::CancellationToken::new(),
+                None
+            )
+            .await
+            .is_err()
+        );
+        submit(&mut app, "/agent custom_42 private task");
+        idle(&mut app).await;
+        assert_eq!(
+            app.team_runtime.inspect(None).await.unwrap().entries.len(),
+            1
+        );
+        let contexts = mock.contexts.lock().unwrap();
+        assert!(
+            contexts[0]
+                .tools
+                .iter()
+                .flatten()
+                .all(|tool| !["team_post", "team_read"].contains(&tool.name.as_str()))
+        );
+        assert!(contexts[0].messages.iter().all(|message| !matches!(message, Message::User(user) if matches!(&user.content, UserContentBody::Text(text) if text.contains("attributed finding")))));
+    }
 }

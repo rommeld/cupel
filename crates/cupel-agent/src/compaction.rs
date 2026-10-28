@@ -61,7 +61,7 @@ impl CompactionConfig {
 const CHARS_PER_TOKEN: u64 = 4;
 const ESTIMATED_IMAGE_CHARS: u64 = 4800;
 
-fn estimate_message_tokens(message: &AgentMessage) -> u64 {
+pub(crate) fn estimate_message_tokens(message: &AgentMessage) -> u64 {
     let chars: u64 = match message {
         AgentMessage::Custom { payload, .. } => payload.to_string().len() as u64,
         AgentMessage::Llm(Message::User(user)) => match &user.content {
@@ -149,6 +149,17 @@ pub(crate) fn invalidate_usage_anchors(messages: &mut [AgentMessage]) {
             assistant.usage = cupel_core::types::Usage::default();
         }
     }
+}
+
+/// Old provider usage includes an older projection; do not count it twice.
+pub(crate) fn estimate_request_tokens(context: &AgentContext, extra: &[AgentMessage]) -> u64 {
+    if extra.is_empty() {
+        return estimate_context_tokens(context);
+    }
+    let mut request = context.clone();
+    invalidate_usage_anchors(&mut request.messages);
+    request.messages.extend_from_slice(extra);
+    estimate_context_tokens(&request)
 }
 
 /// Should this context be compacted before the next request?

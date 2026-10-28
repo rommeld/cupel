@@ -29,6 +29,9 @@ use crate::resources::ContextFile;
 use crate::session::SessionRecorder;
 use crate::settings::{AgentDefinition, Settings};
 use crate::system_prompt::{build_system_prompt, with_preset_prompt};
+use crate::team_conversation::{Participant, TaskPhase, TeamRuntime};
+use crate::team_runtime::ConversationHooks;
+use crate::tools::team_conversation::{CONVERSATION_TOOL_NAMES, conversation_tools};
 use crate::truncate::{TruncationOptions, format_size, truncate_head};
 
 /// A configured helper whose model exists in the catalog.
@@ -322,6 +325,7 @@ struct Helper {
 pub struct Crew {
     specs: BTreeMap<String, AgentSpec>,
     setup: CrewSetup,
+    team: Mutex<Option<Arc<TeamRuntime>>>,
     helpers: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<Helper>>>>,
     running: Mutex<BTreeMap<u64, (String, CancellationToken)>>,
     next_call: AtomicU64,
@@ -338,6 +342,7 @@ impl Crew {
                 .map(|spec| (spec.name.clone(), spec))
                 .collect(),
             setup,
+            team: Mutex::new(None),
             helpers: Mutex::new(BTreeMap::new()),
             running: Mutex::new(BTreeMap::new()),
             next_call: AtomicU64::new(0),
@@ -349,6 +354,19 @@ impl Crew {
     #[must_use]
     pub fn spec(&self, name: &str) -> Option<&AgentSpec> {
         self.specs.get(name)
+    }
+
+    pub fn set_team_runtime(&self, team: Arc<TeamRuntime>) {
+        *self.team.lock().expect("crew team lock poisoned") = Some(team);
+    }
+
+    #[must_use]
+    pub fn shared_team(&self, name: &str) -> Option<Arc<TeamRuntime>> {
+        self.team
+            .lock()
+            .expect("crew team lock poisoned")
+            .clone()
+            .filter(|team| team.contains_member(name))
     }
 
     pub fn specs(&self) -> impl Iterator<Item = &AgentSpec> {
@@ -458,6 +476,18 @@ impl Crew {
         cancel: CancellationToken,
         progress: &(dyn Fn(String) + Send + Sync),
     ) -> Result<Reply, CrewError> {
+        self.run_with_team(name, task, cancel, progress, self.shared_team(name))
+            .await
+    }
+
+    pub async fn run_with_team(
+        &self,
+        name: &str,
+        task: &str,
+        cancel: CancellationToken,
+        progress: &(dyn Fn(String) + Send + Sync),
+        shared: Option<Arc<TeamRuntime>>,
+    ) -> Result<Reply, CrewError> {
         let spec = self
             .specs
             .get(name)
@@ -473,6 +503,71 @@ impl Crew {
             id,
             agent_stop: None,
         };
+        let _active = shared.as_ref().map(|team| team.enter(name));
+        let actor = Participant::Helper(name.into());
+        let mut start = None;
+        if let Some(team) = &shared {
+            match team.task(actor.clone(), TaskPhase::Started, None, task, "") {
+                Ok(receipt) => match team.receive(receipt).await {
+                    Ok(entry) => start = Some(entry.id),
+                    Err(problem) => team.warn(problem),
+                },
+                Err(problem) => team.warn(problem),
+            }
+        }
+        let result = self
+            .run_call(spec, task, &stop, &mut on_duty, progress)
+            .await;
+        if let Some(team) = shared {
+            let (phase, text, changes) = match &result {
+                Ok(reply) => (
+                    if reply.stopped_after.is_some() {
+                        TaskPhase::Stopped
+                    } else {
+                        TaskPhase::Succeeded
+                    },
+                    reply.stopped_after.map_or_else(
+                        || reply.answer.clone(),
+                        |turns| {
+                            format!(
+                                "[maxTurns: stopped after {turns} turns before finishing]\n{}",
+                                reply.answer
+                            )
+                        },
+                    ),
+                    reply.changes.to_string(),
+                ),
+                Err(error @ CrewError::Stopped { changes, .. }) => {
+                    (TaskPhase::Stopped, error.to_string(), changes.to_string())
+                }
+                Err(error @ CrewError::Failed { changes, .. }) => {
+                    (TaskPhase::Failed, error.to_string(), changes.to_string())
+                }
+                Err(error @ CrewError::Unknown(_)) => {
+                    (TaskPhase::Failed, error.to_string(), String::new())
+                }
+            };
+            match team.task(actor, phase, start, &text, &changes) {
+                Ok(receipt) => {
+                    if let Err(problem) = team.receive(receipt).await {
+                        team.warn(problem);
+                    }
+                }
+                Err(problem) => team.warn(problem),
+            }
+        }
+        result
+    }
+
+    async fn run_call(
+        &self,
+        spec: &AgentSpec,
+        task: &str,
+        stop: &CancellationToken,
+        on_duty: &mut OnDuty<'_>,
+        progress: &(dyn Fn(String) + Send + Sync),
+    ) -> Result<Reply, CrewError> {
+        let name = spec.name.as_str();
         let stopped = || CrewError::Stopped {
             name: name.into(),
             changes: Changes::ReadOnly,
@@ -497,6 +592,24 @@ impl Crew {
         }
         if !spec.definition.remembers() {
             helper.agent.reset();
+        }
+        let mut tools = helper
+            .agent
+            .tools()
+            .iter()
+            .filter(|tool| !CONVERSATION_TOOL_NAMES.contains(&tool.name()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Some(team) = self.shared_team(name) {
+            tools.extend(conversation_tools(&team, Participant::Helper(name.into())));
+        }
+        if tools.len() != helper.agent.tools().len()
+            || tools
+                .iter()
+                .zip(helper.agent.tools())
+                .any(|(a, b)| a.name() != b.name())
+        {
+            helper.agent.set_tools(tools);
         }
         helper.hooks.turns.store(0, Ordering::SeqCst);
         helper
@@ -686,7 +799,7 @@ impl Crew {
             .collect::<Vec<_>>();
         let base = build_system_prompt(&setup.cwd, &summaries, &setup.context_files);
         let note = format!(
-            "You are {}, a helper agent. The lead agent or the user gives you one task at a time. Work on it with your tools, then end with a complete, concise answer, with file paths and line numbers where they help.",
+            "You are {}, a helper agent. The lead agent or the user gives you one task at a time. Work on it with your tools, then end with a complete, concise answer, with file paths and line numbers where they help. When team_read/team_post are available, discuss findings with current teammates. The shared discussion is visible; their private histories are not. Posting alone never runs another agent.",
             spec.name
         );
         let prompt = with_preset_prompt(&base, Some(&note));
@@ -722,7 +835,15 @@ impl Crew {
         options.system_prompt =
             with_preset_prompt(&prompt, spec.definition.preset.prompt.as_deref());
         options.tools = tools;
-        options.hooks = Arc::clone(&hooks) as Arc<dyn AgentHooks>;
+        let inner = Arc::clone(&hooks) as Arc<dyn AgentHooks>;
+        options.hooks = match self.team.lock().expect("crew team lock poisoned").clone() {
+            Some(team) => Arc::new(ConversationHooks::new(
+                inner,
+                team,
+                Participant::Helper(spec.name.clone()),
+            )),
+            None => inner,
+        };
         options.thinking_level = spec.definition.preset.thinking_level.level();
         options.tool_execution = ToolExecutionMode::Parallel;
         options.session_id = Some(format!("{}/{}", setup.session_id, spec.name));

@@ -179,6 +179,9 @@ async fn event_loop(
     let result = loop {
         // Startup prompts use the same hooks as typed prompts, before blocking.
         let app = sessions.active_mut();
+        if let Some(after) = app.pending_team_read.take() {
+            app.read_team_conversation(after).await;
+        }
         if let Some(prompt) = app.pending_prompt.take() {
             app.recorder.before_prompt(&prompt).await;
             app.start_run(&prompt);
