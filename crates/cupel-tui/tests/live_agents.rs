@@ -54,14 +54,19 @@ mod tests {
             app.recorder.before_prompt(&prompt).await;
             app.start_run(&prompt);
         }
-        tokio::time::timeout(Duration::from_secs(120), async {
+        let finished = tokio::time::timeout(Duration::from_secs(120), async {
             while app.is_running() {
                 let event = app.next_event().await;
                 app.on_event(event).await;
             }
         })
-        .await
-        .expect("live provider did not finish within two minutes");
+        .await;
+        assert!(
+            finished.is_ok(),
+            "live run did not finish:\n{}\n{}",
+            transcript(app),
+            app.crew.scheduler().describe()
+        );
         assert_ne!(app.last_answer, Status::Failed, "{}", transcript(app));
     }
 
@@ -71,6 +76,7 @@ mod tests {
             .iter()
             .filter_map(|cell| match cell {
                 Cell::Agent { text, .. }
+                | Cell::Assistant { text }
                 | Cell::Answer { text }
                 | Cell::Error { text }
                 | Cell::Notice { text } => Some(text.as_str()),
@@ -156,8 +162,20 @@ mod tests {
             bootstrap::load(&cwd, Some(home.clone()), &registry, Frontend::Tui).await;
         // Bound each request, independently of provider catalog output limits.
         for model in &mut ingredients.models {
-            model.max_tokens = model.max_tokens.min(1024);
+            // MiniMax's low thinking budget is 1024; max_tokens must exceed it.
+            model.max_tokens = model.max_tokens.min(4096);
         }
+        let bounded_models = ingredients
+            .models
+            .iter()
+            .filter(|model| model.provider.as_str() == "fireworks")
+            .cloned()
+            .collect::<Vec<_>>();
+        std::fs::write(
+            home.join("models.json"),
+            serde_json::to_vec(&bounded_models).unwrap(),
+        )
+        .unwrap();
         let model = ingredients
             .models
             .iter()
@@ -171,7 +189,7 @@ mod tests {
         options.hooks = Arc::new(ingredients.hooks);
         options.tool_execution = ToolExecutionMode::Parallel;
         options.thinking_level = None;
-        options.max_tokens = Some(1024);
+        options.max_tokens = Some(4096);
         let meta = SessionMeta {
             model_name: model.name,
             provider: "fireworks".into(),
@@ -192,6 +210,16 @@ mod tests {
         );
         app.questions = ingredients.questions;
         app.initialize_team(TeamInitialization::ConfiguredDefaults);
+        if std::env::var("CUPEL_LIVE_EXTENDED_ONLY").as_deref() == Ok("1") {
+            submit(&mut app, "/team add map-reader diff-auditor");
+            expanded(&mut app, &settings_path, &settings, &cwd).await;
+            let totals = app.session_totals();
+            println!(
+                "Expanded Fireworks usage: {} input, {} output, {} cached, ${:.6}",
+                totals.input, totals.output, totals.cache_read, totals.cost
+            );
+            return;
+        }
         assert!(app.meta.warnings.is_empty());
         submit(&mut app, "/team");
         assert!(!app.crew.is_built("map-reader"));
@@ -274,7 +302,7 @@ mod tests {
 
         submit(
             &mut app,
-            "Use delegate to ask diff-auditor to run exactly: echo started > waiting.txt; sleep 90. This cancellation test needs that bash command, not a simulated sleep. Do nothing else until its tool returns.",
+            "Use delegate to ask diff-auditor to run exactly: echo started > waiting.txt; sleep 90. This cancellation test needs that bash command, not a simulated sleep. Do nothing else until its tool returns. If it is stopped, the cancellation is intentional: never retry, never run its command yourself, and respond only 'cancellation acknowledged'.",
         );
         if let Some(prompt) = app.pending_prompt.take() {
             app.recorder.before_prompt(&prompt).await;
@@ -282,8 +310,10 @@ mod tests {
         }
         tokio::time::timeout(Duration::from_secs(120), async {
             while !cwd.join("waiting.txt").exists() {
-                let event = app.next_event().await;
-                app.on_event(event).await;
+                tokio::select! {
+                    event=app.next_event()=>app.on_event(event).await,
+                    ()=tokio::time::sleep(Duration::from_millis(20))=>{},
+                }
             }
         })
         .await
@@ -322,10 +352,15 @@ mod tests {
             app.agent.registry(),
         );
         options.messages = messages;
+        options.api_key = Some(key.clone());
+        options.system_prompt = app.meta.base_system_prompt.clone();
+        options.tools = bootstrap::coding_tools(&cwd);
+        options.tool_execution = ToolExecutionMode::Parallel;
+        options.max_tokens = Some(4096);
         let mut resumed = App::new(
             Agent::new(options),
             app.meta,
-            SessionRecorder::new(Some(home), &cwd, "live-m8", &model.id),
+            SessionRecorder::new(Some(home.clone()), &cwd, "live-m8", &model.id),
         );
         resumed.initialize_team(TeamInitialization::Restore);
         assert_eq!(resumed.team.len(), 2);
@@ -342,6 +377,8 @@ mod tests {
         let total = resumed.session_totals();
         assert!(total.input > resumed.totals.input);
         println!("PASS lazy resume, helper memory, team and spend restoration");
+        expanded(&mut resumed, &settings_path, &settings, &cwd).await;
+        let total = resumed.session_totals();
         let helpers = resumed.crew.total_spend();
         println!(
             "Fireworks helpers: {} calls, {} input, {} output, {} cached, ${:.6}",
@@ -350,6 +387,297 @@ mod tests {
         println!(
             "Fireworks combined: {} input, {} output, {} cached, ${:.6}",
             total.input, total.output, total.cache_read, total.cost
+        );
+        let fresh = resumed.hot_reload(ReloadTarget::New).await;
+        assert!(
+            fresh
+                .team_runtime
+                .inspect(None)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        assert!(fresh.agent.state().messages.is_empty());
+        let directory = fresh.recorder.sessions_dir().unwrap();
+        assert!(
+            !directory
+                .join(format!("{}.jsonl", fresh.recorder.session_id()))
+                .exists()
+        );
+        assert!(!directory.join(fresh.recorder.session_id()).exists());
+        println!("PASS fresh-session discussion isolation and trace-free listing");
+    }
+
+    async fn reload(app: &mut App, settings_path: &Path, settings: &serde_json::Value) {
+        std::fs::write(settings_path, settings.to_string()).unwrap();
+        assert!(!app.is_running());
+        // App consumes itself on reload; use an independently constructed placeholder
+        // only to satisfy ownership. It has no credentials, history or running work.
+        let model = app.meta.models[0].clone();
+        let placeholder = App::new(
+            Agent::new(AgentOptions::new(model.clone(), app.agent.registry())),
+            SessionMeta {
+                model_name: model.name,
+                provider: model.provider.as_str().into(),
+                cwd: app.meta.cwd.clone(),
+                templates: Vec::new(),
+                models: Vec::new(),
+                settings: cupel_coding_agent::settings::Settings::default(),
+                home: None,
+                startup_warning: None,
+                warnings: Vec::new(),
+                context_files: Vec::new(),
+                base_system_prompt: String::new(),
+            },
+            SessionRecorder::new(None, Path::new(&app.meta.cwd), "unused", "unused"),
+        );
+        let old = std::mem::replace(app, placeholder);
+        *app = old.hot_reload(ReloadTarget::Current).await;
+    }
+
+    async fn expanded(
+        app: &mut App,
+        settings_path: &Path,
+        original: &serde_json::Value,
+        cwd: &Path,
+    ) {
+        use cupel_coding_agent::roles::Role;
+        use cupel_coding_agent::team_conversation::{Participant, TeamBody};
+        use cupel_coding_agent::team_scheduler::{AccessScope, RunContext, TaskState};
+        use cupel_tui::app::TaskAction;
+        let mut settings = original.clone();
+        settings.as_object_mut().unwrap().remove("agentCommands");
+        // Baseline already verifies remembered history. Extension scenarios use a
+        // fresh private writer history so old cancellation instructions do not
+        // steer a new, unrelated live-test task.
+        settings["agents"]["diff-auditor"]["remember"] = false.into();
+        reload(app, settings_path, &settings).await;
+        submit(app, "/team roles");
+        assert!(!app.crew.is_built("diff-auditor"));
+        assert!(!app.crew.is_built("map-reader"));
+        assert!(transcript(app).contains("review: diff-auditor"));
+        submit(app, "/review src/lib.rs");
+        idle(app).await;
+        assert!(app.crew.scheduler().snapshots().iter().any(|task| {
+            task.selection.as_ref().is_some_and(|selection| {
+                selection.role == Role::Review && selection.agent == "diff-auditor"
+            })
+        }));
+        let calls = app.crew.spend_of("diff-auditor").calls;
+        app.apply_startup(cupel_tui::startup::StartupCommand::Review);
+        idle(app).await;
+        assert_eq!(app.crew.spend_of("diff-auditor").calls, calls + 1);
+        println!("PASS discovered /review and typed startup --review with no explicit mapping");
+
+        settings["agents"]["change-lens"] = serde_json::json!({"provider":"fireworks","model":"accounts/fireworks/models/minimax-m3p1-flash","thinkingLevel":"off","description":"Reviews source changes and reports correctness findings.","prompt":"Live verification fixture: after reading the requested source file, always publish exactly one team_post with text REVIEW_OK before returning your answer. Never edit files.","maxTurns":4,"remember":false});
+        settings["agents"]["shell-worker"] = serde_json::json!({"provider":"fireworks","model":"accounts/fireworks/models/minimax-m3p1-flash","thinkingLevel":"off","description":"Implements explicitly requested shell tasks in the disposable checkout.","tools":["bash"],"maxTurns":3,"remember":false});
+        reload(app, settings_path, &settings).await;
+        submit(app, "/team add change-lens shell-worker");
+        submit(
+            app,
+            "/agent diff-auditor This is an end-to-end teamwork test. First use team_post to post the question 'Please review src/lib.rs'. Then use ask with role=review to assign this exact task to another teammate: 'Read src/lib.rs. Use team_post to post REVIEW_OK with a concise finding, then return REVIEW_OK. Do not edit files.' Finally integrate the child's answer and post your conclusion using team_post. Do not substitute your own review for the child call.",
+        );
+        idle(app).await;
+        let nodes = app.crew.scheduler().snapshots();
+        assert!(
+            nodes.iter().any(|task| task.parent.is_some()
+                && task.actor == Participant::Helper("change-lens".into())
+                && task
+                    .selection
+                    .as_ref()
+                    .is_some_and(|selection| selection.role == Role::Review)),
+            "writer did not make the required nested role call"
+        );
+        let page = app.team_runtime.inspect(None).await.unwrap();
+        for name in ["diff-auditor", "change-lens"] {
+            assert!(
+                page.entries
+                    .iter()
+                    .any(|entry| entry.author == Participant::Helper(name.into())
+                        && matches!(&entry.body, TeamBody::Post { .. })),
+                "missing attributed post for {name}: {}\n{}",
+                transcript(app),
+                app.crew.scheduler().describe()
+            );
+        }
+        assert!(transcript(app).contains("REVIEW_OK"));
+        submit(
+            app,
+            "What exact review marker did the team just post? Answer from the shared conversation, without tools.",
+        );
+        idle(app).await;
+        assert!(
+            app.transcript
+                .cells
+                .iter()
+                .rev()
+                .any(|cell| matches!(cell,Cell::Answer{text}if text.contains("REVIEW_OK"))),
+            "{}",
+            transcript(app)
+        );
+        println!(
+            "PASS nested role-based review, attributed discussion and integrated lead awareness"
+        );
+
+        // Force same-specialist concurrency directly through the real task tools,
+        // rather than depending on a model deciding to emit parallel tool calls.
+        app.crew.lead_context().set(RunContext::root(
+            Participant::Lead,
+            AccessScope::CanWrite,
+            "parallel specialist verification".into(),
+            tokio_util::sync::CancellationToken::new(),
+        ));
+        let ask = Arc::clone(
+            app.agent
+                .tools()
+                .iter()
+                .find(|tool| tool.name() == "ask")
+                .unwrap(),
+        );
+        let mut jobs = tokio::task::JoinSet::new();
+        for _ in 0..2 {
+            let ask = Arc::clone(&ask);
+            jobs.spawn(async move{ask.execute("live-parallel",serde_json::json!({"agent":"change-lens","task":"Read src/lib.rs and reply with REVIEW_OK only."}),tokio_util::sync::CancellationToken::new(),None).await.unwrap()});
+        }
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let tasks = app.crew.scheduler().snapshots();
+                let same = tasks
+                    .iter()
+                    .filter(|task| task.actor == Participant::Helper("change-lens".into()))
+                    .collect::<Vec<_>>();
+                if same.iter().any(|task| task.state == TaskState::Queued)
+                    && same.iter().any(|task| task.state == TaskState::Running)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("same specialist was not observably queued");
+        while let Some(result) = jobs.join_next().await {
+            result.unwrap();
+        }
+        let run = app.crew.lead_context().current().unwrap();
+        let root = run.scope(&app.crew.scheduler()).await.unwrap();
+        app.crew
+            .scheduler()
+            .finish(
+                &root,
+                TaskState::Succeeded,
+                "parallel checks complete",
+                cupel_coding_agent::crew::Changes::ReadOnly,
+            )
+            .await;
+        app.crew.lead_context().clear();
+        println!("PASS concurrent real-provider branches queue for one busy specialist");
+
+        submit(
+            app,
+            "/agent diff-auditor Use delegate to assign shell-worker this exact bash command: echo $$ > nested.pid; echo started > nested-started.txt; sleep 90; echo late > must-not-exist.txt . This is a cancellation test. You must call delegate and wait. If the child is stopped, never retry or run its command yourself; report the stop.",
+        );
+        tokio::time::timeout(Duration::from_secs(120), async {
+            while !cwd.join("nested-started.txt").exists() {
+                assert!(
+                    app.is_running(),
+                    "nested fixture ended without starting its writer:\n{}\n{}",
+                    transcript(app),
+                    app.crew.scheduler().describe()
+                );
+                tokio::select! {
+                    event=app.next_event()=>app.on_event(event).await,
+                    ()=tokio::time::sleep(Duration::from_millis(20))=>{},
+                }
+            }
+        })
+        .await
+        .expect("nested writer did not start");
+        let tasks = app.crew.scheduler().snapshots();
+        let child = tasks
+            .iter()
+            .find(|task| {
+                task.actor == Participant::Helper("shell-worker".into())
+                    && task.state == TaskState::Running
+            })
+            .expect("missing running nested task");
+        assert!(
+            !cwd.join("must-not-exist.txt").exists(),
+            "the sleeper must still be running before cancellation"
+        );
+        let cancelling = std::time::Instant::now();
+        app.apply_task_action(TaskAction::Cancel(child.id.0)).await;
+        esc(app);
+        idle(app).await;
+        assert!(
+            cancelling.elapsed() < Duration::from_secs(15),
+            "cancellation must not wait for the 90-second sleep"
+        );
+        app.apply_task_action(TaskAction::Inspect(Some(child.root.0)))
+            .await;
+        assert!(!cwd.join("must-not-exist.txt").exists());
+        assert!(transcript(app).contains("nested-started.txt"));
+        let pid = std::fs::read_to_string(cwd.join("nested.pid"))
+            .unwrap()
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+        assert!(pid > 1);
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &format!("-{pid}")])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(
+            !alive.success(),
+            "nested shell process group survived cancellation"
+        );
+        assert!(
+            app.crew
+                .scheduler()
+                .snapshots()
+                .iter()
+                .all(|task| task.state.terminal())
+        );
+        println!(
+            "PASS task-ID subtree cancellation, Esc, process cleanup and partial change reporting"
+        );
+
+        submit(app, "/review src/lib.rs");
+        assert!(app.helper.is_none());
+        assert!(app.pending_prompt.take().is_some());
+        assert!(transcript(app).contains("ambiguous review"));
+        settings["agentCommands"] = serde_json::json!({"review":"diff-auditor"});
+        reload(app, settings_path, &settings).await;
+        settings["agents"]
+            .as_object_mut()
+            .unwrap()
+            .remove("diff-auditor");
+        reload(app, settings_path, &settings).await;
+        submit(app, "/review src/lib.rs");
+        assert!(app.helper.is_none());
+        assert!(app.pending_prompt.take().is_some());
+        assert!(transcript(app).contains("invalid explicit"));
+        let spent = app.crew.total_spend();
+        let entries = app.team_runtime.inspect(None).await.unwrap().latest;
+        reload(app, settings_path, &settings).await;
+        app.crew.recover_usage().await.unwrap();
+        assert_eq!(app.crew.total_spend(), spent);
+        assert_eq!(
+            app.team_runtime.inspect(None).await.unwrap().latest,
+            entries
+        );
+        assert!(!app.team.contains("diff-auditor"));
+        assert!(
+            app.crew
+                .scheduler()
+                .snapshots()
+                .iter()
+                .all(|task| task.state.terminal())
+        );
+        println!(
+            "PASS ambiguity, invalid explicit precedence, removed-member reload and spend/thread retention"
         );
     }
 }

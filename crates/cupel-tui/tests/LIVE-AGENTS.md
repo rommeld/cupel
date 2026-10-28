@@ -41,8 +41,43 @@ The application test is ignored in normal CI. The PTY check requires Unix and
 Python's standard library. Provider output is nondeterministic: an assertion
 failure must be inspected, not treated as proof of a routing defect by itself.
 
-## Extension checkpoint
+## M10–M12 expanded checkpoint — 2026-10-28
 
-The baseline result does **not** establish M10 shared discussion, M11 recursive
-scheduling, or M12 discovered-role routing. Their automated tests and the expanded
-live check must be recorded separately after those milestones are implemented.
+The complete baseline plus expanded application test passed against Fireworks
+after implementing M10–M12 (80.93 seconds). It additionally verified:
+
+- Explained role hints without constructing helpers; inferred `/review` and the
+  typed startup review handler without an explicit mapping.
+- A writer asking a read-only reviewer by role, both publishing attributed
+  discussion posts, followed by an integrated answer visible to the lead.
+- Two concurrent real-provider calls queuing for the same busy specialist.
+- Cancellation by nested task ID followed by Esc, with the sleeping shell's
+  process group gone, no late write, and partial changed paths retained. The
+  fixture checks cancellation completes within 15 seconds, not after its
+  90-second sleep. Its event driver includes a timer wakeup like the real TUI.
+- Ambiguous reviewers falling back to the lead; an invalid explicit mapping
+  never selecting another discovered helper.
+- Thread/task/spend retention through reload, removed members remaining removed,
+  and fresh-session discussion isolation without an initial transcript write.
+
+The successful full run reported **45,790 input / 14,565 output / 86,159 cached**
+tokens, approximately **$0.029760**; helper usage was attributed to 15 calls.
+The real-terminal probe also passed again after these extensions.
+
+Cycle refusal, hard request/depth/call/deadline limits, interrupted-task recovery,
+and read-only access ceilings are tested deterministically with mock providers
+and scheduler tests rather than relying on a model to provoke failures.
+
+The live pass exposed and fixed interleaved discussion updates splitting streamed
+answers or hiding final-answer promotion. A deterministic regression test covers
+that behavior. The fixture also uses a 4096-token output ceiling, above MiniMax's
+low thinking budget; a 1024-token ceiling was rejected by the provider. It uses
+fresh writer history for independent extension scenarios so earlier cancellation
+instructions do not contaminate later tasks. These are provider/model-dependent
+checks, not a guarantee that arbitrary models always obey delegation prompts.
+
+To run just the expanded scenarios while iterating:
+
+```sh
+CUPEL_LIVE_AGENTS=1 CUPEL_LIVE_EXTENDED_ONLY=1 cargo test -p cupel-tui --test live_agents -- --ignored --nocapture
+```

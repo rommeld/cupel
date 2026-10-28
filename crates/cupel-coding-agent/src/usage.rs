@@ -147,6 +147,7 @@ fn scan_dir(dir: &Path, exclude: Option<&Path>, history: &mut HistoryUsage) {
         } else if kind.is_file()
             && path.extension().is_some_and(|ext| ext == "jsonl")
             && exclude != Some(path.as_path())
+            && !is_team_journal(&path)
         {
             match read_usage(&path) {
                 Ok((usage, warnings)) => {
@@ -160,6 +161,16 @@ fn scan_dir(dir: &Path, exclude: Option<&Path>, history: &mut HistoryUsage) {
             }
         }
     }
+}
+
+fn is_team_journal(path: &Path) -> bool {
+    path.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|name| name == "team")
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "conversation.jsonl" || name.starts_with("conversation-"))
 }
 
 /// Stream one file; do not retain its conversation content in memory.

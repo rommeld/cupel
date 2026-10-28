@@ -93,7 +93,12 @@ impl Transcript {
     /// Append a delta to the last assistant cell, creating one if the last
     /// cell is something else (e.g. the first delta after a tool result).
     pub fn append_assistant(&mut self, delta: &str) {
-        if let Some(Cell::Assistant { text }) = self.cells.last_mut() {
+        let tail = self
+            .cells
+            .iter_mut()
+            .rev()
+            .find(|cell| !matches!(cell, Cell::Team { .. }));
+        if let Some(Cell::Assistant { text }) = tail {
             text.push_str(delta);
         } else {
             self.cells.push(Cell::Assistant {
@@ -104,7 +109,12 @@ impl Transcript {
 
     /// Same, for thinking deltas.
     pub fn append_thinking(&mut self, delta: &str) {
-        if let Some(Cell::Thinking { text }) = self.cells.last_mut() {
+        let tail = self
+            .cells
+            .iter_mut()
+            .rev()
+            .find(|cell| !matches!(cell, Cell::Team { .. }));
+        if let Some(Cell::Thinking { text }) = tail {
             text.push_str(delta);
         } else {
             self.cells.push(Cell::Thinking {
@@ -181,7 +191,7 @@ impl Transcript {
     pub fn promote_final_answer(&mut self) {
         for cell in self.cells.iter_mut().rev() {
             match cell {
-                Cell::Usage { .. } | Cell::Notice { .. } => {}
+                Cell::Usage { .. } | Cell::Notice { .. } | Cell::Team { .. } => {}
                 Cell::Assistant { text } => {
                     // take() moves the String out (leaving an empty one
                     // behind) so the cell can be replaced without cloning
@@ -948,6 +958,25 @@ mod tests {
             matches!(&t.cells[1], Cell::Assistant { text } if text == "mid-turn note"),
             "mid-turn prose must stay plain"
         );
+    }
+
+    #[test]
+    fn discussion_updates_do_not_split_streaming_or_hide_the_final_answer() {
+        let mut transcript = Transcript::default();
+        transcript.append_thinking("first ");
+        transcript.cells.push(Cell::Team {
+            text: "discussion while thinking".into(),
+        });
+        transcript.append_thinking("thought");
+        transcript.append_assistant("first ");
+        transcript.cells.push(Cell::Team {
+            text: "discussion while answering".into(),
+        });
+        transcript.append_assistant("answer");
+        transcript.promote_final_answer();
+        assert!(matches!(&transcript.cells[0],Cell::Thinking{text}if text=="first thought"));
+        assert!(matches!(&transcript.cells[2],Cell::Answer{text}if text=="first answer"));
+        assert_eq!(transcript.cells.len(), 4);
     }
 
     #[test]
