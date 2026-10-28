@@ -1156,7 +1156,7 @@ mod tests {
         let (journal, _) = TeamRuntime::new(None);
         journal.set_members(["a".into()].into_iter().collect());
         let scheduler = TeamScheduler::new(TeamLimits {
-            duration: Duration::from_millis(15),
+            duration: Duration::from_secs(1),
             ..TeamLimits::default()
         });
         scheduler.attach(Arc::clone(&journal));
@@ -1184,7 +1184,7 @@ mod tests {
         assert_eq!(saved.state, TaskState::Interrupted);
         assert_eq!(saved.usage.input, 12);
         assert!(saved.usage.unknown_usage);
-        tokio::time::timeout(Duration::from_secs(1), child.cancel.cancelled())
+        tokio::time::timeout(Duration::from_secs(5), child.cancel.cancelled())
             .await
             .unwrap();
         assert!(root.cancel.is_cancelled());

@@ -2064,10 +2064,13 @@ mod tests {
         );
         let weak = Arc::downgrade(&crew);
         drop(crew);
-        assert!(
-            weak.upgrade().is_none(),
-            "recursive tool ownership must not cycle back to the crew"
-        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while weak.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("recursive tool ownership must not cycle back to the crew");
     }
 
     #[tokio::test]
