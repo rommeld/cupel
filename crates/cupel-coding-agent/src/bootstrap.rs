@@ -107,14 +107,7 @@ pub async fn load(
         home.clone(),
     );
 
-    // The grep tool talks to a CodeSearch backend.
-    let backend = Arc::new(GrepSearch::new(cwd));
-    let mut tools: Vec<Arc<dyn AgentTool>> = vec![
-        Arc::new(ReadTool::new(cwd)),
-        Arc::new(BashTool::new(cwd)),
-        Arc::new(ApplyPatchTool::new(cwd)),
-        Arc::new(GrepTool::new(cwd, backend)),
-    ];
+    let mut tools = coding_tools(cwd);
     let questions = match frontend {
         Frontend::Tui => {
             let (tool, questions) = AskUserTool::new();
@@ -141,6 +134,18 @@ pub async fn load(
         warnings,
         questions,
     }
+}
+
+/// The coding tools available to a session or a configured helper.
+#[must_use]
+pub fn coding_tools(cwd: &Path) -> Vec<Arc<dyn AgentTool>> {
+    let backend = Arc::new(GrepSearch::new(cwd));
+    vec![
+        Arc::new(ReadTool::new(cwd)),
+        Arc::new(BashTool::new(cwd)),
+        Arc::new(ApplyPatchTool::new(cwd)),
+        Arc::new(GrepTool::new(cwd, backend)),
+    ]
 }
 
 /// The one [`AgentHooks`] object a session runs with: the bash guard and

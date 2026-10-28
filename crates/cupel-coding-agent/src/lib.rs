@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod bootstrap;
 pub mod commands;
+pub mod crew;
 pub mod guard;
 pub mod hooks;
 pub mod loop_killer;
