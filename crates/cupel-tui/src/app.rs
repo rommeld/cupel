@@ -19,6 +19,7 @@ use cupel_coding_agent::program_status::{BlockedKind, State as ProgramState};
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
 use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
+use cupel_coding_agent::tools::team::{TEAM_TOOL_NAMES, team_tools};
 use cupel_coding_agent::usage::{HistoryUsage, UsageByModel, UsageTotals};
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
@@ -84,6 +85,7 @@ pub struct App {
     pub helper: Option<HelperRun>,
     pub waiting_helper: Option<HelperCall>,
     pub routes: std::collections::BTreeMap<String, String>,
+    pub team: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +113,7 @@ pub enum HelperEvent {
 }
 
 const HELPER_SPEND_KIND: &str = "cupel.helper-spend";
+const TEAM_KIND: &str = "team";
 
 /// A question from the `ask_user` tool, on screen until it is answered.
 pub struct OpenQuestion {
@@ -396,7 +399,17 @@ impl App {
             helper: None,
             waiting_helper: None,
             routes,
+            team: std::collections::BTreeSet::new(),
         };
+        if let Some(names) = history.iter().rev().find_map(|message| match message {
+            AgentMessage::Custom { kind, payload, .. } if kind == TEAM_KIND => Some(
+                serde_json::from_value::<Vec<String>>(payload["members"].clone())
+                    .unwrap_or_default(),
+            ),
+            _ => None,
+        }) {
+            app.restore_team(names);
+        }
         app.replay_history(&history);
         for warning in std::mem::take(&mut app.meta.warnings)
             .into_iter()
@@ -928,6 +941,8 @@ impl App {
         app.crew.remember_keys(&self.session_keys);
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
+        app.crew.restore_spend(self.crew.spend_snapshot());
+        app.restore_team(self.team.into_iter().collect());
         if let Some(message) = delta_message {
             // The transcript file gets the update too a later --resume
             // replays the same conversation the model saw.
@@ -1691,7 +1706,9 @@ impl App {
     }
 
     fn list_team(&mut self) {
-        let mut lines = vec!["agents (/agent <name> [task]):".to_string()];
+        let mut lines = vec![
+            "agents (* on the lead's team; /team add <name>, /agent <name> [task]):".to_string(),
+        ];
         for spec in self.crew.specs() {
             let tools = spec
                 .definition
@@ -1701,7 +1718,12 @@ impl App {
                 .collect::<Vec<_>>()
                 .join(" ");
             lines.push(format!(
-                "  {} - {}/{}, thinking {}, tools {tools}, {}, from {}",
+                "{} {} - {}/{}, thinking {}, tools {tools}, {}, from {}",
+                if self.team.contains(&spec.name) {
+                    "*"
+                } else {
+                    " "
+                },
                 spec.name,
                 spec.model.provider.as_str(),
                 spec.model.id,
@@ -1749,6 +1771,73 @@ impl App {
         } else {
             self.notice(lines.join("\n"));
         }
+    }
+
+    fn handle_team_command(&mut self, command: commands::TeamCommand) {
+        let before = self.team.clone();
+        match command {
+            commands::TeamCommand::List => {
+                self.list_team();
+                return;
+            }
+            commands::TeamCommand::Add(names) => {
+                for name in names {
+                    if let Some(problem) = crew::team_member_problem(&self.crew, &name) {
+                        self.notice(problem);
+                    } else {
+                        self.team.insert(name);
+                    }
+                }
+            }
+            commands::TeamCommand::Remove(names) => {
+                for name in names {
+                    if !self.team.remove(&name) {
+                        self.notice(format!("{name} is not on the team"));
+                    }
+                }
+            }
+            commands::TeamCommand::Clear => self.team.clear(),
+        }
+        if self.team == before {
+            return;
+        }
+        self.apply_team();
+        self.record_team();
+        self.notice(format!("team: {} (from the lead's next request on; changed tool schemas affect prompt caching)", if self.team.is_empty() { "empty - the lead works alone".into() } else { self.team.iter().cloned().collect::<Vec<_>>().join(", ") }));
+    }
+
+    fn restore_team(&mut self, names: Vec<String>) {
+        self.team.clear();
+        for name in names {
+            if let Some(problem) = crew::team_member_problem(&self.crew, &name) {
+                self.notice(format!("cannot restore team member: {problem}"));
+            } else {
+                self.team.insert(name);
+            }
+        }
+        self.apply_team();
+    }
+
+    fn apply_team(&mut self) {
+        let mut tools = self
+            .agent
+            .tools()
+            .iter()
+            .filter(|tool| !TEAM_TOOL_NAMES.contains(&tool.name()))
+            .cloned()
+            .collect::<Vec<_>>();
+        tools.extend(team_tools(&self.crew, &self.team));
+        self.agent.set_tools(tools);
+    }
+
+    fn record_team(&mut self) {
+        let message = AgentMessage::Custom {
+            kind: TEAM_KIND.into(),
+            payload: serde_json::json!({"members":self.team}),
+            timestamp: cupel_core::types::now_ms(),
+        };
+        self.recorder.record(&message);
+        self.agent.push_message(message);
     }
 
     fn call_helper(&mut self, call: HelperCall) {
@@ -2029,7 +2118,10 @@ impl App {
             }
             "provider" => self.handle_provider_command(args),
             "agent" => self.handle_agent_command(args),
-            "team" => self.list_team(),
+            "team" => match args.parse::<commands::TeamCommand>() {
+                Ok(command) => self.handle_team_command(command),
+                Err(usage) => self.notice(usage),
+            },
             "preset" => self.handle_preset_command(args),
             "login" => self.handle_login_command(args),
             "logout" => self.handle_logout_command(args),

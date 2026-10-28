@@ -78,6 +78,18 @@ pub fn resolve(
     (specs, warnings)
 }
 
+/// Eligibility does not depend on the optional fresh-session preference.
+#[must_use]
+pub fn team_member_problem(crew: &Crew, name: &str) -> Option<String> {
+    match crew.spec(name) {
+        None => Some(format!("no agent named {name} (/team lists them)")),
+        Some(spec) if spec.definition.description().is_none() => Some(format!(
+            "{name} has no description - add agents.{name}.description in settings.json, or call it yourself with /agent {name}"
+        )),
+        Some(_) => None,
+    }
+}
+
 /// Validate explicit routes without granting membership or constructing helpers.
 #[must_use]
 pub fn routes(

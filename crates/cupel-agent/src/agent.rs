@@ -172,6 +172,17 @@ impl Agent {
         self.api_key = api_key;
     }
 
+    #[must_use]
+    pub fn tools(&self) -> &[Arc<dyn AgentTool>] {
+        &self.tools
+    }
+
+    /// Changes apply to the next run and invalidate the prior usage anchor.
+    pub fn set_tools(&mut self, tools: Vec<Arc<dyn AgentTool>>) {
+        self.tools = tools;
+        self.unverified_usage.store(true, Ordering::SeqCst);
+    }
+
     /// The fallback API key future runs will use. This is the read half of
     /// [`Agent::set_api_key`], so frontends and tests can verify which
     /// credential a reload or switch resolved without sending a request.

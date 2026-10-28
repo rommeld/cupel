@@ -29,4 +29,5 @@ pub mod grep_rank;
 pub mod patch_parser;
 pub mod patch_update;
 pub mod read;
+pub mod team;
 pub mod text_diff;

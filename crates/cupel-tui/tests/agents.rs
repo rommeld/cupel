@@ -305,4 +305,139 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(!app.crew.is_built("custom_42"));
     }
+
+    #[tokio::test]
+    async fn team_membership_changes_tools_without_constructing_agents() {
+        let (mut app, mock) = app();
+        submit(&mut app, "/team add missing custom_42");
+        assert_eq!(app.team.iter().cloned().collect::<Vec<_>>(), ["custom_42"]);
+        assert!(!app.crew.is_built("custom_42"));
+        assert!(mock.contexts.lock().unwrap().is_empty());
+        let ask = Arc::clone(
+            app.agent
+                .tools()
+                .iter()
+                .find(|tool| tool.name() == "ask")
+                .unwrap(),
+        );
+        assert_eq!(ask.execution_mode(), None);
+        assert!(
+            app.agent
+                .tools()
+                .iter()
+                .all(|tool| tool.name() != "delegate")
+        );
+        assert!(ask.description().contains("otherwise do the work yourself"));
+        assert_eq!(
+            ask.parameters()["properties"]["agent"]["enum"],
+            serde_json::json!(["custom_42"])
+        );
+        for args in [
+            serde_json::json!({"agent":"missing","task":"task"}),
+            serde_json::json!({"agent":"custom_42","task":" "}),
+        ] {
+            assert!(
+                ask.execute(
+                    "bad",
+                    args,
+                    tokio_util::sync::CancellationToken::new(),
+                    None
+                )
+                .await
+                .is_err()
+            );
+        }
+        assert!(!app.crew.is_built("custom_42"));
+        ask.execute(
+            "ok",
+            serde_json::json!({"agent":"custom_42","task":"task"}),
+            tokio_util::sync::CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(app.crew.is_built("custom_42"));
+        submit(&mut app, "/team clear");
+        assert!(app.team.is_empty());
+        assert!(app.agent.tools().iter().all(|tool| tool.name() != "ask"));
+        let mut options = AgentOptions::new(app.meta.models[0].clone(), app.agent.registry());
+        options.messages = app.agent.state().messages;
+        let restored = App::new(Agent::new(options), app.meta, app.recorder);
+        assert!(restored.team.is_empty(), "saved empty membership wins");
+    }
+
+    #[test]
+    fn team_restoration_revalidates_eligibility_and_write_permissions() {
+        let (app, _) = app();
+        let mut meta = app.meta;
+        meta.settings.agents.get_mut("custom_42").unwrap().tools =
+            Some(vec![cupel_coding_agent::settings::ToolName::Bash]);
+        let mut manual = meta.settings.agents["custom_42"].clone();
+        manual.description = None;
+        meta.settings.agents.insert("manual".into(), manual);
+        let mut options = AgentOptions::new(meta.models[0].clone(), app.agent.registry());
+        options.messages = vec![cupel_agent::AgentMessage::Custom {
+            kind: "team".into(),
+            payload: serde_json::json!({"members":["custom_42","manual","missing"]}),
+            timestamp: now_ms(),
+        }];
+        let restored = App::new(Agent::new(options), meta, app.recorder);
+        assert_eq!(
+            restored.team.iter().cloned().collect::<Vec<_>>(),
+            ["custom_42"]
+        );
+        let tools = restored.agent.tools();
+        let delegate = tools.iter().find(|tool| tool.name() == "delegate").unwrap();
+        assert_eq!(
+            delegate.execution_mode(),
+            Some(cupel_agent::ToolExecutionMode::Sequential)
+        );
+        assert!(tools.iter().all(|tool| tool.name() != "ask"));
+        assert!(!restored.crew.is_built("custom_42"));
+    }
+
+    #[test]
+    fn team_command_forms_are_strict() {
+        use cupel_coding_agent::commands::TeamCommand;
+        assert_eq!("".parse::<TeamCommand>(), Ok(TeamCommand::List));
+        assert_eq!("clear".parse::<TeamCommand>(), Ok(TeamCommand::Clear));
+        assert_eq!(
+            "add one two".parse::<TeamCommand>(),
+            Ok(TeamCommand::Add(vec!["one".into(), "two".into()]))
+        );
+        assert_eq!(
+            "remove one".parse::<TeamCommand>(),
+            Ok(TeamCommand::Remove(vec!["one".into()]))
+        );
+        for invalid in ["add", "remove", "clear extra", "drop one"] {
+            assert!(invalid.parse::<TeamCommand>().is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn changing_team_invalidates_provider_context_usage_anchors() {
+        let (mut app, mock) = app();
+        app.start_run("first");
+        idle(&mut app).await;
+        submit(&mut app, "/team add custom_42");
+        app.start_run("second");
+        idle(&mut app).await;
+        let contexts = mock.contexts.lock().unwrap();
+        let prior = contexts[1]
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                Message::Assistant(assistant) => Some(assistant),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            prior.usage.input, 0,
+            "old size measured a different tool schema"
+        );
+        assert_eq!(
+            app.totals.input, 20,
+            "actual incurred usage remains accounted"
+        );
+    }
 }

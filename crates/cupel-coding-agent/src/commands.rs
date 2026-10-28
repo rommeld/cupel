@@ -231,7 +231,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "team",
-        description: "List the helper agents from settings.json",
+        description: "Who the lead may call: /team lists the agents, /team add|remove <name>... and /team clear change the team",
     },
     BuiltinCommand {
         name: "help",
@@ -342,6 +342,32 @@ impl core::str::FromStr for SpinoffCommand {
                     /spinoff drop <name> (no argument lists the spinoffs)"
                     .to_string(),
             )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TeamCommand {
+    List,
+    Add(Vec<String>),
+    Remove(Vec<String>),
+    Clear,
+}
+
+impl core::str::FromStr for TeamCommand {
+    type Err = String;
+
+    fn from_str(args: &str) -> Result<Self, Self::Err> {
+        let words = args.split_whitespace().collect::<Vec<_>>();
+        let owned = |names: &[&str]| names.iter().map(|name| (*name).to_string()).collect();
+        match words.as_slice() {
+            [] => Ok(Self::List),
+            ["add", names @ ..] if !names.is_empty() => Ok(Self::Add(owned(names))),
+            ["remove", names @ ..] if !names.is_empty() => Ok(Self::Remove(owned(names))),
+            ["clear"] => Ok(Self::Clear),
+            _ => {
+                Err("usage: /team, /team add <name>..., /team remove <name>..., /team clear".into())
+            }
         }
     }
 }
