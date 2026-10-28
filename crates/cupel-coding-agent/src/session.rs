@@ -111,7 +111,19 @@ pub fn archive_sessions(
     std::fs::create_dir_all(&archive)?;
     for transcript in &transcripts {
         let stem = transcript.file_stem().unwrap_or_default().to_string_lossy();
-        std::fs::rename(transcript, free_name(&archive, &stem))?;
+        let target = free_name(&archive, &stem);
+        let helpers = transcript.with_extension("");
+        let archived_helpers = target.with_extension("");
+        let moved_helpers = helpers.is_dir();
+        if moved_helpers {
+            std::fs::rename(&helpers, &archived_helpers)?;
+        }
+        if let Err(error) = std::fs::rename(transcript, &target) {
+            if moved_helpers {
+                let _ = std::fs::rename(&archived_helpers, &helpers);
+            }
+            return Err(error);
+        }
     }
     let _ = std::fs::remove_dir(&from);
     Ok(transcripts.len())
@@ -122,7 +134,7 @@ pub fn archive_sessions(
 fn free_name(dir: &Path, stem: &str) -> PathBuf {
     let mut target = dir.join(format!("{stem}.jsonl"));
     let mut number = 0;
-    while target.exists() {
+    while target.exists() || target.with_extension("").exists() {
         number += 1;
         target = dir.join(format!("{stem}-{number}.jsonl"));
     }
@@ -741,9 +753,15 @@ mod tests {
         let archive = sessions_dir(Some(&home), &origin).unwrap().join("archive");
         std::fs::create_dir_all(&archive).unwrap();
         std::fs::write(archive.join("cupel-1.jsonl"), "older").unwrap();
+        std::fs::create_dir_all(from.join("cupel-1")).unwrap();
+        std::fs::write(from.join("cupel-1/custom_42.jsonl"), "helper transcript").unwrap();
 
         assert_eq!(archive_sessions(Some(&home), &spinoff, &origin).unwrap(), 2);
         assert!(!from.exists(), "the emptied directory is gone");
+        assert_eq!(
+            std::fs::read_to_string(archive.join("cupel-1-1/custom_42.jsonl")).unwrap(),
+            "helper transcript"
+        );
         let read = |name: &str| std::fs::read_to_string(archive.join(name)).unwrap();
         assert_eq!(read("cupel-1.jsonl"), "older");
         assert_eq!(read("cupel-1-1.jsonl"), "cupel-1");

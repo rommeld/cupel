@@ -3,6 +3,8 @@
 //! the same helper serialize; cancellation also covers callers waiting in line.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
+use std::io::Write as _;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -23,8 +25,10 @@ use crate::bootstrap::{SessionHooks, TOOL_SUMMARIES};
 use crate::guard::BashGuard;
 use crate::loop_killer::LoopKiller;
 use crate::resources::ContextFile;
+use crate::session::SessionRecorder;
 use crate::settings::{AgentDefinition, Settings};
 use crate::system_prompt::{build_system_prompt, with_preset_prompt};
+use crate::truncate::{TruncationOptions, format_size, truncate_head};
 
 /// A configured helper whose model exists in the catalog.
 #[derive(Debug, Clone)]
@@ -117,16 +121,123 @@ pub struct Reply {
     pub stopped_after: Option<u32>,
     pub tool_calls: usize,
     pub spend: Spend,
+    pub full_answer: Option<PathBuf>,
+    pub changes: Changes,
+}
+
+const FOR_LEAD: TruncationOptions = TruncationOptions {
+    max_lines: Some(300),
+    max_bytes: Some(12 * 1024),
+};
+
+impl Reply {
+    #[must_use]
+    pub fn for_lead(&self) -> String {
+        let cut = truncate_head(&self.answer, FOR_LEAD);
+        let mut text = if cut.content.trim().is_empty() {
+            "(no answer)".into()
+        } else {
+            cut.content
+        };
+        if cut.truncated {
+            let size = format_size(cut.total_bytes);
+            text.push_str(&match &self.full_answer {
+                Some(path) => format!(
+                    "\n[answer cut, it has {size}: read {} for the rest]",
+                    path.display()
+                ),
+                None => format!("\n[answer cut, it has {size}: the rest was not kept]"),
+            });
+        }
+        if let Some(turns) = self.stopped_after {
+            text.push_str(&format!(
+                "\n[{} stopped after {turns} turns (maxTurns), before it finished]",
+                self.name
+            ));
+        }
+        text.push_str(&self.changes.to_string());
+        text
+    }
+}
+
+/// Observed checkout changes, not exclusive attribution to a helper.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Changes {
+    ReadOnly,
+    Unknown,
+    Files(Vec<String>),
+}
+
+impl core::fmt::Display for Changes {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ReadOnly => Ok(()),
+            Self::Unknown => write!(
+                f,
+                "\n[changed files unknown: could not inspect git working tree]"
+            ),
+            Self::Files(files) if files.is_empty() => write!(f, "\n[no files changed]"),
+            Self::Files(files) => {
+                let names = truncate_head(
+                    &files.join(", "),
+                    TruncationOptions {
+                        max_lines: Some(20),
+                        max_bytes: Some(2048),
+                    },
+                );
+                write!(
+                    f,
+                    "\n[files changed: {}{} - read them again before editing]",
+                    names.content,
+                    if names.truncated {
+                        " (list cut; inspect git status for the rest)"
+                    } else {
+                        ""
+                    }
+                )
+            }
+        }
+    }
+}
+
+pub const EXCHANGE_MARKER: &str = "[agent exchange]";
+
+#[must_use]
+pub fn exchange_note(task: &str, reply: &Reply) -> String {
+    let task = truncate_head(
+        task,
+        TruncationOptions {
+            max_lines: Some(30),
+            max_bytes: Some(1024),
+        },
+    )
+    .content;
+    format!(
+        "{EXCHANGE_MARKER} {name}\nThe user asked the agent {name} directly; you did not see it work. This is the exchange, so you know about it.\n\nTask:\n{task}\n\nAnswer:\n{answer}",
+        name = reply.name,
+        answer = reply.for_lead()
+    )
+}
+
+#[must_use]
+pub fn parse_exchange(text: &str) -> Option<(&str, &str)> {
+    text.strip_prefix(EXCHANGE_MARKER)?
+        .strip_prefix(' ')?
+        .split_once('\n')
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum CrewError {
     #[error("no agent named {0} (/team lists them)")]
     Unknown(String),
-    #[error("{0} was stopped by the user")]
-    Stopped(String),
-    #[error("{name} failed: {message}")]
-    Failed { name: String, message: String },
+    #[error("{name} was stopped by the user{changes}")]
+    Stopped { name: String, changes: Changes },
+    #[error("{name} failed: {message}{changes}")]
+    Failed {
+        name: String,
+        message: String,
+        changes: Changes,
+    },
 }
 
 struct HelperHooks {
@@ -162,6 +273,7 @@ impl AgentHooks for HelperHooks {
 struct Helper {
     agent: Agent,
     hooks: Arc<HelperHooks>,
+    log: SessionRecorder,
 }
 
 /// Definitions, membership (owned by the frontend), and construction are distinct.
@@ -310,7 +422,10 @@ impl Crew {
             id,
             agent_stop: None,
         };
-        let stopped = || CrewError::Stopped(name.into());
+        let stopped = || CrewError::Stopped {
+            name: name.into(),
+            changes: Changes::ReadOnly,
+        };
         if stop.is_cancelled() {
             return Err(stopped());
         }
@@ -336,9 +451,18 @@ impl Crew {
         helper
             .agent
             .set_api_key(self.key_for(spec.model.provider.as_str()));
+        let before = if spec.definition.writes() {
+            Some(snapshot(&self.setup.cwd).await)
+        } else {
+            None
+        };
+        if stop.is_cancelled() {
+            return Err(stopped());
+        }
         let failed = |message: String| CrewError::Failed {
             name: name.into(),
             message,
+            changes: Changes::ReadOnly,
         };
         let mut events = helper
             .agent
@@ -362,16 +486,19 @@ impl Crew {
                 event = events.next() => match event {
                     None => break,
                     Some(AgentEvent::AgentEnd { .. }) => { ended = true; break; }
-                    Some(AgentEvent::MessageEnd { message: AgentMessage::Llm(Message::Assistant(assistant)) }) => {
-                        spend.add_usage(&assistant.usage);
-                        let known = lines.len();
-                        for content in &assistant.content {
-                            if let AssistantContent::ToolCall(call) = content {
-                                lines.push(helper.agent.describe_tool_call(&call.name, &call.arguments));
+                    Some(AgentEvent::MessageEnd { message }) => {
+                        helper.log.record(&message);
+                        if let AgentMessage::Llm(Message::Assistant(assistant)) = message {
+                            spend.add_usage(&assistant.usage);
+                            let known = lines.len();
+                            for content in &assistant.content {
+                                if let AssistantContent::ToolCall(call) = content {
+                                    lines.push(helper.agent.describe_tool_call(&call.name, &call.arguments));
+                                }
                             }
+                            if lines.len() > known { progress(lines.join("\n")); }
+                            last = Some(assistant);
                         }
-                        if lines.len() > known { progress(lines.join("\n")); }
-                        last = Some(assistant);
                     }
                     Some(_) => {}
                 }
@@ -384,6 +511,24 @@ impl Crew {
             .entry(name.into())
             .or_default()
             .add(&spend);
+        let changes = match before {
+            None => Changes::ReadOnly,
+            Some(before) => match (before, snapshot(&self.setup.cwd).await) {
+                (Some(before), Some(after)) if before.head == after.head => {
+                    Changes::Files(changed(&before.files, &after.files))
+                }
+                _ => Changes::Unknown,
+            },
+        };
+        let failed = |message: String| CrewError::Failed {
+            name: name.into(),
+            message,
+            changes: changes.clone(),
+        };
+        let stopped = || CrewError::Stopped {
+            name: name.into(),
+            changes: changes.clone(),
+        };
         if !ended {
             return Err(failed("helper event stream closed before AgentEnd".into()));
         }
@@ -402,14 +547,55 @@ impl Crew {
                 last.error_message.unwrap_or_else(|| "unknown error".into()),
             ));
         }
+        let answer = answer_text(&last);
+        let full_answer = if truncate_head(&answer, FOR_LEAD).truncated {
+            self.keep_answer(name, &answer)
+        } else {
+            None
+        };
         Ok(Reply {
             name: name.into(),
-            answer: answer_text(&last),
+            answer,
             stopped_after: (last.stop_reason == StopReason::ToolUse)
                 .then(|| helper.hooks.turns.load(Ordering::SeqCst)),
             tool_calls: lines.len(),
             spend,
+            full_answer,
+            changes,
         })
+    }
+
+    fn log_dir(&self) -> Option<PathBuf> {
+        crate::session::sessions_dir(self.setup.home.as_deref(), &self.setup.cwd)
+            .map(|dir| dir.join(&self.setup.session_id))
+    }
+
+    fn keep_answer(&self, name: &str, answer: &str) -> Option<PathBuf> {
+        let dir = self.log_dir()?;
+        std::fs::create_dir_all(&dir).ok()?;
+        for _ in 0..10 {
+            let id = self.next_call.fetch_add(1, Ordering::Relaxed);
+            let path = dir.join(format!("{name}-{}-{id}.md", cupel_core::types::now_ms()));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => match file.write_all(answer.as_bytes()) {
+                    Ok(()) => return Some(path),
+                    Err(error) => {
+                        tracing::warn!(path = %path.display(), "cannot keep helper answer: {error}");
+                        return None;
+                    }
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), "cannot keep helper answer: {error}");
+                    return None;
+                }
+            }
+        }
+        None
     }
 
     fn key_for(&self, provider: &str) -> Option<String> {
@@ -463,6 +649,24 @@ impl Crew {
             max_turns: spec.definition.max_turns,
             turns: AtomicU32::new(0),
         });
+        let log = SessionRecorder::new(
+            setup.home.clone(),
+            &setup.cwd,
+            &format!("{}/{}", setup.session_id, spec.name),
+            &spec.model.id,
+        );
+        let history = self
+            .log_dir()
+            .map(|dir| dir.join(format!("{}.jsonl", spec.name)))
+            .filter(|path| spec.definition.remembers() && path.exists())
+            .and_then(|path| match crate::session::load_transcript(&path) {
+                Ok((_, messages)) => Some(messages),
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), "helper starts fresh: {error}");
+                    None
+                }
+            })
+            .unwrap_or_default();
         let mut options = AgentOptions::new(spec.model.clone(), Arc::clone(&setup.registry));
         options.system_prompt =
             with_preset_prompt(&prompt, spec.definition.preset.prompt.as_deref());
@@ -471,9 +675,11 @@ impl Crew {
         options.thinking_level = spec.definition.preset.thinking_level.level();
         options.tool_execution = ToolExecutionMode::Parallel;
         options.session_id = Some(format!("{}/{}", setup.session_id, spec.name));
+        options.messages = history;
         Helper {
             agent: Agent::new(options),
             hooks,
+            log,
         }
     }
 }
@@ -509,6 +715,92 @@ fn answer_text(message: &AssistantMessage) -> String {
         .to_string()
 }
 
+struct WorkingTree {
+    head: Option<String>,
+    files: BTreeMap<String, Option<u64>>,
+}
+
+fn dirty_files(cwd: &Path) -> Option<WorkingTree> {
+    let head = git(cwd, &["rev-parse", "--verify", "HEAD"]);
+    let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
+    let root = PathBuf::from(root.strip_suffix('\n').unwrap_or(&root));
+    let status = git(
+        cwd,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    let mut entries = status.split('\0');
+    let mut files = BTreeMap::new();
+    while let Some(entry) = entries.next() {
+        let (Some(code), Some(path)) = (entry.get(..2), entry.get(3..)) else {
+            continue;
+        };
+        if code.contains(['R', 'C']) {
+            let old = entries.next()?;
+            if code.contains('R') {
+                files.insert(root.join(old).to_str()?.to_string(), None);
+            }
+        }
+        let full = root.join(path);
+        let content = match std::fs::symlink_metadata(&full) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return None,
+            Ok(metadata) => {
+                let mut hasher = DefaultHasher::new();
+                if metadata.file_type().is_symlink() {
+                    std::fs::read_link(&full).ok()?.hash(&mut hasher);
+                } else if metadata.is_file() {
+                    std::fs::read(&full).ok()?.hash(&mut hasher);
+                } else {
+                    return None;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    metadata.permissions().mode().hash(&mut hasher);
+                }
+                Some(hasher.finish())
+            }
+        };
+        files.insert(full.to_str()?.to_string(), content);
+    }
+    Some(WorkingTree { head, files })
+}
+
+async fn snapshot(cwd: &Path) -> Option<WorkingTree> {
+    let cwd = cwd.to_path_buf();
+    tokio::task::spawn_blocking(move || dirty_files(&cwd))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn changed(
+    before: &BTreeMap<String, Option<u64>>,
+    after: &BTreeMap<String, Option<u64>>,
+) -> Vec<String> {
+    before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn git(cwd: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8(output.stdout).ok())
+        .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::crew::*;
@@ -525,6 +817,9 @@ mod tests {
         Read,
         Fail,
         Hang,
+        Long,
+        WriteFail,
+        WriteHang,
     }
 
     struct Mock {
@@ -544,7 +839,11 @@ mod tests {
             context: Context,
             options: StreamOptions,
         ) -> AssistantMessageStream {
-            self.contexts.lock().unwrap().push(context);
+            let call = {
+                let mut contexts = self.contexts.lock().unwrap();
+                contexts.push(context);
+                contexts.len()
+            };
             let signal = options.signal.unwrap_or_default();
             self.signals.lock().unwrap().push(signal.clone());
             let (stream, sink) = assistant_message_channel();
@@ -553,6 +852,25 @@ mod tests {
             tokio::spawn(async move {
                 let _ = sink.start();
                 let (content, stop) = match step {
+                    Step::Long => (
+                        vec![AssistantContent::Text(TextContent::plain(
+                            "long line\n".repeat(400),
+                        ))],
+                        StopReason::Stop,
+                    ),
+                    Step::WriteFail | Step::WriteHang if call == 1 => (
+                        vec![AssistantContent::ToolCall(ToolCall {
+                            id: "write-1".into(),
+                            name: "bash".into(),
+                            arguments: serde_json::json!({"command":"printf changed > edited.txt"}),
+                        })],
+                        StopReason::ToolUse,
+                    ),
+                    Step::WriteFail | Step::Fail => (Vec::new(), StopReason::Error),
+                    Step::WriteHang | Step::Hang => {
+                        signal.cancelled().await;
+                        (Vec::new(), StopReason::Aborted)
+                    }
                     Step::Say => (
                         vec![AssistantContent::Text(TextContent::plain("answer"))],
                         StopReason::Stop,
@@ -565,11 +883,6 @@ mod tests {
                         })],
                         StopReason::ToolUse,
                     ),
-                    Step::Fail => (Vec::new(), StopReason::Error),
-                    Step::Hang => {
-                        signal.cancelled().await;
-                        (Vec::new(), StopReason::Aborted)
-                    }
                 };
                 let message = AssistantMessage {
                     content,
@@ -584,7 +897,8 @@ mod tests {
                         ..Usage::default()
                     },
                     stop_reason: stop,
-                    error_message: matches!(step, Step::Fail).then(|| "no credit".into()),
+                    error_message: matches!(step, Step::Fail | Step::WriteFail)
+                        .then(|| "no credit".into()),
                     error_kind: None,
                     timestamp: now_ms(),
                 };
@@ -636,9 +950,16 @@ mod tests {
             .agents
             .insert("scout".into(), serde_json::from_value(value).unwrap());
         let (specs, _) = resolve(&settings, &[model()], None);
-        let cwd =
-            std::env::temp_dir().join(format!("cupel-crew-m2-{}-{}", std::process::id(), now_ms()));
+        let cwd = std::env::temp_dir().join(format!(
+            "cupel-crew-m2-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&cwd).unwrap();
+        let cwd = std::fs::canonicalize(cwd).unwrap();
         std::fs::write(cwd.join("note.md"), "note").unwrap();
         (
             Arc::new(Crew::new(
@@ -737,7 +1058,7 @@ mod tests {
         cancel.cancel();
         assert!(matches!(
             crew.run("scout", "task", cancel, &|_| {}).await,
-            Err(CrewError::Stopped(_))
+            Err(CrewError::Stopped { .. })
         ));
         assert!(!crew.is_built("scout"));
         assert!(mock.contexts.lock().unwrap().is_empty());
@@ -766,7 +1087,7 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap(),
-                Err(CrewError::Stopped(_))
+                Err(CrewError::Stopped { .. })
             ));
         }
         assert!(crew.running_names().is_empty());
@@ -788,6 +1109,126 @@ mod tests {
         let next = spawn(&crew);
         started(&mock, 2).await;
         crew.stop_running();
-        assert!(matches!(next.await.unwrap(), Err(CrewError::Stopped(_))));
+        assert!(matches!(
+            next.await.unwrap(),
+            Err(CrewError::Stopped { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn long_answers_and_tasks_are_bounded_and_saved_without_overwrite() {
+        let (mut crew, _) = crew(Step::Long, serde_json::json!({}));
+        let setup = &mut Arc::get_mut(&mut crew).unwrap().setup;
+        setup.home = Some(setup.cwd.join("home"));
+        let reply = crew
+            .run("scout", "task", CancellationToken::new(), &|_| {})
+            .await
+            .unwrap();
+        let path = reply.full_answer.as_ref().unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), reply.answer);
+        let second = crew
+            .run("scout", "again", CancellationToken::new(), &|_| {})
+            .await
+            .unwrap();
+        assert_ne!(second.full_answer, reply.full_answer);
+        assert!(reply.for_lead().contains("answer cut"));
+        let note = exchange_note(&"task".repeat(40_000), &reply);
+        assert!(note.len() < 15 * 1024);
+        assert_eq!(parse_exchange(&note).unwrap().0, "scout");
+        assert!(parse_exchange("ordinary message").is_none());
+    }
+
+    #[tokio::test]
+    async fn transcripts_resume_only_at_the_first_call() {
+        let (mut first, mock) = crew(Step::Say, serde_json::json!({}));
+        let setup = &mut Arc::get_mut(&mut first).unwrap().setup;
+        setup.home = Some(setup.cwd.join("home"));
+        assert!(!first.log_dir().unwrap().exists());
+        first
+            .run("scout", "first", CancellationToken::new(), &|_| {})
+            .await
+            .unwrap();
+        let setup = &first.setup;
+        let resumed = Crew::new(
+            first.specs().cloned().collect(),
+            CrewSetup {
+                cwd: setup.cwd.clone(),
+                home: setup.home.clone(),
+                registry: Arc::clone(&setup.registry),
+                settings: setup.settings.clone(),
+                context_files: setup.context_files.clone(),
+                session_id: setup.session_id.clone(),
+            },
+        );
+        assert!(!resumed.is_built("scout"));
+        resumed
+            .run("scout", "second", CancellationToken::new(), &|_| {})
+            .await
+            .unwrap();
+        let path = resumed.log_dir().unwrap().join("scout.jsonl");
+        assert_eq!(crate::session::load_transcript(&path).unwrap().1.len(), 4);
+        assert_eq!(mock.contexts.lock().unwrap()[1].messages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn failures_and_stops_still_report_partial_edits() {
+        for step in [Step::WriteFail, Step::WriteHang] {
+            let (crew, mock) = crew(step, serde_json::json!({"tools":["bash"]}));
+            assert!(git(&crew.setup.cwd, &["init", "-q"]).is_some());
+            let call = spawn(&crew);
+            started(&mock, 2).await;
+            if matches!(step, Step::WriteHang) {
+                crew.stop_running();
+            }
+            let error = tokio::time::timeout(Duration::from_secs(5), call)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            let changes = match error {
+                CrewError::Failed { changes, .. } | CrewError::Stopped { changes, .. } => changes,
+                error @ CrewError::Unknown(_) => panic!("unexpected {error}"),
+            };
+            let Changes::Files(paths) = changes else {
+                panic!("missing changed files");
+            };
+            assert!(
+                paths.contains(
+                    &crew
+                        .setup
+                        .cwd
+                        .join("edited.txt")
+                        .to_string_lossy()
+                        .into_owned()
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn snapshots_include_renames_and_absolute_paths() {
+        let (crew, _) = crew(Step::Say, serde_json::json!({}));
+        let cwd = &crew.setup.cwd;
+        git(cwd, &["init", "-q"]).unwrap();
+        git(cwd, &["add", "note.md"]).unwrap();
+        git(
+            cwd,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "base",
+            ],
+        )
+        .unwrap();
+        let before = dirty_files(cwd).unwrap();
+        git(cwd, &["mv", "note.md", "renamed.md"]).unwrap();
+        let after = dirty_files(cwd).unwrap();
+        let paths = changed(&before.files, &after.files);
+        assert!(paths.contains(&cwd.join("note.md").to_string_lossy().into_owned()));
+        assert!(paths.contains(&cwd.join("renamed.md").to_string_lossy().into_owned()));
     }
 }
