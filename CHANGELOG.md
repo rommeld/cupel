@@ -3,6 +3,17 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.0] - 2026-10-28
+
+- feat(settings): user-defined helper agents and explicit command mappings, protected by project trust
+- feat(crew): lazy private histories, bounded exchanges, changed-file reporting, persistence, and per-agent spend
+- feat(tui): direct `/agent` calls, session teams, opt-in defaults, and typed startup commands
+- feat(team): persistent shared discussion with bounded request-time projections
+- feat(team): recursive delegation with shared budgets, cycle-free queues, subtree cancellation, and checkout write coordination
+- feat(team): explainable role discovery subordinate to explicit choices and actual permissions
+- fix(tui): preserve streamed answers when discussion updates arrive
+- test(team): verify baseline and expanded multi-agent workflows against live Fireworks and a real terminal
+
 ## [v0.33.13] - 2026-10-27
 
 - feat(models): default OpenAI and Codex to GPT-6.1 Sol
