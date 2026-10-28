@@ -412,6 +412,7 @@ impl Sessions {
         let trust_warning = copy_trust(home.as_deref(), &origin_dir, &spinoff.path);
         let session_id = format!("cupel-{}", cupel_core::types::now_ms());
         let mut app = App::open(&spinoff.path, home, registry, carry, session_id, Vec::new()).await;
+        app.initialize_team(crate::startup::TeamInitialization::ConfiguredDefaults);
 
         // `create` refuses a detached HEAD, so the origin has a branch.
         let base = group.origin.branch.unwrap_or_default();
@@ -487,8 +488,12 @@ impl Sessions {
         let mut notes = Vec::new();
         let fresh = || (format!("cupel-{}", cupel_core::types::now_ms()), Vec::new());
         let latest = session::find_latest(home.as_deref(), &spinoff.path);
+        let mut initialization = crate::startup::TeamInitialization::ConfiguredDefaults;
         let (session_id, history) = match latest.map(|path| session::load_transcript(&path)) {
-            Some(Ok((header, messages))) => (header.session_id, messages),
+            Some(Ok((header, messages))) => {
+                initialization = crate::startup::TeamInitialization::Restore;
+                (header.session_id, messages)
+            }
             Some(Err(error)) => {
                 notes.push(format!("{error} - the session starts empty"));
                 fresh()
@@ -514,6 +519,7 @@ impl Sessions {
         }
         let registry = origin.agent.registry();
         let mut app = App::open(&spinoff.path, home, registry, carry, session_id, history).await;
+        app.initialize_team(initialization);
         for note in notes {
             app.notice(note);
         }

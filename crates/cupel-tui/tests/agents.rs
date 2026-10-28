@@ -440,4 +440,53 @@ mod tests {
             "actual incurred usage remains accounted"
         );
     }
+
+    fn default_team_app() -> (App, Arc<Mock>) {
+        let (app, mock) = app();
+        let mut meta = app.meta;
+        meta.settings.agents.get_mut("custom_42").unwrap().team = Some(true);
+        (App::new(app.agent, meta, app.recorder), mock)
+    }
+
+    #[tokio::test]
+    async fn defaults_are_lazy_and_deferred_until_interaction() {
+        use cupel_tui::startup::{StartupCommand, TeamInitialization};
+        let (mut app, mock) = default_team_app();
+        app.initialize_team(TeamInitialization::ConfiguredDefaults);
+        assert!(app.team.contains("custom_42"));
+        assert!(
+            app.agent.state().messages.is_empty(),
+            "launching and quitting leaves no transcript"
+        );
+        assert!(!app.crew.is_built("custom_42"));
+        app.apply_startup(StartupCommand::Agent {
+            name: "custom_42".into(),
+            task: Some("task".into()),
+        });
+        idle(&mut app).await;
+        assert_eq!(mock.contexts.lock().unwrap().len(), 1);
+        assert!(app.agent.state().messages.iter().any(|message| matches!(message, cupel_agent::AgentMessage::Custom { kind, .. } if kind == "team")));
+    }
+
+    #[test]
+    fn restoration_without_a_saved_team_does_not_apply_new_defaults() {
+        use cupel_tui::startup::TeamInitialization;
+        let (mut app, _) = default_team_app();
+        app.initialize_team(TeamInitialization::Restore);
+        assert!(app.team.is_empty());
+        assert!(app.agent.state().messages.is_empty());
+    }
+
+    #[test]
+    fn saved_empty_team_beats_configured_defaults() {
+        use cupel_tui::startup::TeamInitialization;
+        let (mut app, _) = default_team_app();
+        app.initialize_team(TeamInitialization::ConfiguredDefaults);
+        submit(&mut app, "/team clear");
+        let mut options = AgentOptions::new(app.meta.models[0].clone(), app.agent.registry());
+        options.messages = app.agent.state().messages;
+        let mut restored = App::new(Agent::new(options), app.meta, app.recorder);
+        restored.initialize_team(TeamInitialization::ConfiguredDefaults);
+        assert!(restored.team.is_empty());
+    }
 }

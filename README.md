@@ -204,12 +204,21 @@ and one further helper call can wait. Esc cancels work, not edits already made.
 Successful and failed exchanges inform the lead of answers and observed changes;
 change reports also include concurrent user edits and explicitly report uncertainty.
 
-Fresh teams start empty. `/team add scout critic` enables `ask` for read-only
+Fresh teams start empty unless eligible definitions explicitly set `"team": true`.
+Missing or false does not prevent explicit additions. `/team add scout critic` enables `ask` for read-only
 members and `delegate` for writers; `/team remove <name>...` and `/team clear`
 remove them. Eligibility alone does not add a member. Changing the tool schemas
 affects prompt caching from the next lead run. During lead delegation, the first
 Esc stops outstanding helpers; a second stops the lead. Restored sessions retain
 their saved choices, including an empty team.
+
+Start the normal TUI with one of `cupel --team [--add <name>...]`,
+`cupel --agent <name> [task]`, or `cupel --review`. These mutually exclusive
+forms use the same handlers as slash commands and do not exit automatically.
+Use `--` before flag-shaped task words. They require terminal input and output;
+`--plain` is not supported. `/new` and fresh spinoffs use their own settings'
+defaults; resumed sessions and in-place reloads retain saved choices instead.
+Default membership alone does not write a transcript until the first interaction.
 
 `agentCommands` routes `/review` and prompt templates explicitly, independently of
 team membership. Invalid mappings warn and fall back to the lead, not an armed

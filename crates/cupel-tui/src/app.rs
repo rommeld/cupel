@@ -34,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 use crate::autocomplete::{Autocomplete, Candidate};
 use crate::input::InputState;
 use crate::login;
+use crate::startup::{StartupCommand, TeamInitialization};
 use crate::theme::Theme;
 use crate::transcript::{Cell, ToolOutcome, Transcript};
 
@@ -86,6 +87,7 @@ pub struct App {
     pub waiting_helper: Option<HelperCall>,
     pub routes: std::collections::BTreeMap<String, String>,
     pub team: std::collections::BTreeSet<String>,
+    pub initial_team_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,6 +402,7 @@ impl App {
             waiting_helper: None,
             routes,
             team: std::collections::BTreeSet::new(),
+            initial_team_pending: false,
         };
         if let Some(names) = history.iter().rev().find_map(|message| match message {
             AgentMessage::Custom { kind, payload, .. } if kind == TEAM_KIND => Some(
@@ -428,6 +431,44 @@ impl App {
         }
         app.note_thinking_level();
         app
+    }
+
+    pub fn initialize_team(&mut self, initialization: TeamInitialization) {
+        let has_saved = self.agent.state().messages.iter().any(
+            |message| matches!(message, AgentMessage::Custom { kind, .. } if kind == TEAM_KIND),
+        );
+        if initialization == TeamInitialization::Restore || has_saved {
+            return;
+        }
+        let defaults = self
+            .crew
+            .specs()
+            .filter(|spec| spec.definition.joins_team_by_default())
+            .map(|spec| spec.name.clone())
+            .collect();
+        self.restore_team(defaults);
+        self.initial_team_pending = !self.team.is_empty();
+    }
+
+    pub fn apply_startup(&mut self, startup: StartupCommand) {
+        match startup {
+            StartupCommand::Team(command) => self.handle_team_command(command),
+            StartupCommand::Agent { name, task } => {
+                self.handle_agent_command(
+                    &task.map_or(name.clone(), |task| format!("{name} {task}")),
+                );
+            }
+            StartupCommand::Review => {
+                self.handle_builtin("review");
+            }
+        }
+    }
+
+    fn flush_initial_team(&mut self) {
+        if self.initial_team_pending {
+            self.initial_team_pending = false;
+            self.record_team();
+        }
     }
 
     /// Say so when the model cannot do the thinking level that was asked for.
@@ -865,6 +906,7 @@ impl App {
             timestamp += 1;
         };
         let mut app = self.reload_session(cwd, session_id, Vec::new()).await;
+        app.initialize_team(TeamInitialization::ConfiguredDefaults);
         app.notice(format!("new session {}", app.recorder.session_id()));
         app
     }
@@ -943,6 +985,7 @@ impl App {
         app.mouse_captured = self.mouse_captured;
         app.crew.restore_spend(self.crew.spend_snapshot());
         app.restore_team(self.team.into_iter().collect());
+        app.initial_team_pending = self.initial_team_pending;
         if let Some(message) = delta_message {
             // The transcript file gets the update too a later --resume
             // replays the same conversation the model saw.
@@ -1293,6 +1336,7 @@ impl App {
     /// Route a prompt to the agent: new run when idle, queued or steered
     /// when busy.
     pub fn send(&mut self, text: &str, delivery: Delivery) {
+        self.flush_initial_team();
         // A prompt is headed for the agent the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately not at
         // startup (launching + quitting cupel must leave no trace), and not
@@ -1328,6 +1372,7 @@ impl App {
 
     /// Start the agent run for a prompt (the async half of `send`).
     pub fn start_run(&mut self, text: &str) {
+        self.flush_initial_team();
         // The task leads the turn. `start_run`is the single funnel every
         // prompt goes through (typed prompts, expanded templates, /review bundles).
         self.transcript.cells.push(Cell::User {
@@ -1802,6 +1847,7 @@ impl App {
             return;
         }
         self.apply_team();
+        self.initial_team_pending = false;
         self.record_team();
         self.notice(format!("team: {} (from the lead's next request on; changed tool schemas affect prompt caching)", if self.team.is_empty() { "empty - the lead works alone".into() } else { self.team.iter().cloned().collect::<Vec<_>>().join(", ") }));
     }
@@ -1858,6 +1904,7 @@ impl App {
     }
 
     fn start_helper(&mut self, call: HelperCall) {
+        self.flush_initial_team();
         self.transcript.cells.push(Cell::User {
             text: format!("@{} {}", call.name, call.task),
         });

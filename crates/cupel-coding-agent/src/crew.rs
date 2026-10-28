@@ -69,6 +69,9 @@ pub fn resolve(
         if let Some(problem) = problem {
             warnings.push(format!("warning: agent {name}: {problem}"));
         }
+        if definition.description().is_none() {
+            warnings.push(format!("warning: agent {name} is manual-only: add agents.{name}.description in settings.json to use it on a team; /agent {name} and agentCommands remain available"));
+        }
         specs.push(AgentSpec {
             name: name.clone(),
             definition: definition.clone(),

@@ -29,6 +29,7 @@ pub mod login;
 pub mod markdown;
 pub mod project_trust;
 pub mod sessions;
+pub mod startup;
 mod terminal_text;
 pub mod theme;
 pub mod transcript;
@@ -65,6 +66,8 @@ pub async fn run(
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
     questions: Option<QuestionReceiver>,
+    initialization: startup::TeamInitialization,
+    startup: Option<startup::StartupCommand>,
 ) -> std::io::Result<Exit> {
     // Register before entering raw mode so termination always takes the restore path.
     let signals = TerminationSignals::new()?;
@@ -101,7 +104,17 @@ pub async fn run(
         );
         ratatui_hook(info);
     }));
-    let result = event_loop(&mut terminal, agent, meta, recorder, questions, signals).await;
+    let result = event_loop(
+        &mut terminal,
+        agent,
+        meta,
+        recorder,
+        questions,
+        signals,
+        initialization,
+        startup,
+    )
+    .await;
     // Pop what was pushed, before `restore` leaves the alternate screen it was
     // pushed on.
     let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
@@ -142,9 +155,15 @@ async fn event_loop(
     recorder: cupel_coding_agent::session::SessionRecorder,
     questions: Option<QuestionReceiver>,
     mut signals: TerminationSignals,
+    initialization: startup::TeamInitialization,
+    startup: Option<startup::StartupCommand>,
 ) -> std::io::Result<Exit> {
     let mut app = app::App::new(agent, meta, recorder);
     app.questions = questions;
+    app.initialize_team(initialization);
+    if let Some(startup) = startup {
+        app.apply_startup(startup);
+    }
     let mut sessions = sessions::Sessions::new(app);
     sessions.restore().await;
     let mut updates = updates::Updates::default();
@@ -158,6 +177,12 @@ async fn event_loop(
     let mut status = Reporter::for_stdout();
 
     let result = loop {
+        // Startup prompts use the same hooks as typed prompts, before blocking.
+        let app = sessions.active_mut();
+        if let Some(prompt) = app.pending_prompt.take() {
+            app.recorder.before_prompt(&prompt).await;
+            app.start_run(&prompt);
+        }
         status.sync(terminal.backend_mut(), sessions.status_records());
         if let Err(error) = terminal.draw(|frame| ui::render_sessions(frame, &mut sessions)) {
             break Err(error);
