@@ -14,5 +14,4 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-      interval: 3
     open-pull-requests-limit: 1
