@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.1] - 2026-10-30
+
+- docs: reduce the README to setup, everyday usage, and essential configuration; simplify helper teams and ACP, remove client examples and benchmark tables
+- chore(deps): update base64, sha2, unicode-normalization, grep-searcher, and ignore
+- ci: update Dependabot configuration
+
 ## [v0.34.0] - 2026-10-28
 
 - feat(settings): user-defined helper agents and explicit command mappings, protected by project trust
