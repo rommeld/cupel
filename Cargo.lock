@@ -1015,7 +1015,7 @@ name = "cupel-coding-agent"
 version = "0.34.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "cupel-agent",
  "cupel-core",
  "futures-util",
@@ -1043,7 +1043,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
  "aws-smithy-types",
- "base64 0.22.1",
+ "base64 0.23.1",
  "futures-core",
  "futures-util",
  "getrandom 0.4.3",
@@ -1062,7 +1062,7 @@ dependencies = [
 name = "cupel-tui"
 version = "0.34.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "cupel-agent",
  "cupel-coding-agent",
  "cupel-core",

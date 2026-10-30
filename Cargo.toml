@@ -24,7 +24,7 @@ aws-config = "1"
 # Keep the current HTTPS client without the legacy `rustls` default feature.
 aws-sdk-bedrockruntime = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-types = "1"
-base64 = "0.22"
+base64 = "0.23"
 futures-core = "0.3"
 futures-util = "0.3"
 getrandom = "0.4"
