@@ -1031,13 +1031,7 @@ fn convert_tools(
                 let mut converted = json!({
                     "name": name,
                     "description": tool.description,
-                    "input_schema": {
-                        "type": "object",
-                        "properties": tool.parameters.get("properties").cloned()
-                            .unwrap_or_else(|| json!({})),
-                        "required": tool.parameters.get("required").cloned()
-                            .unwrap_or_else(|| json!([])),
-                    },
+                    "input_schema": tool.parameters,
                 });
                 if supports_eager_input_streaming {
                     converted["eager_input_streaming"] = json!(true);
@@ -1087,6 +1081,57 @@ mod tests {
                 timestamp: now_ms(),
             })],
             tools: None,
+        }
+    }
+
+    #[test]
+    fn tool_request_preserves_selector_constraints_and_schema_definitions() {
+        let model = catalog_model("accounts/fireworks/models/minimax-m3");
+        let schemas = [
+            json!({
+                "type":"object", "properties":{
+                    "agent":{"type":"string"},
+                    "role":{"$ref":"#/$defs/role"},
+                    "task":{"type":"string","minLength":1}
+                },
+                "required":["task"],
+                "oneOf":[{"required":["agent"]},{"required":["role"]}],
+                "additionalProperties":false,
+                "$defs":{"role":{"type":"string","enum":["review","research"]}}
+            }),
+            json!({
+                "type":"object", "properties":{
+                    "call":{"type":"integer","minimum":0},
+                    "after":{"type":"integer","minimum":0}
+                },
+                "not":{"required":["call","after"]},
+                "additionalProperties":false
+            }),
+        ];
+        let mut context = hello();
+        context.tools = Some(
+            schemas
+                .iter()
+                .enumerate()
+                .map(|(index, schema)| crate::types::Tool {
+                    name: format!("fixture_{index}"),
+                    description: "Fixture tool".into(),
+                    parameters: schema.clone(),
+                })
+                .collect(),
+        );
+        let compat = anthropic_compat(&model);
+        for is_oauth in [false, true] {
+            let body = build_request_body(
+                &model,
+                &context,
+                &StreamOptions::default(),
+                &compat,
+                is_oauth,
+            );
+            for (index, schema) in schemas.iter().enumerate() {
+                assert_eq!(&body["tools"][index]["input_schema"], schema);
+            }
         }
     }
 
