@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.2] - 2026-10-30
+
+- chore: keep development benchmarks outside packaging
+
 ## [v0.34.1] - 2026-10-30
 
 - docs: reduce the README to setup, everyday usage, and essential configuration; simplify helper teams and ACP, remove client examples and benchmark tables
