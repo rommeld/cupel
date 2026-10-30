@@ -3,6 +3,15 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.3] - 2026-10-30
+
+- chore: ignore generated coding-agent examples
+- docs(team): describe selective handoffs and helper result delivery
+- test(team): trace live handoffs and reconcile workflow usage
+- fix(team): scope shared knowledge and defer helper initialization
+- fix(agent): keep background outside active tool exchanges
+- fix(core): preserve complete Anthropic tool schemas
+
 ## [v0.34.2] - 2026-10-30
 
 - chore: keep development benchmarks outside packaging
