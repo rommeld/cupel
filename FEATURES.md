@@ -1,7 +1,7 @@
 # cupel features
 
 Inventory of the features implemented in the current source checkout, including
-local working-tree changes, as of October 20, 2026. This describes implementation
+local working-tree changes, as of October 30, 2026. This describes implementation
 scope, not a roadmap or a guarantee that every feature is in a published release.
 
 ## Contents
@@ -10,6 +10,7 @@ scope, not a roadmap or a guarantee that every feature is in a published release
 - [Providers, models, and authentication](#providers-models-and-authentication)
 - [Coding tools and retrieval](#coding-tools-and-retrieval)
 - [Agent execution and context management](#agent-execution-and-context-management)
+- [Helper agents and shared knowledge](#helper-agents-and-shared-knowledge)
 - [Project customization](#project-customization)
 - [Sessions and persistence](#sessions-and-persistence)
 - [Parallel worktree sessions](#parallel-worktree-sessions)
@@ -142,12 +143,46 @@ Additional tooling features:
 - Output-token clamping to remaining context capacity.
 - Cross-provider history normalization: thinking blocks, tool-call IDs, missing
   results, empty results, and unsupported images.
+- Complete tool-parameter schemas preserved by the Anthropic adapter, including
+  selector alternatives, field restrictions and schema definitions.
+- Transient shared background placed before the active assignment, keeping its
+  tool calls and observations together without adding it to private history.
 - Recovery from thinking blocks invalidated by edited history.
 - Provider-supported prompt caching and cache-retention options.
 - Input, output, and cache-token accounting.
 - Separate reasoning-token counts when reported by the provider, included in
   output-token totals rather than counted twice.
 - Estimated cost calculation, including cache pricing and long-context tiers.
+
+## Helper agents and shared knowledge
+
+- User-defined helpers in home settings or trusted project settings, with their
+  own provider, model, thinking level, prompt and tool grants.
+- Direct `/agent` calls, explicit command mappings and session team membership;
+  `/team roles` explains inferred roles without adding permissions.
+- Helper construction and remembered-history loading deferred until admission,
+  under a cancellable per-helper slot rather than the crew-wide lock.
+- Private helper histories, shared attributed discussion and a persistent audit
+  log; private prompts and raw histories are not forked into another model.
+- One latest discussion state per call, with current-tree peer outcomes and
+  posts selected for bounded inference context while retaining the full audit.
+- Runtime-assigned post roots prevent older helper procedures from being
+  presented automatically as part of a new task. General lead constraints remain
+  visible; older shared posts and results remain explicitly retrievable.
+- Optional `context` on `ask`/`delegate` for known evidence and constraints,
+  limited to 60 lines/4 KB; oversized handoffs fail before dispatch.
+- `team_read` with a known `call` retrieves its task/result and long-answer
+  reference directly; `after` pages the discussion. The selectors are exclusive.
+- Final helper answers return to their caller automatically. Separate posts
+  remain available for requested discussion and intermediate findings.
+- Shared depth, call, request and cancellation budgets for recursive work;
+  ancestor targets and delegation already beyond depth/call limits are omitted
+  from helper menus, with runtime checks enforcing changing budgets.
+- Read-only subtrees, cycle-free queues, subtree cancellation and checkout write
+  coordination; cancellation retains partial changes and incurred usage.
+- Opt-in live benchmarks with exact-artifact/source-preservation checks, both
+  provider protocols, per-agent usage and retained failed attempts. See
+  `scripts/benchmarks/benchmark_live_agents.py --help`.
 
 ## Project customization
 
