@@ -35,3 +35,7 @@
 !/packaging/homebrew/
 !/packaging/homebrew/**
 !/packaging/README.md
+
+!/scripts/
+!/scripts/benchmarks/
+!/scripts/benchmarks/*.py
