@@ -506,8 +506,15 @@ async fn stream_assistant_response(
     let mut transformed = hooks.transform_context(context.messages.clone()).await;
     if !request_messages.is_empty() {
         compaction::invalidate_usage_anchors(&mut transformed);
+        // Supplemental state is background for the current assignment. Appending
+        // it after tool results creates a new user turn and can restart old work.
+        // Keep the assignment and every subsequent call/result pair together.
+        let assignment = transformed
+            .iter()
+            .rposition(|message| matches!(message, AgentMessage::Llm(Message::User(_))))
+            .unwrap_or(0);
+        drop(transformed.splice(assignment..assignment, request_messages.iter().cloned()));
     }
-    transformed.extend_from_slice(request_messages);
     let llm_messages = hooks.convert_to_llm(&transformed).await;
 
     let llm_context = Context {
