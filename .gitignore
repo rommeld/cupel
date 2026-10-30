@@ -2,6 +2,7 @@
 
 !/crates/
 !/crates/**
+/crates/cupel-coding-agent/examples/
 
 !.gitignore
 
