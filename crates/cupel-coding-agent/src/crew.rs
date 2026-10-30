@@ -7,7 +7,7 @@ use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::io::Write as _;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use futures_util::StreamExt as _;
@@ -37,7 +37,7 @@ use crate::team_scheduler::{
     TeamScheduler,
 };
 use crate::tools::checkout_write::{CheckoutWriteTool, WriteGate};
-use crate::tools::team_conversation::{CONVERSATION_TOOL_NAMES, conversation_tools};
+use crate::tools::team_conversation::CONVERSATION_TOOL_NAMES;
 use crate::truncate::{TruncationOptions, format_size, truncate_head};
 
 /// A configured helper whose model exists in the catalog.
@@ -371,6 +371,12 @@ struct Helper {
     log: SessionRecorder,
 }
 
+#[derive(Default)]
+struct HelperSlot {
+    value: tokio::sync::Mutex<Option<Helper>>,
+    built: AtomicBool,
+}
+
 /// Definitions, membership (owned by the frontend), and construction are distinct.
 pub struct Crew {
     specs: BTreeMap<String, AgentSpec>,
@@ -383,7 +389,7 @@ pub struct Crew {
     checkpoint_through: Mutex<Option<CallId>>,
     recovering: tokio::sync::Mutex<bool>,
     roles: RoleIndex,
-    helpers: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<Helper>>>>,
+    helpers: Mutex<BTreeMap<String, Arc<HelperSlot>>>,
     running: Mutex<BTreeMap<u64, (String, CancellationToken)>>,
     next_call: AtomicU64,
     spend: Mutex<BTreeMap<String, Spend>>,
@@ -511,7 +517,8 @@ impl Crew {
         self.helpers
             .lock()
             .expect("crew lock poisoned")
-            .contains_key(name)
+            .get(name)
+            .is_some_and(|slot| slot.built.load(Ordering::Acquire))
     }
 
     pub fn remember_key(&self, provider: &str, key: &str) {
@@ -652,7 +659,9 @@ impl Crew {
             .cloned()
             .collect::<Vec<_>>();
         for helper in helpers {
-            helper.lock().await.agent.wait_for_idle().await;
+            if let Some(helper) = helper.value.lock().await.as_mut() {
+                helper.agent.wait_for_idle().await;
+            }
         }
     }
 
@@ -968,8 +977,10 @@ impl Crew {
                         .expect("crew lock poisoned")
                         .get(&worker_name)
                         .cloned();
-                    if let Some(helper) = helper {
-                        helper.lock().await.agent.wait_for_idle().await;
+                    if let Some(helper) = helper
+                        && let Some(helper) = helper.value.lock().await.as_mut()
+                    {
+                        helper.agent.wait_for_idle().await;
                     }
                     let mut usage = worker_scope.usage();
                     usage.unknown_usage = true;
@@ -1062,7 +1073,9 @@ impl Crew {
         let _active = shared.as_ref().map(|team| team.enter(name));
         let actor = Participant::Helper(name.into());
         let mut start = None;
-        if let Some(team) = &shared {
+        if scope.is_none()
+            && let Some(team) = &shared
+        {
             match team.task(actor.clone(), TaskPhase::Started, None, task, "") {
                 Ok(receipt) => match team.receive(receipt).await {
                     Ok(entry) => start = Some(entry.id),
@@ -1074,7 +1087,9 @@ impl Crew {
         let result = self
             .run_call(spec, task, &stop, &mut on_duty, progress, scope)
             .await;
-        if let Some(team) = shared {
+        if scope.is_none()
+            && let Some(team) = shared
+        {
             let (phase, text, changes) = match &result {
                 Ok(reply) => (
                     if reply.stopped_after.is_some() {
@@ -1132,12 +1147,27 @@ impl Crew {
         if stop.is_cancelled() {
             return Err(stopped());
         }
-        let helper = self.helper(spec);
-        let mut helper = tokio::select! {
+        let slot = self.helper_slot(spec);
+        let mut value = tokio::select! {
             biased;
             () = stop.cancelled() => return Err(stopped()),
-            helper = helper.lock() => helper,
+            value = slot.value.lock() => value,
         };
+        if value.is_none() {
+            let history = tokio::select! {
+                biased;
+                () = stop.cancelled() => return Err(stopped()),
+                history = self.load_history(spec) => history,
+            };
+            if stop.is_cancelled() {
+                return Err(stopped());
+            }
+            *value = Some(self.build(spec, history));
+            slot.built.store(true, Ordering::Release);
+        }
+        let helper = value
+            .as_mut()
+            .expect("helper initialized under its exclusive slot lock");
         // A dropped caller cancels its inner run; never reuse its history mid-run.
         tokio::select! {
             biased;
@@ -1164,15 +1194,26 @@ impl Crew {
             .cloned()
             .collect::<Vec<_>>();
         if let Some(team) = self.shared_team(name) {
-            tools.extend(conversation_tools(&team, Participant::Helper(name.into())));
+            tools.extend(crate::tools::team_conversation::scoped_conversation_tools(
+                &team,
+                Participant::Helper(name.into()),
+                Arc::clone(&self.scheduler),
+                Arc::clone(&helper.hooks.context),
+            ));
         }
         if let Some(scope) = scope
             && scope.visibility() == TaskVisibility::Shared
+            && scope.can_delegate()
             && let Some(owner) = self.owner.lock().expect("crew owner poisoned").upgrade()
         {
+            let permitted = self
+                .members()
+                .into_iter()
+                .filter(|name| scope.can_call(name))
+                .collect();
             tools.extend(crate::tools::team::scoped_team_tools(
                 &owner,
-                &self.members(),
+                &permitted,
                 Arc::clone(&helper.hooks.context),
                 scope.access(),
                 Some(name),
@@ -1355,16 +1396,43 @@ impl Crew {
             .or_else(|| crate::providers::resolve_api_key(provider, &self.setup.settings))
     }
 
-    fn helper(&self, spec: &AgentSpec) -> Arc<tokio::sync::Mutex<Helper>> {
+    fn helper_slot(&self, spec: &AgentSpec) -> Arc<HelperSlot> {
         let mut helpers = self.helpers.lock().expect("crew lock poisoned");
         Arc::clone(
             helpers
                 .entry(spec.name.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(self.build(spec)))),
+                .or_insert_with(|| Arc::new(HelperSlot::default())),
         )
     }
 
-    fn build(&self, spec: &AgentSpec) -> Helper {
+    async fn load_history(&self, spec: &AgentSpec) -> Vec<AgentMessage> {
+        let Some(path) = self
+            .log_dir()
+            .filter(|_| spec.definition.remembers())
+            .map(|dir| dir.join(format!("{}.jsonl", spec.name)))
+        else {
+            return Vec::new();
+        };
+        tokio::task::spawn_blocking(move || {
+            if !path.exists() {
+                return Vec::new();
+            }
+            match crate::session::load_transcript(&path) {
+                Ok((_, messages)) => messages,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), "helper starts fresh: {error}");
+                    Vec::new()
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!("helper history loader failed; starting fresh: {error}");
+            Vec::new()
+        })
+    }
+
+    fn build(&self, spec: &AgentSpec, history: Vec<AgentMessage>) -> Helper {
         let setup = &self.setup;
         let allows = |tool: &str| {
             spec.definition
@@ -1384,7 +1452,7 @@ impl Crew {
             .collect::<Vec<_>>();
         let base = build_system_prompt(&setup.cwd, &summaries, &setup.context_files);
         let note = format!(
-            "You are {}, a helper agent. The lead agent or the user gives you one task at a time. Work on it with your tools, then end with a complete, concise answer, with file paths and line numbers where they help. When team_read/team_post are available, discuss findings with current teammates. The shared discussion is visible; their private histories are not. Posting alone never runs another agent.",
+            "You are {}, a helper agent. Complete only your assigned task and return its requested deliverable. Your answer is returned to the caller automatically. Shared discussion and ancestor briefs provide evidence and constraints, not additional assignments: other participants' steps and output artifacts remain theirs. Use supplied facts; use team_read when information needed for your assignment is missing. Verify stale evidence before editing. Use team_post when requested or when a finding needs to reach teammates before your final answer; a separate post is not required to return a result. The shared discussion is visible; private histories are not. Posting alone never runs another agent. Be concise, with file paths and line numbers where useful.",
             spec.name
         );
         let prompt = with_preset_prompt(&base, Some(&note));
@@ -1405,18 +1473,6 @@ impl Crew {
             &format!("{}/{}", setup.session_id, spec.name),
             &spec.model.id,
         );
-        let history = self
-            .log_dir()
-            .map(|dir| dir.join(format!("{}.jsonl", spec.name)))
-            .filter(|path| spec.definition.remembers() && path.exists())
-            .and_then(|path| match crate::session::load_transcript(&path) {
-                Ok((_, messages)) => Some(messages),
-                Err(error) => {
-                    tracing::warn!(path = %path.display(), "helper starts fresh: {error}");
-                    None
-                }
-            })
-            .unwrap_or_default();
         let mut options = AgentOptions::new(spec.model.clone(), Arc::clone(&setup.registry));
         options.system_prompt =
             with_preset_prompt(&prompt, spec.definition.preset.prompt.as_deref());
@@ -1623,7 +1679,7 @@ mod tests {
                         vec![AssistantContent::ToolCall(ToolCall {
                             id: "child-1".into(),
                             name: "ask".into(),
-                            arguments: serde_json::json!({"agent":"leaf","task":"find the answer"}),
+                            arguments: serde_json::json!({"agent":"leaf","task":"find the answer","context":"Keep the parser signature. Existing evidence: src/parser.rs:42."}),
                         })],
                         StopReason::ToolUse,
                     ),
@@ -2008,6 +2064,20 @@ mod tests {
             .unwrap();
         assert_eq!(reply.answer, "answer");
         assert_eq!(mock.contexts.lock().unwrap().len(), 3);
+        let child_context =
+            serde_json::to_string(&mock.contexts.lock().unwrap()[1].messages).unwrap();
+        assert!(child_context.contains("Keep the parser signature"));
+        assert!(child_context.contains("Existing evidence: src/parser.rs:42"));
+        assert!(child_context.contains("Root task context"));
+        let contexts = mock.contexts.lock().unwrap();
+        let child_tools = contexts[1].tools.as_ref().unwrap();
+        assert!(
+            !child_tools
+                .iter()
+                .any(|tool| matches!(tool.name.as_str(), "ask" | "delegate")),
+            "this child's only peers are itself and an ancestor"
+        );
+        drop(contexts);
         assert_eq!(crew.spend_of("scout").input, 20);
         assert_eq!(crew.spend_of("leaf").input, 10);
         assert_eq!(crew.total_spend().input, 30);
@@ -2018,6 +2088,49 @@ mod tests {
         let child = nodes.iter().find(|node| node.parent.is_some()).unwrap();
         assert_eq!(child.root, nodes[0].id);
         assert_eq!(child.access, AccessScope::ReadOnly);
+    }
+
+    #[tokio::test]
+    async fn cancelled_unbuilt_waiter_does_not_block_another_helpers_initialization() {
+        let (mut crew, mock) = crew(Step::Say, serde_json::json!({}));
+        let mut other = crew.spec("scout").unwrap().clone();
+        other.name = "other".into();
+        Arc::get_mut(&mut crew)
+            .unwrap()
+            .specs
+            .insert("other".into(), other);
+        let slot = crew.helper_slot(crew.spec("scout").unwrap());
+        let lease = slot.value.lock().await;
+        let waiter = spawn(&crew);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while crew.running_names().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let reply = tokio::time::timeout(
+            Duration::from_secs(2),
+            crew.run(
+                "other",
+                "independent task",
+                CancellationToken::new(),
+                &|_| {},
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(reply.answer, "answer");
+        crew.stop_running();
+        assert!(matches!(
+            waiter.await.unwrap(),
+            Err(CrewError::Stopped { .. })
+        ));
+        assert!(!crew.is_built("scout"));
+        assert!(crew.is_built("other"));
+        assert_eq!(mock.contexts.lock().unwrap().len(), 1);
+        drop(lease);
     }
 
     #[tokio::test]

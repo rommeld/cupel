@@ -518,26 +518,25 @@ mod tests {
 
     #[tokio::test]
     async fn on_team_results_use_the_thread_once_and_remain_visible_after_clear() {
-        use cupel_coding_agent::team_conversation::{Participant, TaskPhase, TeamBody};
+        use cupel_coding_agent::team_conversation::{Participant, TeamBody};
+        use cupel_coding_agent::team_scheduler::TaskState;
         let (mut app, mock) = app();
         submit(&mut app, "/team add custom_42");
         submit(&mut app, "/agent custom_42 shared task");
         idle(&mut app).await;
-        let mut page = app.team_runtime.inspect(None).await.unwrap();
-        page.entries
-            .retain(|entry| matches!(entry.body, TeamBody::Task { .. }));
-        assert_eq!(page.entries.len(), 2);
+        let page = app
+            .team_runtime
+            .read(&Participant::Lead, None)
+            .await
+            .unwrap();
+        assert_eq!(page.entries.len(), 1);
         assert_eq!(
             page.entries[0].author,
             Participant::Helper("custom_42".into())
         );
         assert!(matches!(
-            page.entries[1].body,
-            TeamBody::Task {
-                phase: TaskPhase::Succeeded,
-                task_entry: Some(_),
-                ..
-            }
+            &page.entries[0].body,
+            TeamBody::Scheduled { task } if task.state == TaskState::Succeeded
         ));
         assert!(!app.agent.state().messages.iter().any(|message| matches!(message, cupel_agent::AgentMessage::Llm(Message::User(user)) if matches!(&user.content, UserContentBody::Text(text) if text.starts_with("[agent exchange]")))));
         {
