@@ -3,20 +3,88 @@
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use cupel_agent::{Agent, AgentOptions, ToolExecutionMode};
     use cupel_coding_agent::bootstrap::{self, Frontend};
     use cupel_coding_agent::modes::SessionMeta;
     use cupel_coding_agent::session::SessionRecorder;
+    use cupel_core::event_stream::{AssistantMessageStream, assistant_message_channel};
+    use cupel_core::provider::Provider;
+    use cupel_core::types::{AssistantMessageEvent, Context, Model, StreamOptions};
     use cupel_tui::app::{App, ReloadTarget, Status};
     use cupel_tui::startup::TeamInitialization;
     use cupel_tui::transcript::Cell;
+    use futures_util::StreamExt as _;
     use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
     struct Workspace(PathBuf);
+
+    /// Opt-in diagnostics for this synthetic fixture only. Never records credentials.
+    struct Trace {
+        file: Mutex<std::fs::File>,
+        next: AtomicUsize,
+        secret: String,
+    }
+
+    impl Trace {
+        fn record(&self, value: &serde_json::Value) {
+            let text = value.to_string().replace(&self.secret, "[redacted]");
+            writeln!(self.file.lock().unwrap(), "{text}").unwrap();
+        }
+    }
+
+    struct TracedProvider {
+        inner: Arc<dyn Provider>,
+        trace: Arc<Trace>,
+    }
+
+    impl Provider for TracedProvider {
+        fn api(&self) -> &str {
+            self.inner.api()
+        }
+        fn compat_problems(&self, model: &Model) -> Vec<String> {
+            self.inner.compat_problems(model)
+        }
+        fn stream(
+            &self,
+            model: &Model,
+            context: Context,
+            mut options: StreamOptions,
+        ) -> AssistantMessageStream {
+            options.temperature = Some(0.0);
+            let id = self.trace.next.fetch_add(1, Ordering::Relaxed);
+            self.trace.record(&serde_json::json!({
+                "event":"request", "id":id, "model":model, "context":context,
+                "temperature":options.temperature, "max_tokens":options.max_tokens,
+                "reasoning":options.reasoning, "session":options.session_id,
+            }));
+            let mut source = self.inner.stream(model, context, options);
+            let (stream, sink) = assistant_message_channel();
+            let trace = Arc::clone(&self.trace);
+            tokio::spawn(async move {
+                while let Some(event) = source.next().await {
+                    match &event {
+                        AssistantMessageEvent::Done { message, .. } => trace.record(
+                            &serde_json::json!({"event":"response","id":id,"message":message}),
+                        ),
+                        AssistantMessageEvent::Error { error, .. } => trace.record(
+                            &serde_json::json!({"event":"response","id":id,"message":error}),
+                        ),
+                        _ => {}
+                    }
+                    if !sink.emit(event) {
+                        break;
+                    }
+                }
+            });
+            stream
+        }
+    }
 
     impl Drop for Workspace {
         fn drop(&mut self) {
@@ -101,17 +169,26 @@ mod tests {
             .providers
             .get("fireworks")
             .expect("Fireworks key required");
-        let root = std::env::temp_dir().join(format!(
-            "cupel-live-m8-{}-{}",
-            std::process::id(),
-            cupel_core::types::now_ms()
-        ));
+        let root = std::env::var_os("CUPEL_LIVE_AGENTS_ROOT").map_or_else(
+            || {
+                std::env::temp_dir().join(format!(
+                    "cupel-live-m8-{}-{}",
+                    std::process::id(),
+                    cupel_core::types::now_ms()
+                ))
+            },
+            PathBuf::from,
+        );
+        assert!(
+            !root.exists(),
+            "live fixture root must be a fresh, disposable directory"
+        );
         std::fs::create_dir_all(root.join("project/src")).unwrap();
         let root = Workspace(std::fs::canonicalize(root).unwrap());
         let cwd = root.0.join("project");
         let home = root.0.join("home");
         std::fs::create_dir_all(&home).unwrap();
-        let settings = serde_json::json!({
+        let mut settings = serde_json::json!({
             "checkForUpdates":false,
             "providers":{"fireworks":key},
             "agents":{
@@ -120,6 +197,16 @@ mod tests {
             },
             "agentCommands":{"review":"diff-auditor"}
         });
+        let matched = std::env::var("CUPEL_LIVE_MATCHED_TASK").as_deref() == Ok("1");
+        if matched {
+            settings["agents"]["change-lens"] = serde_json::json!({
+                "provider":"fireworks","model":"accounts/fireworks/models/minimax-m3p1-flash",
+                "thinkingLevel":"off","description":"Reviews source changes and reports correctness findings.",
+                "maxTurns":4,"remember":false
+            });
+            settings["agents"]["diff-auditor"]["tools"] =
+                serde_json::json!(["read", "grep", "apply_patch"]);
+        }
         let settings_path = home.join("settings.json");
         {
             use std::io::Write as _;
@@ -157,7 +244,30 @@ mod tests {
             cupel_coding_agent::project_trust::ProjectTrust::Trusted,
         )
         .unwrap();
-        let registry = Arc::new(cupel_core::default_registry());
+        let mut registry = cupel_core::default_registry();
+        if let Some(path) = std::env::var_os("CUPEL_LIVE_AGENTS_TRACE") {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let trace = Arc::new(Trace {
+                file: Mutex::new(
+                    std::fs::OpenOptions::new()
+                        .create_new(true)
+                        .write(true)
+                        .mode(0o600)
+                        .open(path)
+                        .unwrap(),
+                ),
+                next: AtomicUsize::new(0),
+                secret: key.clone(),
+            });
+            for api in ["openai-completions", "anthropic-messages"] {
+                let inner = registry.get(api).unwrap();
+                registry.register(Arc::new(TracedProvider {
+                    inner,
+                    trace: Arc::clone(&trace),
+                }));
+            }
+        }
+        let registry = Arc::new(registry);
         let mut ingredients =
             bootstrap::load(&cwd, Some(home.clone()), &registry, Frontend::Tui).await;
         // Bound each request, independently of provider catalog output limits.
@@ -210,6 +320,10 @@ mod tests {
         );
         app.questions = ingredients.questions;
         app.initialize_team(TeamInitialization::ConfiguredDefaults);
+        if matched {
+            matched_workflow(&mut app, &cwd, &home).await;
+            return;
+        }
         if std::env::var("CUPEL_LIVE_EXTENDED_ONLY").as_deref() == Ok("1") {
             submit(&mut app, "/team add map-reader diff-auditor");
             expanded(&mut app, &settings_path, &settings, &cwd).await;
@@ -409,6 +523,74 @@ mod tests {
         println!("PASS fresh-session discussion isolation and trace-free listing");
     }
 
+    async fn matched_workflow(app: &mut App, cwd: &Path, home: &Path) {
+        use cupel_coding_agent::team_conversation::Participant;
+        use cupel_coding_agent::team_scheduler::TaskState;
+        use cupel_core::types::{Message, ToolResultContent};
+        let original = std::fs::read(cwd.join("src/lib.rs")).unwrap();
+        submit(app, "/team add map-reader diff-auditor change-lens");
+        app.team_runtime.post(Participant::Lead,
+            "User constraint for this task: preserve src/lib.rs byte-for-byte. The required result marker is SHARED_19; carry it through the final answer and result.json.".into(), None).await.unwrap();
+        submit(
+            app,
+            "/agent diff-auditor Use ask to assign change-lens this review: read src/lib.rs and return a JSON object with status REVIEW_OK and transcript equal to the TRANSCRIPT string literal's contents (exclude the Rust declaration and quotation marks); do not change files. After that child succeeds, create result.json with exactly two fields: transcript (copy the child's transcript field) and marker (the required marker from shared discussion). Preserve src/lib.rs byte-for-byte. Finish with a brief answer containing the value and marker. Do not substitute your own review for the child.",
+        );
+        idle(app).await;
+        let nodes = app.crew.scheduler().snapshots();
+        assert!(
+            nodes.iter().any(|task| task.parent.is_some()
+                && task.actor == Participant::Helper("change-lens".into())
+                && task.state == TaskState::Succeeded
+                && task.summary.contains("REVIEW_OK")
+                && task.summary.contains("LEDGER42.jsonl")),
+            "child must finish the actual review with the observed value"
+        );
+        println!("PASS child review result");
+        let path = cupel_coding_agent::session::sessions_dir(Some(home), cwd)
+            .unwrap()
+            .join("live-m8/change-lens.jsonl");
+        let (_, history) = cupel_coding_agent::session::load_transcript(&path).unwrap();
+        assert!(history.iter().any(|message| matches!(message,
+            cupel_agent::AgentMessage::Llm(Message::ToolResult(result)) if result.tool_name == "read"
+                && result.content.iter().any(|part| matches!(part, ToolResultContent::Text(text) if text.text.contains("LEDGER42.jsonl"))))),
+            "reviewer must observe real file contents, not just repeat task text");
+        println!("PASS reviewer read real source evidence");
+        let result: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(cwd.join("result.json")).unwrap()).unwrap();
+        assert_eq!(
+            result,
+            serde_json::json!({"transcript":"LEDGER42.jsonl","marker":"SHARED_19"})
+        );
+        assert_eq!(std::fs::read(cwd.join("src/lib.rs")).unwrap(), original);
+        assert!(
+            nodes.iter().all(|task| task.state == TaskState::Succeeded),
+            "no cancelled, failed or exhausted work may count as success"
+        );
+        println!("PASS exact artifact and unchanged source");
+        submit(
+            app,
+            "What exact transcript value and required marker did the team verify? Answer from shared findings without tools, using both exact strings.",
+        );
+        idle(app).await;
+        let answer = app
+            .transcript
+            .cells
+            .iter()
+            .rev()
+            .find_map(|cell| match cell {
+                Cell::Answer { text } => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert!(answer.contains("LEDGER42.jsonl") && answer.contains("SHARED_19"));
+        println!("PASS shared knowledge reaches lead");
+        let total = app.session_totals();
+        println!(
+            "Matched combined: {} input, {} output, {} cached, ${:.6}",
+            total.input, total.output, total.cache_read, total.cost
+        );
+    }
+
     async fn reload(app: &mut App, settings_path: &Path, settings: &serde_json::Value) {
         std::fs::write(settings_path, settings.to_string()).unwrap();
         assert!(!app.is_running());
@@ -488,6 +670,13 @@ mod tests {
                     .as_ref()
                     .is_some_and(|selection| selection.role == Role::Review)),
             "writer did not make the required nested role call"
+        );
+        assert!(
+            nodes.iter().any(|task| task.parent.is_some()
+                && task.actor == Participant::Helper("change-lens".into())
+                && task.state == TaskState::Succeeded
+                && task.summary.contains("REVIEW_OK")),
+            "the actual child reviewer must succeed and return REVIEW_OK, not merely mention it in an error"
         );
         let page = app.team_runtime.inspect(None).await.unwrap();
         for name in ["diff-auditor", "change-lens"] {

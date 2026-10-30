@@ -22,9 +22,19 @@ def summarize(trace):
     responses = {row["id"]: row for row in rows if row["event"] == "response"}
     agents = defaultdict(Counter)
     tools = Counter()
+    reads = Counter()
+    observed_errors = Counter()
+    observed_results = set()
     profiles = []
     for request_id, request in requests.items():
         agent = request.get("session") or "lead"
+        for message in request["context"]["messages"]:
+            if message.get("role") == "toolResult":
+                key = (agent, message["toolCallId"])
+                if key not in observed_results:
+                    observed_results.add(key)
+                    if message.get("isError"):
+                        observed_errors[message["toolName"]] += 1
         agents[agent]["requests"] += 1
         response = responses.get(request_id)
         if response is None:
@@ -46,6 +56,9 @@ def summarize(trace):
         metrics["total"] = metrics["input"] + metrics["output"]
         agents[agent].update(metrics)
         calls = [c["name"] for c in message["content"] if c["type"] == "toolCall"]
+        for call in message["content"]:
+            if call["type"] == "toolCall" and call["name"] == "read":
+                reads[f"{agent}:{call['arguments'].get('path', '?')}"] += 1
         tools.update(calls)
         profiles.append({"id": request_id, "agent": agent, **metrics, "tools": calls})
     totals = Counter()
@@ -54,6 +67,8 @@ def summarize(trace):
     return {
         "totals": dict(totals), "agents": {k: dict(v) for k, v in agents.items()},
         "tools": dict(tools), "requests": profiles,
+        "file_reads": dict(reads),
+        "observed_tool_errors": dict(observed_errors),
         "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest(),
         "apis": sorted({request["model"]["api"] for request in requests.values()}),
     }
@@ -109,7 +124,7 @@ def main():
             row = {"variant": name, "round": round_id, "passed": passed, "reused": reused, **summarize(trace)}
             log_text = log.read_text()
             row["checks"] = [line for line in log_text.splitlines() if line.startswith("PASS ")]
-            combined = re.search(r"Matched combined: (\d+) input, (\d+) output, (\d+) cached, \$([\d.]+)", log_text)
+            combined = re.search(r"(?:Matched|Fireworks) combined: (\d+) input, (\d+) output, (\d+) cached, \$([\d.]+)", log_text)
             if combined:
                 uncached, output, cached = map(int, combined.group(1, 2, 3))
                 row["accounting_reconciled"] = (
@@ -120,8 +135,8 @@ def main():
                 )
                 if not row["accounting_reconciled"]:
                     raise RuntimeError("incomplete provider recording: trace does not reconcile with application totals")
-            if passed and args.workflow == "matched" and not row.get("accounting_reconciled"):
-                raise RuntimeError("passing matched run must reconcile all provider usage")
+            if passed and not row.get("accounting_reconciled"):
+                raise RuntimeError("passing run must reconcile all provider usage")
             report["runs"].append(row)
             (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
             print(name, round_id, "PASS" if passed else "FAIL", row["totals"], flush=True)
