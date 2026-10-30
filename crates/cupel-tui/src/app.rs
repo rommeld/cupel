@@ -19,15 +19,13 @@ use cupel_coding_agent::program_status::{BlockedKind, State as ProgramState};
 use cupel_coding_agent::roles::{AccessFilter, CommandRoute, RoleSelection, command_route};
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
-use cupel_coding_agent::team_conversation::{
-    EntryReceipt, Participant, TaskPhase, TeamRuntime, TeamUpdate,
-};
+use cupel_coding_agent::team_conversation::{Participant, TaskPhase, TeamRuntime, TeamUpdate};
 use cupel_coding_agent::team_runtime::ConversationHooks;
 use cupel_coding_agent::team_scheduler::{AccessScope, RunContext, TaskState};
 use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
 use cupel_coding_agent::tools::checkout_write::{CheckoutWriteTool, WriteGate};
 use cupel_coding_agent::tools::team::{TEAM_TOOL_NAMES, team_tools};
-use cupel_coding_agent::tools::team_conversation::{CONVERSATION_TOOL_NAMES, conversation_tools};
+use cupel_coding_agent::tools::team_conversation::CONVERSATION_TOOL_NAMES;
 use cupel_coding_agent::usage::{HistoryUsage, UsageByModel, UsageTotals};
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
@@ -100,7 +98,6 @@ pub struct App {
     pub team_events: Option<tokio::sync::mpsc::UnboundedReceiver<TeamUpdate>>,
     pub pending_team_read: Option<Option<u64>>,
     pub team_seen: u64,
-    pub lead_team_entry: Option<EntryReceipt>,
     pub base_hooks: Arc<dyn cupel_agent::AgentHooks>,
     pub base_tools: Vec<Arc<dyn cupel_agent::AgentTool>>,
     pub pending_task_action: Option<TaskAction>,
@@ -478,7 +475,6 @@ impl App {
             team_events: Some(team_events),
             pending_team_read: None,
             team_seen: 0,
-            lead_team_entry: None,
             base_hooks,
             base_tools,
             pending_task_action: None,
@@ -1516,15 +1512,6 @@ impl App {
     pub fn start_run(&mut self, text: &str) {
         self.flush_initial_team();
         self.prepare_team_root(text);
-        if !self.team.is_empty() {
-            match self
-                .team_runtime
-                .task(Participant::User, TaskPhase::Started, None, text, "")
-            {
-                Ok(receipt) => self.lead_team_entry = Some(receipt),
-                Err(problem) => self.notice(problem),
-            }
-        }
         // The task leads the turn. `start_run`is the single funnel every
         // prompt goes through (typed prompts, expanded templates, /review bundles).
         self.transcript.cells.push(Cell::User {
@@ -2072,7 +2059,14 @@ impl App {
             .cloned()
             .collect::<Vec<_>>();
         tools.extend(team_tools(&self.crew, &self.team));
-        tools.extend(conversation_tools(&self.team_runtime, Participant::Lead));
+        tools.extend(
+            cupel_coding_agent::tools::team_conversation::scoped_conversation_tools(
+                &self.team_runtime,
+                Participant::Lead,
+                self.crew.scheduler(),
+                self.crew.lead_context(),
+            ),
+        );
         self.agent.set_tools(tools);
     }
 
@@ -2898,60 +2892,6 @@ impl App {
             self.crew.lead_context().clear();
         }
         self.run_finished = true;
-        if let Some(receipt) = self.lead_team_entry.take() {
-            let start = match self.team_runtime.receive(receipt).await {
-                Ok(entry) => Some(entry.id),
-                Err(problem) => {
-                    self.notice(problem);
-                    None
-                }
-            };
-            let state = self.agent.state();
-            let last = state
-                .messages
-                .iter()
-                .rev()
-                .find_map(|message| match message {
-                    AgentMessage::Llm(Message::Assistant(message)) => Some(message),
-                    _ => None,
-                });
-            let (phase, text) = match last {
-                Some(message) => {
-                    let phase = match message.stop_reason {
-                        StopReason::Aborted | StopReason::Length => TaskPhase::Stopped,
-                        StopReason::Error => TaskPhase::Failed,
-                        _ => TaskPhase::Succeeded,
-                    };
-                    let text = message.error_message.clone().unwrap_or_else(|| {
-                        message
-                            .content
-                            .iter()
-                            .filter_map(|part| match part {
-                                AssistantContent::Text(text) => Some(text.text.as_str()),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    });
-                    (phase, text)
-                }
-                None => (
-                    TaskPhase::Failed,
-                    "lead ended without a final message".into(),
-                ),
-            };
-            match self
-                .team_runtime
-                .task(Participant::Lead, phase, start, &text, "")
-            {
-                Ok(receipt) => {
-                    if let Err(problem) = self.team_runtime.receive(receipt).await {
-                        self.notice(problem);
-                    }
-                }
-                Err(problem) => self.notice(problem),
-            }
-        }
         self.record_helper_spend();
         self.start_waiting();
     }

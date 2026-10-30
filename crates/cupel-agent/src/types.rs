@@ -173,7 +173,8 @@ pub trait AgentHooks: Send + Sync {
         None
     }
     async fn observe_usage(&self, _usage: Option<&cupel_core::types::Usage>) {}
-    /// Transient, budgeted request data; never persisted or compacted into history.
+    /// Transient, budgeted background data, placed before the latest user assignment
+    /// and its tool exchanges; never persisted or compacted into private history.
     async fn request_messages(&self) -> Vec<AgentMessage> {
         Vec::new()
     }

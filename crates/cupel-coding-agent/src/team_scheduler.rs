@@ -116,7 +116,18 @@ impl TaskSnapshot {
             self.state.label(),
             reason,
             self.changes,
-            format_args!("{selection}{}", self.summary),
+            format_args!(
+                "{selection}{}",
+                if self.summary.is_empty() {
+                    if self.state.terminal() {
+                        "(no result produced)"
+                    } else {
+                        &self.task
+                    }
+                } else {
+                    &self.summary
+                }
+            ),
             self.artifact
                 .as_ref()
                 .map_or_else(String::new, |path| format!(
@@ -184,8 +195,19 @@ impl CallScope {
         self.parent
     }
     #[must_use]
+    pub fn root_id(&self) -> CallId {
+        self.root
+    }
+    #[must_use]
     pub fn can_call(&self, name: &str) -> bool {
         !self.ancestry.iter().any(|ancestor| ancestor == name)
+    }
+    /// Advertising an already forbidden delegation invites paid retry loops.
+    #[must_use]
+    pub fn can_delegate(&self) -> bool {
+        self.depth < self.budget.limits.depth
+            && self.budget.calls.load(Ordering::SeqCst) < self.budget.limits.helper_calls
+            && !self.cancel.is_cancelled()
     }
     #[must_use]
     pub fn access(&self) -> AccessScope {
@@ -240,7 +262,7 @@ impl CallScope {
     }
     #[must_use]
     pub fn facts(&self) -> String {
-        format!(
+        let mut facts = format!(
             "[Task {} root {}; depth {}/{}; {}; root calls {}/{}, requests {}/{}; shared cancellation and deadline apply]",
             self.id.0,
             self.root.0,
@@ -255,7 +277,17 @@ impl CallScope {
             self.budget.limits.helper_calls,
             self.budget.requests.load(Ordering::SeqCst),
             self.budget.limits.requests
-        )
+        );
+        if self.id != self.root
+            && matches!(self.actor, Participant::Helper(_))
+            && self.visibility == TaskVisibility::Shared
+        {
+            facts.push_str(&format!(
+                "\n[Root task context: team_read call={}. Follow your own assignment; retrieve the parent brief only if needed.]",
+                self.root.0
+            ));
+        }
+        facts
     }
 }
 
@@ -1063,6 +1095,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelled_empty_outcome_never_masquerades_as_an_instruction() {
+        let scheduler = TeamScheduler::new(TeamLimits::default());
+        let scope = scheduler
+            .root(
+                Participant::Helper("reader".into()),
+                AccessScope::ReadOnly,
+                "Delegate the old task to another reviewer",
+                CancellationToken::new(),
+                TaskVisibility::Shared,
+            )
+            .await
+            .unwrap();
+        scheduler.acquire(&scope).await.unwrap();
+        scheduler
+            .finish(&scope, TaskState::Cancelled, "", Changes::ReadOnly)
+            .await;
+        let snapshot = scheduler
+            .snapshots()
+            .into_iter()
+            .find(|task| task.id == scope.id())
+            .unwrap();
+        assert!(snapshot.display().contains("(no result produced)"));
+        assert!(!snapshot.display().contains("Delegate the old task"));
+        assert_eq!(
+            snapshot.task, "Delegate the old task to another reviewer",
+            "audit context remains intact"
+        );
+    }
+
+    #[tokio::test]
     async fn ancestry_access_depth_and_root_budgets_cannot_be_reset() {
         let scheduler = TeamScheduler::new(TeamLimits {
             depth: 2,
@@ -1071,11 +1133,18 @@ mod tests {
             duration: Duration::from_secs(30),
         });
         let root = root(&scheduler).await;
+        assert!(root.can_delegate());
+        assert!(
+            !root.facts().contains("Root task context"),
+            "the root already owns its assignment"
+        );
         let a = scheduler
             .child(&root, "a", "read", AccessScope::ReadOnly)
             .await
             .unwrap();
         scheduler.acquire(&a).await.unwrap();
+        assert!(a.can_delegate(), "a valid deeper call is still allowed");
+        assert!(a.facts().contains("Root task context: team_read call="));
         assert!(
             scheduler
                 .child(&a, "writer", "write", AccessScope::CanWrite)
@@ -1093,6 +1162,14 @@ mod tests {
             .await
             .unwrap();
         scheduler.acquire(&b).await.unwrap();
+        assert!(
+            !b.can_delegate(),
+            "depth and root call ceilings are exhausted"
+        );
+        assert!(
+            !root.can_delegate(),
+            "siblings share the same exhausted call budget"
+        );
         assert!(
             scheduler
                 .child(&b, "c", "deep", AccessScope::ReadOnly)
