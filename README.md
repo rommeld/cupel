@@ -219,7 +219,6 @@ are unsupported over ACP.
 
 ## More
 
-- [Feature reference](FEATURES.md)
 - [Contributing and workspace layout](CONTRIBUTING.md)
 - [Releases and packaging](packaging/README.md)
 - [Development benchmarks](scripts/benchmarks/)
