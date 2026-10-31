@@ -3,6 +3,18 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.4] - 2026-10-31
+
+- docs(team): describe configured review workflow
+- test(team): verify Developer and Reviewer lifecycle
+- feat(team): define Developer and Reviewer handoffs
+- fix(review): allow requested standalone Markdown reports
+- fix(roles): preserve supported helper responsibilities
+- Define coding guidelines (#112)
+- feat(tui): add theme examples to repository
+- style: simplify code comments and remove field documentation (#110)
+- feat(config): add implementer team agent
+
 ## [v0.34.3] - 2026-10-30
 
 - chore: ignore generated coding-agent examples
