@@ -1,8 +1,8 @@
-//! Stateful wrapper around the low-level agent loop.
+//! Stateful wrapper around the low level agent loop.
 //!
-//! Concurrency model: the run executes on a spawned Tokio task, so
+//! Concurrency model, the run executes on a spawned Tokio task, so
 //! everything the run touches lives behind `Arc`s. State sits in
-//! `Arc<Mutex<...>>` with short lock scopes; the queues likewise. [`Agent::prompt`]
+//! `Arc<Mutex<...>>` with short lock scopes, the queues likewise. `prompt`
 //! hands back an [`AgentEventStream`]. The caller consumes events at its
 //! own pace while the internal forwarder keeps [`AgentState`] up to date.
 
@@ -99,10 +99,6 @@ pub struct Agent {
     tool_execution: ToolExecutionMode,
     retry: RetryConfig,
     compaction: crate::compaction::CompactionConfig,
-    /// Seeded history (a resumed transcript, a restored spinoff, a hot reload)
-    /// carries provider usage measured on whatever context its original run
-    /// sent, possibly a compacted one. Until a reply of this agent's own reports
-    /// the real size again, runs estimate that history from its content.
     unverified_usage: Arc<AtomicBool>,
     active: Option<(CancellationToken, tokio::task::JoinHandle<()>)>,
 }
@@ -148,15 +144,15 @@ impl Agent {
             .clone()
     }
 
-    /// Switch the model for future requests (an in-flight run keeps the
-    /// model it started with; the next run picks this up).
+    /// Switch the model for future requests (an in flight run keeps the
+    /// model it started with, the next run picks this up).
     pub fn set_model(&self, model: Model) {
         self.state.lock().expect("agent state lock poisoned").model = model;
     }
 
     /// Replace the system prompt for runs (the TUI's /preset
     /// appends a preset prompt to the base prompt). Like set_model, a run
-    /// in flight keeps the prompt it started with: `prompt` copies it
+    /// in flight keeps the prompt it started with, `prompt` copies it
     /// into the run's context at the start.
     pub fn set_system_prompt(&self, system_prompt: String) {
         self.state
@@ -166,8 +162,8 @@ impl Agent {
     }
 
     /// Swap the fallback API key used by future runs (the TUI's /provider
-    /// and cross-provider /model switches). A run already in flight keeps
-    /// the key it was started with; hook-provided keys still win.
+    /// and cross provider /model switches). A run already in flight keeps
+    /// the key it was started with, hook provided keys still win.
     pub fn set_api_key(&mut self, api_key: Option<String>) {
         self.api_key = api_key;
     }
@@ -193,7 +189,7 @@ impl Agent {
     }
 
     /// The fallback API key future runs will use. This is the read half of
-    /// [`Agent::set_api_key`], so frontends and tests can verify which
+    /// `set_api_key`, so frontends and tests can verify which
     /// credential a reload or switch resolved without sending a request.
     #[must_use]
     pub fn api_key(&self) -> Option<&str> {
@@ -201,8 +197,8 @@ impl Agent {
     }
 
     /// The provider registry this agent dispatches through. Cheap (Arc
-    /// clone), letting a frontend rebuild an agent for the TUI's /hot-reload
-    /// without re-plumbing the registry from startup.
+    /// clone), letting a frontend rebuild an agent for the TUI's /hot reload
+    /// without re plumbing the registry from startup.
     #[must_use]
     pub fn registry(&self) -> Arc<Registry> {
         Arc::clone(&self.registry)
@@ -227,7 +223,7 @@ impl Agent {
     }
 
     /// The thinking level future runs will use. This is the read half of
-    /// [`Agent::set_thinking_level`], for status displays. A cheap
+    /// `set_thinking_level`, for status displays. A cheap
     /// copy read under the lock, deliberately not a full state()
     /// snapshot (which clones the message history).
     #[must_use]
@@ -238,7 +234,7 @@ impl Agent {
             .thinking_level
     }
 
-    /// The thinking level the next request really uses: the requested one,
+    /// The thinking level the next request really uses, the requested one,
     /// except "off" on a model that cannot turn reasoning off, which gets its
     /// lowest level instead.
     #[must_use]
@@ -320,7 +316,7 @@ impl Agent {
             .push_back(message);
     }
 
-    /// Take the oldest queued follow-up out of the queue. A run can end
+    /// Take the oldest queued follow up out of the queue. A run can end
     /// with messages still waiting. Queued after the loop's last look at
     /// the queue, or behind a run that ended in an error. A frontend then
     /// starts the next run with this message.
@@ -332,7 +328,7 @@ impl Agent {
             .pop_front()
     }
 
-    /// Drop every queued follow-up. The user took the queued prompts back
+    /// Drop every queued follow up. The user took the queued prompts back
     /// into the editor.
     pub fn clear_follow_ups(&self) {
         self.follow_ups
@@ -343,7 +339,7 @@ impl Agent {
 
     /// Steer the active run. The message goes in before the model's next request, and
     /// a reply that is streaming right now is cut short so that request comes at once.
-    /// Tools that are already running finish first. Unlike a follow-up, every waiting
+    /// Tools that are already running finish first. Unlike a follow up, every waiting
     /// steering message is delivered at the same moment.
     pub fn steer(&self, message: AgentMessage) {
         self.steering
@@ -356,7 +352,7 @@ impl Agent {
         self.steering_signal.notify_one();
     }
 
-    /// Take every waiting steering message out of the queue. Like follow-ups, they can
+    /// Take every waiting steering message out of the queue. Like follow ups, they can
     /// outlive a run that ended before the loop looked at them. A frontend then starts
     /// the next run with them.
     #[must_use]
@@ -373,7 +369,7 @@ impl Agent {
             .clear();
     }
 
-    /// Cancellation token of the active run, if any (e.g. for a Ctrl-C
+    /// Cancellation token of the active run, if any (e.g. for a Ctrl C
     /// handler).
     #[must_use]
     pub fn cancel_token(&self) -> Option<CancellationToken> {
@@ -397,7 +393,7 @@ impl Agent {
     /// Start a run with a plain text prompt.
     ///
     /// Returns the run's event stream. Consume it (or drop it, since state still
-    /// updates) and call [`Agent::wait_for_idle`] before the next prompt.
+    /// updates) and call `wait_for_idle` before the next prompt.
     pub fn prompt_text(&mut self, text: impl Into<String>) -> Result<AgentEventStream, AgentError> {
         self.prompt(vec![AgentMessage::user_text(text)])
     }
@@ -431,7 +427,7 @@ impl Agent {
                 },
                 AgentLoopConfig {
                     model: state.model.clone(),
-                    // The run uses what the model can do; the state keeps
+                    // The run uses what the model can do, the state keeps
                     // what was asked for, so a later model switch can honour it.
                     thinking_level: cupel_core::model::effective_thinking_level(
                         &state.model,
@@ -463,7 +459,7 @@ impl Agent {
             state.error_message = None;
         }
 
-        // Task 1: the loop itself, emitting into the internal channel.
+        // Task 1, the loop itself, emitting into the internal channel.
         let loop_cancel = cancel.clone();
         tokio::spawn(async move {
             let _ = agent_loop(
@@ -478,8 +474,8 @@ impl Agent {
             .await;
         });
 
-        // Task 2: the forwarder reduces every event into AgentState,
-        // then re-emits it to the caller.
+        // Task 2, the forwarder reduces every event into AgentState,
+        // then re emits it to the caller.
         let state = Arc::clone(&self.state);
         let unverified_usage = Arc::clone(&self.unverified_usage);
         let handle = tokio::spawn(async move {
@@ -537,7 +533,7 @@ async fn forward_events(
 
 /// A successful reply with provider usage measures the context this agent
 /// actually sent. Same test as the usage anchor in
-/// [`estimate_context_tokens`](crate::compaction::estimate_context_tokens).
+/// `estimate_context_tokens`.
 fn reports_context_size(message: &AgentMessage) -> bool {
     let AgentMessage::Llm(Message::Assistant(assistant)) = message else {
         return false;

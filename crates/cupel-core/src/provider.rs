@@ -1,4 +1,4 @@
-//! Provider trait + registry + the top-level `stream`/`complete` entry points.
+//! Provider trait + registry + the top level `stream`/`complete` entry points.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -10,7 +10,7 @@ use crate::{
 
 /// A backend that can turn (model, context, options) into a stream of events.
 ///
-/// `stream` is intentionally synchronous: it returns the stream object
+/// `stream` is intentionally synchronous, it returns the stream object
 /// *immediately* and performs the HTTP work in the background. Per the
 /// contract, errors after this point are delivered *on the stream*
 /// (as an `Error` event), never by panicing.
@@ -27,7 +27,7 @@ pub trait Provider: Send + Sync {
 
     /// Problems in `model.compat` for this API, one line per rejected key
     /// (empty when the knobs parse). The catalog loader shows them, so a
-    /// typo in a hand-written models.json row is visible instead of quietly
+    /// typo in a hand written models.json row is visible instead of quietly
     /// leaving that knob at its default.
     fn compat_problems(&self, _model: &Model) -> Vec<String> {
         Vec::new()
@@ -71,7 +71,7 @@ impl Registry {
         Ok(provider.stream(model, context, options))
     }
 
-    /// Convenience: stream to completion and return the final message.
+    /// Convenience, stream to completion and return the final message.
     pub async fn complete(
         &self,
         model: &Model,

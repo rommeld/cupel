@@ -1,10 +1,10 @@
 //! The `grep` tool.
 //!
-//! Split of responsibilities:
-//! - [`crate::search`] finds matching lines (the pluggable backend).
-//! - This module is the model-facing layer: argument schema, context lines,
+//! Split of responsibilities,
+//! * `search` finds matching lines (the pluggable backend).
+//! * This module is the model facing layer, argument schema, context lines,
 //!   line/byte truncation, and the output format the model sees
-//!   (`path:line: text` for matches, `path-line- text` for context).
+//!   (path, line number and text separated by colons for matches, path, line number and text separated by hyphens for context).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -185,7 +185,7 @@ impl AgentTool for GrepTool {
         let search_path = resolve_to_root(args.path.as_deref().unwrap_or("."), &self.cwd);
         let searching_directory = search_path.is_dir();
 
-        // The scope, spelled out for the no-match message: a model that sees
+        // The scope, spelled out for the no match message, a model that sees
         // what was searched where fixes a bad glob instead of retrying blind.
         let scope = format!(
             "/{}/ in {}{}",
@@ -204,7 +204,7 @@ impl AgentTool for GrepTool {
             limit,
         };
         // Files mode needs to know what a definition of the pattern looks
-        // like; the ranker reads that off the query before the backend
+        // like, the ranker reads that off the query before the backend
         // takes ownership of it.
         let ranker = (args.output_mode == OutputMode::Files).then(|| Ranker::new(&query));
         let outcome = self.backend.search(query, cancel).await?;
@@ -247,14 +247,14 @@ impl AgentTool for GrepTool {
             let relative_path = format_path(&m.path);
 
             if args.context == 0 {
-                // Fast path: the backend already gave us the matching line.
+                // Fast path, the backend already gave us the matching line.
                 let (text, was_truncated) = truncate_line(&m.line, GREP_MAX_LINE_LENGTH);
                 lines_truncated |= was_truncated;
                 output_lines.push(format!("{relative_path}:{}: {text}", m.line_number));
                 continue;
             }
 
-            // Context mode: pull surrounding lines from the file.
+            // Context mode, pull surrounding lines from the file.
             let lines = file_cache.entry(m.path.clone()).or_insert_with(|| {
                 std::fs::read_to_string(&m.path)
                     .map(|content| {
@@ -281,7 +281,7 @@ impl AgentTool for GrepTool {
                     .map_or("", String::as_str);
                 let (text, was_truncated) = truncate_line(line_text, GREP_MAX_LINE_LENGTH);
                 lines_truncated |= was_truncated;
-                // Match lines use `:`, context lines use `-`, as in the classic
+                // Match lines use a colon, context lines use a hyphen, as in the classic
                 // grep convention, and what the model is trained on.
                 if current == m.line_number {
                     output_lines.push(format!("{relative_path}:{current}: {text}"));
@@ -291,7 +291,7 @@ impl AgentTool for GrepTool {
             }
         }
 
-        // No line limit here: the match limit already capped the row count.
+        // No line limit here, the match limit already capped the row count.
         let raw_output = output_lines.join("\n");
         let truncation = truncate_head(
             &raw_output,
@@ -335,7 +335,7 @@ impl AgentTool for GrepTool {
     }
 }
 
-/// `files` mode output: the best `limit` files, one line each.
+/// `files` mode output, the best `limit` files, one line each.
 fn render_files(
     ranked: &[FileSummary],
     window_full: bool,

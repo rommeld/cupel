@@ -1,19 +1,19 @@
-//! The `apply_patch` tool: create, delete, rename and patch files with one `*** Begin
+//! The `apply_patch` tool, create, delete, rename and patch files with one `*** Begin
 //! Patch` / `*** End Patch` envelope.
 //!
-//! A whole-file overwrite is the bluntest possible edit: the model re-emits every
+//! A whole file overwrite is the bluntest possible edit, the model re emits every
 //! line, and any slip is silently written out. A patch names its intent per file
 //! (add, delete, update, move) and per hunk (context, removed, added), so the
 //! tool can check each intent against the file before anything is written.
 //!
-//! The pieces: [`crate::tools::patch_parser`] turns the text into hunks,
-//! [`crate::tools::patch_update`] applies update hunks to text, and this module is
+//! The pieces, `patch_parser` turns the text into hunks,
+//! `patch_update` applies update hunks to text, and this module is
 //! the I/O shell around them. Unlike Codex's standalone `apply_patch` binary, which
 //! writes hunk by hunk and leaves earlier hunks applied when a later one fails, this
-//! tool follows Codex's tool handler: verify every hunk first (all reads, no writes),
+//! tool follows Codex's tool handler, verify every hunk first (all reads, no writes),
 //! then apply. A patch that does not match the files changes nothing.
 //!
-//! Every file the patch touches is locked for the whole verify-and-apply cycle.
+//! Every file the patch touches is locked for the whole verify and apply cycle.
 
 use std::path::{Path, PathBuf};
 
@@ -85,7 +85,7 @@ impl ApplyPatchTool {
     /// Every absolute path the patch writes or removes, deduplicated the
     /// way the file queue keys its locks (canonical path when the file
     /// exists) and sorted. Two hunks on one file are refused up front, as
-    /// in Codex: applying them in sequence would make the second one
+    /// in Codex, applying them in sequence would make the second one
     /// operate on the first one's result, which the patch did not say.
     fn lock_keys(&self, hunks: &[Hunk]) -> Result<Vec<PathBuf>, ToolError> {
         let mut targets: Vec<PathBuf> = Vec::new();
@@ -149,7 +149,7 @@ impl ApplyPatchTool {
                 let raw = tokio::fs::read_to_string(&absolute)
                     .await
                     .map_err(|e| format!("Failed to read file to update {path}: {e}"))?;
-                // Match in BOM-free, LF-normalized space; restore both on
+                // Match in BOM free, LF normalized space, restore both on
                 // write.
                 let (bom, text) = strip_bom(&raw);
                 let ending = detect_line_ending(text);
@@ -171,8 +171,8 @@ impl ApplyPatchTool {
     }
 }
 
-/// One verified file operation: all reading and matching is done, only
-/// the write is left. `display` is the path as the patch spelled it; the
+/// One verified file operation, all reading and matching is done, only
+/// the write is left. `display` is the path as the patch spelled it, the
 /// model and the transcript see that spelling, never the absolute path.
 enum Change {
     Add {
@@ -217,8 +217,8 @@ impl AgentTool for ApplyPatchTool {
         })
     }
 
-    /// `apply_patch A new.txt, M src/main.rs, D old.txt` - the diff below the
-    /// header shows what changed, so the header lists where, git-style.
+    /// `apply_patch A new.txt, M src/main.rs, D old.txt` the diff below the
+    /// header shows what changed, so the header lists where, git style.
     fn describe_call(&self, args: &Value) -> String {
         let Some(hunks) = args
             .get("input")
@@ -254,7 +254,7 @@ impl AgentTool for ApplyPatchTool {
         }
 
         // Lock every file the patch touches, in one global order, before
-        // reading anything: the verify step must see the same bytes the
+        // reading anything, the verify step must see the same bytes the
         // apply step overwrites, and two patches on overlapping files must
         // not deadlock (sorted acquisition means no cycles).
         let _guards = lock_all(&self.lock_keys(&hunks)?).await;
@@ -308,7 +308,7 @@ impl AgentTool for ApplyPatchTool {
             }
         }
 
-        // Codex's summary, verbatim: the models know it.
+        // Codex's summary, verbatim, the models know it.
         let mut summary = String::from("Success. Updated the following files:");
         for (letter, paths) in [('A', &added), ('M', &modified), ('D', &deleted)] {
             for path in paths {
@@ -317,7 +317,7 @@ impl AgentTool for ApplyPatchTool {
         }
         Ok(AgentToolResult {
             content: vec![ToolResultContent::Text(TextContent::plain(summary))],
-            // The diff rides in details for the transcript; the model only
+            // The diff rides in details for the transcript, the model only
             // needs the summary (it wrote the patch).
             details: Some(json!({ "diff": diff.trim_end() })),
             terminate: false,
@@ -325,7 +325,7 @@ impl AgentTool for ApplyPatchTool {
     }
 }
 
-/// The file queue's key: symlinks and `./` resolved when the file exists,
+/// The file queue's key, symlinks and `./` resolved when the file exists,
 /// the plain absolute path otherwise (a file about to be created).
 fn queue_key(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
@@ -356,7 +356,7 @@ async fn write_creating_parents(
 }
 
 /// The write step. Like Codex, an I/O failure here leaves the changes
-/// before it in place; the error names the file, and the model can read
+/// before it in place, the error names the file, and the model can read
 /// it back.
 async fn apply(change: &Change) -> Result<(), ToolError> {
     match change {
@@ -583,8 +583,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(read(&root, "name.txt"), "new\n");
-        // exists() cannot distinguish the two spellings on case-insensitive
-        // filesystems; inspect the directory entry to verify the rename.
+        // exists() cannot distinguish the two spellings on case insensitive
+        // filesystems, inspect the directory entry to verify the rename.
         let names: Vec<_> = std::fs::read_dir(&root)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
@@ -656,7 +656,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_files_and_directories_are_rejected_before_any_write() {
-        // Codex fixtures 007, 009, 012 and (with a twist) 015: Codex's
+        // Codex fixtures 007, 009, 012 and (with a twist) 015, Codex's
         // binary leaves created.txt behind, this tool verifies first.
         let root = temp_root("reject");
         write(&root, "foo.txt", "stable\n");

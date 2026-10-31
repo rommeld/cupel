@@ -1,8 +1,8 @@
-//! Updates in the background: the check at startup, and `/update`.
+//! Updates in the background, the check at startup, and `/update`.
 //!
 //! The work runs in a spawned task that reports over a channel, the way a login does
-//! (login.rs). Unlike a login it belongs to the whole process, not to one session:
-//! the event loop owns the one [`Updates`], so `/new`, `/hot-reload` and switching
+//! (login.rs). Unlike a login it belongs to the whole process, not to one session,
+//! the event loop owns the one [`Updates`], so `/new`, hot reload and switching
 //! sessions never start a second check, its notice comes once, and two `/update`s
 //! can't run side by side.
 
@@ -27,11 +27,7 @@ enum State {
     Idle,
     Checking(JoinHandle<()>),
     Updating(JoinHandle<()>),
-    /// The release on disk; this process still runs the old one.
-    Installed {
-        version: Version,
-        binary: PathBuf,
-    },
+    Installed { version: Version, binary: PathBuf },
 }
 
 /// The update work of this process, owned by the event loop.
@@ -56,7 +52,7 @@ impl Default for Updates {
 
 impl Updates {
     /// Ask GitHub in the background whether a newer release is out. A failure (offline,
-    /// a timeout, the rate limit) only reaches the log: the check is a courtesy and
+    /// a timeout, the rate limit) only reaches the log, the check is a courtesy and
     /// must never get in the way.
     pub fn check(&mut self) {
         let sender = self.sender.clone();
@@ -75,10 +71,10 @@ impl Updates {
         self.state = State::Checking(task);
     }
 
-    /// `/update` was typed: install the newest release in the background, unless
+    /// `/update` was typed, install the newest release in the background, unless
     /// something is in the way. The task reports through events, like the check.
     /// After an install whose restart was in the way, `/update` tries the restart
-    /// again: a `Restart` asks the event loop to end the TUI and start the new binary.
+    /// again, a `Restart` asks the event loop to end the TUI and start the new binary.
     pub fn request(&mut self, sessions: &mut Sessions) -> Option<Restart> {
         match &self.state {
             State::Updating(_) => {
@@ -142,7 +138,7 @@ impl Updates {
     pub fn on_event(&mut self, event: UpdateEvent, sessions: &mut Sessions) -> Option<Restart> {
         match event {
             UpdateEvent::Checked(newer) => {
-                // Only the answer of a check that still runs counts: `/update` stops
+                // Only the answer of a check that still runs counts, `/update` stops
                 // the check, and its answer may be on its way already.
                 if !matches!(self.state, State::Checking(_)) {
                     return None;
@@ -438,7 +434,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_runs_in_the_background_and_reports_back() {
-        // A port that was free a moment ago: GitHub is "offline".
+        // A port that was free a moment ago, GitHub is "offline".
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);

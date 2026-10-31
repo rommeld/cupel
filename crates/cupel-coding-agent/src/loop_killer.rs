@@ -1,38 +1,34 @@
-//! The loop killer: blocks a tool call that repeats backt-to-back with identical
+//! The loop killer, blocks a tool call that repeats backt to back with identical
 //! arguments more often than settings allow, and steers the model onto a new track via
 //! the error text it receives instead of a result.
 //!
-//! Detection is deliberately consecutive-only: `read x, edit x, read x` is a legitimate
+//! Detection is deliberately consecutive only, `read x, edit x, read x` is a legitimate
 //! verification loop and must stay allowed. Any different call resets the chain. The
 //! canoncial key is `name + argumetns JSON`. Sort object keys recursively before
-//! serializing: another workspace dependency can enable serde_json's preserve_order
+//! serializing, another workspace dependency can enable serde_json's preserve_order
 //! feature.
 //!
-//! Why a veto (and not the alternatives): injecting a steering message would be
+//! Why a veto (and not the alternatives), injecting a steering message would be
 //! silently dropped (the Agent's RunHooks decorator does not forward
 //! steering_messages, yet), and should_stop_after_turn would end the run without any
 //! event, causing a silent stop the user cannot distinguish from a finished answer.
-//! The before_tool_call veto is the machnism the bash guard already proves out: the
+//! The before_tool_call veto is the machnism the bash guard already proves out, the
 //! model sees an error tool result and the run continues, redirected.
 
 use std::sync::Mutex;
 
 use cupel_core::types::ToolCall;
 
-/// Consecutive-repeat tracker. One per session, shared across runs (a
-/// /hot-reald rebuilds it, which also resets the chain).
+/// Consecutive repeat tracker. One per session, shared across runs (a
+/// /hot reald rebuilds it, which also resets the chain).
 pub struct LoopKiller {
-    /// None = disabled (no loopKiller section, or maxRepeats 0).
     limit: Option<u32>,
     state: Mutex<RepeatState>,
 }
 
 #[derive(Default)]
 struct RepeatState {
-    /// Canonical `name\n{args}` of the most recent call.
     last_key: Option<String>,
-    /// How many times in a row that key has been seen, counting the
-    /// first occurrence.
     seen: u32,
 }
 
@@ -45,20 +41,20 @@ impl LoopKiller {
         }
     }
 
-    /// Record one request tool call; Some(reason) = block this one.
+    /// Record one request tool call, Some(reason) = block this one.
     ///
-    /// With maxRepeats = N the first N identical consecutive calls run;
+    /// With maxRepeats = N the first N identical consecutive calls run,
     /// the N+1th (and every further identical repeat) is blocked.
     /// Blocked attempts keep counting. Hammering the same call after a
     /// block stays blocked until the model tries something else.
     pub fn note_call(&self, tool_call: &ToolCall) -> Option<String> {
-        // Disabled killer: not even the bookkeeping runs.
+        // Disabled killer, not even the bookkeeping runs.
         let limit = self.limit?;
         let mut arguments = tool_call.arguments.clone();
         arguments.sort_all_objects();
         let key = format!("{}\n{arguments}", tool_call.name);
         let seen = {
-            // Tight lock scope: compare-and-count only, no I/O, no await.
+            // Tight lock scope, compare and count only, no I/O, no await.
             let mut state = self.state.lock().expect("loop killer state poisoned");
             if state.last_key.as_deref() == Some(key.as_str()) {
                 state.seen += 1;
@@ -71,7 +67,7 @@ impl LoopKiller {
         (seen > limit).then(|| {
             // Every wrapped line ends in ` \`. A bare line break inside a
             // string literal stays in the text, plus the next line's
-            // indentation; a `\` directly before the break drops both. The
+            // indentation, a `\` directly before the break drops both. The
             // space before `\` is what keeps two words apart.
             format!(
                 "Loop killer: this exact call ({} with identical arguments) has now been \
@@ -106,7 +102,7 @@ mod tests {
         assert!(killer.note_call(&c).is_none());
         let reason = killer.note_call(&c).expect("third identical call blocks");
         assert!(reason.contains("Loop killer"), "{reason}");
-        // One paragraph, no line breaks. `{reason:?}` (Debug) prints the
+        // One paragraph, no line breaks. the Debug formatted reason (Debug) prints the
         // string escaped, so a stray line break shows up as `\n`.
         assert!(!reason.contains('\n'), "{reason:?}");
         assert!(

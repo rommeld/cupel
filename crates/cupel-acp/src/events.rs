@@ -1,4 +1,4 @@
-//! Translate visible Cupel events without exposing provider-private reasoning.
+//! Translate visible Cupel events without exposing provider private reasoning.
 
 use agent_client_protocol::schema::v1 as acp;
 use cupel_agent::{AgentEvent, AgentMessage};
@@ -45,7 +45,7 @@ fn tool_update(id: &str, fields: acp::ToolCallUpdateFields) -> acp::SessionUpdat
     acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(id.to_owned(), fields))
 }
 
-/// Replay finalized visible history; never run tools or record it a second time.
+/// Replay finalized visible history, never run tools or record it a second time.
 #[must_use]
 pub fn replay(message: &AgentMessage) -> Vec<acp::SessionUpdate> {
     match message {

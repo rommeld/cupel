@@ -1,21 +1,21 @@
 //! Fuzzy matching for the file autocomplete.
 //!
-//! The shape is the classic editor-completion matcher: a query matches when
+//! The shape is the classic editor completion matcher, a query matches when
 //! all of its characters appear in order in the candidate (not necessarily
 //! adjacent), and a score decides ranking. Lower is better, because the
-//! score is mostly penalties:
+//! score is mostly penalties,
 //!
-//! consecutive-match streaks earn `-5 * streak` (typing "main" should
+//! consecutive match streaks earn a reduction of five times the streak length (typing "main" should
 //!   love `main.rs`),
 //! gaps between matches cost `+2 * gap`,
-//! matching right after a word boundary (`space _ . / :`) earns `-10`
-//!   ("mr" should hit `main.rs` via m..r-after-dot),
+//! matching right after a word boundary (spaces, underscores, dots, slashes and colons) earns a reduction of ten
+//!   ("mr" should hit `main.rs` via m..r after dot),
 //! later positions cost `+0.1 * index` (prefer early matches),
-//! an exact full match earns a decisive `-100`.
+//! an exact full match earns a decisive a reduction of one hundred.
 //!
-//! One quirk ported as-is: if the query fails, retry with its trailing
-//! letter/digit halves swapped (`"v2" <-> "2v"`) at a `+5` penalty
-//! version-ish queries match either spelling.
+//! One quirk ported as is, if the query fails, retry with its trailing
+//! letter/digit halves swapped (`"v2" ↔ "2v"`) at a `+5` penalty
+//! version ish queries match either spelling.
 
 /// Score one candidate against one query token. `None` = no match.
 /// Lower scores rank first.
@@ -28,7 +28,7 @@ pub fn fuzzy_score(query: &str, candidate: &str) -> Option<f64> {
         return Some(score);
     }
 
-    // Letter/digit swap fallback: "v2" also tries "2v" (and vice versa).
+    // Letter/digit swap fallback, "v2" also tries "2v" (and vice versa).
     let swapped = swap_letter_digit_halves(&query_lower)?;
     score_subsequence(&swapped, &candidate_lower).map(|score| score + 5.0)
 }
@@ -89,7 +89,7 @@ fn score_subsequence(query: &[char], candidate: &[char]) -> Option<f64> {
     Some(score)
 }
 
-/// `"abc123"` -> `"123abc"`, `"123abc"` -> `"abc123"`; anything else `None`.
+/// `"abc123"` → `"123abc"`, `"123abc"` → `"abc123"`, anything else `None`.
 fn swap_letter_digit_halves(query: &[char]) -> Option<Vec<char>> {
     let split = query.iter().position(char::is_ascii_digit);
     match split {
@@ -111,9 +111,9 @@ fn swap_letter_digit_halves(query: &[char]) -> Option<Vec<char>> {
     }
 }
 
-/// Filter + rank: the query splits on whitespace and `/` into tokens
-/// ("src main" or "src/main" both mean two tokens); all tokens must match;
-/// per-token scores sum; ascending stable sort (ties keep input order).
+/// Filter + rank, the query splits on whitespace and `/` into tokens
+/// ("src main" or "src/main" both mean two tokens), all tokens must match,
+/// per token scores sum, ascending stable sort (ties keep input order).
 #[must_use]
 pub fn fuzzy_filter<'a, T>(query: &str, items: &'a [T], key: impl Fn(&T) -> &str) -> Vec<&'a T> {
     let tokens: Vec<&str> = query
@@ -135,7 +135,7 @@ pub fn fuzzy_filter<'a, T>(query: &str, items: &'a [T], key: impl Fn(&T) -> &str
             Some((item, total))
         })
         .collect();
-    // Stable sort keeps input order on ties; scores are finite by
+    // Stable sort keeps input order on ties, scores are finite by
     // construction, so the comparison never actually falls back.
     scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
     scored.into_iter().map(|(item, _)| item).collect()
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn word_boundary_matches_score_better() {
-        // "r" right after '.' (boundary) vs buried mid-word.
+        // "r" right after '.' (boundary) vs buried mid word.
         let boundary = fuzzy_score("r", ".rs").expect("matches");
         let mid_word = fuzzy_score("r", "xxr").expect("matches");
         assert!(boundary < mid_word);
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn letter_digit_swap_fallback_matches_at_a_penalty() {
-        // "2v" is not a subsequence of "v2-schema", but the swap "v2" is.
+        // "2v" is not a subsequence of "v2 schema", but the swap "v2" is.
         let swapped = fuzzy_score("2v", "v2-schema").expect("swap fallback matches");
         let direct = fuzzy_score("v2", "v2-schema").expect("matches");
         assert!(direct < swapped, "swap carries a +5 penalty");

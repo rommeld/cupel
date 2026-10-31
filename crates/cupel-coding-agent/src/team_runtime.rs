@@ -1,4 +1,4 @@
-//! Request-time discussion projection without changing private history or hooks.
+//! Request time discussion projection without changing private history or hooks.
 
 use crate::team_conversation::{Participant, TeamRuntime};
 use crate::team_scheduler::{CallContext, TeamScheduler};

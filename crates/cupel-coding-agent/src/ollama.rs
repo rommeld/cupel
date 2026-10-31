@@ -1,31 +1,31 @@
-//! Ollama auto-discovery: locally pulled models appear in the catalog
+//! Ollama auto discovery, locally pulled models appear in the catalog
 //! (and therefore `/model` autocomplete and `/provider`) automatically.
 //!
-//! One bounded GET to ollama's native `/api/tags` at startup; the models
-//! themselves are then driven through ollama's OpenAI-compatible
+//! One bounded GET to ollama's native `/api/tags` at startup, the models
+//! themselves are then driven through ollama's OpenAI compatible
 //! `{host}/v1/chat/completions` endpoint by the existing
-//! `openai-completions` provider. Discovery is the only ollama-specific
+//! OpenAI Chat Completions provider. Discovery is the only ollama specific
 //! code in the workspace.
 //!
-//! Fail-soft by design: ollama not running is the normal case for most
+//! Fail soft by design, ollama not running is the normal case for most
 //! users, so any failure (connection refused, timeout, bad JSON) logs at
-//! debug and yields an empty list. The resources.rs warn-and-continue
+//! debug and yields an empty list. The resources.rs warn and continue
 //! idiom, one notch quieter.
 
 use cupel_core::types::{Api, InputModality, Model, ModelCost, Provider};
 
-/// How long the whole probe may take. Localhost answers in microseconds;
+/// How long the whole probe may take. Localhost answers in microseconds,
 /// the budget only matters for a firewalled remote OLLAMA_HOST that
-/// black-holes packets.
+/// black holes packets.
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Discovered models claim a conservative 4096-token window based on ollama's
+/// Discovered models claim a conservative 4096 token window based on ollama's
 /// default context length. Understating merely compacts early. Overstating
 /// would make the server truncate the prompt silently, which corrupts tool
 /// calls. Users who raise ollama's context pin the model in models.json.
 const DEFAULT_CONTEXT_WINDOW: u64 = 4096;
 
-/// The ollama endpoint: `OLLAMA_HOST` when set, else the local default.
+/// The ollama endpoint, `OLLAMA_HOST` when set, else the local default.
 #[must_use]
 pub fn ollama_host() -> String {
     std::env::var("OLLAMA_HOST")
@@ -37,8 +37,8 @@ pub fn ollama_host() -> String {
         )
 }
 
-/// OLLAMA_HOST is commonly scheme-less (`0.0.0.0:11434`, ollama's own
-/// convention); default the scheme and drop a trailing slash so URL
+/// OLLAMA_HOST is commonly scheme less (`0.0.0.0` on port 11434, ollama's own
+/// convention), default the scheme and drop a trailing slash so URL
 /// concatenation stays predictable.
 fn normalize_host(raw: &str) -> String {
     let trimmed = raw.trim().trim_end_matches('/');
@@ -65,7 +65,7 @@ pub async fn discover(host: &str) -> Vec<Model> {
     }
 }
 
-/// The pure mapping core: an `/api/tags` response into catalog entries.
+/// The pure mapping core, an `/api/tags` response into catalog entries.
 /// Split from the fetch so tests need no HTTP mock (parameterized like
 /// `resolve_config_home` in resources.rs).
 #[must_use]
@@ -80,11 +80,11 @@ pub fn models_from_tags(json: &serde_json::Value, host: &str) -> Vec<Model> {
             name: name.to_string(),
             api: Api::from(Api::OPENAI_COMPLETIONS),
             provider: Provider::from("ollama"),
-            // The provider appends /chat/completions; /v1 is ollama's
-            // OpenAI-compatible prefix.
+            // The provider appends /chat/completions, /v1 is ollama's
+            // OpenAI compatible prefix.
             base_url: format!("{host}/v1"),
-            // /api/tags doesn't say whether a model thinks; models.json
-            // pinning is the override for reasoning-capable ones.
+            // /api/tags doesn't say whether a model thinks, models.json
+            // pinning is the override for reasoning capable ones.
             reasoning: false,
             thinking_level_map: None,
             input: vec![InputModality::Text],
@@ -93,12 +93,12 @@ pub fn models_from_tags(json: &serde_json::Value, host: &str) -> Vec<Model> {
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_context_window: None,
             // Leave room for the prompt instead of reserving the whole window
-            // for generation; match the model-sized compaction reserve.
+            // for generation, match the model sized compaction reserve.
             max_tokens: 16_384.min(DEFAULT_CONTEXT_WINDOW / 4),
             headers: None,
-            // Safe-side flags for local servers: no key, and none of the
-            // OpenAI-proprietary body fields that stricter clones
-            // (llama-server) reject.
+            // Safe side flags for local servers, no key, and none of the
+            // OpenAI proprietary body fields that stricter clones
+            // (llama server) reject.
             compat: Some(serde_json::json!({
                 "requiresApiKey": false,
                 // Discovery provenance for the UI, ignored by the provider.

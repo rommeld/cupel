@@ -1,14 +1,14 @@
-//! Text normalization and diff rendering behind [`super::apply_patch`].
+//! Text normalization and diff rendering behind `apply_patch`.
 //!
-//! Patch hunks are matched against LF-normalized, BOM-free text; the
-//! original line-ending style and BOM are restored on write, so a CRLF file
+//! Patch hunks are matched against LF normalized, BOM free text, the
+//! original line ending style and BOM are restored on write, so a CRLF file
 //! stays CRLF and a BOM survives a patch it is invisible to the model, whose
 //! context lines never carry it. [`generate_diff_string`] renders the result
-//! for the transcript: a display diff with line numbers and limited context.
+//! for the transcript, a display diff with line numbers and limited context.
 
-// ---------------------------------------------------------------------------
-// Line-ending and BOM handling
-// ---------------------------------------------------------------------------
+//
+// Line ending and BOM handling
+//
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnding {
@@ -38,8 +38,8 @@ pub fn restore_line_endings(text: &str, ending: LineEnding) -> String {
     }
 }
 
-/// Split off a UTF-8 BOM. The model never sees the invisible BOM, so its
-/// patch context can never include it; matching must happen without it.
+/// Split off a UTF 8 BOM. The model never sees the invisible BOM, so its
+/// patch context can never include it, matching must happen without it.
 #[must_use]
 pub fn strip_bom(content: &str) -> (&'static str, &str) {
     content
@@ -47,22 +47,18 @@ pub fn strip_bom(content: &str) -> (&'static str, &str) {
         .map_or(("", content), |rest| ("\u{FEFF}", rest))
 }
 
-// ---------------------------------------------------------------------------
+//
 // Diff rendering
-// ---------------------------------------------------------------------------
+//
 
 pub struct DiffString {
     pub diff: String,
-    /// Line number of the first change in the new file (editor navigation).
     pub first_changed_line: Option<usize>,
 }
 
-/// A display diff with line numbers and limited context, e.g.
-/// ```text
-///  10 unchanged
-/// -11 removed line
-/// +11 added line
-/// ```
+/// A display diff with line numbers and limited context.
+/// Removed lines have a hyphen prefix, added lines a plus prefix,
+/// and unchanged lines a space prefix.
 /// Built on the `similar` crate's line diff.
 #[must_use]
 pub fn generate_diff_string(old: &str, new: &str, context_lines: usize) -> DiffString {
@@ -76,8 +72,8 @@ pub fn generate_diff_string(old: &str, new: &str, context_lines: usize) -> DiffS
 
     let mut output: Vec<String> = Vec::new();
     let mut first_changed_line: Option<usize> = None;
-    // The 1-based new-file line where the next line would land. Needed for
-    // deletions: a deleted line has no new_index (it doesn't exist in the
+    // The 1 based new file line where the next line would land. Needed for
+    // deletions, a deleted line has no new_index (it doesn't exist in the
     // new file), but "where the change appears in the new file" is exactly
     // this running position.
     let mut next_new_line = 1_usize;

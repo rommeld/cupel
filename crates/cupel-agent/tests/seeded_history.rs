@@ -1,5 +1,5 @@
-//! End-to-end test of history seeding through `AgentOptions.messages`. The
-//! path `cupel --resume` uses to restore a persisted transcript. A mock
+//! End to end test of history seeding through `AgentOptions.messages`. The
+//! path the resume option uses to restore a persisted transcript. A mock
 //! provider captures the `Context` it receives, proving the seeded messages
 //! actually reach the LLM request (not just the state snapshot).
 #![allow(clippy::tests_outside_test_module)]

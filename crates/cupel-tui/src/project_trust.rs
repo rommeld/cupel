@@ -16,7 +16,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::theme::Theme;
 
 /// Ask once per canonical project and persist either answer in cupel home.
-/// There is no CLI auto-trust flag; noninteractive startup stays restricted
+/// There is no CLI auto trust flag, noninteractive startup stays restricted
 /// unless an earlier interactive decision explicitly granted trust.
 pub fn confirm(home: Option<&Path>, cwd: &Path, theme: &Theme) -> std::io::Result<()> {
     if decision(home, cwd).is_some() {
@@ -24,7 +24,7 @@ pub fn confirm(home: Option<&Path>, cwd: &Path, theme: &Theme) -> std::io::Resul
     }
     let mut terminal = ratatui::init();
     let result = (|| {
-        // Pasted tabs/newlines are an Event::Paste, not consent keystrokes.
+        // Pasted tabs/newlines are an Paste, not consent keystrokes.
         execute!(std::io::stdout(), EnableBracketedPaste)?;
         let mut selected = ProjectTrust::Restricted;
         loop {

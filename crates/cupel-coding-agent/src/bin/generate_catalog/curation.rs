@@ -1,11 +1,11 @@
-//! The curated built-in catalog defines which models cupel ships, plus the
-//! cupel-side knowledge models.dev does not carry: base URLs (missing
+//! The curated built in catalog defines which models cupel ships, plus the
+//! cupel side knowledge models.dev does not carry, base URLs (missing
 //! upstream for anthropic/openai), the API family per model, compat
-//! quirks, and thinking-map exceptions.
+//! quirks, and thinking map exceptions.
 //!
-//! Routine maintenance happens here: adding a model = one row in
+//! Routine maintenance happens here, adding a model = one row in
 //! [`PROVIDERS`], then refresh the snapshot with
-//! `cargo run -p cupel-coding-agent --bin generate-catalog -- --fetch`.
+//! the catalog generator with its fetch option.
 
 use cupel_core::types::{Api, Provider};
 
@@ -13,46 +13,34 @@ pub const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-/// Empty on purpose: the AWS SDK derives the endpoint from the region
-/// (see providers::bedrock::build_client).
+/// Empty on purpose, the AWS SDK derives the endpoint from the region
+/// (see build_client).
 pub const BEDROCK_BASE_URL: &str = "";
-/// Fireworks' Anthropic-compatible endpoint (most of their models).
+/// Fireworks' Anthropic compatible endpoint (most of their models).
 pub const FIREWORKS_ANTHROPIC_BASE_URL: &str = "https://api.fireworks.ai/inference";
-/// Fireworks' Anthropic-compatible endpoint (most of ther models).
+/// Fireworks' Anthropic compatible endpoint (most of ther models).
 pub const FIREWORKS_COMPLETIONS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
 /// OpenRouter's OpenAI completions compatible endpoint
 pub const OPENROUTER_COMPLETIONS_BASE_URL: &str = "https://openrouter.ai/api/v1";
-/// The ChatGPT Codex backend (subscription auth, see cupel-core's
-/// oauth::openai_codex + providers::openai_codex_responses).
+/// The ChatGPT Codex backend (subscription auth, see cupel core's
+/// openai_codex + openai_codex_responses).
 pub const OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
 /// How a curated model's thinkingLevelMap is produced.
 pub enum Thinking {
-    /// Budget-based thinking (Anthropic budget path and the Fireworks
-    /// anthropic-compat endpoint): no map, every cupel level allowed.
-    /// models.dev's effort options describe those vendors' native APIs,
-    /// not the anthropic-compat endpoint cupel drives. Deriving a map
-    /// here would wrongly disable levels.
     Budget,
-    /// Derive from models.dev effort values (models_dev.rs).
     FromEffort,
-    /// Pin an explicit map where deriving one from models.dev would be
-    /// wrong (e.g. Kimi K2.7 Code on OpenRouter cannot switch thinking off).
     Explicit(&'static [(&'static str, Option<&'static str>)]),
 }
 
 /// Where a curated model's context window come from.
 pub enum Window {
-    /// models.dev's `limit.context` verbatim.
     ModelsDev,
-    /// Models with long-context pricing (GPT-6, Haiku 5.5): the
-    /// planning window is the price tier's threshold, and models.dev's
-    /// `limit.input` (or `limit.context`) becomes `maxContextWindow`.
     PriceTier,
 }
 
-/// Named compat templates for the per-API quirk blobs from the old
-/// hand-written catalog, now defined in exactly one place.
+/// Named compat templates for the per API quirk blobs from the old
+/// hand written catalog, now defined in exactly one place.
 pub enum Compat {
     None,
     FireworksAnthropic,
@@ -93,10 +81,9 @@ impl Compat {
     }
 }
 
-/// One curated model: the models.dev id (== cupel id) plus cupel-side facts.
+/// One curated model, the models.dev id (== cupel id) plus cupel side facts.
 pub struct Curated {
     pub id: &'static str,
-    /// None = take models.dev's display name verbatim.
     pub rename: Option<&'static str>,
     pub api: &'static str,
     pub base_url: &'static str,
@@ -106,21 +93,19 @@ pub struct Curated {
 }
 
 pub struct CuratedProvider {
-    /// Key in models.dev's api.json ("fireworks-ai", ...).
     pub models_dev_id: &'static str,
-    /// cupel's provider id ("fireworks", ...).
     pub cupel_id: &'static str,
     pub models: &'static [Curated],
 }
 
-/// Kimi K2.7 Code on OpenRouter is always-thinking.
+/// Kimi K2.7 Code on OpenRouter is always thinking.
 const KIMI_K27_CODE_OPENROUTER_THINKING: &[(&str, Option<&str>)] = &[("off", None)];
 
-/// Claude Sonnet 5.5 answers `thinking: {type: "disabled"}` with a 400.
-/// Its lowest setting is the thinking type `between_tools`: no extended
+/// Claude Sonnet 5.5 answers `thinking` with `type` set to `disabled` with a 400.
+/// Its lowest setting is the thinking type `between_tools`, no extended
 /// thinking, only short progress notes between tool calls. models.dev
 /// has no field for that, so the map is pinned here instead of derived
-/// from the effort list (which would give off -> null, i.e. `thinking`
+/// from the effort list (which would give off → null, i.e. `thinking`
 /// left out and the model thinking adaptively at its default effort,
 /// high). "off" names the thinking type the provider sends (anthropic and
 /// bedrock), "minimal" has no effort upstream (null), and low..max keep
@@ -133,11 +118,11 @@ const SONNET55_THINKING: &[(&str, Option<&str>)] =
 // old catalog.rs used (fireworks_anthropic / fireworks_glm52 helpers).
 
 /// Claude models that answer `budget_tokens` with a 400 (Sonnet 5,
-/// Opus 5, Opus 5.5, Fable 5/5.1): effort levels replace token budgets, and
+/// Opus 5, Opus 5.5, Fable 5/5.1), effort levels replace token budgets, and
 /// `temperature` is rejected too. The level map comes from models.dev's
-/// effort list: a model listed with a toggle keeps "off" (the provider
-/// sends `thinking: {type: "disabled"}`), one without a toggle gets
-/// off -> null (the provider leaves `thinking` out).
+/// effort list, a model listed with a toggle keeps "off" (the provider
+/// sends `thinking` with `type` set to `disabled`), one without a toggle gets
+/// off → null (the provider leaves `thinking` out).
 const fn anthropic_adaptive(id: &'static str) -> Curated {
     Curated {
         id,
@@ -150,12 +135,12 @@ const fn anthropic_adaptive(id: &'static str) -> Curated {
     }
 }
 
-/// Adaptive Claude models that run the preserved-thinking check (Opus 5.5,
-/// Sonnet 5.5, Haiku 5.5): a thinking block is only valid in the unchanged
-/// conversation that produced it. Accounts created on or after 2026-08-31
+/// Adaptive Claude models that run the preserved thinking check (Opus 5.5,
+/// Sonnet 5.5, Haiku 5.5), a thinking block is only valid in the unchanged
+/// conversation that produced it. Accounts created on or after 2026 08 31
 /// get a 400 for a replayed block after an edit, and cupel edits history
 /// (compaction, the date line of a resumed session). "drop_block" makes
-/// the API drop such blocks instead; see the anthropic provider.
+/// the API drop such blocks instead, see the anthropic provider.
 const fn anthropic_preserved(id: &'static str) -> Curated {
     Curated {
         compat: Compat::PreservedThinkingAnthropic,
@@ -187,7 +172,7 @@ const fn bedrock(id: &'static str, rename: Option<&'static str>, thinking: Think
     }
 }
 
-/// Claude 5+ on Bedrock: the same adaptive compat as the Anthropic twin, so
+/// Claude 5+ on Bedrock, the same adaptive compat as the Anthropic twin, so
 /// the Bedrock provider reads the model's capabilities from the catalog
 /// instead of guessing them from the id.
 const fn bedrock_adaptive(
@@ -237,8 +222,8 @@ const fn openrouter(id: &'static str, thinking: Thinking) -> Curated {
     }
 }
 
-/// Plan below the first long-context price tier, retaining the full window
-/// as an explicit opt-in. Applies to GPT-6 and other tier-priced models.
+/// Plan below the first long context price tier, retaining the full window
+/// as an explicit opt in. Applies to GPT 6 and other tier priced models.
 const fn openrouter_tiered(id: &'static str) -> Curated {
     Curated {
         window: Window::PriceTier,
@@ -248,9 +233,9 @@ const fn openrouter_tiered(id: &'static str) -> Curated {
 
 /// Table order = catalog order = /model and /provider order.
 ///
-/// claude-sonnet-5 must stay the very first row: test fixtures across
+/// claude sonnet 5 must stay the very first row, test fixtures across
 /// the workspace use builtin_models().remove(0), and catalog_providers'
-/// per-provder default is "first in catalog order". The generator's
+/// per provder default is "first in catalog order". The generator's
 /// validate() enforces this.
 pub const PROVIDERS: &[CuratedProvider] = &[
     CuratedProvider {
@@ -258,7 +243,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         cupel_id: Provider::ANTHROPIC,
         models: &[
             anthropic_adaptive("claude-sonnet-5"),
-            // Struct update syntax: every field comes from the preserved
+            // Struct update syntax, every field comes from the preserved
             // template (compat, API, base URL), only `thinking` is replaced.
             Curated {
                 thinking: Thinking::Explicit(SONNET55_THINKING),
@@ -270,7 +255,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             anthropic_adaptive("claude-fable-5-1"),
             // Haiku accepts `disabled` (unlike Sonnet 5.5), so derive its
             // map from the toggle/effort list. Plan below the 100k price
-            // boundary; the full 1M window remains an explicit opt-in.
+            // boundary, the full 1M window remains an explicit opt in.
             Curated {
                 window: Window::PriceTier,
                 ..anthropic_preserved("claude-haiku-5-5")
@@ -282,9 +267,9 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         cupel_id: Provider::OPENAI,
         models: &[
             // First row = the `/provider openai` default.
-            // Unlike Sol and Luna, GPT-6.1 Sol has no "none" effort (OpenAI's
-            // model page: "none" and "minimal" are not supported). The
-            // derived map therefore gives off -> null, and the provider
+            // Unlike Sol and Luna, GPT 6.1 Sol has no "none" effort (OpenAI's
+            // model page, "none" and "minimal" are not supported). The
+            // derived map therefore gives off → null, and the provider
             // leaves `reasoning` out, as it does for Astra.
             openai("gpt-6.1-sol", None),
             openai("gpt-6-astra", None),
@@ -302,8 +287,8 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 Some("Claude Sonnet 5 (Bedrock)"),
                 Thinking::FromEffort,
             ),
-            // models.dev lists Sonnet 5.5 only as the global cross-region
-            // profile so far; its off switch is the same as on the API.
+            // models.dev lists Sonnet 5.5 only as the global cross region
+            // profile so far, its off switch is the same as on the API.
             bedrock_adaptive(
                 "global.anthropic.claude-sonnet-5-5",
                 Some("Claude Sonnet 5.5 (Bedrock)"),
@@ -331,7 +316,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             fireworks_anthropic("accounts/fireworks/routers/deepseek-flash-latest"),
             fireworks_anthropic("accounts/fireworks/models/minimax-m3"),
             // These models expose native effort scales through completions.
-            // Keep their independent OpenRouter rows too: limits can differ.
+            // Keep their independent OpenRouter rows too, limits can differ.
             fireworks_completions(
                 "accounts/fireworks/models/minimax-m3p1-flash",
                 Thinking::FromEffort,
@@ -492,55 +477,46 @@ pub const PROVIDERS: &[CuratedProvider] = &[
     },
 ];
 
-/// One Codex model, pinned by hand. models.dev has no `openai-codex`
+/// One Codex model, pinned by hand. models.dev has no OpenAI Codex
 /// provider (subscription backends carry no public price sheet), so this
-/// table keeps an explicit list to avoid aliases. GPT-6 Sol and Luna's limits
+/// table keeps an explicit list to avoid aliases. GPT 6 Sol and Luna's limits
 /// and levels come from Codex CLI's models.json (openai/codex#47332), and
 /// their prices come from OpenAI plus models.dev (cache write, no temperature).
 ///
-/// The `id` is the backend's model name; the generator namespaces the
+/// The `id` is the backend's model name, the generator namespaces the
 /// catalog id as `codex/<id>` and stores the backend name in compat's
 /// `requestModel`. That split exists because cupel's catalog is one flat
 /// id namespace (merge_models replaces by id, /model addresses by id),
-/// and the openai provider already owns "gpt-6-sol" etc.
+/// and the openai provider already owns "gpt 6 sol" etc.
 pub struct PinnedCodex {
     pub id: &'static str,
     pub name: &'static str,
-    /// Whether the model accepts image input.
     pub vision: bool,
-    /// $/M: input, output, cache read, cache write.
     pub cost: (f64, f64, f64, f64),
-    /// Whether the >272k long-context tier applies (input x2, output
-    /// x1.5, cache x2).
     pub long_context_tier: bool,
     pub context_window: u64,
-    /// The backend's `max_context_window` when it exceeds context_window
-    /// (the long-context opt-in ceiling).
     pub max_context_window: Option<u64>,
-    /// The backend's effort scale, verbatim from Codex CLI's models.json
-    /// (`supported_reasong_levels`), minus its `ultra` entry.
     pub levels: &'static [&'static str],
-    /// Whether the model accepts `temperature` (GPT-6 rejects it).
     pub temperature: bool,
 }
 
-/// The effort scale advertised by the Codex backend for GPT-6 models.
+/// The effort scale advertised by the Codex backend for GPT 6 models.
 const CODEX_LEVELS_TO_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
-/// Row order = catalog order: the first row is the `/provider
-/// openai-codex` default. gpt-6.1-sol leads by choice; the remaining
+/// Row order = catalog order, the first row is the `/provider
+/// openai codex` default. gpt 6.1 sol leads by choice, the remaining
 /// models keep their relative order. Other providers keep their defaults.
 pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
     // The model card lists the same standard input/output prices as Sol
-    // but $0.10/M cached input. Codex CLI's models.json gives GPT-6.1 Sol
-    // the same ceiling and effort scale as Sol (checked 2026-10-08).
-    // https://openai.com/de-DE/index/introducing-gpt-6-1-sol/
-    // The 500k window is OpenAI's Codex default since 2026-10-12. It comes
-    // from the backend's live model list; the models.json bundled with
-    // Codex CLI still says 272k (checked 2026-10-16). The >272k tier stays:
-    // the cost line shows API-equivalent prices, and the API still charges
+    // but $0.10/M cached input. Codex CLI's models.json gives GPT 6.1 Sol
+    // the same ceiling and effort scale as Sol (checked 2026 10 08).
+    // Source OpenAI's introduction of GPT 6.1 Sol
+    // The 500k window is OpenAI's Codex default since 2026 10 12. It comes
+    // from the backend's live model list, the models.json bundled with
+    // Codex CLI still says 272k (checked 2026 10 16). The >272k tier stays,
+    // the cost line shows API equivalent prices, and the API still charges
     // the tier.
-    // https://x.com/thsottiaux/status/2109430343346581527
+    // Source Thibault Sottiaux's announcement on X, post 2109430343346581527
     PinnedCodex {
         id: "gpt-6.1-sol",
         name: "GPT-6.1 Sol",
@@ -563,9 +539,9 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         levels: CODEX_LEVELS_TO_MAX,
         temperature: false,
     },
-    // Prices and temperature support: models.dev's openai/gpt-6.1-terra.
-    // Codex windows and efforts (no "none"), checked 2026-10-27:
-    // https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json
+    // Prices and temperature support, models.dev's openai/gpt 6.1 terra.
+    // Codex windows and efforts (no "none"), checked 2026 10 27,
+    // Source models.json in the OpenAI Codex models manager on GitHub
     PinnedCodex {
         id: "gpt-6.1-terra",
         name: "GPT-6.1 Terra",
@@ -601,17 +577,17 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
     },
 ];
 
-/// Catalog rows that also ship an Ultrafast twin `<id>-ultrafast`.
-/// Ultrafast is not a separate model: it is the same model on OpenAI's
+/// Catalog rows that also ship a twin with an ultrafast suffix.
+/// Ultrafast is not a separate model, it is the same model on OpenAI's
 /// fastest serving tier, chosen per request with the body field
-/// `service_tier: "ultrafast"`. A twin row turns that tier into
+/// `service_tier` set to `ultrafast`. A twin row turns that tier into
 /// something `/model` can switch to (main.rs `with_ultrafast_twins`).
 /// Codex access depends on the ChatGPT plan (Pro 500, Enterprise, Edu at
-/// launch); the backend, not cupel, enforces that.
-/// https://developers.openai.com/api/docs/guides/ultrafast-mode
+/// launch), the backend, not cupel, enforces that.
+/// Source OpenAI's developer guide to ultrafast mode
 pub const ULTRAFAST_BASES: &[&str] = &["gpt-6.1-sol", "codex/gpt-6.1-sol"];
 
-/// Every Ultrafast price is 6x the Standard price, including the >272k long-context
-/// tier. models.dev lists only the short-context half, so the generator scales the
+/// Every Ultrafast price is 6x the Standard price, including the >272k long context
+/// tier. models.dev lists only the short context half, so the generator scales the
 /// Standard row instead.
 pub const ULTRAFAST_PRICE_FACTOR: f64 = 6.0;

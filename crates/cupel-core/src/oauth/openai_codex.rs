@@ -1,8 +1,8 @@
 //! OpenAI Codex OAuth flow for login with a ChatGPT Plus/Pro
 //! subscription instead of an API key.
 //!
-//! The flow is the one the official Codex CLI ships:
-//! an RFC-standard authorization-code flow with PKCE against
+//! The flow is the one the official Codex CLI ships,
+//! an RFC standard authorization code flow with PKCE against
 //! `auth.openai.com`, using Codex's public client id.
 
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ use crate::types::now_ms;
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-/// The redirect the browser flow registers; port 1455 is Codex's fixed,
+/// The redirect the browser flow registers, port 1455 is Codex's fixed,
 /// allowlosted callback port.
 pub const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const SCOPE: &str = "openid profile email offline_access";
@@ -30,20 +30,14 @@ pub const ORIGINATOR: &str = "cupel";
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthCredential {
-    /// Short-lived bearer token (a JWT); this is what requests send.
     pub access: String,
-    /// Long-lived token that mints new access tokens.
     pub refresh: String,
-    /// Unix ms when `access` expires (mint time + the server's
-    /// `expires_in`).
     pub expires: u64,
-    /// The ChatGPT account id extracted from the access token's claim;
-    /// the backend wants it back as the `chatgpt-account-id` header.
     pub account_id: String,
 }
 
-/// Manual Debug that never prints token values: `{:?}`output reaches logs
-/// and failed-asseration messages, secrets must not.
+/// Manual Debug that never prints token values, Debug formatted output reaches logs
+/// and failed asseration messages, secrets must not.
 impl core::fmt::Debug for OAuthCredential {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("OAuthCredential")
@@ -73,15 +67,15 @@ pub enum OAuthError {
     Other(String),
 }
 
-/// Everything one browser-login attempt needs to remember: the PKCE
-/// verifier and state stay local; only the URL leaves the process.
+/// Everything one browser login attempt needs to remember, the PKCE
+/// verifier and state stay local, only the URL leaves the process.
 pub struct AuthorizationFlow {
     pub verifier: String,
     pub state: String,
     pub url: String,
 }
 
-/// Start a browser login: fresh PKCE pair, fresh CSRF state, and the
+/// Start a browser login, fresh PKCE pair, fresh CSRF state, and the
 /// authorize URL to open.
 #[must_use]
 pub fn authorization_flow() -> AuthorizationFlow {
@@ -96,7 +90,7 @@ pub fn authorization_flow() -> AuthorizationFlow {
 }
 
 /// 16 random bytes as hex `state` parameter that redirect back
-/// to this login attempt (CSRF protection: `createState`).
+/// to this login attempt (CSRF protection, `createState`).
 fn random_state() -> String {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).expect("OS entropy source unavailable");
@@ -108,7 +102,7 @@ fn random_state() -> String {
 }
 
 fn build_authorize_url(challenge: &str, state: &str) -> String {
-    // reqwest re-exports the `url` crate; query_pairs_mut percent-encodes
+    // reqwest re exports the `url` crate, query_pairs_mut percent encodes
     // every value correctly.
     let mut url = reqwest::Url::parse(AUTHORIZE_URL).expect("static URL parses");
     url.query_pairs_mut()
@@ -141,14 +135,14 @@ pub async fn exchange_code(
         ("code_verifier", verifier),
         ("redirect_uri", redirect_uri),
     ];
-    // .from() sets application/x-www-form-urlencoded. The token endpoint
+    // .form() selects URL encoded form content. The token endpoint
     // speaks forms, not JSON.
     let response = http.post(TOKEN_URL).form(&form).send().await?;
     read_token_response(response, "exchange").await
 }
 
 /// Upper bound for a token refresh. It runs before every request inside the
-/// refresh margin, so a hanging auth server must not stall each turn; the
+/// refresh margin, so a hanging auth server must not stall each turn, the
 /// stored token covers the failure until it expires.
 const REFRESH_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(15);
 
@@ -210,7 +204,7 @@ fn credential_from_json(
 }
 
 /// The ChatGPT account id baked into an access token. Used at login time to fill the credential
-/// and by the provider on every request to build the `chatgpt-account-id` header.
+/// and by the provider on every request to build the ChatGPT account id header.
 #[must_use]
 pub fn account_id_from_access_token(access: &str) -> Option<String> {
     decode_jwt_payload(access)?
@@ -222,7 +216,7 @@ pub fn account_id_from_access_token(access: &str) -> Option<String> {
 }
 
 /// Decode a JWT's payload without verifying the signature. Verification
-/// is the server's job; the client only reads a routing claim out of a
+/// is the server's job, the client only reads a routing claim out of a
 /// token if just received over TLS.
 fn decode_jwt_payload(token: &str) -> Option<Value> {
     use base64::Engine as _;
@@ -249,34 +243,34 @@ fn callback_page(title: &str, detail: &str) -> String {
     )
 }
 
-/// One-shot local HTTP endpoing for the OAuth redirect.
+/// One shot local HTTP endpoing for the OAuth redirect.
 pub struct CallbackServer {
     listener: tokio::net::TcpListener,
 }
 
 impl CallbackServer {
     /// Bind the fixed Codex port. Fails when another login (or another
-    /// Codex-family tool) is already listening.
+    /// Codex family tool) is already listening.
     pub async fn bind() -> std::io::Result<Self> {
         Self::bind_addr(CALLBACK_ADDR).await
     }
 
-    /// Test seam: bind an arbitrary address (tests use port 0).
+    /// Test seam, bind an arbitrary address (tests use port 0).
     pub async fn bind_addr(addr: &str) -> std::io::Result<Self> {
         Ok(Self {
             listener: tokio::net::TcpListener::bind(addr).await?,
         })
     }
 
-    /// The actually-bound address (tests bind port 0 and need the real one).
+    /// The actually bound address (tests bind port 0 and need the real one).
     pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
         self.listener.local_addr()
     }
 
-    /// Serve until a redirect with the right state and a code arrives;
+    /// Serve until a redirect with the right state and a code arrives,
     /// return that code. Wrong paths (favicon probes), state mismatches,
     /// and codeless callbacks are answered with an error page and the
-    /// server keeps waiting. Cancellation is the caller's: select! against
+    /// server keeps waiting. Cancellation is the caller's, select! against
     /// this future and drop it.
     pub async fn wait_for_code(&self, state: &str) -> Result<String, OAuthError> {
         loop {
@@ -329,7 +323,7 @@ async fn handle_connection(stream: &mut tokio::net::TcpStream, state: &str) -> O
         content-length: {}\r\nconnection: close\r\n\r\n{page}",
         page.len()
     );
-    // Best effort: the browser closing early must not kill the login.
+    // Best effort, the browser closing early must not kill the login.
     let _ = stream.write_all(response.as_bytes()).await;
     let _ = stream.shutdown().await;
     code
@@ -342,7 +336,7 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
 
 /// The routing decision, pure and etstable.
 fn evaluate_callback(target: &str, state: &str) -> (&'static str, String, Option<String>) {
-    // The target is origin-relative; give Url::parse a base to hang it on.
+    // The target is origin relative, give parse a base to hang it on.
     let parsed = reqwest::Url::parse(&format!("http://localhost{target}"));
     let Ok(url) = parsed else {
         return (
@@ -387,7 +381,7 @@ fn evaluate_callback(target: &str, state: &str) -> (&'static str, String, Option
     }
 }
 
-/// Parse whatever the user pasted as a manual fallback: the full redirect
+/// Parse whatever the user pasted as a manual fallback, the full redirect
 /// URL, a raw `code=...&state=...` query, `code#state`, or the bare code.
 /// Returns (code, state).
 #[must_use]
@@ -425,15 +419,15 @@ const DEVICE_USER_CODE_URL: &str = "https://auth.openai.com/api/accounts/devicea
 const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
 /// Where the user types the code in (shown in the TUI notice).
 pub const DEVICE_VERIFICATION_URI: &str = "https://auth.openai.com/codex/device";
-/// The device flow redeems its code against this server-side redirect.
+/// The device flow redeems its code against this server side redirect.
 const DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 const DEVICE_CODE_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(15);
-/// RFC 8628: no server interval means poll every 5 seconds.
+/// RFC 8628, no server interval means poll every 5 seconds.
 const DEVICE_DEFAULT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 /// ...and every `slow_down`answer stretches the interval by 5 seconds.
 const DEVICE_SLOW_DOWN_INCREMENT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// A started device authorization: show `user_code` to the user, then poll.
+/// A started device authorization, show `user_code` to the user, then poll.
 #[derive(Debug)]
 pub struct DeviceAuth {
     pub device_auth_id: String,
@@ -479,15 +473,11 @@ pub async fn start_device_auth(http: &reqwest::Client) -> Result<DeviceAuth, OAu
 enum DevicePoll {
     Pending,
     SlowDown,
-    /// The code arrived, plus the verifier for the exchange.
-    Complete {
-        code: String,
-        verifier: String,
-    },
+    Complete { code: String, verifier: String },
     Failed(String),
 }
 
-/// OpenAI's device endpoint signals "not yet" in three shapes: plain 403
+/// OpenAI's device endpoint signals "not yet" in three shapes, plain 403
 /// or 404, and a JSON error code. `error` may be a bare string or an object
 /// with `code`.
 fn classify_device_poll(status: u16, body: &str) -> DevicePoll {
@@ -564,8 +554,8 @@ pub async fn poll_device_auth(
 mod tests {
     use super::*;
 
-    /// Build an unsigned JWT-shaped token around `payload` with three
-    /// base64url segments; the signature is junk because nothing here
+    /// Build an unsigned JWT shaped token around `payload` with three
+    /// base64url segments, the signature is junk because nothing here
     /// verifies it.
     pub(crate) fn fake_jwt(payload: &Value) -> String {
         use base64::Engine as _;
@@ -626,7 +616,7 @@ mod tests {
             Some("acc-123")
         );
 
-        // Missing claim, empty id, and non-JWT shapes all yield None.
+        // Missing claim, empty id, and non JWT shapes all yield None.
         assert_eq!(
             account_id_from_access_token(&fake_jwt(&serde_json::json!({}))),
             None
@@ -667,7 +657,7 @@ mod tests {
             "no secrets in errors: {message}"
         );
 
-        // A well-formed response whose access token carries no account
+        // A well formed response whose access token carries no account
         // claim is also rejected because the header cannot be built without it.
         let json = serde_json::json!({
             "access_token": fake_jwt(&serde_json::json!({"sub": "x"})),
@@ -710,7 +700,7 @@ mod tests {
 
     #[test]
     fn evaluate_callback_validates_route_state_and_code() {
-        // Success: right path, right state, a code.
+        // Success, right path, right state, a code.
         let (status, page, code) = evaluate_callback("/auth/callback?code=c-1&state=s-1", "s-1");
         assert_eq!(status, "200 OK");
         assert!(page.contains("Login complete"), "{page}");
@@ -736,7 +726,7 @@ mod tests {
 
         let http = reqwest::Client::new();
         let base = format!("http://127.0.0.1:{port}");
-        // Noise first: wrong route, then wrong state. The server answers
+        // Noise first, wrong route, then wrong state. The server answers
         // both and keeps waiting.
         let response = http
             .get(format!("{base}/favicon.ico"))
@@ -793,7 +783,7 @@ mod tests {
 
     #[test]
     fn device_poll_classification_covers_openais_quirks() {
-        // 200 with both halves: done (the verifier comes from the server).
+        // 200 with both halves, done (the verifier comes from the server).
         assert_eq!(
             classify_device_poll(200, r#"{"authorization_code": "c", "code_verifier": "v"}"#),
             DevicePoll::Complete {
@@ -804,7 +794,7 @@ mod tests {
         // Plain 403/404 mean "user not done yet", not failure.
         assert_eq!(classify_device_poll(403, ""), DevicePoll::Pending);
         assert_eq!(classify_device_poll(404, "not found"), DevicePoll::Pending);
-        // The JSON error code variants: bare string and nested object.
+        // The JSON error code variants, bare string and nested object.
         assert_eq!(
             classify_device_poll(400, r#"{"error": "deviceauth_authorization_pending"}"#),
             DevicePoll::Pending

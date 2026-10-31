@@ -1,34 +1,30 @@
-//! Server-Sent Events (SSE) decoder shared by the Anthropic and `OpenAI`
+//! Server Sent Events (SSE) decoder shared by the Anthropic and `OpenAI`
 //! providers.
 //!
-//! SSE is a line-oriented text protocol: fields like `event: foo` and
-//! `data: {...}` accumulate until a blank line "flushes" one event.
+//! SSE is a line oriented text protocol, fields like an `event` field with a value and
+//! a `data` field containing JSON accumulate until a blank line "flushes" one event.
 //!
-//! Design notes for the Rust version:
-//! - The decoder is *push-based*: the caller feeds raw network chunks into
-//!   [`SseDecoder::push`] and receives zero or more complete events. This
+//! Design notes for the Rust version,
+//! * The decoder is *push based*, the caller feeds raw network chunks into
+//!   `push` and receives zero or more complete events. This
 //!   fits `reqwest`'s `bytes_stream()` which yields chunks at arbitrary
 //!   boundaries. An event may be split across chunks, or one chunk may
 //!   contain many events.
-//! - We buffer bytes (not `String`) because a chunk may end in the middle of
-//!   a multi-byte UTF-8 character. Lines are only converted to text once a
+//! * We buffer bytes (not `String`) because a chunk may end in the middle of
+//!   a multi byte UTF 8 character. Lines are only converted to text once a
 //!   line break proves they are complete.
 
 /// One decoded SSE event.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerSentEvent {
-    /// The `event:` field, if any (e.g. `"message_start"`).
     pub event: Option<String>,
-    /// All `data:` lines joined with `\n`, per the SSE spec.
     pub data: String,
 }
 
-/// Incremental SSE decoder. Feed it chunks; it emits complete events.
+/// Incremental SSE decoder. Feed it chunks, it emits complete events.
 #[derive(Debug, Default)]
 pub struct SseDecoder {
-    /// Bytes received but not yet terminated by a line break.
     buffer: Vec<u8>,
-    /// Fields of the event currently being assembled.
     event: Option<String>,
     data: Vec<String>,
 }
@@ -39,7 +35,7 @@ impl SseDecoder {
         Self::default()
     }
 
-    /// Feed one network chunk; complete events are appended to `out`.
+    /// Feed one network chunk, complete events are appended to `out`.
     ///
     /// Taking an output `Vec` instead of returning one lets the caller reuse
     /// a single allocation across the whole stream.
@@ -48,7 +44,7 @@ impl SseDecoder {
 
         // Repeatedly carve complete lines off the front of the buffer.
         // A "line" ends at \n, \r, or \r\n (the SSE spec allows all three).
-        // The loop ends when no complete line remains; wait for more bytes.
+        // The loop ends when no complete line remains, wait for more bytes.
         while let Some(break_at) = self.buffer.iter().position(|b| *b == b'\n' || *b == b'\r') {
             // If the buffer ends exactly at a '\r' we cannot yet know whether
             // a '\n' follows (a CRLF pair split across chunks). Wait.
@@ -71,7 +67,7 @@ impl SseDecoder {
         }
     }
 
-    /// Signal end-of-stream: flush whatever is still buffered.
+    /// Signal end of stream, flush whatever is still buffered.
     /// Some servers omit the final blank line, so a trailing event may only
     /// become visible here.
     pub fn finish(&mut self, out: &mut Vec<ServerSentEvent>) {
@@ -93,12 +89,12 @@ impl SseDecoder {
         if line.is_empty() {
             return self.flush();
         }
-        // Lines starting with ':' are comments (used by proxies as keepalive).
+        // Lines starting with '' are comments (used by proxies as keepalive).
         if line.starts_with(':') {
             return None;
         }
 
-        // Split into "field: value". A missing colon means the whole line is
+        // Split into "field, value". A missing colon means the whole line is
         // the field name with an empty value.
         let (field, value) = match line.find(':') {
             Some(i) => {
@@ -155,7 +151,7 @@ mod tests {
 
     #[test]
     fn handles_events_split_across_chunks() {
-        // The event boundary lands mid-line to prove buffering works.
+        // The event boundary lands mid line to prove buffering works.
         let events = decode_all(&["event: mess", "age_start\ndata: 1\n", "\n"]);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event.as_deref(), Some("message_start"));

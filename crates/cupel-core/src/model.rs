@@ -1,30 +1,30 @@
-//! Model registry helpers and cost/thinking-level logic.
+//! Model registry helpers and cost/thinking level logic.
 
 use crate::types::{CostTier, Model, ModelThinkingLevel, ThinkingLevel, Usage};
 
 const PER_M: f64 = 1_000_000.0;
 
-/// Fill in `usage.cost` from a model's per-million pricing.
+/// Fill in `usage.cost` from a model's per million pricing.
 pub(crate) fn calculate_cost(model: &Model, usage: &mut Usage) {
     let long_write = usage.cache_write1h.unwrap_or(0) as f64;
     let short_write = usage.cache_write as f64 - long_write;
 
-    // Long-context tiers: the highest
+    // Long context tiers, the highest
     // tier below the total prompt size reprices the whole request.
     let rates = effective_rates(&model.cost, usage);
 
     usage.cost.input = rates.input / PER_M * usage.input as f64;
     usage.cost.output = rates.output / PER_M * usage.output as f64;
     usage.cost.cache_read = rates.cached_read / PER_M * usage.cache_read as f64;
-    // 1h writes cost 2x base input; short writes use the cache-write rate.
-    // The division by tokens-per-million applies to the whole sum.
+    // 1h writes cost 2x base input, short writes use the cache write rate.
+    // The division by tokens per million applies to the whole sum.
     usage.cost.cache_write =
         (rates.cached_write * short_write + rates.input * 2.0 * long_write) / PER_M;
     usage.cost.total =
         usage.cost.input + usage.cost.output + usage.cost.cache_read + usage.cost.cache_write;
 }
 
-/// Per-million rates for this request: the matching tier's prices, or
+/// Per million rates for this request, the matching tier's prices, or
 /// the model's base rates when no tier applies.
 fn effective_rates(cost: &crate::types::ModelCost, usage: &Usage) -> CostTier {
     let base = CostTier {
@@ -84,7 +84,7 @@ pub(crate) fn supported_thinking_levels(model: &Model) -> Vec<ModelThinkingLevel
 }
 
 /// The thinking level a request really uses (`None` = off). Only "off" can
-/// change: a model whose catalog row maps "off" to null cannot turn reasoning
+/// change, a model whose catalog row maps "off" to null cannot turn reasoning
 /// off, and leaving the setting out would let the server reason at its own
 /// default effort, unseen. Such a model gets its lowest level instead.
 #[must_use]
@@ -95,7 +95,7 @@ pub fn effective_thinking_level(
     if requested.is_some() || !model.reasoning {
         return requested;
     }
-    // The supported levels are sorted from off upwards: off itself when the
+    // The supported levels are sorted from off upwards, off itself when the
     // model can turn reasoning off, otherwise its lowest real level.
     match supported_thinking_levels(model).first().copied() {
         Some(ModelThinkingLevel::Minimal) => Some(ThinkingLevel::Minimal),
@@ -108,7 +108,7 @@ pub fn effective_thinking_level(
     }
 }
 
-/// Snap a requested level to the nearest supported one: try the exact
+/// Snap a requested level to the nearest supported one, try the exact
 /// level, then walk upward, then downward.
 #[must_use]
 pub(crate) fn clamp_thinking_level(model: &Model, level: ModelThinkingLevel) -> ModelThinkingLevel {
@@ -202,13 +202,13 @@ mod tests {
 
     #[test]
     fn off_becomes_the_lowest_level_where_reasoning_cannot_be_turned_off() {
-        // "off" and "minimal" map to null: the lowest level is low.
+        // "off" and "minimal" map to null, the lowest level is low.
         let opus = catalog_row("claude-opus-5-5");
         assert_eq!(
             effective_thinking_level(&opus, None),
             Some(ThinkingLevel::Low)
         );
-        // Only "off" maps to null: minimal is left.
+        // Only "off" maps to null, minimal is left.
         let codex = catalog_row("codex/gpt-6.1-sol");
         assert_eq!(
             effective_thinking_level(&codex, None),
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn long_cache_writes_follow_prompt_tier_rates() {
-        // Controlled rates: runtime cost math must not pin upstream catalog prices.
+        // Controlled rates, runtime cost math must not pin upstream catalog prices.
         let mut model = tiered_model();
         model.cost = ModelCost {
             input: 0.1,
@@ -338,7 +338,7 @@ mod tests {
             }]),
         };
         for (prompt_tokens, multiplier) in [(99_999, 1.0), (100_000, 1.0), (100_001, 5.0)] {
-            // Cache reads and both write durations count as prompt tokens;
+            // Cache reads and both write durations count as prompt tokens,
             // output tokens do not push an otherwise cheap prompt over 100k.
             let mut usage = Usage {
                 input: prompt_tokens - 60_000,

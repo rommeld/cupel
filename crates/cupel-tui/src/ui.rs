@@ -1,8 +1,8 @@
-//! The render pass: `App` state in, one frame out.
+//! The render pass, `App` state in, one frame out.
 //!
 //! ratatui is immediate mode this function redescribes the entire screen every frame,
 //! and the library diffs against the previous frame to emit minimal terminal writes.
-//! So there is no "update the widget" anywhere; there is only state (in `App`) and
+//! So there is no "update the widget" anywhere, there is only state (in `App`) and
 //! this projection of it.
 
 use ratatui::Frame;
@@ -25,10 +25,10 @@ const QUESTION_PADDING: u16 = 2;
 
 pub fn render_sessions(frame: &mut Frame<'_>, sessions: &mut Sessions) {
     // A second owner leaves `sessions` free for mutable borrows below.
-    // Arc::clone copies a pointer and counts, not the theme.
+    // clone copies a pointer and counts, not the theme.
     let theme = std::sync::Arc::clone(&sessions.theme);
     let area = frame.area();
-    // Start every cell in the theme's colors; later widgets patch them.
+    // Start every cell in the theme's colors, later widgets patch them.
     // CUPEL's empty base leaves the terminal colors unchanged.
     frame.render_widget(Block::new().style(theme.base), area);
     let width = if sessions.list.len() > 1 && area.width >= SIDEBAR_MIN_SCREEN {
@@ -117,7 +117,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     let waiting = app.steering.len() + app.queued.len() + usize::from(app.waiting_helper.is_some());
     let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
     // Reserve the editor, model status, footer, queues and one transcript row first.
-    // The pane itself uses at most half the screen; its outside gaps are separate rows.
+    // The pane itself uses at most half the screen, its outside gaps are separate rows.
     let available = area.height.saturating_sub(
         queued_lines
             .saturating_add(input_lines + 2)
@@ -164,7 +164,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     render_input(frame, app, input_area, theme);
     render_footer(frame, app, footer_area, theme);
     // Drawn last so it overdraws the transcript's bottom rows in
-    // immediate-mode rendering, paint order is the z-order.
+    // immediate mode rendering, paint order is the z order.
     render_autocomplete(frame, app, area, transcript_area, model_area, theme);
     if let Some(popup) = &mut app.usage_popup {
         crate::usage::render(frame, popup, area, theme);
@@ -190,7 +190,7 @@ fn render_autocomplete(
 
     let height = (rows.len() as u16).min(transcript_area.height);
     // Anchor x to the `@` column when it's on the input's visible first
-    // line; degrade gracefully to the input's left edge otherwise.
+    // line, degrade gracefully to the input's left edge otherwise.
     let anchor_col = app.autocomplete.token_start().map_or(0, |start| {
         app.input.text()[..]
             .chars()
@@ -214,7 +214,7 @@ fn render_autocomplete(
     };
 
     // Clear blanks the transcript underneath, then the rows paint on top.
-    // It also resets colors: the paragraph repaints the entire popup surface,
+    // It also resets colors, the paragraph repaints the entire popup surface,
     // including padding after shorter rows.
     frame.render_widget(Clear, popup);
     let lines: Vec<Line<'_>> = rows
@@ -246,21 +246,21 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     let total = rendered.lines.len();
     let height = inner.height as usize;
 
-    // Keep the reader's place: the offset is measured from the bottom, and
+    // Keep the reader's place, the offset is measured from the bottom, and
     // new output moves the bottom a fixed offset would slide the view.
-    // Growing it by exactly the growth pins the visible lines; at 0
+    // Growing it by exactly the growth pins the visible lines, at 0
     // (follow mode) the view sticks to the tail on purpose.
     if app.scroll_from_bottom > 0 {
         app.scroll_from_bottom += total.saturating_sub(app.last_total_lines);
     }
 
-    // Remember geometry so key/mouse handlers can clamp and hit-test.
+    // Remember geometry so key/mouse handlers can clamp and hit test.
     app.last_total_lines = total;
     app.last_transcript_height = inner.height;
     let max_scroll = total.saturating_sub(height);
     app.scroll_from_bottom = app.scroll_from_bottom.min(max_scroll);
 
-    // Bottom-anchored window: offset 0 shows the newest lines.
+    // Bottom anchored window, offset 0 shows the newest lines.
     let end = total - app.scroll_from_bottom;
     let start = end.saturating_sub(height);
     app.last_top_line = start;
@@ -308,7 +308,7 @@ struct QuestionLines {
     selected: std::ops::Range<usize>,
 }
 
-/// A frame-local render plan, not session state. Closing the question drops it.
+/// A frame local render plan, not session state. Closing the question drops it.
 struct QuestionPane {
     block: Block<'static>,
     content: QuestionLines,
@@ -353,7 +353,7 @@ fn question_pane(app: &App, area: Rect, theme: &Theme) -> Option<QuestionPane> {
     })
 }
 
-/// Paint a viewport derived from the selection: no second scroll state can become
+/// Paint a viewport derived from the selection, no second scroll state can become
 /// stale after Up/Down, a resize, or a switch to another session.
 fn render_question(frame: &mut Frame<'_>, pane: QuestionPane, area: Rect, theme: &Theme) {
     let inner = pane.block.inner(area);
@@ -397,7 +397,7 @@ fn push_question_text(
     let prefix_width = Line::from(first)
         .width()
         .max(Line::from(continuation).width());
-    // On narrower terminals omit indentation; the Paragraph safely clips a character
+    // On narrower terminals omit indentation, the Paragraph safely clips a character
     // wider than itself.
     let (first, continuation, prefix_width) = if width >= prefix_width + 2 {
         (first, continuation, prefix_width)
@@ -415,7 +415,7 @@ fn push_question_text(
     }
 }
 
-/// The question, a blank row, and separated options. All margins belong to the block;
+/// The question, a blank row, and separated options. All margins belong to the block,
 /// prefixes here express hierarchy rather than outside padding.
 fn question_lines(app: &App, width: usize, theme: &Theme) -> QuestionLines {
     let Some(open) = &app.question else {
@@ -469,8 +469,8 @@ fn question_lines(app: &App, width: usize, theme: &Theme) -> QuestionLines {
     content
 }
 
-/// The waiting prompts above the input box: "Steer:" rows first (they go in sooner),
-/// then "Follow-up:" rows, oldest first. The first line of each prompt, then the key
+/// The waiting prompts above the input box, "Steer" rows first (they go in sooner),
+/// then "Follow up" rows, oldest first. The first line of each prompt, then the key
 /// that takes them back.
 fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     if app.steering.is_empty() && app.queued.is_empty() && app.waiting_helper.is_none() {
@@ -499,7 +499,7 @@ fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
 
 const SPINNER: [&str; 4] = ["◓", "◑", "◒", "◐"];
 
-/// A pane frame: dim border, optional dim title, one column of horizontal padding.
+/// A pane frame, dim border, optional dim title, one column of horizontal padding.
 fn pane_block(title: Option<&str>, theme: &Theme) -> Block<'static> {
     let block = Block::new()
         .borders(Borders::ALL)
@@ -512,14 +512,14 @@ fn pane_block(title: Option<&str>, theme: &Theme) -> Block<'static> {
 }
 
 /// Cursor position as (visual line, visual column) in the wrapped input
-/// text. Derived from the same `wrap_line` output that renders the text: a
+/// text. Derived from the same `wrap_line` output that renders the text, a
 /// second, parallel wrapping computation would inevitably disagree with it
 /// (word wrap vs. plain column wrap) and paint the cursor away from where
 /// the next keystroke actually lands.
 ///
 /// `cursor` is a character index (see `InputState`). `wrap_line` preserves every
 /// character of its input across the chunks it returns, so char offsets map
-/// 1:1 onto the wrapped output and locating the cursor is just counting.
+/// 11 onto the wrapped output and locating the cursor is just counting.
 fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
     use unicode_width::UnicodeWidthChar;
 
@@ -529,7 +529,7 @@ fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
         let chunks = transcript::wrap_line(logical, width);
         let line_chars = logical.chars().count();
         if remaining <= line_chars {
-            // The cursor sits on this logical line: walk its wrapped chunks
+            // The cursor sits on this logical line, walk its wrapped chunks
             // until the offset falls inside one.
             for (i, chunk) in chunks.iter().enumerate() {
                 let chunk_chars = chunk.chars().count();
@@ -552,7 +552,7 @@ fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
         remaining -= line_chars + 1; // +1 consumes the '\n'
         visual_line += chunks.len();
     }
-    (visual_line, 0) // unreachable: the last logical line always contains the cursor
+    (visual_line, 0) // unreachable, the last logical line always contains the cursor
 }
 
 fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
@@ -597,7 +597,7 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
         .collect();
 
     // Scroll the viewport so the cursor's line stays visible once the text
-    // outgrows the height-capped box.
+    // outgrows the height capped box.
     let (cursor_line, cursor_col) =
         visual_cursor(app.input.text(), app.input.cursor(), inner_width);
     let visible = inner.height.max(1) as usize;
@@ -615,7 +615,7 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
 }
 
 fn render_model_status(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
-    // Only reasoning models show effort; keep "thinking" even for "off" so
+    // Only reasoning models show effort, keep "thinking" even for "off" so
     // the level never reads like part of the model name.
     let thinking_segment = if app.agent.model_supports_reasoning() {
         match app.agent.effective_thinking_level() {
@@ -647,8 +647,8 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
         ""
     };
     let maximum_segment = maximum.map_or_else(String::new, |max| format!(" · max {}k", max / 1000));
-    // The session id sits in the always-visible left half so `--resume
-    // <id>` (or /hot-reload <id>) can be typed from what's on screen.
+    // The session id sits in the always visible left half so ` resume
+    // <id>` (or /hot reload <id>) can be typed from what's on screen.
     let totals = app.session_totals();
     let left = format!(
         " {} | {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k{window_label} ({percent}%){maximum_segment}",
@@ -664,7 +664,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let version_label = format!("version: {}", env!("CARGO_PKG_VERSION"));
     // The mouse hint tracks selection mode, so it never lies about what
     // the wheel currently does. It shares the status row's left margin because
-    // a right-aligned hint row would sit staggered against it.
+    // a right aligned hint row would sit staggered against it.
     let hints = if app.question.is_some() {
         " ↑↓ choose · enter answer (typed text wins) · alt+enter newline · @ file · esc abort"
     } else if app.mouse_captured {
@@ -685,8 +685,8 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
         Paragraph::new(Span::styled(hints, theme.chrome)),
         hints_area,
     );
-    // Right-aligned, the area's spare column sits in front of the label. It is
-    // the gap that keeps cut-off hints from running into the version.
+    // Right aligned, the area's spare column sits in front of the label. It is
+    // the gap that keeps cut off hints from running into the version.
     frame.render_widget(
         Paragraph::new(Span::styled(version_label, theme.chrome)).right_aligned(),
         version_area,
@@ -709,8 +709,8 @@ fn thinking_level_name(level: cupel_core::types::ThinkingLevel) -> &'static str 
 
 #[cfg(test)]
 pub(crate) mod tests {
-    //! Headless render tests: ratatui's `TestBackend` draws frames into an
-    //! in-memory buffer, so the full render path is testable without a
+    //! Headless render tests, ratatui's `TestBackend` draws frames into an
+    //! in memory buffer, so the full render path is testable without a
     //! terminal (or an API key the Agent is constructed but never run).
 
     use super::*;
@@ -736,7 +736,7 @@ pub(crate) mod tests {
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let agent = Agent::new(AgentOptions::new(model, registry));
-        // home: None disables persistence + hooks tests touch no disk.
+        // home, None disables persistence + hooks tests touch no disk.
         let recorder = cupel_coding_agent::session::SessionRecorder::new(
             None,
             std::path::Path::new(cwd),
@@ -801,10 +801,10 @@ pub(crate) mod tests {
     }
 
     /// Draw the app and return the style painted at the first occurrence
-    /// of `needle`. ASCII needles only: the byte index of the match is
+    /// of `needle`. ASCII needles only, the byte index of the match is
     /// then also its column. Panics when the needle is not on screen
     /// that is a failed test either way, and panicking here gives the
-    /// missing-text message instead of a confusing style mismatch.
+    /// missing text message instead of a confusing style mismatch.
     fn style_of(app: &mut App, needle: &str) -> ratatui::style::Style {
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal
@@ -921,7 +921,7 @@ pub(crate) mod tests {
         terminal
             .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
             .unwrap();
-        // Two border rows plus two text rows: input starts at y=14.
+        // Two border rows plus two text rows, input starts at y=14.
         assert_eq!(
             terminal.get_cursor_position().unwrap(),
             Position::new(6, 16)
@@ -1037,7 +1037,7 @@ pub(crate) mod tests {
             "{screen}"
         );
         for y in [0, 13] {
-            // The scrollbar may occupy the right edge; text stays inside the padding.
+            // The scrollbar may occupy the right edge, text stays inside the padding.
             assert!(
                 screen
                     .lines()
@@ -1145,7 +1145,7 @@ pub(crate) mod tests {
         std::fs::write(root.join("code.rs"), "fn main() {}").unwrap();
         let mut app = test_app_in(root.to_str().unwrap());
 
-        // A reviewable path: the built bundle is queued as the prompt.
+        // A reviewable path, the built bundle is queued as the prompt.
         type_text(&mut app, "/review code.rs");
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         app.on_terminal_event(Event::Key(KeyEvent::new(
@@ -1156,7 +1156,7 @@ pub(crate) mod tests {
         assert!(prompt.contains("=== file: code.rs ==="));
         assert!(prompt.contains("fn main() {}"));
 
-        // A bad path: error notice, nothing queued or sent.
+        // A bad path, error notice, nothing queued or sent.
         type_text(&mut app, "/review missing.rs");
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         app.on_terminal_event(Event::Key(KeyEvent::new(
@@ -1201,7 +1201,7 @@ pub(crate) mod tests {
     #[test]
     fn footer_ends_the_hints_row_with_the_version_after_a_gap() {
         let mut app = test_app();
-        // The leading space is the gap: at 80 and 140 columns the hints are cut
+        // The leading space is the gap, at 80 and 140 columns the hints are cut
         // off, and the cut must not touch the label.
         let version_suffix = format!(" version: {}", env!("CARGO_PKG_VERSION"));
         for mouse_captured in [true, false] {
@@ -1225,7 +1225,7 @@ pub(crate) mod tests {
 
     #[test]
     fn session_id_command_lists_this_projects_sessions() {
-        // A home-backed recorder (unlike test_app's disabled one) so the
+        // A home backed recorder (unlike test_app's disabled one) so the
         // listing has a real sessions dir to read.
         let root = std::env::temp_dir().join("cupel-ui-session-list");
         let _ = std::fs::remove_dir_all(&root);
@@ -1237,7 +1237,7 @@ pub(crate) mod tests {
             "cupel-current",
             "test-model",
         );
-        // Pre-write an older session the listing must show alongside.
+        // Pre write an older session the listing must show alongside.
         let dir = recorder.sessions_dir().unwrap().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -1661,7 +1661,7 @@ pub(crate) mod tests {
 
         let root = std::env::temp_dir().join("cupel-ui-hotreload-delta");
         let _ = std::fs::remove_dir_all(&root);
-        // Ten rules: far enough apart that the unified diff's 2-line
+        // Ten rules, far enough apart that the unified diff's 2 line
         // context radius provably excludes the untouched start of the file.
         let original: String = (1..=10).fold(String::new(), |mut s, i| {
             use std::fmt::Write as _;
@@ -1670,7 +1670,7 @@ pub(crate) mod tests {
         });
         let mut app = test_app_with_home(&root, "cupel-current");
         std::fs::write(root.join("home/AGENTS.md"), &original).unwrap();
-        // The session-start baseline the delta will diff against.
+        // The session start baseline the delta will diff against.
         app.meta.context_files = vec![ContextFile {
             path: root.join("home/AGENTS.md"),
             content: original.clone(),
@@ -1684,20 +1684,20 @@ pub(crate) mod tests {
             Agent::new(options)
         };
 
-        // Edit one rule mid-session.
+        // Edit one rule mid session.
         let edited = original.replace("RULE 6", "RULE 6 (amended)");
         std::fs::write(root.join("home/AGENTS.md"), &edited).unwrap();
 
         let app = app.hot_reload(ReloadTarget::Current).await;
 
-        // The session continues: same id, history intact.
+        // The session continues, same id, history intact.
         assert_eq!(app.recorder.session_id(), "cupel-current");
         let messages = app.agent.state().messages;
         assert_eq!(messages.len(), 2, "history + appended delta");
         // The system prompt was not rebuilt (test agent starts with an
-        // empty one re-embedding would have injected the rules).
+        // empty one re embedding would have injected the rules).
         assert!(!app.agent.state().system_prompt.contains("RULE"));
-        // The appended message is the delta, not the whole file: the
+        // The appended message is the delta, not the whole file, the
         // changed line travels, distant unchanged lines do not.
         let cupel_agent::AgentMessage::Llm(cupel_core::types::Message::User(user)) = &messages[1]
         else {
@@ -1721,7 +1721,7 @@ pub(crate) mod tests {
             "in-place notice shown"
         );
 
-        // Reload again with no further edits: nothing new is appended.
+        // Reload again with no further edits, nothing new is appended.
         let app = app.hot_reload(ReloadTarget::Current).await;
         assert_eq!(app.agent.state().messages.len(), 2, "no duplicate delta");
         assert!(app.transcript.cells.iter().any(|c| matches!(
@@ -1750,7 +1750,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        // Unknown id: old app comes back intact, with an error notice.
+        // Unknown id, old app comes back intact, with an error notice.
         let app = app
             .hot_reload(ReloadTarget::Resume("cupel-nope".into()))
             .await;
@@ -1760,7 +1760,7 @@ pub(crate) mod tests {
             Cell::Notice { text } if text.contains("no session named cupel-nope")
         )));
 
-        // Known id: history seeded, cells replayed, same id continued.
+        // Known id, history seeded, cells replayed, same id continued.
         let app = app
             .hot_reload(ReloadTarget::Resume("cupel-old".into()))
             .await;
@@ -1844,7 +1844,7 @@ pub(crate) mod tests {
         }
         // Render once so the app learns the viewport geometry.
         let _ = draw(&mut app, 40, 10);
-        // Scroll way past the top: must clamp, not underflow or overshoot.
+        // Scroll way past the top, must clamp, not underflow or overshoot.
         for _ in 0..100 {
             app.on_terminal_event(Event::Key(KeyEvent::new(
                 KeyCode::PageUp,
@@ -1888,7 +1888,7 @@ pub(crate) mod tests {
         }
         let after = draw(&mut app, 40, 12);
 
-        // The window held its place in content space: same top line, and
+        // The window held its place in content space, same top line, and
         // none of the new tail scrolled into view.
         assert_eq!(app.last_top_line, anchor, "view must stay pinned");
         assert!(
@@ -1949,7 +1949,7 @@ pub(crate) mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        // The reference is now in the buffer; nothing was submitted (no run
+        // The reference is now in the buffer, nothing was submitted (no run
         // started, no user cell in the transcript).
         assert_eq!(app.input.text(), "@src/main.rs ");
         assert!(!app.is_running());
@@ -1982,7 +1982,7 @@ pub(crate) mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        // Handled locally: no run started, a Notice cell lists the commands.
+        // Handled locally, no run started, a Notice cell lists the commands.
         assert!(!app.is_running());
         let notice = app.transcript.cells.iter().any(|c| {
             matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage"))
@@ -1997,14 +1997,14 @@ pub(crate) mod tests {
         assert!(app.autocomplete.is_open(), "command popup should open");
         let screen = draw(&mut app, 80, 20);
         assert!(screen.contains("help"), "popup missing:\n{screen}");
-        // Accept via Enter: inserts, does not submit.
+        // Accept via Enter, inserts, does not submit.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
         assert_eq!(app.input.text(), "/help ");
 
-        // Now /quit end-to-end.
+        // Now /quit end to end.
         let mut app = test_app();
         type_text(&mut app, "/quit");
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
@@ -2014,7 +2014,7 @@ pub(crate) mod tests {
         )));
         assert!(app.should_quit);
 
-        // /exit is not a command: it is neither offered nor handled locally.
+        // /exit is not a command, it is neither offered nor handled locally.
         let mut app = test_app();
         type_text(&mut app, "/ex");
         assert!(app.autocomplete.visible().is_none());
@@ -2030,25 +2030,25 @@ pub(crate) mod tests {
 
     #[test]
     fn visual_cursor_matches_word_wrapping() {
-        // width 10 word-wraps "hello world" as ["hello ", "world"]. A plain
-        // column-wrap computation would report (1, 1) here the regression
+        // width 10 word wraps "hello world" as ["hello ", "world"]. A plain
+        // column wrap computation would report (1, 1) here the regression
         // this test pins down.
         assert_eq!(visual_cursor("hello world", 11, 10), (1, 5));
-        // On the chunk boundary (after "hello "): inserting there joins the
+        // On the chunk boundary (after "hello "), inserting there joins the
         // word "world", so the cursor belongs at the start of line 1.
         assert_eq!(visual_cursor("hello world", 6, 10), (1, 0));
-        // Mid-first-chunk stays on line 0.
+        // Mid first chunk stays on line 0.
         assert_eq!(visual_cursor("hello world", 3, 10), (0, 3));
     }
 
     #[test]
     fn visual_cursor_handles_hard_splits_newlines_and_wide_chars() {
-        // A single long word hard-splits by columns: "abcd" / "efgh" / "ij".
+        // A single long word hard splits by columns, "abcd" / "efgh" / "ij".
         assert_eq!(visual_cursor("abcdefghij", 10, 4), (2, 2));
         // Explicit newlines start fresh visual lines.
         assert_eq!(visual_cursor("ab\nxyz", 6, 4), (1, 3));
         assert_eq!(visual_cursor("ab\n", 3, 4), (1, 0));
-        // CJK chars are 2 columns wide: width 4 fits two, the third wraps.
+        // CJK chars are 2 columns wide, width 4 fits two, the third wraps.
         assert_eq!(visual_cursor("日本語", 3, 4), (1, 2));
         // After the second char = boundary = start of the wrapped chunk.
         assert_eq!(visual_cursor("日本語", 2, 4), (1, 0));
@@ -2059,7 +2059,7 @@ pub(crate) mod tests {
     #[test]
     fn input_viewport_follows_the_cursor_past_the_height_cap() {
         let mut app = test_app();
-        // 8 explicit lines; the input box caps at 5 visible rows, so the
+        // 8 explicit lines, the input box caps at 5 visible rows, so the
         // viewport must scroll to keep the cursor's line (the last one) on
         // screen.
         app.input
@@ -2083,7 +2083,7 @@ pub(crate) mod tests {
             TextContent, ToolCall, ToolResultMessage, Usage, now_ms,
         };
 
-        // Seed an Agent the way --resume does, then build the App around it.
+        // Seed an Agent the way resume does, then build the App around it.
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let assistant = CoreAssistant {
@@ -2248,7 +2248,7 @@ pub(crate) mod tests {
         let screen = draw(&mut app, 120, 40);
         assert_eq!(screen.matches("row 9").count(), 1, "{screen}");
 
-        // Ctrl+T: everything, then nothing.
+        // Ctrl+T, everything, then nothing.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('t'),
             KeyModifiers::CONTROL,
@@ -2322,7 +2322,7 @@ pub(crate) mod tests {
                 .count()
         }
         // The test app starts with thinking off on Claude Sonnet 5, which can
-        // turn reasoning off: nothing to say.
+        // turn reasoning off, nothing to say.
         let mut app = test_app();
         assert_eq!(clamp_notices(&app), 0);
 
@@ -2364,7 +2364,7 @@ pub(crate) mod tests {
             )),
             "{screen}"
         );
-        // A compaction resets the meter to the post-compaction estimate.
+        // A compaction resets the meter to the post compaction estimate.
         app.on_agent_event(Some(AgentEvent::CompactionEnd {
             tokens_before: 48_000,
             tokens_after: 12_000,
@@ -2382,7 +2382,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.context_tokens = 48_000;
         // The windows come from models.dev through the catalog, so they are
-        // read from the rows here, never pinned: a `--fetch` that corrects
+        // read from the rows here, never pinned, a a catalog fetch that corrects
         // one must not break this test.
         let catalog = cupel_core::catalog::builtin_models();
         let row = |id: &str| catalog.iter().find(|m| m.id == id).expect(id).clone();
@@ -2557,7 +2557,7 @@ pub(crate) mod tests {
         assert!(!screen.contains("> [Conversation summary"), "{screen}");
     }
 
-    /// The User cells in transcript order: which prompts reached a run.
+    /// The User cells in transcript order, which prompts reached a run.
     fn user_prompts(app: &App) -> Vec<&str> {
         app.transcript
             .cells
@@ -2597,13 +2597,13 @@ pub(crate) mod tests {
         app.start_run("build it");
         submit_paste(&mut app, "first");
 
-        // Alt+Up: back into the input box, the run keeps going.
+        // Alt+Up, back into the input box, the run keeps going.
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT)));
         assert_eq!(app.input.text(), "first");
         assert!(app.queued.is_empty());
         assert!(app.agent.cancel_token().is_some_and(|t| !t.is_cancelled()));
 
-        // Queue it again plus one more, start a draft, then Esc: all of it
+        // Queue it again plus one more, start a draft, then Esc, all of it
         // lands in the input box, oldest first, and the run is aborted.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
@@ -2614,7 +2614,7 @@ pub(crate) mod tests {
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         assert_eq!(app.input.text(), "first\n\nsecond\n\ndraft");
         assert!(app.agent.cancel_token().is_some_and(|t| t.is_cancelled()));
-        // Taken back means never sent: the agent's copy is gone as well.
+        // Taken back means never sent, the agent's copy is gone as well.
         assert!(app.agent.take_follow_up().is_none());
 
         while app.is_running() {
@@ -2691,7 +2691,7 @@ pub(crate) mod tests {
         let mut steered = false;
         while app.is_running() {
             let event = app.next_event().await;
-            // The run is over but its end is not handled yet: the loop
+            // The run is over but its end is not handled yet, the loop
             // will never look at the steering queue again.
             if !steered
                 && matches!(
@@ -2733,7 +2733,7 @@ pub(crate) mod tests {
         }))
         .await;
         assert!(app.steering.is_empty(), "delivered, so no longer waiting");
-        // The partial prose stays plain prose: it is no final answer.
+        // The partial prose stays plain prose, it is no final answer.
         assert!(matches!(
             app.transcript.cells.as_slice(),
             [
@@ -2760,7 +2760,7 @@ pub(crate) mod tests {
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         assert_eq!(app.input.text(), "steered\n\nqueued\n\ndraft");
         assert!(app.steering.is_empty() && app.queued.is_empty());
-        // Taken back means never sent: the agent's copies are gone as well.
+        // Taken back means never sent, the agent's copies are gone as well.
         assert!(app.agent.take_steering().is_empty());
         assert!(app.agent.take_follow_up().is_none());
     }
@@ -2768,7 +2768,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn the_spinner_turns_with_every_tick_while_running() {
         let mut app = test_app();
-        // A run against the empty registry errors in the background; until
+        // A run against the empty registry errors in the background, until
         // its events are pumped the app counts as running.
         app.start_run("spin");
         assert!(draw(&mut app, 80, 20).contains("◓ waiting for the model · 0s"));
@@ -2866,7 +2866,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_tool_call_renders_as_its_own_header_line() {
         use cupel_agent::AgentTool;
-        // An agent that has the bash tool: the header comes from the tool.
+        // An agent that has the bash tool, the header comes from the tool.
         let model = cupel_core::catalog::builtin_models().remove(0);
         let registry = Arc::new(cupel_core::provider::Registry::new());
         let mut options = AgentOptions::new(model, registry);
@@ -2971,7 +2971,7 @@ pub(crate) mod tests {
         assert!(screen.contains("ctrl+y select"), "hint missing:\n{screen}");
 
         // Ctrl+Y only requests the toggle (the event loop owns the
-        // terminal); applying flips state and posts a notice.
+        // terminal), applying flips state and posts a notice.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('y'),
             KeyModifiers::CONTROL,
@@ -2993,7 +2993,7 @@ pub(crate) mod tests {
     #[test]
     fn multi_line_paste_inserts_without_submitting() {
         let mut app = test_app();
-        // Bracketed paste delivers the whole clipboard as one event; the
+        // Bracketed paste delivers the whole clipboard as one event, the
         // embedded newline must become buffer content, not an Enter press.
         app.on_terminal_event(Event::Paste("line one\nline two".to_string()));
         assert_eq!(app.input.text(), "line one\nline two");
@@ -3063,7 +3063,7 @@ pub(crate) mod tests {
             KeyModifiers::NONE,
         )));
         assert_eq!(app.input.text(), "/thinking off ");
-        // The settled argument closed the popup; Enter now submits.
+        // The settled argument closed the popup, Enter now submits.
         assert!(!app.autocomplete.is_open());
     }
 
@@ -3092,7 +3092,7 @@ pub(crate) mod tests {
         });
         assert!(listing, "expected provider listing notice");
 
-        // Switching with an explicit key: session key wins, no echo of the
+        // Switching with an explicit key, session key wins, no echo of the
         // secret, meta + footer follow the new provider's default model.
         let mut app = test_app();
         type_text(&mut app, "/provider fireworks fw-secret-123");
@@ -3110,7 +3110,7 @@ pub(crate) mod tests {
         });
         assert!(switched, "expected switch notice without the secret");
 
-        // Unknown provider: a helpful error, no state change.
+        // Unknown provider, a helpful error, no state change.
         type_text(&mut app, "/provider nope");
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
@@ -3142,7 +3142,7 @@ pub(crate) mod tests {
     }
 
     /// test_app with two presets and a known base prompt. Rebuilt through
-    /// App::new, because App::new turns the presets into completions.
+    /// new, because new turns the presets into completions.
     fn test_app_with_presets() -> App {
         let mut app = test_app();
         app.meta.settings = serde_json::from_str(
@@ -3223,7 +3223,7 @@ pub(crate) mod tests {
     #[test]
     fn up_down_with_popup_open_move_selection_not_history() {
         let mut app = test_app_in(&autocomplete_cwd("nav"));
-        // Prime history directly on the input (App::submit would spawn agent
+        // Prime history directly on the input (submit would spawn agent
         // tasks, which needs a tokio runtime this sync test doesn't have).
         app.input.insert_str("old prompt");
         let _ = app.input.submit();
@@ -3253,7 +3253,7 @@ pub(crate) mod tests {
         let path = root.join("home/settings.json");
         let saved = cupel_coding_agent::settings::load_settings(&path).unwrap();
         assert_eq!(saved.api_key("fireworks"), Some("fw-secret-123"));
-        // The in-memory mirror agrees (the listing reads this, not disk).
+        // The in memory mirror agrees (the listing reads this, not disk).
         assert_eq!(
             app.meta.settings.api_key("fireworks"),
             Some("fw-secret-123")
@@ -3302,8 +3302,8 @@ pub(crate) mod tests {
         assert!(warned, "expected the not-saved warning");
     }
 
-    /// A key-requiring model on a provider id with no env-var mapping
-    /// the same env-independence trick as main.rs's select_model tests.
+    /// A key requiring model on a provider id with no env var mapping
+    /// the same env independence trick as main.rs's select_model tests.
     fn acme_model() -> cupel_core::types::Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
         model.id = "acme-1".into();
@@ -3345,8 +3345,8 @@ pub(crate) mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        // Accepted into session memory (the old env_var_name gate is gone);
-        // with home: None the save fails soft (NoHome warning), which this
+        // Accepted into session memory (the old env_var_name gate is gone),
+        // with home, None the save fails soft (NoHome warning), which this
         // test does not mind the acceptance is the point.
         assert_eq!(
             app.session_keys.get("acme").map(String::as_str),
@@ -3383,7 +3383,7 @@ pub(crate) mod tests {
             KeyModifiers::NONE,
         )));
         assert_eq!(app.meta.provider, "fireworks");
-        // Proof that env/no-key paths can never persist anything.
+        // Proof that env/no key paths can never persist anything.
         assert!(!root.join("home/settings.json").exists());
     }
 
@@ -3399,7 +3399,7 @@ pub(crate) mod tests {
         app.agent.set_model(model.clone());
         app.meta.models.push(model);
 
-        // Simulate the user hand-editing the file while cupel runs.
+        // Simulate the user hand editing the file while cupel runs.
         std::fs::write(
             root.join("home/settings.json"),
             r#"{"providers": {"acme": "from-disk"}}"#,
@@ -3423,7 +3423,7 @@ pub(crate) mod tests {
             let root = std::env::temp_dir().join(format!("cupel-ui-reload-warnings-{name}"));
             let _ = std::fs::remove_dir_all(&root);
             let mut app = test_app_with_home(&root, "cupel-current");
-            // A real registry avoids unrelated warnings for built-in models.
+            // A real registry avoids unrelated warnings for built in models.
             app.agent = Agent::new(AgentOptions::new(
                 acme_model(),
                 Arc::new(cupel_core::default_registry()),
@@ -3507,14 +3507,14 @@ pub(crate) mod tests {
         app.meta.settings =
             cupel_coding_agent::settings::load_settings(&root.join("home/settings.json")).unwrap();
         run_command(&mut app, "/preset fast");
-        // The test app's base prompt is empty: only the preset part is left.
+        // The test app's base prompt is empty, only the preset part is left.
         assert_eq!(app.agent.state().system_prompt, "\n\nPRESET RULES");
 
-        // In place: the running system prompt is kept as it is.
+        // In place, the running system prompt is kept as it is.
         let app = app.hot_reload(ReloadTarget::Current).await;
         assert_eq!(app.agent.state().system_prompt, "\n\nPRESET RULES");
 
-        // Resume: a fresh base prompt, the preset prompt still at its end.
+        // Resume, a fresh base prompt, the preset prompt still at its end.
         let dir = app.recorder.sessions_dir().unwrap().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -3597,7 +3597,7 @@ pub(crate) mod tests {
     #[test]
     fn model_status_shows_the_thinking_level_for_reasoning_models() {
         let mut app = test_app();
-        // AgentOptions::new leaves thinking at None -> "thinking off".
+        // new leaves thinking at None → "thinking off".
         let screen = draw(&mut app, 120, 20);
         assert!(
             screen.lines().nth(14).unwrap().contains("thinking off"),
@@ -3671,7 +3671,7 @@ pub(crate) mod tests {
         });
         app.transcript.append_assistant("found it");
         let screen = draw(&mut app, 80, 20);
-        // One frame: no tools pane, no band rule.
+        // One frame, no tools pane, no band rule.
         assert!(!screen.contains(" conversation "), "{screen}");
         assert!(!screen.contains(" tools "), "{screen}");
         assert!(!screen.contains("─ 1 "), "{screen}");
@@ -3777,7 +3777,7 @@ pub(crate) mod tests {
         )));
         assert_eq!(app.pending_copy.as_deref(), Some("final answer"));
 
-        // An empty transcript: a helpful notice, nothing queued.
+        // An empty transcript, a helpful notice, nothing queued.
         let mut app = test_app();
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('o'),
@@ -3802,7 +3802,7 @@ pub(crate) mod tests {
         assert!(screen.contains("Fazit"), "{screen}");
         assert!(!screen.contains("# Fazit"), "hashes are chrome: {screen}");
         assert!(!screen.contains("**"), "delimiters are consumed: {screen}");
-        // The invariant: unmarked text keeps the cell identity...
+        // The invariant, unmarked text keeps the cell identity...
         assert_eq!(style_of(&mut app, "plain magenta").fg, Some(Color::Magenta));
         // ...and accents combine with it instead of replacing it.
         let weight = style_of(&mut app, "weight");
@@ -3870,7 +3870,7 @@ pub(crate) mod tests {
         assert!(last_notice(&app).contains("login cancelled"));
     }
 
-    /// Type + enter without the popup-closing esc: while a login waits,
+    /// Type + enter without the popup closing esc, while a login waits,
     /// esc (with no popup visible) would cancel exactly the flow this
     /// test needs alive. The paste token matches no candidate, so the
     /// popup never opens and enter submits directly.
@@ -3895,7 +3895,7 @@ pub(crate) mod tests {
             last_notice(&app)
         );
         assert_eq!(code_rx.try_recv().unwrap(), "code-from-browser");
-        // The oneshot is spent; a second paste is told so.
+        // The oneshot is spent, a second paste is told so.
         submit_paste(&mut app, "/login openai-codex another");
         assert!(last_notice(&app).contains("cannot take a pasted code"));
     }
@@ -3964,7 +3964,7 @@ pub(crate) mod tests {
 
     #[test]
     fn provider_listing_shows_the_codex_login_status() {
-        let mut app = test_app(); // home: None -> never logged in
+        let mut app = test_app(); // home, None → never logged in
         submit_command(&mut app, "/provider");
         let notice = last_notice(&app);
         assert!(
@@ -3976,10 +3976,10 @@ pub(crate) mod tests {
         submit_command(&mut app, "/provider openai-codex");
         assert_eq!(app.meta.provider, "openai-codex");
         assert_eq!(app.meta.model_name, "GPT-6.1 Sol");
-        // Not the last notice: the test app runs with thinking off, which
-        // GPT-6.1 Sol cannot do, so the thinking notice follows this one.
+        // Not the last notice, the test app runs with thinking off, which
+        // GPT 6.1 Sol cannot do, so the thinking notice follows this one.
         assert!(has_notice(&app, "model codex/gpt-6.1-sol;"));
-        // And the key path is closed: codex takes logins, not keys.
+        // And the key path is closed, codex takes logins, not keys.
         submit_command(&mut app, "/provider openai-codex sk-pasted");
         let notice = app
             .transcript
@@ -4135,7 +4135,7 @@ pub(crate) mod tests {
         use crate::app::Status;
         let mut app = test_app();
         assert_eq!(app.status(), Status::New);
-        // A run against the empty registry fails in the background; until
+        // A run against the empty registry fails in the background, until
         // its events are pumped, the session counts as running.
         app.start_run("hello");
         assert_eq!(app.status(), Status::Running);
@@ -4207,7 +4207,7 @@ pub(crate) mod tests {
             label: "auth".to_string(),
             app,
         });
-        // A run in the session off screen; it fails against the empty registry.
+        // A run in the session off screen, it fails against the empty registry.
         sessions.list[1].app.start_run("work");
         while sessions.any_running() {
             // A time limit turns "never read" into a failure instead of a hang.
@@ -4267,11 +4267,11 @@ pub(crate) mod tests {
                     messages: Vec::new(),
                 });
             }
-            // The second stream closes without AgentEnd; both endings must be handled.
+            // The second stream closes without AgentEnd, both endings must be handled.
             expected.push(text);
         }
 
-        // The normal wakeup handles one event; the rest must precede the next draw.
+        // The normal wakeup handles one event, the rest must precede the next draw.
         let (index, event) = sessions.next_event().await;
         sessions.list[index].app.on_event(event).await;
         tokio::time::timeout(
@@ -4338,7 +4338,7 @@ pub(crate) mod tests {
         use crate::sessions::{Session, Sessions};
         let mut sessions = Sessions::new(test_app());
         let mut app = test_app();
-        // A run that never ends: `_sink` keeps its channel open.
+        // A run that never ends, `_sink` keeps its channel open.
         let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
         app.run_events = Some(events);
         sessions.list.push(Session {
@@ -4720,7 +4720,7 @@ pub(crate) mod tests {
             "{listing}"
         );
 
-        // The App that /hot-reload builds reads the files again.
+        // The App that /hot reload builds reads the files again.
         std::fs::write(&file, gruvbox.replace("BG", "#1d2021")).unwrap();
         sessions.reload(ReloadTarget::Current).await;
         assert_eq!(sessions.theme.base.bg, Some(Color::Rgb(0x1d, 0x20, 0x21)));
@@ -4760,7 +4760,7 @@ pub(crate) mod tests {
         assert!(!screen.contains(" sessions "), "one session: no sidebar");
 
         let mut app = test_app();
-        // A run that never ends: `_sink` keeps its channel open.
+        // A run that never ends, `_sink` keeps its channel open.
         let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
         app.run_events = Some(events);
         sessions.list.push(Session {
@@ -4789,7 +4789,7 @@ pub(crate) mod tests {
         // The spinner turns with the ticks.
         sessions.tick();
         assert!(draw_sessions(&mut sessions, 100, 20).contains("◑ auth"));
-        // Too narrow: the sidebar steps aside.
+        // Too narrow, the sidebar steps aside.
         let narrow = draw_sessions(&mut sessions, 79, 20);
         assert!(!narrow.contains(" sessions "), "{narrow}");
     }
@@ -4886,7 +4886,7 @@ pub(crate) mod tests {
         assert_eq!(sessions.list[1].app.meta.cwd, cwd);
         assert!(has_notice(&sessions.list[1].app, "spinoff auth: worktree"));
         assert!(has_notice(&sessions.list[0].app, "spinoff auth started"));
-        // Without a preset: the model of the session it came from.
+        // Without a preset, the model of the session it came from.
         let model = |index: usize| sessions.list[index].app.agent.state().model.id;
         assert_eq!(model(1), model(0));
 
@@ -5008,12 +5008,12 @@ pub(crate) mod tests {
         assert_eq!(sessions.conflict_count(0), 1);
         assert_eq!(sessions.conflict_count(1), 1);
 
-        // The same result again: no new notice.
+        // The same result again, no new notice.
         let cells = sessions.list[0].app.transcript.cells.len();
         sessions.check_conflicts().await;
         assert_eq!(sessions.list[0].app.transcript.cells.len(), cells);
 
-        // The spinoff takes its change back: the conflict is gone.
+        // The spinoff takes its change back, the conflict is gone.
         std::fs::write(worktree.join("a.txt"), TEN_LINES).unwrap();
         sessions.check_conflicts().await;
         assert!(has_notice(
@@ -5072,7 +5072,7 @@ pub(crate) mod tests {
         std::fs::write(dir.join("a.txt"), changed).unwrap();
     }
 
-    /// `git <args>` in `dir`; its output, for checks.
+    /// `git <args>` in `dir`, its output, for checks.
     fn git_output(dir: &std::path::Path, args: &[&str]) -> String {
         let output = std::process::Command::new("git")
             .arg("-C")
@@ -5164,12 +5164,12 @@ pub(crate) mod tests {
             .unwrap_or_default();
         let head = "Merging spinoff \"auth\" (branch cupel/spinoff/auth) into main stopped";
         assert!(prompt.starts_with(head), "{prompt}");
-        // The leftovers commit is in the log; auth never had a prompt.
+        // The leftovers commit is in the log, auth never had a prompt.
         assert!(prompt.contains(" spinoff auth: (no prompt)\n"), "{prompt}");
         assert!(prompt.contains("\n- a.txt\n"), "{prompt}");
         assert_eq!(sessions.list.len(), 2, "auth stays until the merge is done");
 
-        // Markers left: refused, and no second prompt.
+        // Markers left, refused, and no second prompt.
         run_spinoff(&mut sessions, "merge auth").await;
         assert!(has_notice(
             sessions.active(),
@@ -5177,7 +5177,7 @@ pub(crate) mod tests {
         ));
         assert!(sessions.active().pending_prompt.is_none());
 
-        // The model's resolution; the next merge finishes and cleans up.
+        // The model's resolution, the next merge finishes and cleans up.
         set_line(&repo, 5, "5 main and auth");
         run_spinoff(&mut sessions, "merge auth").await;
         assert!(has_notice(
@@ -5242,7 +5242,7 @@ pub(crate) mod tests {
         let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
         run_spinoff(&mut sessions, "auth").await;
         sessions.active = 0;
-        // A run that never ends: `_sink` keeps its channel open.
+        // A run that never ends, `_sink` keeps its channel open.
         let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
         sessions.list[1].app.run_events = Some(events);
         run_spinoff(&mut sessions, "drop auth").await;
@@ -5300,7 +5300,7 @@ pub(crate) mod tests {
             .unwrap();
             origin
         };
-        // The first run: auth, on preset fast, gets one prompt; docs gets none. The
+        // The first run, auth, on preset fast, gets one prompt, docs gets none. The
         // prompt's run fails at once against the empty registry, but it is recorded.
         let mut first = Sessions::new(origin());
         run_spinoff(&mut first, "auth fast").await;
@@ -5456,7 +5456,7 @@ pub(crate) mod tests {
         app.on_terminal_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
     }
 
-    /// The tool's arguments: two options, the second one recommended.
+    /// The tool's arguments, two options, the second one recommended.
     fn presets_question() -> serde_json::Value {
         serde_json::json!({
             "question": "Where should presets live?",
@@ -5512,7 +5512,7 @@ pub(crate) mod tests {
         let event = app.next_event().await;
         app.on_event(event).await;
         press(&mut app, KeyCode::Enter);
-        // Checked before waiting on the tool: an Enter that didn't answer
+        // Checked before waiting on the tool, an Enter that didn't answer
         // fails here instead of waiting forever.
         assert!(app.question.is_none());
 
@@ -5810,7 +5810,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn reloaded_sessions_listen_for_questions() {
         use crate::app::ReloadTarget;
-        // In place keeps the session; New opens one, like /spinoff does.
+        // In place keeps the session, New opens one, like /spinoff does.
         for (name, target) in [
             ("current", ReloadTarget::Current),
             ("new", ReloadTarget::New),

@@ -1,4 +1,4 @@
-//! Root budgets and cycle-free, per-helper queues. No lock is held across inference.
+//! Root budgets and cycle free, per helper queues. No lock is held across inference.
 
 use crate::crew::{Changes, Spend};
 use crate::roles::RoleSelection;

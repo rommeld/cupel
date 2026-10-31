@@ -1,6 +1,6 @@
-//! Plain mode: a line-based REPL on a TTY, or one prompt from piped stdin.
+//! Plain mode, a line based REPL on a TTY, or one prompt from piped stdin.
 //!
-//! Used when stdout is not a terminal (pipes, CI) or with `--plain`. It
+//! Used when stdout is not a terminal (pipes, CI) or with plain mode. It
 //! prints unstyled text with no screen management so it can be captured.
 
 use std::io::{IsTerminal as _, Write as _};
@@ -199,7 +199,7 @@ async fn run_session(
         "tools: read, grep, apply_patch, bash | cwd: {} | 'exit' to quit\n\n",
         meta.cwd
     ))?;
-    // Non-empty history at startup = a resumed session (seeded via
+    // Non empty history at startup = a resumed session (seeded via
     // AgentOptions.messages in main).
     let restored = agent.state().messages.len();
     if restored > 0 {
@@ -231,7 +231,7 @@ async fn run_session(
             .await
             .map_err(PlainError::Run)?;
         let Some(line) = read else {
-            break; // EOF (Ctrl-D on a TTY, or the end of a pipe)
+            break; // EOF (Ctrl D on a TTY, or the end of a pipe)
         };
         let input = line.trim();
         if input.is_empty() {
@@ -241,8 +241,8 @@ async fn run_session(
             break;
         }
 
-        // Slash commands: only supported built-ins run locally. TUI-only
-        // built-ins show a notice; unknown commands and prompt templates
+        // Slash commands, only supported built ins run locally. TUI only
+        // built ins show a notice, unknown commands and prompt templates
         // retain their usual behavior.
         let mut prompt = input.to_string();
         if let Some(rest) = input.strip_prefix('/') {
@@ -268,9 +268,9 @@ async fn run_session(
                     output(format_args!("\n"))?;
                     continue;
                 }
-                // Same builder as the TUI; here the whole path is
+                // Same builder as the TUI, here the whole path is
                 // synchronous. Gather, then fall through to the ordinary
-                // (blocking) prompt round-trip below.
+                // (blocking) prompt round trip below.
                 PlainCommand::Review => {
                     let review_args = crate::commands::parse_command_args(
                         rest.split_once(char::is_whitespace).map_or("", |(_, a)| a),
@@ -308,13 +308,13 @@ async fn run_session(
             }
         }
 
-        // First real agent interaction: scaffold the project .cupel/
+        // First real agent interaction, scaffold the project .cupel/
         // directory (idempotent, never fails). Deferred until here rather
-        // than startup so `cupel --plain < /dev/null` etc. leave no trace.
+        // than startup so plain mode with empty input etc. leave no trace.
         crate::resources::ensure_project_dot_cupel(std::path::Path::new(&meta.cwd));
-        // Transcript + hooks: creates the transcript lazily, settles any
-        // pending stop hook, fires session-start (once) and
-        // user-prompt-submit before the run begins.
+        // Transcript + hooks, creates the transcript lazily, settles any
+        // pending stop hook, fires session start (once) and
+        // user prompt submit before the run begins.
         status.set(State::Working);
         recorder.before_prompt(&prompt).await;
 
@@ -329,7 +329,7 @@ async fn run_session(
         last_run_error = None;
 
         // Render the event stream without terminal styling. Text deltas
-        // print incrementally; tool calls appear as one-liners.
+        // print incrementally, tool calls appear as one liners.
         let mut in_thinking = false;
         let mut thinking_newlines = 0;
         loop {
@@ -347,7 +347,7 @@ async fn run_session(
             };
             match event {
                 // Every finalized message (user, assistant, tool result)
-                // rides into the transcript; display still renders from the
+                // rides into the transcript, display still renders from the
                 // streaming deltas below.
                 AgentEvent::MessageEnd { message } => recorder.record(&message),
                 AgentEvent::MessageUpdate { event } => match event {
@@ -482,7 +482,7 @@ async fn run_session(
                 | AgentEvent::ThinkingBlocksRemoved { .. } => {}
                 AgentEvent::AgentEnd { .. } => {
                     // Fire the `stop` hook without holding up the prompt
-                    // loop; the next before_prompt settles it.
+                    // loop, the next before_prompt settles it.
                     recorder.on_agent_end();
                     break;
                 }

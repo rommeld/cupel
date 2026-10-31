@@ -1,8 +1,8 @@
 #!/bin/sh
 # Rewrite the inherited [workspace.package] version in Cargo.toml, used by
-# prepare-release.sh before opening a release PR. Usage:
+# the release preparation script before opening a release PR.
 #
-#   packaging/set-workspace-version.sh 0.33.10
+# Run this script with a bare version such as 0.33.10.
 #
 # Takes the bare version (no leading `v`). POSIX sh + awk only, like the rest
 # of packaging/.

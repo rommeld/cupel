@@ -1,18 +1,15 @@
-//! The input editor: a small text buffer with a cursor and prompt history.
+//! The input editor, a small text buffer with a cursor and prompt history.
 //!
-//! Implementation note: the cursor is a character index into the buffer, not a
-//! byte index. Rust strings are UTF-8, so byte-indexing at arbitrary
-//! positions panics on multi-byte characters; converting at the edges keeps
+//! Implementation note, the cursor is a character index into the buffer, not a
+//! byte index. Rust strings are UTF 8, so byte indexing at arbitrary
+//! positions panics on multi byte characters, converting at the edges keeps
 //! all editing logic safely in char space.
 
 #[derive(Default)]
 pub struct InputState {
     buffer: String,
-    /// Cursor position in characters from the start of the buffer.
     cursor: usize,
-    /// Previously submitted prompts, oldest first.
     history: Vec<String>,
-    /// Current position while browsing history (`None` = editing new input).
     history_index: Option<usize>,
     stash: String,
 }
@@ -34,7 +31,7 @@ impl InputState {
         self.cursor
     }
 
-    /// Replace the char range `[start, end)` with `replacement`; the cursor
+    /// Replace the char range `[start, end)` with `replacement`, the cursor
     /// lands after the inserted text. Used by autocomplete acceptance to
     /// swap the typed `@quer` for the completed `@path `.
     pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str) {
@@ -66,7 +63,7 @@ impl InputState {
         self.history_index = None;
     }
 
-    /// Backspace: remove the char before the cursor.
+    /// Backspace, remove the char before the cursor.
     pub fn delete_back(&mut self) {
         if self.cursor == 0 {
             return;
@@ -76,7 +73,7 @@ impl InputState {
         self.buffer.remove(at);
     }
 
-    /// Delete: remove the char at the cursor.
+    /// Delete, remove the char at the cursor.
     pub fn delete_forward(&mut self) {
         if self.cursor >= self.buffer.chars().count() {
             return;
@@ -93,14 +90,14 @@ impl InputState {
         self.cursor = (self.cursor + 1).min(self.buffer.chars().count());
     }
 
-    /// Home: start of the current line (not the whole buffer).
+    /// Home, start of the current line (not the whole buffer).
     pub fn move_home(&mut self) {
         while self.cursor > 0 && self.buffer.chars().nth(self.cursor - 1) != Some('\n') {
             self.cursor -= 1;
         }
     }
 
-    /// End: end of the current line.
+    /// End, end of the current line.
     pub fn move_end(&mut self) {
         let total = self.buffer.chars().count();
         while self.cursor < total && self.buffer.chars().nth(self.cursor) != Some('\n') {
@@ -119,7 +116,7 @@ impl InputState {
         text
     }
 
-    /// Up arrow: step back through history. The in-progress input is stashed
+    /// Up arrow, step back through history. The in progress input is stashed
     /// on the first step so it isn't lost.
     pub fn history_prev(&mut self) {
         if self.history.is_empty() {
@@ -138,7 +135,7 @@ impl InputState {
         self.cursor = self.buffer.chars().count();
     }
 
-    /// Down arrow: step forward; past the newest entry restores the stash.
+    /// Down arrow, step forward, past the newest entry restores the stash.
     pub fn history_next(&mut self) {
         let Some(index) = self.history_index else {
             return;

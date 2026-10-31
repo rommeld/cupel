@@ -2,16 +2,16 @@
 //!
 //! This is the oldest and most widely cloned LLM wire protocol. Fireworks,
 //! Groq, Together, `DeepSeek`, and dozens of other providers expose
-//! "OpenAI-compatible" endpoints that speak it. That ubiquity is also its
-//! curse: every clone deviates a little, so
+//! "OpenAI compatible" endpoints that speak it. That ubiquity is also its
+//! curse, every clone deviates a little, so
 //! this file is half protocol and half compatibility knobs.
 //!
-//! Protocol shape: POST `{base_url}/chat/completions` with `stream: true`;
+//! Protocol shape, POST `{base_url}/chat/completions` with `stream` set to true,
 //! the SSE body carries `ChatCompletionChunk` JSON. Unlike Anthropic's
-//! block-indexed events, chunks have one choice whose `delta` may carry
+//! block indexed events, chunks have one choice whose `delta` may carry
 //! `content`, a reasoning field, and/or `tool_calls` keyed by their own
 //! index. We accumulate one text block, one thinking block, and a map
-//! of tool-call blocks.
+//! of tool call blocks.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -41,49 +41,30 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 enum ThinkingFormat {
-    /// `reasoning_effort: "low" | ...` (the `OpenAI` standard).
     #[default]
     Openai,
-    /// `thinking: {type: enabled|disabled}` plus optional `reasoning_effort`.
     Deepseek,
-    /// OpenRouter's unified `reasoning: {effort: ...}` object with one scale
-    /// the router translates for every vendor behind it.
     Openrouter,
 }
 
 /// Compat knobs, deserialized from `model.compat`. Defaults match a
-/// well-behaved `OpenAI`-compatible endpoint; entries only exist for
+/// well behaved `OpenAI` compatible endpoint, entries only exist for
 /// deviations.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct CompletionsCompat {
-    /// Endpoint accepts `store: false` (rejecting unknown fields is common).
     supports_store: bool,
-    /// Reasoning models take the system prompt as a `developer` role.
     supports_developer_role: bool,
-    /// Endpoint accepts the `reasoning_effort` parameter.
     supports_reasoning_effort: bool,
-    /// Endpoint accepts `stream_options: {include_usage: true}`.
     supports_usage_in_streaming: bool,
-    /// Whether tool definitions may carry `strict: false`.
     supports_strict_mode: bool,
-    /// `"max_completion_tokens"` (modern) or `"max_tokens"` (legacy clones).
     max_tokens_field: String,
-    /// Some providers require `name` on tool-result messages.
     requires_tool_result_name: bool,
-    /// Some providers reject a user message directly after tool results.
     requires_assistant_after_tool_result: bool,
-    /// Replay thinking as plain text instead of a vendor reasoning field.
     requires_thinking_as_text: bool,
-    /// Send session headers so requests hit the same cache shard.
     send_session_affinity_headers: bool,
     thinking_format: ThinkingFormat,
-    /// Endpoint requires a Bearer API key. Local servers (ollama,
-    /// llama-server) accept anonymous requests using `requiresApiKey: false`
-    /// lets a keyless request proceed without an Authorization header.
     requires_api_key: bool,
-    /// Whether the model accepts `temperature` (GPT-6 Astra rejects it;
-    /// derived from models.dev by the generator).
     supports_temperature: bool,
 }
 
@@ -160,7 +141,7 @@ async fn run(
     options: &StreamOptions,
     sink: &EventSink,
 ) -> Result<()> {
-    // Compat is parsed before key resolution: `requiresApiKey: false`
+    // Compat is parsed before key resolution, `requiresApiKey` set to false
     // (local servers) turns a missing key from a hard error into a keyless
     // request. A key that is present is always sent. Ollama ignores it,
     // and authenticated proxies keep working.
@@ -176,7 +157,7 @@ async fn run(
     };
 
     let body = build_request_body(model, context, options, &compat);
-    // TRACE only: request bodies contain the user's code and prompts.
+    // TRACE only, request bodies contain the user's code and prompts.
     tracing::trace!(body = %body, "request body");
     let url = format!("{}/chat/completions", model.base_url.trim_end_matches('/'));
 
@@ -208,11 +189,11 @@ async fn run(
     }
 
     // At most one text block and one thinking block accumulate (chunks have
-    // no block indices for those); tool calls are keyed by the API's own
-    // per-call `index`.
+    // no block indices for those), tool calls are keyed by the API's own
+    // per call `index`.
     let mut text_index: Option<usize> = None;
     let mut thinking_index: Option<usize> = None;
-    // tool-call stream index -> (content index, partial JSON scratch).
+    // tool call stream index → (content index, partial JSON scratch).
     // BTreeMap (not HashMap) so the finalization pass below emits
     // `toolcall_end` events in a deterministic, stream order.
     let mut tool_calls: std::collections::BTreeMap<u64, (usize, String)> =
@@ -241,7 +222,7 @@ async fn run(
                 continue;
             };
 
-            // Every chunk repeats the completion id; capture the first.
+            // Every chunk repeats the completion id, capture the first.
             if output.response_id.is_none()
                 && let Some(id) = data.get("id").and_then(Value::as_str)
             {
@@ -324,7 +305,7 @@ async fn run(
                 }
             }
 
-            // Clones disagree on the field name; take the first non-empty one.
+            // Clones disagree on the field name, take the first non empty one.
             // The field name is stored as the thinking signature so replay can
             // write the text back into the same vendor field.
             let reasoning_field = ["reasoning_content", "reasoning", "reasoning_text"]
@@ -435,7 +416,7 @@ async fn run(
         }
     }
 
-    // Chat Completions has no per-block end events; close everything now.
+    // Chat Completions has no per block end events, close everything now.
     if let Some(index) = text_index
         && let Some(AssistantContent::Text(block)) = output.content.get(index)
         && !sink.text_end(index, block.text.clone())
@@ -472,7 +453,7 @@ fn parse_usage(usage: &Value, model: &Model, output: &mut AssistantMessage) {
         .get("prompt_tokens")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    // Standard: prompt_tokens_details.cached_tokens; DeepSeek's older
+    // Standard, prompt_tokens_details.cached_tokens, DeepSeek's older
     // prompt_cache_hit_tokens is the fallback.
     let cache_read = usage
         .get("prompt_tokens_details")
@@ -485,7 +466,7 @@ fn parse_usage(usage: &Value, model: &Model, output: &mut AssistantMessage) {
         .and_then(|d| d.get("cache_write_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    // prompt_tokens includes cached tokens; our unified model separates them.
+    // prompt_tokens includes cached tokens, our unified model separates them.
     output.usage.input = prompt
         .saturating_sub(cache_read)
         .saturating_sub(cache_write);
@@ -566,7 +547,7 @@ fn build_request_body(
                 .collect(),
         );
     } else if has_tool_history(&context.messages) {
-        // Anthropic-behind-a-proxy requires `tools` whenever the transcript
+        // Anthropic behind a proxy requires `tools` whenever the transcript
         // contains tool calls/results, even when none are offered now.
         body["tools"] = json!([]);
     }
@@ -620,8 +601,8 @@ fn has_tool_history(messages: &[Message]) -> bool {
     })
 }
 
-/// Tool-call ids: pipe-separated ids from the Responses API get reduced to
-/// their call half; everything is sanitized and capped at 40 chars.
+/// Tool call ids, pipe separated ids from the Responses API get reduced to
+/// their call half, everything is sanitized and capped at 40 chars.
 fn normalize_tool_call_id(id: &str, _model: &Model, _source: &AssistantMessage) -> String {
     let call_id = id.split_once('|').map_or(id, |(call, _)| call);
     call_id
@@ -734,7 +715,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                         message["content"] = json!(text);
                     }
                     // The signature is the vendor field name the reasoning
-                    // came from (see the streaming side); write it back there.
+                    // came from (see the streaming side), write it back there.
                     if let Some(field) = thinking
                         .first()
                         .and_then(|t| t.thinking_signature.as_deref())
@@ -776,7 +757,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
             }
 
             Message::ToolResult(_) => {
-                // Consecutive results each become a `tool` role message;
+                // Consecutive results each become a `tool` role message,
                 // any images follow as one user message (the tool role only
                 // carries text).
                 let mut image_parts: Vec<Value> = Vec::new();
@@ -868,7 +849,7 @@ mod tests {
 
     #[test]
     fn requires_api_key_defaults_to_true() {
-        // No compat at all: a well-behaved cloud endpoint wants a key.
+        // No compat at all, a well behaved cloud endpoint wants a key.
         let compat = completions_compat(&model_with_compat(None));
         assert!(compat.requires_api_key);
     }
@@ -887,8 +868,8 @@ mod tests {
 
     #[test]
     fn a_wrong_compat_value_does_not_reset_the_other_knobs() {
-        // The local llama-server row stays keyless although another knob
-        // has a typo; before, the whole blob fell back to defaults and every
+        // The local llama server row stays keyless although another knob
+        // has a typo, before, the whole blob fell back to defaults and every
         // request failed with "no API key".
         let model = model_with_compat(Some(serde_json::json!({
             "requiresApiKey": false,
@@ -941,7 +922,7 @@ mod tests {
     }
 
     /// A reasoning model pinned to the OpenRouter thinking format, with an
-    /// optional level -> effort map (mirrors a curated openrouter row).
+    /// optional level → effort map (mirrors a curated openrouter row).
     fn openrouter_model(map: Option<crate::types::ThinkingLevelMap>) -> Model {
         let mut model = model_with_compat(Some(serde_json::json!({
             "thinkingFormat": "openrouter",
@@ -1221,8 +1202,8 @@ mod tests {
 
     #[test]
     fn openrouter_off_sends_an_explicit_none() {
-        // Without an `off -> null` map entry, off is an explicit
-        // {effort: "none"} so OpenRouter disables reasoning server-side.
+        // Without an `off → null` map entry, off is an explicit
+        // {effort, "none"} so OpenRouter disables reasoning server side.
         let model = openrouter_model(None);
         let compat = completions_compat(&model);
         let options = StreamOptions::default();
@@ -1230,8 +1211,8 @@ mod tests {
         assert_eq!(body["reasoning"], json!({"effort": "none"}));
     }
 
-    /// GPT-6 Astra through an OpenAI-compatible completions endpoint
-    /// (OpenRouter's `openai/gpt-6-astra`, or api.openai.com itself).
+    /// GPT 6 Astra through an OpenAI compatible completions endpoint
+    /// (OpenRouter's OpenAI GPT 6 Astra, or api.openai.com itself).
     fn astra_model(format: &str) -> Model {
         let mut map = crate::types::ThinkingLevelMap::new();
         map.insert("off".to_string(), None);
@@ -1264,7 +1245,7 @@ mod tests {
             };
             assert_eq!(effort, json!("max"), "{format}");
 
-            // off -> null: no reasoning field at all, in both formats.
+            // off → null, no reasoning field at all, in both formats.
             let body =
                 build_request_body(&model, &empty_context(), &StreamOptions::default(), &compat);
             assert!(body.get(field).is_none(), "{format}: {body}");
@@ -1273,7 +1254,7 @@ mod tests {
 
     #[test]
     fn openrouter_off_is_omitted_for_always_thinking_models() {
-        // Kimi K2.7 Code cannot stop thinking (curation pins off -> null);
+        // Kimi K2.7 Code cannot stop thinking (curation pins off → null),
         // the request must omit the parameter entirely, not send "none".
         let mut map = crate::types::ThinkingLevelMap::new();
         map.insert("off".to_string(), None);

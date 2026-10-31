@@ -1,9 +1,9 @@
-//! The low-level agent loop: stream an assistant response, execute its tool
+//! The low level agent loop, stream an assistant response, execute its tool
 //! calls, feed the results back, repeat until the model stops asking for
 //! tools (and no queued messages remain).
 //!
 //! Cloning the whole message per delta is
-//! wasteful in Rust; instead [`AgentEvent::MessageUpdate`] carries the raw
+//! wasteful in Rust, instead `MessageUpdate` carries the raw
 //! provider event and consumers accumulate exactly the state they render.
 
 use std::sync::Arc;
@@ -126,31 +126,31 @@ async fn run_loop(
     sink: &AgentEventSink,
 ) {
     let mut first_turn = true;
-    // Consecutive transient-failure retries so far; any successful response
+    // Consecutive transient failure retries so far, any successful response
     // resets it.
     let mut retry_attempt: u32 = 0;
-    // Guard for reactive overflow compaction: at most once per failure
+    // Guard for reactive overflow compaction, at most once per failure
     // episode, or a provider that keeps rejecting would loop forever.
     let mut overflow_compacted = false;
     // Same guard for stripping stale thinking blocks (see below).
     let mut thinking_stripped = false;
     // The user may have queued steering input while the previous run wound
-    // down; check before the first request.
+    // down, check before the first request.
     let mut pending_messages = hooks.steering_messages().await;
 
-    // Outer loop: restarts when follow-up messages arrive after the agent
+    // Outer loop, restarts when follow up messages arrive after the agent
     // would otherwise stop.
     loop {
         let mut has_more_tool_calls = true;
 
-        // Inner loop: one iteration = one "turn" (assistant response plus
+        // Inner loop, one iteration = one "turn" (assistant response plus
         // its tool executions).
         while has_more_tool_calls || !pending_messages.is_empty() {
             if first_turn {
                 first_turn = false;
             }
 
-            // TODO: Cost reducition due to `.clone()`
+            // TODO, Cost reducition due to `.clone()`
             // Inject queued messages before the next assistant response.
             for message in pending_messages.drain(..) {
                 context.messages.push(message.clone());
@@ -159,7 +159,7 @@ async fn run_loop(
             }
 
             // Compact before the request that would overflow, not after it
-            // fails: cheaper (no wasted request) and invisible to the model.
+            // fails, cheaper (no wasted request) and invisible to the model.
             let request_messages = hooks.request_messages().await;
             let estimate = compaction::estimate_request_tokens(&context, &request_messages);
             let mut private_config = config.clone();
@@ -218,7 +218,7 @@ async fn run_loop(
                 });
                 pending_messages = hooks.steering_messages().await;
                 // Request again even if the user took the message back in the
-                // meantime: the interrupted reply still needs an answer.
+                // meantime, the interrupted reply still needs an answer.
                 has_more_tool_calls = true;
                 continue;
             }
@@ -234,11 +234,11 @@ async fn run_loop(
                     tool_results: Vec::new(),
                 });
 
-                // The pre-turn estimate is a heuristic; when it undershoots,
+                // The pre turn estimate is a heuristic, when it undershoots,
                 // the provider rejects the request as too large. That error
                 // is checked before transient retry. The waiting and resending the same oversized
-                // request could never succeed. Compact, then re-request
-                // immediately (no backoff: the failure wasn't load-related).
+                // request could never succeed. Compact, then re request
+                // immediately (no backoff, the failure wasn't load related).
                 if cupel_core::overflow::is_context_overflow(&message, config.model.context_window)
                     && config.compaction.enabled
                     && !overflow_compacted
@@ -259,18 +259,18 @@ async fn run_loop(
                         has_more_tool_calls = true;
                         continue;
                     }
-                    // Compaction failed or found nothing to cut: fall through
+                    // Compaction failed or found nothing to cut, fall through
                     // to normal error handling.
                 }
 
-                // Preserved thinking: a thinking block is only valid in the
+                // Preserved thinking, a thinking block is only valid in the
                 // conversation that produced it. After cupel edited that
                 // conversation (compaction, a resumed session's new date
                 // line), the provider rejects every replayed block, and
                 // resending the same request fails the same way. Drop the
-                // thinking blocks (text and tool calls stay) and re-request
+                // thinking blocks (text and tool calls stay) and re request
                 // immediately, once per failure episode. The anthropic
-                // provider avoids this 400 where it can (`drop_block`); this
+                // provider avoids this 400 where it can (`drop_block`), this
                 // covers the rest (Sonnet 5.5's `between_tools`, Bedrock).
                 if cupel_core::retry::is_thinking_binding_mismatch(&message)
                     && !thinking_stripped
@@ -313,7 +313,7 @@ async fn run_loop(
                             .unwrap_or_else(|| "Unknown error".to_string()),
                     });
 
-                    // Abortable backoff: the user can still cancel mid-wait.
+                    // Abortable backoff, the user can still cancel mid wait.
                     tokio::select! {
                         biased;
                         () = cancel.cancelled() => return,
@@ -321,8 +321,8 @@ async fn run_loop(
                             core::time::Duration::from_millis(delay_ms),
                         ) => {}
                     }
-                    // Re-enter the turn loop: the context still ends with the
-                    // user/tool-result message that triggered this request.
+                    // Re enter the turn loop, the context still ends with the
+                    // user/tool result message that triggered this request.
                     // Forcing the flag keeps the `while` condition true even
                     // when this turn was entered via a steering message.
                     has_more_tool_calls = true;
@@ -387,7 +387,7 @@ async fn run_loop(
             pending_messages = hooks.steering_messages().await;
         }
 
-        // The agent would stop here; follow-up messages restart it.
+        // The agent would stop here, follow up messages restart it.
         let follow_ups = hooks.follow_up_messages().await;
         if follow_ups.is_empty() {
             break;
@@ -399,8 +399,8 @@ async fn run_loop(
 /// Run one compaction attempt, emitting start/end events. Returns whether
 /// the transcript actually shrank. Failures are reported on the event
 /// stream but never abort the run. A failed compaction just means the next
-/// request goes out as-is (and its error, if any, reaches the user).
-/// Nothing to cut is a silent no-op, not a failed attempt.
+/// request goes out as is (and its error, if any, reaches the user).
+/// Nothing to cut is a silent no op, not a failed attempt.
 async fn run_compaction(
     context: &mut AgentContext,
     config: &AgentLoopConfig,
@@ -462,9 +462,9 @@ async fn run_compaction(
     }
 }
 
-/// Remove every thinking block from the assistant turns in `context`;
+/// Remove every thinking block from the assistant turns in `context`,
 /// returns whether there was anything to remove. The caller emits the
-/// updated context so future runs keep the removal; the session log still
+/// updated context so future runs keep the removal, the session log still
 /// retains the original blocks recorded via `MessageEnd`.
 fn strip_thinking_blocks(context: &mut AgentContext) -> bool {
     context
@@ -486,8 +486,8 @@ fn strip_thinking_blocks(context: &mut AgentContext) -> bool {
 /// Stream one assistant response. This is the only place `AgentMessage`s are
 /// converted to provider [`Message`]s.
 ///
-/// Failures never propagate as `Err`: they come back as an
-/// [`AssistantMessage`] with `stop_reason: Error | Aborted`.
+/// Failures never propagate as `Err`, they come back as an
+/// [`AssistantMessage`] with `stop_reason` set to `Error` or `Aborted`.
 async fn stream_assistant_response(
     context: &mut AgentContext,
     config: &AgentLoopConfig,
@@ -502,7 +502,7 @@ async fn stream_assistant_response(
         emit_final_message(context, sink, message.clone(), false);
         return message;
     }
-    // AgentMessage[] -> (transform hook) -> convert -> Message[]
+    // AgentMessage[] → (transform hook) → convert → Message[]
     let mut transformed = hooks.transform_context(context.messages.clone()).await;
     if !request_messages.is_empty() {
         compaction::invalidate_usage_anchors(&mut transformed);
@@ -596,13 +596,13 @@ async fn stream_assistant_response(
             // Cancel only this reply. The provider sees its signal fire and ends the
             // stream with an aborted message, which the arm above receives like any
             // other ending. The `if` switches this arm off once the token is
-            // cancelled: a finished future must not be polled again.
+            // cancelled, a finished future must not be polled again.
             () = &mut steering, if !cancel.is_cancelled() => cancel.cancel(),
         }
     }
 
     let message = final_message.unwrap_or_else(|| {
-        // Channel closed without a terminal event: a provider bug, but the
+        // Channel closed without a terminal event, a provider bug, but the
         // loop must still terminate cleanly.
         error_assistant_message(
             config,
@@ -679,8 +679,8 @@ async fn execute_tool_calls(
     cancel: &CancellationToken,
     sink: &AgentEventSink,
 ) -> ExecutedToolCallBatch {
-    // One sequential-only tool in the batch forces sequential execution for
-    // the whole batch (a mutating tool next to a read-only one, say).
+    // One sequential only tool in the batch forces sequential execution for
+    // the whole batch (a mutating tool next to a read only one, say).
     let has_sequential_tool = tool_calls.iter().any(|tc| {
         context
             .tools
@@ -750,9 +750,9 @@ async fn execute_tool_calls_parallel(
     cancel: &CancellationToken,
     sink: &AgentEventSink,
 ) -> ExecutedToolCallBatch {
-    // Phase 1: prepare sequentially (start events + before-hooks run in
+    // Phase 1, prepare sequentially (start events + before hooks run in
     // assistant source order, so permission prompts appear predictably).
-    // Preparation results are either finished outcomes or ready-to-run work.
+    // Preparation results are either finished outcomes or ready to run work.
     enum Entry {
         Finalized(FinalizedToolCall),
         Ready {
@@ -791,7 +791,7 @@ async fn execute_tool_calls_parallel(
         }
     }
 
-    // Phase 2: run the ready entries concurrently. `ToolExecutionEnd` fires
+    // Phase 2, run the ready entries concurrently. `ToolExecutionEnd` fires
     // in completion order (that's the point of parallel mode)...
     let mut ordered: Vec<Option<FinalizedToolCall>> = Vec::new();
     let mut running = futures_util::stream::FuturesUnordered::new();
@@ -826,7 +826,7 @@ async fn execute_tool_calls_parallel(
         ordered[slot] = Some(finalized);
     }
 
-    // ...but tool-result messages are emitted in assistant source order, so
+    // ...but tool result messages are emitted in assistant source order, so
     // the transcript stays aligned with the tool_use blocks.
     let finalized_calls: Vec<FinalizedToolCall> = ordered.into_iter().flatten().collect();
     let mut messages: Vec<ToolResultMessage> = Vec::new();
@@ -843,12 +843,10 @@ async fn execute_tool_calls_parallel(
 
 /// Outcome of the preflight phase for one tool call.
 enum Preparation {
-    /// Failed (unknown tool, blocked, aborted): resolves without executing.
     Immediate {
         result: AgentToolResult,
         is_error: bool,
     },
-    /// Validated, allowed, and ready to execute.
     Ready {
         tool: Arc<dyn AgentTool>,
         args: Value,
@@ -876,7 +874,7 @@ async fn prepare_tool_call(
         return error(format!("Tool {} not found", tool_call.name));
     };
 
-    // Arguments must at least be a JSON object; field-level validation is
+    // Arguments must at least be a JSON object, field level validation is
     // the tool's own serde deserialization.
     if !tool_call.arguments.is_object() {
         return error(format!(

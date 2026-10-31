@@ -52,7 +52,7 @@ mod tests {
             serde_json::to_vec(&vec![model]).unwrap(),
         )
         .unwrap();
-        // Even a syntactically valid project-side grant must have no effect.
+        // Even a syntactically valid project side grant must have no effect.
         std::fs::write(
             cwd.join(".cupel/project-trust.json"),
             serde_json::to_vec(&std::collections::BTreeMap::from([(
@@ -85,7 +85,7 @@ mod tests {
                 }
             };
             // On macOS (BSD sockets), an accepted stream inherits the listener's
-            // non-blocking mode; Linux does not. Non-blocking, the read timeout
+            // non blocking mode, Linux does not. Non blocking, the read timeout
             // below has no effect and `read` fails with `WouldBlock` whenever the
             // request has not arrived yet, so switch the stream back to blocking.
             stream.set_nonblocking(false).unwrap();
@@ -99,7 +99,7 @@ mod tests {
                 assert_ne!(n, 0, "request headers missing");
                 request.extend_from_slice(&buffer[..n]);
             }
-            // A non-retryable error ends the prompt deterministically.
+            // A non retryable error ends the prompt deterministically.
             stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
             String::from_utf8(request).unwrap()
         });

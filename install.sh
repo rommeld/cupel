@@ -1,15 +1,15 @@
 #!/bin/sh
-# cupel installer - downloads the latest release binaries for this platform.
+# cupel installer downloads the latest release binaries for this platform.
 #
-#   curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
+# Download install.sh from the repository and run it with sh.
 #
 # No Rust toolchain required. Everything lives in one home directory
-# (cargo-style), so backup and uninstall are a single path:
+# (cargo style), so backup and uninstall are a single path,
 #
 #   ~/.cupel/
 #   ├── bin/cupel      the binary (this dir goes on PATH)
-#   ├── bin/cupel-acp  ACP stdio frontend for editor/agent clients
-#   ├── bin/.cupel-installer   tells cupel's /update it may replace the binary
+#   ├── bin/          also contains the ACP frontend for editor and agent clients
+#   ├── bin/          also contains the installer marker used by cupel's /update
 #   ├── AGENTS.md      global context, loaded into every session (optional)
 #   ├── prompts/*.md   global /command prompt templates
 #   └── memory/        reserved for the future memory feature
@@ -18,7 +18,7 @@
 # CUPEL_INSTALL_DIR. POSIX sh (not bash) so it runs on stock Debian,
 # Alpine, and macOS alike.
 #
-# Nice side effect on macOS: curl downloads don't get the Gatekeeper
+# Nice side effect on macOS, curl downloads don't get the Gatekeeper
 # quarantine attribute, so the unsigned binary runs without any
 # "unidentified developer" ceremony (browser downloads do get quarantined).
 
@@ -28,7 +28,7 @@ REPO="rommeld/cupel"
 CUPEL_HOME="${CUPEL_HOME:-$HOME/.cupel}"
 INSTALL_DIR="${CUPEL_INSTALL_DIR:-$CUPEL_HOME/bin}"
 
-# ---- Pick the release asset for this platform ------------------------------
+# Pick the release asset for this platform
 os="$(uname -s)"
 arch="$(uname -m)"
 case "$os" in
@@ -52,18 +52,18 @@ case "$os" in
         ;;
 esac
 
-# `releases/latest/download/` always points at the newest release - no API
+# `releases/latest/download/` always points at the newest release, no API
 # call or JSON parsing needed.
 url="https://github.com/$REPO/releases/latest/download/$asset.tar.gz"
 
-# ---- Download and verify ----------------------------------------------------
+# Download and verify
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 echo "downloading $url"
 curl -fsSL "$url" -o "$tmp/$asset.tar.gz"
 
-# Verify against the published checksums when a checksum tool exists;
+# Verify against the published checksums when a checksum tool exists,
 # a missing tool downgrades to a warning rather than blocking the install.
 if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
     curl -fsSL "https://github.com/$REPO/releases/latest/download/sha256sums.txt" \
@@ -84,7 +84,7 @@ else
     echo "warning: no sha256 tool found; skipping checksum verification" >&2
 fi
 
-# ---- Install ----------------------------------------------------------------
+# Install
 tar -xzf "$tmp/$asset.tar.gz" -C "$tmp"
 mkdir -p "$INSTALL_DIR"
 install -m 755 "$tmp/cupel" "$INSTALL_DIR/cupel"
@@ -96,22 +96,22 @@ else
     echo "warning: this release predates cupel-acp packaging; rerun this installer after the next release" >&2
 fi
 # cupel's /update replaces only a binary that this script installed. The marker
-# says so; Homebrew and builds from source have none.
+# says so, Homebrew and builds from source have none.
 echo "cupel's install.sh put the cupel binary here; /update may replace it" \
     > "$INSTALL_DIR/.cupel-installer"
 echo "installed cupel to $INSTALL_DIR/cupel"
 
-# Scaffold the config side of the home (mkdir -p never overwrites anything).
+# Scaffold the config side of the home without overwriting existing directories.
 mkdir -p "$CUPEL_HOME/prompts"
 echo "cupel home: $CUPEL_HOME (global AGENTS.md and prompts/*.md live here)"
 
-# Releases before v0.1.4-beta installed to ~/.local/bin; a stale binary
+# Releases before the beta of v0.1.4 installed to ~/.local/bin, a stale binary
 # there would shadow or be shadowed depending on PATH order.
 if [ "$INSTALL_DIR" != "$HOME/.local/bin" ] && [ -x "$HOME/.local/bin/cupel" ]; then
     echo "warning: an older cupel install exists at ~/.local/bin/cupel - consider removing it" >&2
 fi
 
-# ---- Make `cupel` work as a bare command ------------------------------------
+# Make `cupel` work as a bare command
 case ":$PATH:" in
     *":$INSTALL_DIR:"*)
         echo "run 'cupel' to get started"

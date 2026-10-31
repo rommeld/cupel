@@ -1,17 +1,17 @@
 #!/bin/sh
-# Prepend a release section to CHANGELOG.md from git history, before tagging:
+# Prepend a release section to CHANGELOG.md from git history, before tagging,
 #
-#   packaging/update-changelog.sh v0.1.8-beta [CHANGELOG.md]
+# Run this script with a version tag and an optional changelog path.
 #
 # The section lists commit subjects since the previous tag through HEAD.
 # An existing tag can also be used to backfill a past release. POSIX sh + awk
-# only, same as update-formula.sh.
+# only, same as the formula update script.
 #
-# Two behaviors worth knowing:
-# - Idempotent: a section for <tag> already in the file means a re-run,
+# Two behaviors worth knowing,
+# * Idempotent, a section for <tag> already in the file means a re run,
 #   so it exits 0 without touching anything.
-# - A hand-maintained "## [Unreleased]" section is replaced by the new
-#   tagged section: its commits are part of the generated list anyway, so
+# * A hand maintained "## [Unreleased]" section is replaced by the new
+#   tagged section, its commits are part of the generated list anyway, so
 #   keeping both would say everything twice.
 
 set -eu
@@ -29,7 +29,7 @@ if grep -Fq "## [$TAG]" "$CHANGELOG"; then
     exit 0
 fi
 
-# For a planned release use HEAD; for a backfill exclude the tag itself when
+# For a planned release use HEAD, for a backfill exclude the tag itself when
 # finding its predecessor. A first release logs the whole history.
 REF=HEAD
 PREVIOUS_REF=HEAD
@@ -42,17 +42,17 @@ RANGE="${PREV:+$PREV..}$REF"
 
 DATE="$(git log -1 --format=%cd --date=short "$REF")"
 
-# The commit list goes through a temp file, not `awk -v`: -v values get
-# backslash-escape processing, which would mangle commit subjects that
-# happen to contain backslashes. Metadata-only `changelog: vX.Y.Z` commits
-# are filtered out; `|| true` keeps `set -e` happy when grep filters everything.
+# The commit list goes through a temp file, not awk variable assignment, whose values get
+# backslash escape processing, which would mangle commit subjects that
+# happen to contain backslashes. Metadata only changelog version commits
+# are filtered out, `|| true` keeps the shell's exit on error mode happy when grep filters everything.
 SECTION="$(mktemp)"
 trap 'rm -f "$SECTION"' EXIT
 git log --format='- %s' --no-merges "$RANGE" | grep -v '^- changelog: v' > "$SECTION" || true
 [ -s "$SECTION" ] || echo "- no changes recorded" > "$SECTION"
 
 # Insert the new section right before the first existing "## [" heading so
-# the file stays newest-first. The Unreleased rule comes first and `next`s,
+# the file stays newest first. The Unreleased rule comes first and `next`s,
 # so its heading never reaches the insert rule below it.
 awk -v tag="$TAG" -v date="$DATE" -v secfile="$SECTION" '
     function print_section(   line) {
@@ -68,7 +68,7 @@ awk -v tag="$TAG" -v date="$DATE" -v secfile="$SECTION" '
     { print }
     END {
         # A changelog with no release sections yet (or Unreleased as the
-        # last section): nothing triggered the insert, append at the end.
+        # last section), nothing triggered the insert, append at the end.
         if (!inserted) { print ""; print_section() }
     }
 ' "$CHANGELOG" > "$CHANGELOG.tmp"

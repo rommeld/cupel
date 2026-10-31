@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# The only bin left in this package, so `cargo run -p cupel-coding-agent`
-# starts it (it rewrites catalog.json). cupel itself: `cargo run --bin cupel`.
+# The only bin left in this package, so running this package with Cargo
+# starts it (it rewrites catalog.json). cupel itself, running the cupel binary with Cargo.
 [[bin]]
 name = "generate-catalog"
 path = "src/bin/generate_catalog/main.rs"
@@ -22,13 +22,13 @@ grep-regex.workspace = true
 grep-searcher.workspace = true
 ignore.workspace = true
 # For the bounded ollama /api/tags discovery probe at startup, the
-# dev-time generate-catalog bin (models.dev fetch), and the update check.
+# dev time generate catalog bin (models.dev fetch), and the update check.
 reqwest.workspace = true
-# Release versions compare as semver: 0.10.0 is newer than 0.9.0.
+# Release versions compare as semver, 0.10.0 is newer than 0.9.0.
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# The SHA-256 of a downloaded release archive (update.rs).
+# The SHA 256 of a downloaded release archive (update.rs).
 sha2.workspace = true
 similar.workspace = true
 thiserror.workspace = true

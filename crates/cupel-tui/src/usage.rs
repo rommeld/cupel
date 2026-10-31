@@ -58,7 +58,7 @@ impl UsagePopup {
         };
     }
 
-    /// All input is modal; true asks the owner to close the popup.
+    /// All input is modal, true asks the owner to close the popup.
     pub fn on_terminal_event(&mut self, event: &Event) -> bool {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
@@ -100,7 +100,7 @@ impl UsagePopup {
     }
 }
 
-/// Painted after the normal screen. The title's X is also the hit-test rectangle.
+/// Painted after the normal screen. The title's X is also the hit test rectangle.
 pub fn render(frame: &mut Frame<'_>, popup: &mut UsagePopup, area: Rect, theme: &Theme) {
     popup.close_button = Rect::ZERO;
     if area.width < 3 || area.height < 3 {
@@ -126,7 +126,7 @@ pub fn render(frame: &mut Frame<'_>, popup: &mut UsagePopup, area: Rect, theme: 
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
-    // Ratatui starts a left title immediately after the top-left corner.
+    // Ratatui starts a left title immediately after the top left corner.
     popup.close_button = Rect::new(area.x + 1, area.y, 3.min(inner.width), 1);
     if inner.width < 56 || inner.height < 5 {
         frame.render_widget(

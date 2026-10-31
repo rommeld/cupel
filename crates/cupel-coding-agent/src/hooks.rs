@@ -1,19 +1,19 @@
-//! Lifecycle hooks: user-provided executables that run on session events.
+//! Lifecycle hooks, user provided executables that run on session events.
 //!
-//! Discovery is file-based, no config parsing: every executable file in
+//! Discovery is file based, no config parsing, every executable file in
 //! `<root>/hooks/<event>/` runs when that event fires, where the roots are
 //! the cupel home (`~/.cupel`) and, only with explicit project trust, the
 //! project's `.cupel/`. Installing a hook = dropping a script in a
-//! directory; uninstalling = deleting it. SessionRecorder gates the roots.
+//! directory, uninstalling = deleting it. SessionRecorder gates the roots.
 //! Hooks run with a cleared environment and a fixed system PATH, not the
 //! agent's API keys, AWS variables, SSH socket, or shell startup settings.
-//! This is not a sandbox: trusted scripts still have filesystem access.
+//! This is not a sandbox, trusted scripts still have filesystem access.
 //!
-//! Events: `session-start`, `user-prompt-submit`, `stop`, `session-end`.
-//! Each hook receives one JSON payload on stdin and must exit; stdout and
+//! Events, session start, user prompt submission, `stop`, session end.
+//! Each hook receives one JSON payload on stdin and must exit, stdout and
 //! stderr are captured for debug logging, never shown in the UI. Hooks can
 //! observe but not veto. A failing, missing, or slow hook is at most a
-//! `tracing::warn`, never a broken session.
+//! `warn`, never a broken session.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,15 +23,11 @@ use serde::Serialize;
 
 use crate::process::{EXIT_STDIO_GRACE, OutputChunk, kill_process_group, output_chunks};
 
-/// A lifecycle event plus its event-specific payload fields.
+/// A lifecycle event plus its event specific payload fields.
 pub enum HookEvent<'a> {
-    /// First prompt of this process (fires for resumed sessions too).
     SessionStart,
-    /// Every prompt headed for the agent, steering included.
     UserPromptSubmit { prompt: &'a str },
-    /// An agent run finished (the model stopped and tools are done).
     Stop,
-    /// cupel is exiting normally.
     SessionEnd,
 }
 
@@ -49,13 +45,12 @@ impl HookEvent<'_> {
 }
 
 /// The JSON object written to each hook's stdin. camelCase to match the
-/// workspace-wide serde convention (cupel-core types.rs).
+/// workspace wide serde convention (cupel core types.rs).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HookPayload {
     event: &'static str,
     session_id: String,
-    /// Absolute path of the session's JSONL transcript.
     session_ref: String,
     cwd: String,
     timestamp: u64,
@@ -66,26 +61,22 @@ struct HookPayload {
 /// Everything a dispatch needs, immutable and cheap to share into the
 /// background tasks `fire_background` spawns.
 struct HookConfig {
-    /// Directories containing `hooks/` trees, in run order (home first,
-    /// project second, the same precedence direction as resource roots).
     roots: Vec<PathBuf>,
     session_id: String,
     session_ref: PathBuf,
     cwd: PathBuf,
-    /// Per-hook wall clock budget; an expired hook is killed and warned.
     timeout: Duration,
 }
 
 /// Discovers and executes hooks for one session.
 ///
-/// `stop` and steering-time events fire in the background (a TUI must not
-/// freeze at run end), but strictly ordered: each background dispatch first
-/// awaits the previous one, and [`HookRunner::settle`] lets the prompt path
+/// `stop` and steering time events fire in the background (a TUI must not
+/// freeze at run end), but strictly ordered, each background dispatch first
+/// awaits the previous one, and `settle` lets the prompt path
 /// wait for the chain to drain so a `stop` hook is guaranteed to have
 /// finished before the next prompt's hooks fire.
 pub struct HookRunner {
     config: Arc<HookConfig>,
-    /// The tail of the background dispatch chain.
     pending: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -104,7 +95,7 @@ impl HookRunner {
         }
     }
 
-    /// Test hook: shrink the per-hook timeout (private, since production always
+    /// Test hook, shrink the per hook timeout (private, since production always
     /// uses the default).
     #[cfg(test)]
     fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -115,8 +106,8 @@ impl HookRunner {
     }
 
     /// Run every hook for `event` now, returning when all finished or timed
-    /// out. Used for prompt-path events where the caller wants the
-    /// guarantee (session-start, user-prompt-submit, session-end).
+    /// out. Used for prompt path events where the caller wants the
+    /// guarantee (session start, user prompt submit, session end).
     pub async fn dispatch(&mut self, event: HookEvent<'_>) {
         self.settle().await;
         dispatch_event(
@@ -165,7 +156,7 @@ fn payload_json(config: &HookConfig, event: &HookEvent<'_>) -> String {
         timestamp: cupel_core::types::now_ms(),
         prompt,
     };
-    // A struct of strings cannot fail to serialize; fall back to {} anyway
+    // A struct of strings cannot fail to serialize, fall back to {} anyway
     // rather than unwrap in a path that must never panic.
     serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
 }
@@ -198,8 +189,8 @@ fn hook_scripts(roots: &[PathBuf], event_name: &str) -> Vec<PathBuf> {
     scripts
 }
 
-/// A regular file with any execute bit set. The execute-bit filter lets a
-/// README.md or disabled-by-chmod script sit in the directory harmlessly.
+/// A regular file with any execute bit set. The execute bit filter lets a
+/// README.md or disabled by chmod script sit in the directory harmlessly.
 fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
@@ -225,7 +216,7 @@ fn hook_command(script: &Path, cwd: &Path) -> tokio::process::Command {
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .stdin(std::process::Stdio::piped())
-        // Captured, not inherited: a hook writing to the terminal would
+        // Captured, not inherited, a hook writing to the terminal would
         // corrupt the ratatui screen.
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -236,8 +227,8 @@ fn hook_command(script: &Path, cwd: &Path) -> tokio::process::Command {
     command
 }
 
-/// Execute one hook: JSON on stdin, output captured, bounded by `timeout`.
-/// Every failure mode (unspawnable, non-zero exit, timeout) is warn-only.
+/// Execute one hook, JSON on stdin, output captured, bounded by `timeout`.
+/// Every failure mode (unspawnable, non zero exit, timeout) is warn only.
 async fn run_one(script: &Path, payload: &str, cwd: &Path, timeout: Duration) {
     use tokio::io::AsyncWriteExt as _;
 
@@ -256,12 +247,12 @@ async fn run_one(script: &Path, payload: &str, cwd: &Path, timeout: Duration) {
 
     let result = tokio::time::timeout(timeout, async {
         let status = {
-            // Writing and waiting race independently: a hook can exit while
+            // Writing and waiting race independently, a hook can exit while
             // a descendant holds stdin open without reading the payload.
             let write = async {
                 if let Some(mut stdin) = stdin {
                     let _ = stdin.write_all(payload.as_bytes()).await;
-                    // Dropping stdin delivers EOF to `cat`-style hooks.
+                    // Dropping stdin delivers EOF to `cat` style hooks.
                 }
             };
             tokio::pin!(write);
@@ -373,7 +364,7 @@ mod tests {
         let root = temp_root("discovery");
         install_script(&root, "stop", "b-second", "true");
         install_script(&root, "stop", "a-first", "true");
-        // Not executable: must be skipped even though it's in the directory.
+        // Not executable, must be skipped even though it's in the directory.
         let disabled = root.join("hooks/stop/c-disabled");
         std::fs::write(&disabled, "#!/bin/sh\ntrue\n").unwrap();
         std::fs::set_permissions(&disabled, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -384,7 +375,7 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
             .collect();
         assert_eq!(names, vec!["a-first", "b-second"]);
-        // Missing event dir: empty, not an error.
+        // Missing event dir, empty, not an error.
         assert!(hook_scripts(&[root], "session-end").is_empty());
     }
 
@@ -417,7 +408,7 @@ mod tests {
                 .ends_with("t.jsonl")
         );
         assert!(captured["timestamp"].as_u64().unwrap() > 0);
-        // Non-prompt events omit the field entirely.
+        // Non prompt events omit the field entirely.
         install_script(
             &root,
             "stop",
@@ -437,7 +428,7 @@ mod tests {
         let root = temp_root("failing");
         install_script(&root, "stop", "fails", "exit 1");
         // An executable that isn't a valid program (spawn succeeds via sh
-        // shebang absence -> exec error path).
+        // shebang absence → exec error path).
         let mut runner = runner(vec![root.clone(), PathBuf::from("/nonexistent")], &root);
         runner.dispatch(HookEvent::Stop).await; // must simply return
     }
@@ -483,7 +474,7 @@ mod tests {
             runner.dispatch(HookEvent::UserPromptSubmit { prompt: &prompt }),
         )
         .await;
-        // Successful hooks may leave background processes running; clean
+        // Successful hooks may leave background processes running, clean
         // up the test's process group before making assertions.
         let pid = std::fs::read_to_string(root.join("hook.pid")).unwrap();
         kill_process_group(pid.trim().parse().unwrap());

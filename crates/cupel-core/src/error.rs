@@ -9,12 +9,9 @@ use crate::types::{AssistantMessage, ErrorKind, Provider, StopReason};
 pub type Result<T> = core::result::Result<T, InferenceError>;
 
 /// Error produced while collecting the final message from an
-/// [`AssistantMessageStream`](crate::event_stream::AssistantMessageStream).
+/// `AssistantMessageStream`.
 #[derive(Debug, Clone, Error)]
 pub enum MessageStreamError {
-    /// Provider emitted an `Error` event. The text carries the provider's own
-    /// message, so a caller that only keeps this error (compaction's
-    /// summarization call) still says what went wrong.
     #[error(
         "provider reported error: {}",
         .message.error_message.as_deref().unwrap_or("no details")
@@ -23,48 +20,33 @@ pub enum MessageStreamError {
         reason: StopReason,
         message: Box<AssistantMessage>,
     },
-    /// The channel closed before any `Done` or `Error` terminal event.
     #[error("stream closed before terminal event")]
     ClosedBeforeTerminalEvent,
 }
 
 #[derive(Debug, Error)]
 pub enum InferenceError {
-    /// No provider was registered for a model's `api`.
     #[error("no API provider registered for api: {0}")]
     NoProvider(String),
 
-    /// A provider needed an API key but none was supplied.
     #[error("no API key for provider: {0}{hint}", hint = missing_api_key_hint(.0))]
     MissingApiKey(String),
 
-    /// The upstream HTTP API returned a non-2xx status. We keep the body
-    /// so the caller can see the provider's error JSON.
     #[error("provider returned HTTP {status}: {body}")]
     ApiStatus { status: u16, body: String },
 
-    /// The request was cancelled via the abort signal.
     #[error("request was aborted")]
     Aborted,
 
-    /// reqwest's own text stops at "error sending request for url (...)";
-    /// the part that says why (connection reset, DNS, TLS, timeout) sits in
-    /// its `source()` chain, so the message spells that chain out.
     #[error("HTTP transport error: {}", with_causes(.0))]
     Http(#[from] reqwest::Error),
 
-    /// The message stream closed or reported an error before producing a final message.
     #[error("message stream error: {0}")]
     Stream(#[from] MessageStreamError),
 
-    /// The connection failed or broke before the response was complete,
-    /// outside reqwest (the AWS SDK) or as a stream that ended without its
-    /// terminal event. Sending the request again may succeed.
     #[error("{0}")]
     Transport(String),
 
-    /// The request cannot be built from the configuration (credentials,
-    /// region, endpoint). Sending it again cannot help.
     #[error("{0}")]
     Config(String),
 
@@ -108,13 +90,13 @@ fn missing_api_key_hint(provider: &str) -> &'static str {
     }
 }
 
-/// `err`, then each error in its `source()` chain, joined by `: `.
+/// `err`, then each error in its `source()` chain, joined by a colon and space.
 ///
-/// `successors` walks the linked list: start at the first cause, and keep
+/// `successors` walks the linked list, start at the first cause, and keep
 /// asking each cause for its cause until one answers `None`. The closure
-/// gets `&&dyn Error`; the `&cause` pattern copies the inner reference out,
+/// gets `&&dyn Error`, the `&cause` pattern copies the inner reference out,
 /// so the next cause borrows from the error itself, not from the closure's
-/// short-lived argument (without it: "lifetime may not live long enough").
+/// short lived argument (without it, "lifetime may not live long enough").
 pub(crate) fn with_causes(err: &dyn core::error::Error) -> String {
     core::iter::successors(err.source(), |&cause| cause.source())
         .fold(err.to_string(), |text, cause| format!("{text}: {cause}"))
@@ -138,7 +120,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_errors_name_their_cause() {
-        // Bind a free port, then close it: connecting there is refused.
+        // Bind a free port, then close it, connecting there is refused.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);

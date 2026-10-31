@@ -1,11 +1,11 @@
-//! Shared subprocess output and process-group handling for bash and hooks.
+//! Shared subprocess output and process group handling for bash and hooks.
 
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt as _;
 use tokio::sync::mpsc;
 
-/// Bash uses this as a quiet interval; hooks use it as a fixed drain budget.
+/// Bash uses this as a quiet interval, hooks use it as a fixed drain budget.
 pub(crate) const EXIT_STDIO_GRACE: Duration = Duration::from_millis(500);
 
 pub(crate) enum OutputChunk {
@@ -25,7 +25,7 @@ impl OutputChunk {
 /// direct syscalls need `unsafe`, which this workspace forbids.
 pub(crate) fn kill_process_group(pid: u32) {
     let _ = std::process::Command::new("kill")
-        // `--` keeps a negative PID (= process group) from being parsed as
+        // the option terminator keeps a negative PID (= process group) from being parsed as
         // an option, including by Linux's procps kill.
         .args(["-9", "--", &format!("-{pid}")])
         .output();
@@ -45,7 +45,7 @@ pub(crate) fn output_chunks(child: &mut tokio::process::Child) -> mpsc::Receiver
 }
 
 /// Copy one pipe until EOF or until the run stops listening. Closing our
-/// end makes later writes fail with EPIPE; background servers should log
+/// end makes later writes fail with EPIPE, background servers should log
 /// to a file rather than inherit the captured pipes.
 fn spawn_reader(
     mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,

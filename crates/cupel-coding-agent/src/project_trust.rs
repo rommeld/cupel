@@ -49,7 +49,7 @@ pub fn is_trusted(home: Option<&Path>, cwd: &Path) -> bool {
 }
 
 /// Save only after a user decision. Repository settings cannot grant trust.
-/// Atomic replacement avoids partially written grants; malformed state is
+/// Atomic replacement avoids partially written grants, malformed state is
 /// refused rather than silently overwriting other projects' decisions.
 pub fn save(home: &Path, cwd: &Path, trust: ProjectTrust) -> std::io::Result<()> {
     let cwd = cwd.canonicalize()?;

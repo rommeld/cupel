@@ -1,20 +1,20 @@
 //! Protocol adapters ("providers").
 //!
-//! Each submodule translates between the unified types in [`crate::types`]
-//! and one vendor wire protocol:
+//! Each submodule translates between the unified types in `types`
+//! and one vendor wire protocol,
 //!
-//! - [`anthropic`]: Anthropic Messages API (SSE)
-//! - [`openai_responses`]: `OpenAI` Responses API (SSE)
-//! - [`openai_completions`]: `OpenAI` Chat Completions API (SSE), the
-//!   protocol most "OpenAI-compatible" vendors (Fireworks, OpenRouter, ...) speak
-//! - [`openai_codex_responses`]: the ChatGPT Codex backend's Responses
+//! * [`anthropic`], Anthropic Messages API (SSE)
+//! * [`openai_responses`], `OpenAI` Responses API (SSE)
+//! * [`openai_completions`], `OpenAI` Chat Completions API (SSE), the
+//!   protocol most "OpenAI compatible" vendors (Fireworks, OpenRouter, ...) speak
+//! * [`openai_codex_responses`], the ChatGPT Codex backend's Responses
 //!   dialect (SSE), driven by ChatGPT OAuth tokens instead of API keys
-//! - [`bedrock`]: AWS Bedrock `ConverseStream` (binary event stream via the
+//! * [`bedrock`], AWS Bedrock `ConverseStream` (binary event stream via the
 //!   official AWS SDK)
 //!
-//! All providers follow the same stream functions:
-//! `stream()` returns immediately; the network work happens on a spawned
-//! Tokio task; *every* failure after that point is delivered as an `Error`
+//! All providers follow the same stream functions,
+//! `stream()` returns immediately, the network work happens on a spawned
+//! Tokio task, *every* failure after that point is delivered as an `Error`
 //! event on the stream, never as a panic.
 
 pub mod anthropic;
@@ -37,9 +37,9 @@ pub(crate) const CONTENT_FILTER_MESSAGE: &str =
 /// Parse `model.compat` into an adapter's knob struct one key at a time.
 ///
 /// A key whose value has the wrong type costs only that knob, which keeps its
-/// default; every other key still applies. Parsing the whole object at once
+/// default, every other key still applies. Parsing the whole object at once
 /// would reset all knobs for one typo. `T` needs `#[serde(default)]` so a
-/// single key parses on its own; unknown keys are ignored as before.
+/// single key parses on its own, unknown keys are ignored as before.
 /// Returns the knobs and one problem line per rejected key.
 pub(crate) fn parse_compat<T>(model: &Model) -> (T, Vec<String>)
 where
@@ -72,7 +72,7 @@ where
 }
 
 /// [`parse_compat`] for a request. The catalog loader already showed the
-/// problems to the user (see [`Provider::compat_problems`](crate::provider::Provider::compat_problems)),
+/// problems to the user (see `compat_problems`),
 /// so here they only reach the log.
 pub(crate) fn compat<T>(model: &Model) -> T
 where
@@ -93,7 +93,7 @@ pub(crate) fn log_compat_problems(model: &Model, problems: &[String]) {
     }
 }
 
-/// Shared producer/consumer split and in-band worker error contract.
+/// Shared producer/consumer split and in band worker error contract.
 pub(crate) fn spawn_provider_stream<F>(
     model: &Model,
     worker: impl FnOnce(Model, EventSink) -> F + Send + 'static,
@@ -114,7 +114,7 @@ where
 }
 
 /// Send a request and preserve HTTP status/body errors. Cancellation also applies
-/// while reading an error body; a missing body never hides the known status.
+/// while reading an error body, a missing body never hides the known status.
 pub(crate) async fn send_request(
     request: reqwest::RequestBuilder,
     options: &StreamOptions,
@@ -140,8 +140,8 @@ async fn check_http_response(
     })
 }
 
-/// Protocol-native fallback names. Model metadata is still authoritative for
-/// clamping and remapping; old Bedrock Claude models have no native xhigh.
+/// Protocol native fallback names. Model metadata is still authoritative for
+/// clamping and remapping, old Bedrock Claude models have no native xhigh.
 #[derive(Clone, Copy)]
 pub(crate) enum EffortStyle {
     OpenAi,
@@ -205,7 +205,7 @@ pub(crate) fn off_effort<'a>(model: &'a Model, default: Option<&'a str>) -> Opti
     }
 }
 
-/// Anthropic Messages and Bedrock share the same 64-character tool-call ids.
+/// Anthropic Messages and Bedrock share the same 64 character tool call ids.
 pub(crate) fn normalize_anthropic_tool_call_id(
     id: &str,
     _model: &Model,
@@ -259,7 +259,7 @@ pub(crate) fn error_message(model: &Model, error: &InferenceError) -> AssistantM
     }
 }
 
-/// Finish a protocol-complete response without discarding its content or usage.
+/// Finish a protocol complete response without discarding its content or usage.
 /// Mapped error stops are terminal Error events, not worker failures that the
 /// outer wrapper would replace with an empty error message.
 pub(crate) fn finish_output(mut output: AssistantMessage, sink: &EventSink) {
@@ -285,7 +285,7 @@ pub(crate) fn finish_output(mut output: AssistantMessage, sink: &EventSink) {
 
 /// Await a future, racing it against the caller's cancellation token.
 ///
-/// This is the Rust analogue of passing an `AbortSignal` into fetch: instead
+/// This is the Rust analogue of passing an `AbortSignal` into fetch, instead
 /// of the signal being threaded through the HTTP client, we `select!` between
 /// "the work" and "cancellation" at every await point that can block.
 pub(crate) async fn with_cancel<T>(
@@ -307,7 +307,7 @@ pub(crate) async fn with_cancel<T>(
 }
 
 /// Log the terminal outcome of one provider request. This is the
-/// observability record for cost accounting: one INFO line per request with
+/// observability record for cost accounting, one INFO line per request with
 /// exact token counts and dollars. Request duration comes from the enclosing
 /// provider span (emitted on span close when the subscriber enables span
 /// events), so it isn't duplicated here.
@@ -324,8 +324,8 @@ pub(crate) fn log_completion(message: &AssistantMessage) {
     );
 }
 
-/// Apply model-level then option-level custom headers to a request builder
-/// (option-level wins).
+/// Apply model level then option level custom headers to a request builder
+/// (option level wins).
 pub(crate) fn apply_custom_headers(
     mut req: reqwest::RequestBuilder,
     model: &Model,
@@ -366,7 +366,7 @@ mod tests {
     }
 
     /// How many "ignoring compat setting" warnings `run` logs. Shared by the
-    /// provider modules' tests: a request should parse its compat blob once,
+    /// provider modules' tests, a request should parse its compat blob once,
     /// so each bad key shows up once per request.
     pub(crate) fn compat_warnings_during(run: impl FnOnce()) -> usize {
         use std::sync::{Arc, Mutex};
@@ -597,7 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn responses_streams_that_end_early_are_retryable_transport_errors() {
-        // A 200 whose event stream stops before `response.completed`: the
+        // A 200 whose event stream stops before `response.completed`, the
         // connection broke, so the turn is worth sending again.
         let body = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n";
         let request = request_for_response(format!(
@@ -638,7 +638,7 @@ mod tests {
             "somethingElse": 1,
         }));
         let (knobs, problems) = crate::providers::parse_compat::<Knobs>(&model);
-        // One typo costs only its own knob; unknown keys stay ignored.
+        // One typo costs only its own knob, unknown keys stay ignored.
         assert_eq!(knobs.requires_api_key, Some(false));
         assert_eq!(knobs.supports_store, None);
         assert_eq!(problems.len(), 1, "{problems:?}");

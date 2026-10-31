@@ -1,18 +1,18 @@
-//! Theme files: `<cupel home>/themes/<id>.json`, one color theme each.
+//! Theme files, `<cupel home>/themes/<id>.json`, one color theme each.
 //!
-//! This module reads and checks them as plain data, colors as three bytes;
-//! cupel-tui turns them into styles. It knows nothing about ratatui, so this
+//! This module reads and checks them as plain data, colors as three bytes,
+//! cupel tui turns them into styles. It knows nothing about ratatui, so this
 //! crate stays free of UI dependencies. The file name is the theme's id, the
 //! way a prompt template's file name is its command.
 //!
-//! A broken file costs only itself: it is skipped with a warning that names
+//! A broken file costs only itself, it is skipped with a warning that names
 //! the file and the problem, and every other theme still loads.
 
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-/// A color as a theme file writes it: `"#rrggbb"`.
+/// A color as a theme file writes it, `"#rrggbb"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -38,8 +38,8 @@ impl TryFrom<String> for Rgb {
     }
 }
 
-/// The 15 colors of a theme file's `"palette"`, matching cupel-tui's `Palette`.
-/// Every color is required; an unknown name is an error, not a silent typo.
+/// The 15 colors of a theme file's `"palette"`, matching cupel tui's `Palette`.
+/// Every color is required, an unknown name is an error, not a silent typo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilePalette {
@@ -81,13 +81,10 @@ struct ThemeJson {
 /// One theme file that loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeFile {
-    /// The file name without `.json`: what `/themes` and settings.json use.
     pub id: String,
-    /// The name `/themes` shows.
     pub name: String,
     pub appearance: FileAppearance,
     pub palette: FilePalette,
-    /// Where the file is, for `/themes` and for warnings.
     pub path: PathBuf,
 }
 
@@ -99,7 +96,7 @@ pub fn themes_dir(home: &Path) -> PathBuf {
 
 /// Read every `*.json` file in `<home>/themes`, sorted by file name. No home
 /// or no folder means no themes and no warning. A file that doesn't load is
-/// left out with a warning; a theme whose text is hard to read loads with a
+/// left out with a warning, a theme whose text is hard to read loads with a
 /// warning.
 #[must_use]
 pub fn load_theme_files(home: Option<&Path>) -> (Vec<ThemeFile>, Vec<String>) {
@@ -136,7 +133,7 @@ pub fn load_theme_files(home: Option<&Path>) -> (Vec<ThemeFile>, Vec<String>) {
     (themes, warnings)
 }
 
-/// One file: its id from the file name, its content from the JSON.
+/// One file, its id from the file name, its content from the JSON.
 fn load_theme_file(path: &Path) -> Result<ThemeFile, String> {
     let id = path
         .file_stem()
@@ -163,7 +160,7 @@ fn load_theme_file(path: &Path) -> Result<ThemeFile, String> {
     })
 }
 
-/// WCAG contrast ratio of two colors: 1 (the same) up to 21 (black on white).
+/// WCAG contrast ratio of two colors, 1 (the same) up to 21 (black on white).
 #[must_use]
 pub fn contrast(first: Rgb, second: Rgb) -> f64 {
     let luminance = |Rgb(red, green, blue): Rgb| {
@@ -181,8 +178,8 @@ pub fn contrast(first: Rgb, second: Rgb) -> f64 {
     (first.max(second) + 0.05) / (first.min(second) + 0.05)
 }
 
-/// Below 4.5:1, the WCAG minimum for body text, on any text background.
-/// Only a warning: the theme is the user's choice.
+/// Below 4.51, the WCAG minimum for body text, on any text background.
+/// Only a warning, the theme is the user's choice.
 fn readability_warning(theme: &ThemeFile) -> Option<String> {
     let palette = theme.palette;
     [
@@ -213,7 +210,7 @@ mod tests {
         home
     }
 
-    /// A valid theme file: Gruvbox Dark. Tests break it with `.replace(…)`.
+    /// A valid theme file, Gruvbox Dark. Tests break it with `.replace(…)`.
     fn gruvbox() -> String {
         r##"{
             "name": "Gruvbox Dark",

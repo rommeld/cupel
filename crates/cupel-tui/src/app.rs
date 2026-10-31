@@ -1,9 +1,9 @@
 //! Application state and event handling.
 //!
-//! The TUI is a classic reducer: two event sources (terminal input, agent
+//! The TUI is a classic reducer, two event sources (terminal input, agent
 //! events) mutate one `App`, and the render pass in `ui.rs` draws whatever
 //! the `App` currently says. No state lives in the widgets that's the
-//! immediate-mode contract that keeps ratatui apps easy to reason about.
+//! immediate mode contract that keeps ratatui apps easy to reason about.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -199,8 +199,8 @@ pub struct Carry {
     pub mouse_captured: bool,
 }
 
-/// One wakeup from a background source (see [`App::next_event`]).
-/// The size skew (AgentEvent is ~300 bytes, LoginEvent a Vec-sized
+/// One wakeup from a background source (see `next_event`).
+/// The size skew (AgentEvent is ~300 bytes, LoginEvent a Vec sized
 /// String) is fine for a value that lives one loop turn on the stack
 /// boxing would buy nothing but an allocation per event.
 #[allow(clippy::large_enum_variant)]
@@ -213,7 +213,7 @@ pub enum AppEvent {
     Team(Option<TeamUpdate>),
 }
 
-/// What `/new` or `/hot-reload` asked for.
+/// What `/new` or hot reload asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReloadTarget {
     New,
@@ -247,7 +247,7 @@ impl App {
                 is_dir: false,
             });
         }
-        // Argument value sets: after `/model ` the popup offers the catalog,
+        // Argument value sets, after `/model ` the popup offers the catalog,
         // after `/thinking ` the levels no more typing ids from memory.
         // meta.models is the merged catalog (builtins + models.json +
         // discovered ollama models), resolved once at startup.
@@ -304,7 +304,7 @@ impl App {
                 is_dir: false,
             })
             .collect();
-        // /new, /hot-reload and every spinoff build a new App, so they
+        // /new, /hot reload and every spinoff build a new App, so they
         // see new and edited theme files as well as the startup App.
         let (theme_files, theme_warnings) =
             cupel_coding_agent::themes::load_theme_files(meta.home.as_deref());
@@ -371,8 +371,8 @@ impl App {
             )
             .with_scope(crew.scheduler(), crew.lead_context()),
         ));
-        // `/hot-reload <id>` completes from the transcripts on disk. Only
-        // file stems are read (no parsing) App::new must stay fast.
+        // hot reload with an id completes from the transcripts on disk. Only
+        // file stems are read (no parsing) new must stay fast.
         let session_candidates: Vec<Candidate> = recorder
             .sessions_dir()
             .map(list_session_id_candidates)
@@ -407,7 +407,7 @@ impl App {
                 .collect(),
             )
             .with_command_args("hot-reload", session_candidates);
-        // Restored history (a --resume session) exists before the App does;
+        // Restored history (a resume session) exists before the App does,
         // snapshot it so the transcript can replay it as cells.
         let history = agent.state().messages;
         if let Some(payload) = history.iter().rev().find_map(|message| match message {
@@ -547,7 +547,7 @@ impl App {
     }
 
     /// Say so when the model cannot do the thinking level that was asked for.
-    /// Only "off" can differ (see `effective_thinking_level`); the footer
+    /// Only "off" can differ (see `effective_thinking_level`), the footer
     /// shows the level that is really used.
     fn note_thinking_level(&mut self) {
         if self.agent.thinking_level().is_none()
@@ -707,7 +707,7 @@ impl App {
         if self.login.is_some() {
             return Some("waits for a login");
         }
-        // `--resume` brings back what the transcript holds. When that is less than the
+        // the resume option brings back what the transcript holds. When that is less than the
         // history (persistence is off, a write failed), the rest would be lost.
         let history = self.agent.state().messages.len();
         let saved = self
@@ -724,7 +724,7 @@ impl App {
 
     pub fn on_terminal_event(&mut self, event: Event) {
         if let Some(popup) = &mut self.usage_popup {
-            // Preserve process control and the existing mouse-capture toggle.
+            // Preserve process control and the existing mouse capture toggle.
             let global = matches!(
                 &event,
                 Event::Key(key) if key.kind == KeyEventKind::Press
@@ -739,7 +739,7 @@ impl App {
             }
         }
         match event {
-            // Windows terminals report key releases too; only act on press.
+            // Windows terminals report key releases too, only act on press.
             Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key),
             Event::Paste(text) => {
                 self.input.insert_str(&text);
@@ -748,7 +748,7 @@ impl App {
             }
             // The wheel scrolls the transcript wherever the pointer is the
             // same clamped movement as PgUp/PgDn, at the conventional
-            // 3-lines-per-notch step. A left click selects the block under
+            // 3 lines per notch step. A left click selects the block under
             // the pointer. (Mouse events only arrive because mod.rs
             // enables mouse capture.)
             Event::Mouse(mouse) => match mouse.kind {
@@ -757,7 +757,7 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left) => self.click(mouse.column, mouse.row),
                 _ => {}
             },
-            // Resize is handled implicitly: the next draw uses the new size.
+            // Resize is handled implicitly, the next draw uses the new size.
             _ => {}
         }
     }
@@ -766,11 +766,11 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-        // It consumes only the keys it needs; everything else (Ctrl-C
+        // It consumes only the keys it needs, everything else (Ctrl C
         // included) falls through so session control never changes meaning.
-        // Visible but  not merely open: a session with zero matches renders
+        // Visible but  not merely open, a session with zero matches renders
         // nothing, and an invisible popup swallowing Enter would make a
-        // typo'd `/model xyz` un-submittable.
+        // typo'd `/model xyz` un submittable.
         if self.autocomplete.visible().is_some() {
             match (key.code, ctrl, alt) {
                 // Esc closes the popup it does not abort the run. A second
@@ -797,9 +797,9 @@ impl App {
                             &completion.insert,
                         );
                     }
-                    // Refresh decides what happens next: a completed file no
+                    // Refresh decides what happens next, a completed file no
                     // longer forms a token (trailing space) so the popup
-                    // closes; a directory still does, so it keeps completing.
+                    // closes, a directory still does, so it keeps completing.
                     self.autocomplete
                         .refresh(self.input.text(), self.input.cursor());
                     return;
@@ -809,7 +809,7 @@ impl App {
         }
 
         // An open question takes the keys that answer it. Everything else works as
-        // usual: typing writes an answer of one's own, Alt+Enter adds a line to it,
+        // usual, typing writes an answer of one's own, Alt+Enter adds a line to it,
         // and Esc aborts the run.
         if let Some(open) = &mut self.question {
             let last = open.pending.question().options.len().saturating_sub(1);
@@ -822,7 +822,7 @@ impl App {
                     open.selected = (open.selected + 1).min(last);
                     return;
                 }
-                // Ctrl+Enter answers too: a steered prompt would wait behind the very
+                // Ctrl+Enter answers too, a steered prompt would wait behind the very
                 // question it should answer.
                 (KeyCode::Enter, _, false) | (KeyCode::Char('j'), true, _) => {
                     self.answer_question();
@@ -835,7 +835,7 @@ impl App {
         match (key.code, ctrl, alt) {
             (KeyCode::Char('c'), true, _) => {
                 if self.is_running() {
-                    // First Ctrl-C aborts the run; when idle it quits.
+                    // First Ctrl C aborts the run, when idle it quits.
                     self.abort_run();
                 } else {
                     self.should_quit = true;
@@ -845,7 +845,7 @@ impl App {
                 self.should_quit = true;
             }
             // A waiting login is the newest interaction but the esc addresses
-            // it first; a second esc then aborts the run as usual.
+            // it first, a second esc then aborts the run as usual.
             (KeyCode::Esc, ..) if self.login.is_some() => {
                 self.login = None; // Drop cancels the background task.
                 self.notice("login cancelled");
@@ -856,17 +856,17 @@ impl App {
                 }
             }
             (KeyCode::Esc, ..) if self.is_running() => self.abort_run(),
-            // Esc while idle drops the click selection (harmless no-op
+            // Esc while idle drops the click selection (harmless no op
             // when nothing is selected).
             (KeyCode::Esc, ..) => self.selected_cell = None,
 
-            // Ctrl+Y toggles "selection mode": mouse capture off so the
+            // Ctrl+Y toggles "selection mode", mouse capture off so the
             // Terminal owns the mouse again (select + copy text natively),
             // then back on for wheel scrolling. Only requested here when the
             // event loop owns the terminal and issues the actual commands.
             (KeyCode::Char('y'), true, _) => self.mouse_toggle_requested = true,
-            // Ctrl+O copies: the clicked block, or with nothing selected
-            // - the latest answer, so the everyday "grab the result"
+            // Ctrl+O copies, the clicked block, or with nothing selected
+            // * the latest answer, so the everyday "grab the result"
             // gesture needs no mouse at all.
             (KeyCode::Char('o'), true, _) => self.copy_selected(),
             // Ctrl+T shows every tool result in full (and hides them again).
@@ -922,8 +922,8 @@ impl App {
                     self.notice("no queued messages to restore");
                 }
             }
-            // History recall closes the popup instead of refreshing: a
-            // recalled prompt containing `@src/x` must not surprise-open the
+            // History recall closes the popup instead of refreshing, a
+            // recalled prompt containing `@src/x` must not surprise open the
             // menu. Completion triggers on typing.
             (KeyCode::Up, ..) => {
                 self.input.history_prev();
@@ -941,29 +941,29 @@ impl App {
         }
     }
 
-    /// Edits (typing, deleting, pasting) re-evaluate the popup and may open
-    /// a session but  completion is typing-driven.
+    /// Edits (typing, deleting, pasting) re evaluate the popup and may open
+    /// a session but  completion is typing driven.
     fn refresh_autocomplete(&mut self) {
         self.autocomplete
             .refresh(self.input.text(), self.input.cursor());
     }
 
-    /// Cursor motion only keeps an already-open session accurate (or closes
+    /// Cursor motion only keeps an already open session accurate (or closes
     /// it when the cursor leaves the token). Moving into an existing
-    /// `@token` never surprise-opens the popup.
+    /// `@token` never surprise opens the popup.
     fn refresh_autocomplete_if_open(&mut self) {
         if self.autocomplete.is_open() {
             self.refresh_autocomplete();
         }
     }
 
-    /// `/new` or `/hot-reload`: rebuild from `.cupel` configuration, consuming
+    /// `/new` or hot reload, rebuild from `.cupel` configuration, consuming
     /// the old App and returning its replacement (the event loop rebinds).
     /// A failed resume returns the old app with an error notice, nothing torn down.
     ///
-    /// What carries over in all modes: the current model, thinking level,
-    /// and preset prompt (runtime switches survive a reload), session-entered
-    /// API keys (settings.json is re-read from disk), and the mouse-capture
+    /// What carries over in all modes, the current model, thinking level,
+    /// and preset prompt (runtime switches survive a reload), session entered
+    /// API keys (settings.json is re read from disk), and the mouse capture
     /// state.
     pub async fn hot_reload(self, target: ReloadTarget) -> Self {
         let cwd = std::path::PathBuf::from(&self.meta.cwd);
@@ -974,7 +974,7 @@ impl App {
         }
     }
 
-    /// `/new`: end the old session and rebuild with an unused id and no history.
+    /// `/new`, end the old session and rebuild with an unused id and no history.
     async fn reload_new(self, cwd: &std::path::Path) -> Self {
         let mut timestamp = cupel_core::types::now_ms();
         let session_id = loop {
@@ -996,11 +996,11 @@ impl App {
         app
     }
 
-    /// Bare `/hot-reload`: the running session continues same id, same
-    /// history, same transcript file, and no session-end hook (the session
-    /// is not ending). Fresh templates, models, bash-deny rules, and tools
+    /// Bare hot reload, the running session continues same id, same
+    /// history, same transcript file, and no session end hook (the session
+    /// is not ending). Fresh templates, models, bash deny rules, and tools
     /// are swapped in. Context files (AGENTS.md/CLAUDE.md) get delta
-    /// treatment: the system prompt keeps the text embedded at session
+    /// treatment, the system prompt keeps the text embedded at session
     /// start, and only a unified diff of what changed on disk is appended
     /// to the conversation the full file is never sent twice.
     async fn reload_in_place(self, cwd: &std::path::Path) -> Self {
@@ -1033,8 +1033,8 @@ impl App {
 
         let session_id = self.recorder.session_id().to_string();
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
-        // Deliberately the old system prompt: the original context stays
-        // embedded once; updates travel as the (small) delta message.
+        // Deliberately the old system prompt, the original context stays
+        // embedded once, updates travel as the (small) delta message.
         options.system_prompt = state.system_prompt.clone();
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
@@ -1061,7 +1061,7 @@ impl App {
             base_system_prompt: self.meta.base_system_prompt.clone(),
         };
 
-        // The session continues: retain its open transcript, started state,
+        // The session continues, retain its open transcript, started state,
         // and pending hook chain rather than creating a fresh recorder.
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, self.recorder);
         app.team_runtime = self.team_runtime;
@@ -1085,7 +1085,7 @@ impl App {
         app.restore_team(self.team.into_iter().collect());
         app.initial_team_pending = self.initial_team_pending;
         if let Some(message) = delta_message {
-            // The transcript file gets the update too a later --resume
+            // The transcript file gets the update too a later resume
             // replays the same conversation the model saw.
             app.recorder.record(&message);
             app.notice(format!(
@@ -1099,7 +1099,7 @@ impl App {
         app
     }
 
-    /// `/hot-reload <session-id>`: full rebuild with freshly loaded
+    /// hot reload with a session id, full rebuild with freshly loaded
     /// configuration (incl. a fresh system prompt a resumed session gets
     /// the current context files embedded), history seeded from that
     /// session's transcript.
@@ -1132,14 +1132,14 @@ impl App {
         app
     }
 
-    /// Full session rebuild shared by `/new` and `/hot-reload <session-id>`.
+    /// Full session rebuild shared by `/new` and hot reload with a session id.
     async fn reload_session(
         mut self,
         cwd: &std::path::Path,
         session_id: String,
         seeded: Vec<AgentMessage>,
     ) -> Self {
-        // Close the old session cleanly: settles pending hooks and fires session-end,
+        // Close the old session cleanly, settles pending hooks and fires session end,
         // so external consumers see a real boundary.
         self.recorder.end_session().await;
         let carry = self.carry();
@@ -1175,7 +1175,7 @@ impl App {
 
     /// Build a session in `cwd` from freshly loaded configuration (the `.cupel`
     /// layers, context files and tools of that directory) plus what `carry` takes
-    /// over. `/new`, `/hot-reload <session-id>` and `/spinoff` all open their session
+    /// over. `/new`, hot reload with a session id and `/spinoff` all open their session
     /// here.
     pub async fn open(
         cwd: &std::path::Path,
@@ -1192,7 +1192,7 @@ impl App {
         options.system_prompt = format!("{}{}", ingredients.system_prompt, carry.preset_prompt);
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
-        // Session-entered keys still win, but the settings tier must come from the
+        // Session entered keys still win, but the settings tier must come from the
         // fresh ingredients. A stale copy would lost hand edits.
         let provider = carry.model.provider.as_str();
         options.api_key = carry.session_keys.get(provider).cloned().or_else(|| {
@@ -1233,8 +1233,8 @@ impl App {
         app
     }
 
-    /// Flip the mouse-capture state and tell the user what changed. Called
-    /// by the event loop after it issued the matching crossterm command;
+    /// Flip the mouse capture state and tell the user what changed. Called
+    /// by the event loop after it issued the matching crossterm command,
     /// split from the key handler so the state logic is testable without a
     /// terminal. Returns the new state.
     pub fn apply_mouse_toggle(&mut self) -> bool {
@@ -1249,10 +1249,10 @@ impl App {
     }
 
     /// A left click selects the block under the pointer (the Ctrl+O copy
-    /// target); clicking it again or clicking chrome deselects. A
+    /// target), clicking it again or clicking chrome deselects. A
     /// click on a tool cell toggles its preview instead. Terminal
-    /// coordinates resolve through the geometry the render pass saved:
-    /// window top line + row offset = visual line, and the line->cell map
+    /// coordinates resolve through the geometry the render pass saved,
+    /// window top line + row offset = visual line, and the line→cell map
     /// says which block that is.
     fn click(&mut self, column: u16, row: u16) {
         let inner = self.last_transcript_inner;
@@ -1270,8 +1270,8 @@ impl App {
         self.selected_cell = if hit == self.selected_cell { None } else { hit };
     }
 
-    /// Ctrl+O: queue a block's raw text for the clipboard. The selected
-    /// block wins; without a selection the most recent Answer is the
+    /// Ctrl+O, queue a block's raw text for the clipboard. The selected
+    /// block wins, without a selection the most recent Answer is the
     /// target. Only queued here the event loop owns the terminal and
     /// emits the actual OSC 52 sequence (same split as the mouse toggle).
     fn copy_selected(&mut self) {
@@ -1292,7 +1292,7 @@ impl App {
         };
         let chars = text.chars().count();
         self.pending_copy = Some(text);
-        // "sent", not "copied": OSC 52 is fire-and-forget the terminal
+        // "sent", not "copied", OSC 52 is fire and forget the terminal
         // decides whether it honors the sequence.
         self.notice(format!("sent {chars} chars to the clipboard (OSC 52)"));
     }
@@ -1305,11 +1305,11 @@ impl App {
         self.scroll_from_bottom = usize::try_from(next.max(0)).unwrap_or(0).min(max);
     }
 
-    /// Enter or Ctrl+Enter: dispatch commands locally, expand templates, or
+    /// Enter or Ctrl+Enter, dispatch commands locally, expand templates, or
     /// send the text as a prompt (queued or steered when a run is active).
     fn submit(&mut self, delivery: Delivery) {
         // Enter is consumed by the popup while open, so this is normally a
-        // no-op, so no code path can submit with a live session.
+        // no op, so no code path can submit with a live session.
         self.autocomplete.close();
         let text = self.input.submit();
         let trimmed = text.trim().to_string();
@@ -1321,8 +1321,8 @@ impl App {
             return;
         }
 
-        // /command dispatch: built-ins are UI-local and never
-        // reach the model; prompt templates expand into the prompt;
+        // /command dispatch, built ins are UI local and never
+        // reach the model, prompt templates expand into the prompt,
         // anything else falls through as literal text (a typo becomes a
         // question, not an error).
         if let Some(rest) = trimmed.strip_prefix('/') {
@@ -1387,7 +1387,7 @@ impl App {
         }
     }
 
-    /// Enter on an open question. Typed text is the answer; with nothing typed, the
+    /// Enter on an open question. Typed text is the answer, with nothing typed, the
     /// highlighted option is.
     fn answer_question(&mut self) {
         let Some(open) = self.question.take() else {
@@ -1402,7 +1402,7 @@ impl App {
         open.pending.answer(answer);
     }
 
-    /// Esc or Ctrl-C while running. The queued and steered prompts go back
+    /// Esc or Ctrl C while running. The queued and steered prompts go back
     /// into the input box first. An aborted run never reaches the point
     /// where it would take them, so they would sit in the agent's queues
     /// until the next run ends.
@@ -1428,11 +1428,11 @@ impl App {
     /// due sooner), then queued ones, oldest first and ahead of whatever is typed.
     /// Returns how many came back.
     fn restore_queued(&mut self) -> usize {
-        // Both copies go: a prompt that is back in the input box must not also reach
+        // Both copies go, a prompt that is back in the input box must not also reach
         // the model from the agent's queues.
         self.agent.clear_steering();
         self.agent.clear_follow_ups();
-        // mem::take moves each list out and leaves an empty Vec behind.
+        // take moves each list out and leaves an empty Vec behind.
         let waiting = self
             .waiting_helper
             .take()
@@ -1459,14 +1459,14 @@ impl App {
         restored
     }
 
-    /// Route a prompt to the agent: new run when idle, queued or steered
+    /// Route a prompt to the agent, new run when idle, queued or steered
     /// when busy.
     pub fn send(&mut self, text: &str, delivery: Delivery) {
         self.flush_initial_team();
         // A prompt is headed for the agent the "first interaction" moment
         // that scaffolds the project .cupel/ directory. Deliberately not at
         // startup (launching + quitting cupel must leave no trace), and not
-        // for local built-ins like /help. Idempotent and never fails, so
+        // for local built ins like /help. Idempotent and never fails, so
         // calling it on every send is fine.
         cupel_coding_agent::resources::ensure_project_dot_cupel(std::path::Path::new(
             &self.meta.cwd,
@@ -1497,14 +1497,14 @@ impl App {
                 self.notice(problem);
             }
         } else {
-            // Not started here: the event loop takes it via
-            // `take_pending_prompt`, awaits the prompt-path hooks
-            // (session-start / user-prompt-submit, plus settling a pending
+            // Not started here, the event loop takes it via
+            // `take_pending_prompt`, awaits the prompt path hooks
+            // (session start / user prompt submit, plus settling a pending
             // stop hook), then calls `start_run`. Keeping this method sync
             // keeps every key handler.
             self.pending_prompt = Some(text.to_string());
         }
-        // New activity: snap back to following the output.
+        // New activity, snap back to following the output.
         self.scroll_from_bottom = 0;
     }
 
@@ -1528,7 +1528,7 @@ impl App {
         }
     }
 
-    /// A run started: keep its events, start its clock, and wait for the model.
+    /// A run started, keep its events, start its clock, and wait for the model.
     fn prepare_team_root(&self, text: &str) {
         let context = self.crew.lead_context();
         if self.team.is_empty() {
@@ -1562,7 +1562,7 @@ impl App {
         self.last_answer = Status::New;
     }
 
-    /// The title's words: the headline of the reasoning while the model
+    /// The title's words, the headline of the reasoning while the model
     /// thinks (when it writes headlines), otherwise the activity.
     #[must_use]
     pub fn activity_label(&self) -> String {
@@ -1647,7 +1647,7 @@ impl App {
             .push(Cell::Notice { text: text.into() });
     }
 
-    /// The API key for `provider`: a key entered this session wins, then
+    /// The API key for `provider`, a key entered this session wins, then
     /// the exported env var. Bedrock returns `None`. Its AWS credential
     /// chain resolves inside the provider itself.
     fn resolve_key(&self, provider: &str) -> Option<String> {
@@ -1656,8 +1656,8 @@ impl App {
         })
     }
 
-    /// Point the agent at `model` and re-resolve the API key for its
-    /// provider. Model and key must travel together: switching providers
+    /// Point the agent at `model` and re resolve the API key for its
+    /// provider. Model and key must travel together, switching providers
     /// while keeping the old key would sign requests with the wrong
     /// credential.
     fn switch_model(&mut self, model: cupel_core::types::Model) {
@@ -1691,7 +1691,7 @@ impl App {
                         "no AWS credentials".to_string()
                     }
                 } else if provider == "openai-codex" {
-                    // Subscription auth: the credential is a stored login,
+                    // Subscription auth, the credential is a stored login,
                     // never a key mirror auth.json, not the key tiers.
                     if cupel_coding_agent::auth::has_credential(
                         self.meta.home.as_deref(),
@@ -1706,7 +1706,7 @@ impl App {
                     &self.meta.models,
                     &provider,
                 ) {
-                    // Local endpoints (ollama, llama-server): requests go
+                    // Local endpoints (ollama, llama server), requests go
                     // out anonymously, nothing to configure.
                     "local endpoint - no key required".to_string()
                 } else if self.session_keys.contains_key(&provider) {
@@ -1729,7 +1729,7 @@ impl App {
                     format!("no key ({var} unset)")
                 } else {
                     // Custom providers have no env var at all pointing at
-                    // one would be misleading; /provider is ther channel.
+                    // one would be misleading, /provider is ther channel.
                     format!("no key (set with /provider {provider} <api-key>")
                 };
                 lines.push(format!("  {provider}  - default {}, {status}", model.id));
@@ -1754,13 +1754,13 @@ impl App {
             if !cupel_coding_agent::providers::takes_api_key(&self.meta.models, &provider) {
                 self.notice(format!("{provider} does not take an API key - key ignored"));
             } else {
-                // Session memory first: the key must work for this session
+                // Session memory first, the key must work for this session
                 // even if the disk save below fails. Deliberately never
                 // echoed back into the transcript.
                 self.session_keys.insert(provider.clone(), key.to_string());
                 self.crew.remember_key(&provider, key);
-                // Persist. save_provider_key re-reads the file itself and
-                // refuses to clobber a malformed one; the in-memory mirror
+                // Persist. save_provider_key re reads the file itself and
+                // refuses to clobber a malformed one, the in memory mirror
                 // is updated only on sucess
                 let saved = cupel_coding_agent::settings::save_provider_key(
                     self.meta.home.as_deref(),
@@ -1814,7 +1814,7 @@ impl App {
         self.note_thinking_level();
     }
 
-    /// `/preset`, list the presets from settings.json, or switched to one:
+    /// `/preset`, list the presets from settings.json, or switched to one,
     /// model (with its key), thinking level, and system prompt together, each
     /// taking effect with the next request like /model and /thinking.
     fn handle_preset_command(&mut self, name: &str) {
@@ -1832,7 +1832,7 @@ impl App {
             self.notice(lines.join("\n"));
             return;
         }
-        // Cloned out of self.meta: switch_model below needs `&mut self`,
+        // Cloned out of self.meta, switch_model below needs `&mut self`,
         // which a live reference into self.meta.settings would forbid.
         let Some(preset) = self.meta.settings.presets.get(name).cloned() else {
             self.notice(format!("unknown preset: {name} (/preset lists them"));
@@ -2275,8 +2275,8 @@ impl App {
         self.agent.push_message(message);
     }
 
-    /// Handle a built-in `/command`. Returns false when the name isn't a
-    /// built-in (the caller then tries prompt templates).
+    /// Handle a built in `/command`. Returns false when the name isn't a
+    /// built in (the caller then tries prompt templates).
     fn handle_builtin(&mut self, rest: &str) -> bool {
         let (name, args) = rest
             .split_once(char::is_whitespace)
@@ -2305,7 +2305,7 @@ impl App {
             "session-id" => {
                 // Transcripts carry no stored summary (compaction output is
                 // never persisted), so each session's first prompt serves as
-                // its human-readable label.
+                // its human readable label.
                 let mut lines = vec![format!(
                     "current session: {} (resume later with `cupel --resume {}`)",
                     self.recorder.session_id(),
@@ -2370,7 +2370,7 @@ impl App {
                     self.notice("cannot clear while the agent is working (esc to abort first)");
                 } else {
                     // Ending hooks and rebuilding the recorder require async
-                    // work; the event loop handles this like /hot-reload.
+                    // work, the event loop handles this like /hot reload.
                     self.pending_reload = Some(ReloadTarget::New);
                 }
             }
@@ -2408,7 +2408,7 @@ impl App {
                     );
                 } else {
                     // The event loop picks this up and rebuilds the session
-                    // (async work); see App::hot_reload.
+                    // (async work), see hot_reload.
                     self.pending_reload = Some(if args.is_empty() {
                         ReloadTarget::Current
                     } else {
@@ -2483,7 +2483,7 @@ impl App {
             Some("device") => {
                 self.start_login(login::spawn_device(self.meta.home.clone()), "device-code");
             }
-            // Anything else is the manual fallback: the redirect URL (or
+            // Anything else is the manual fallback, the redirect URL (or
             // bare code) pasted into the flow that is waiting for it.
             Some(pasted) => match &mut self.login {
                 Some(flow) => {
@@ -2503,7 +2503,7 @@ impl App {
         }
     }
 
-    /// Swap in a fresh login flow; a previous attempt is cancelled by
+    /// Swap in a fresh login flow, a previous attempt is cancelled by
     /// the drop (login.rs).
     fn start_login(&mut self, flow: login::LoginFlow, kind: &str) {
         if self.login.take().is_some() {
@@ -2559,7 +2559,7 @@ impl App {
                 self.login = None;
                 self.notice(format!("login failed: {error}"));
             }
-            // Channel closed without Done: the task was cancelled and its
+            // Channel closed without Done, the task was cancelled and its
             // final send raced the drop nothing to report.
             None => self.login = None,
         }
@@ -2569,7 +2569,7 @@ impl App {
     /// Enter (see `on_key`).
     pub fn on_question(&mut self, question: Option<PendingQuestion>) {
         let Some(pending) = question else {
-            // Every sender is gone. Stop listening: a closed channel is always ready,
+            // Every sender is gone. Stop listening, a closed channel is always ready,
             // and the event loop would spin on it.
             self.questions = None;
             return;
@@ -2579,13 +2579,13 @@ impl App {
         }
         let selected = pending.question().recommended();
         self.question = Some(OpenQuestion { pending, selected });
-        // The question builds on what the agent just wrote: show the end.
+        // The question builds on what the agent just wrote, show the end.
         self.scroll_from_bottom = 0;
     }
 
     /// Await the next agent event, or park forever when no run is active.
     /// Parking (instead of returning None immediately) matters inside
-    /// `tokio::select!`: a constantly-ready branch would busy-spin the loop.
+    /// Tokio's `select!` macro, a constantly ready branch would busy spin the loop.
     pub async fn next_agent_event(&mut self) -> Option<AgentEvent> {
         match &mut self.run_events {
             Some(events) => events.next().await,
@@ -2596,7 +2596,7 @@ impl App {
     /// The background sources (the run, a login, the questions), multiplexed
     /// behind one `&mut self` future mod.rs cannot hold two `app.next_...()`
     /// branches in its select! (each would borrow `app` mutably). Inside the
-    /// method the borrows split field-by-field, which is exactly what the
+    /// method the borrows split field by field, which is exactly what the
     /// borrow checker is happy to prove.
     pub async fn next_event(&mut self) -> AppEvent {
         let run_events = &mut self.run_events;
@@ -2657,7 +2657,7 @@ impl App {
 
     pub async fn on_agent_event(&mut self, event: Option<AgentEvent>) {
         let Some(event) = event else {
-            // Stream closed without AgentEnd (shouldn't happen; be robust).
+            // Stream closed without AgentEnd (shouldn't happen, be robust).
             if self.last_answer != Status::Cancelled {
                 self.last_answer = Status::Failed;
             }
@@ -2694,7 +2694,7 @@ impl App {
                 }
                 _ => {}
             },
-            // Every finalized message arrives here, user prompts included:
+            // Every finalized message arrives here, user prompts included,
             // the run's own prompt and each queued prompt at the moment the
             // model receives it.
             AgentEvent::MessageEnd { message } => {
@@ -2718,7 +2718,7 @@ impl App {
                     && let Some(index) = self.steering.iter().position(|steered| steered == text)
                 {
                     // A steered prompt reached the model. Unlike a queued one it
-                    // arrives mid-task, so the prose before it is no final answer and
+                    // arrives mid task, so the prose before it is no final answer and
                     // stays as it is.
                     self.steering.remove(index);
                     self.transcript
@@ -2837,7 +2837,7 @@ impl App {
         // A run can end with its question still open (a crash, a closed event stream).
         // A question nobody waits for must not keep taking Enter.
         self.question = None;
-        // Fire the `stop` hook without blocking the UI; the next prompt's
+        // Fire the `stop` hook without blocking the UI, the next prompt's
         // before_prompt (or session end) settles it.
         self.recorder.on_agent_end();
         // Joins the (already finished) run tasks so state flags settle.
@@ -2974,8 +2974,8 @@ impl App {
     }
 }
 
-/// The last headline in a reasoning text: a line that is bold as a whole,
-/// `**Like this**`. Reasoning summaries open each section with one; raw
+/// The last headline in a reasoning text, a line that is bold as a whole,
+/// `**Like this**`. Reasoning summaries open each section with one, raw
 /// thinking has none.
 #[must_use]
 pub fn reasoning_headline(text: &str) -> Option<&str> {
@@ -2986,7 +2986,7 @@ pub fn reasoning_headline(text: &str) -> Option<&str> {
         .filter(|headline| !headline.is_empty())
 }
 
-/// A duration the way a clock reads it: `42s`, `1m 05s`.
+/// A duration the way a clock reads it, `42s`, `1m 05s`.
 #[must_use]
 pub fn format_elapsed(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
@@ -2998,7 +2998,7 @@ pub fn format_elapsed(elapsed: Duration) -> String {
 }
 
 /// One line per preset for the `/preset` popup and listening, e.g.
-/// `anthropic/claude-sonnet-5`, thinking high, + prompt`.
+/// For example, Anthropic Claude Sonnet 5 with high thinking and a prompt.
 fn preset_summary(preset: &Preset) -> String {
     let prompt = if preset.prompt.as_deref().is_some_and(|p| !p.is_empty()) {
         ", + prompt"
@@ -3013,9 +3013,9 @@ fn preset_summary(preset: &Preset) -> String {
     )
 }
 
-/// Session-id completion candidates: transcript file stems, newest first
+/// Session id completion candidates, transcript file stems, newest first
 /// by modification time. Deliberately does not parse the transcripts
-/// this runs in `App::new`.
+/// this runs in `new`.
 fn list_session_id_candidates(dir: &std::path::Path) -> Vec<Candidate> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -3041,9 +3041,9 @@ fn list_session_id_candidates(dir: &std::path::Path) -> Vec<Candidate> {
         .collect()
 }
 
-/// The transcript's view of a finished tool call: the text the model saw,
+/// The transcript's view of a finished tool call, the text the model saw,
 /// plus the diff an edit ships in its `details`. Shared by the live path
-/// (ToolExecutionEnd) and the --resume replay, so both show the same thing.
+/// (ToolExecutionEnd) and the resume replay, so both show the same thing.
 fn tool_outcome(
     content: &[ToolResultContent],
     details: Option<&serde_json::Value>,

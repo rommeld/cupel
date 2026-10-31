@@ -400,7 +400,7 @@ mod tests {
             client.until(3).await.last().unwrap()["result"]["stopReason"],
             "cancelled"
         );
-        // Same packet: cancel must see the prompt before its task is polled.
+        // Same packet, cancel must see the prompt before its task is polled.
         let packet = format!(
             "{}\n{}\n",
             json!({"jsonrpc":"2.0","id":5,"method":"session/prompt","params":params(&id,"slow")}),

@@ -90,7 +90,7 @@ mod tests {
             };
             if self.scenario == "question" && !question {
                 // Keep the resumed inference observable instead of racing a
-                // complete second response into the same event-drain batch.
+                // complete second response into the same event drain batch.
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     let _ = sink.done(reason, message);

@@ -1,8 +1,8 @@
 #!/bin/sh
-# Rewrite packaging/homebrew/cupel.rb for a release: set `version` and the
-# three per-asset sha256 values from a release's sha256sums.txt.
+# Rewrite packaging/homebrew/cupel.rb for a release, set `version` and the
+# three per asset sha256 values from a release's sha256sums.txt.
 #
-#   packaging/update-formula.sh 0.1.4-beta sha256sums.txt
+# Run this script with a bare version and the path to sha256sums.txt.
 #
 # Used by the `publish` job in .github/workflows/release.yml after every
 # release, and runnable by hand for a manual bump. POSIX sh + awk only.
@@ -23,7 +23,7 @@ SUMS="$2"
 FORMULA="${3:-$(dirname "$0")/homebrew/cupel.rb}"
 
 sha_for() {
-    # sha256sums.txt lines look like: "<hash>  <filename>"
+    # sha256sums.txt lines look like, "<hash>  <filename>"
     awk -v file="$1" '$2 == file { print $1 }' "$SUMS"
 }
 

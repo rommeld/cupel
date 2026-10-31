@@ -1,4 +1,4 @@
-//! The unified, provider-agnostic data model.
+//! The unified, provider agnostic data model.
 //!
 //! Every provider speaks its own wire format, but the *rest of the application* only ever sees types.
 //! Providers translate inbound/outbound.
@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use tokio_util::sync::CancellationToken;
 
-// The wire protocol a model speaks (e.g. `"anthropic-message"). This is the
+// The wire protocol a model speaks (e.g. `"anthropic message"). This is the
 // key the provider registry dispatches on.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -65,7 +65,7 @@ impl From<&str> for Provider {
 }
 
 /// A run of assistant/user text. `text_signature` is opaque provider metadata
-/// (e.g. an `OpenAI` Responses message id) preserved for multi-turn replay.
+/// (e.g. an `OpenAI` Responses message id) preserved for multi turn replay.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextContent {
@@ -85,7 +85,7 @@ impl TextContent {
     }
 }
 
-/// Extended-thinking content. `thinking_signature` is the cryptographic
+/// Extended thinking content. `thinking_signature` is the cryptographic
 /// signature some providers require to *replay* a thinking block on the next
 /// turn. `redacted` marks thinking the provider hid behind a safety filter,
 /// the encrypted blob still rides along in the signature for continuity.
@@ -99,7 +99,7 @@ pub struct ThinkingContent {
     pub redacted: Option<bool>,
 }
 
-/// A base64-encoded inline image (no URLs, images always bytes).
+/// A base64 encoded inline image (no URLs, images always bytes).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageContent {
@@ -107,7 +107,7 @@ pub struct ImageContent {
     pub mime_type: String,
 }
 
-/// A model's request to call a tool. `arguments` is free-form JSON; it's
+/// A model's request to call a tool. `arguments` is free form JSON, it's
 /// expected to be a JSON object. During streaming it is only fully
 /// populated once the tool call finishes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -161,7 +161,7 @@ pub struct UserMessage {
     pub timestamp: u64,
 }
 
-/// Failure category retained alongside the provider's human-readable error text.
+/// Failure category retained alongside the provider's human readable error text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ErrorKind {
@@ -179,7 +179,6 @@ pub struct AssistantMessage {
     pub api: Api,
     pub provider: Provider,
     pub model: String,
-    /// Set when the upstream served a *different* concrete model than requested.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub response_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -188,7 +187,6 @@ pub struct AssistantMessage {
     pub stop_reason: StopReason,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub error_message: Option<String>,
-    /// Absent in older session files and messages from unclassified providers.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub error_kind: Option<ErrorKind>,
     pub timestamp: u64,
@@ -252,19 +250,15 @@ pub struct Usage {
     pub output: u64,
     pub cache_read: u64,
     pub cache_write: u64,
-    /// Subset of `cache_write` written with 1h retention. Anthropic-only; it
-    /// changes the cost formula (1h writes cost 2x base input).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cache_write1h: Option<u64>,
-    /// Reasoning/thinking tokens, when the provider reports them separately.
-    /// They are a *subset* of `output`, not an addition to it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reasoning: Option<u64>,
     pub total_tokens: u64,
     pub cost: Cost,
 }
 
-/// `Error`/`Aborted` are terminal states (the provider maps vendor-specific
+/// `Error`/`Aborted` are terminal states (the provider maps vendor specific
 /// reasons onto these).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -333,9 +327,9 @@ impl ModelThinkingLevel {
 
 pub type ThinkingLevelMap = BTreeMap<String, Option<String>>;
 
-/// Per-level thinking token budgets for budget-based thinking models.
-/// `None` fields fall back to the built-in defaults (1024/2048/8192/16384).
-/// There is no `xhigh` budget: budget-based models clamp `xhigh` to `high`.
+/// Per level thinking token budgets for budget based thinking models.
+/// `None` fields fall back to the built in defaults (1024/2048/8192/16384).
+/// There is no `xhigh` budget, budget based models clamp `xhigh` to `high`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThinkingBudgets {
@@ -360,7 +354,7 @@ pub enum InputModality {
     Image,
 }
 
-/// One long-context price tier: applies when the request's prompt
+/// One long context price tier, applies when the request's prompt
 /// tokens exceed `context_over`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -403,7 +397,6 @@ pub struct Model {
     pub max_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub headers: Option<BTreeMap<String, String>>,
-    /// API-specific compatibility overrides (raw JSON).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub compat: Option<Value>,
 }
@@ -423,9 +416,7 @@ pub struct StreamOptions {
     pub max_retries: Option<u32>,
     pub metadata: Option<BTreeMap<String, serde_json::Value>>,
     pub env: Option<BTreeMap<String, String>>,
-    /// Unified reasoning level; the provider maps it to its own thinking config.
     pub reasoning: Option<ThinkingLevel>,
-    /// Custom per-level thinking budgets (budget-based thinking models only).
     pub thinking_budgets: Option<ThinkingBudgets>,
 }
 

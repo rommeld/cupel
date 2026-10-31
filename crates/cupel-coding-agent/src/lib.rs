@@ -1,7 +1,7 @@
-//! The cupel coding agent: tools, search backends, and the system prompt.
+//! The cupel coding agent, tools, search backends, and the system prompt.
 //!
 //! A library without any UI dependency. The `cupel` binary and its ratatui
-//! TUI live in the `cupel-tui` crate, which builds on this one.
+//! TUI live in the TUI crate, which builds on this one.
 
 pub mod auth;
 pub mod bootstrap;

@@ -1,14 +1,14 @@
-//! The `ask_user` tool: the agent stops at a design decision and lets the user decide.
+//! The `ask_user` tool, the agent stops at a design decision and lets the user decide.
 //!
 //! The model sends one question with at least two options and marks the one it
 //! recommends. The tool hands the question to the frontend and waits until the user
-//! answers: with one of the options, or in their own words. Esc aborts the run, and
+//! answers, with one of the options, or in their own words. Esc aborts the run, and
 //! with it the wait.
 //!
-//! The tool reaches the frontend over a channel. [`AskUserTool::new`] returns the tool
+//! The tool reaches the frontend over a channel. `new` returns the tool
 //! together with the channel's receiving end, and whoever keeps the receiver answers.
 //! Only the TUI can, so only the TUI gets the tool
-//! (see [`crate::bootstrap::Frontend`]).
+//! (see `Frontend`).
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,7 +24,7 @@ const MIN_OPTIONS: usize = 2;
 const MAX_OPTIONS: usize = 5;
 
 /// What the model asks. Deserializing the tool's arguments into this struct checks
-/// their shape; [`Question::problem`] checks the rest.
+/// their shape, `problem` checks the rest.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Question {
     pub question: String,
@@ -114,7 +114,7 @@ impl PendingQuestion {
         &self.question
     }
 
-    /// Send the answer back. It takes `self` by value: a question is answered once,
+    /// Send the answer back. It takes `self` by value, a question is answered once,
     /// and the compiler refects a second call.
     pub fn answer(self, answer: Answer) {
         // The receiver is gone when the run was aborted in the meantime. Then nobody
@@ -203,13 +203,13 @@ impl AgentTool for AskUserTool {
         })
     }
 
-    /// One question at a time, and never next to a running command: the loop runs a
+    /// One question at a time, and never next to a running command, the loop runs a
     /// batch with this tool in it one call after the other.
     fn execution_mode(&self) -> Option<ToolExecutionMode> {
         Some(ToolExecutionMode::Sequential)
     }
 
-    /// `ask: <question>`.
+    /// the ask prefix, a colon and the question.
     fn describe_call(&self, args: &Value) -> String {
         match args.get("question").and_then(Value::as_str) {
             Some(question) => format!("ask: {question}"),
@@ -270,7 +270,7 @@ mod tests {
     use super::*;
     use cupel_core::types::ToolResultContent;
 
-    /// Arguments as the model sends them: two options, the first recommended.
+    /// Arguments as the model sends them, two options, the first recommended.
     fn presets() -> Value {
         json!({
             "question": "Where should presets live?",
@@ -321,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn the_picked_option_comes_back_as_the_result() {
         let (tool, mut questions) = AskUserTool::new();
-        // Play the user in a second task: wait for the question, pick option 2.
+        // Play the user in a second task, wait for the question, pick option 2.
         let user = tokio::spawn(async move {
             let pending = questions.recv().await.unwrap();
             assert_eq!(pending.question().recommended(), 0);
@@ -352,7 +352,7 @@ mod tests {
         let user = tokio::spawn(async move {
             let pending = questions.recv().await.unwrap();
             esc.cancel();
-            // Returned, not dropped: the question stays open, so only the
+            // Returned, not dropped, the question stays open, so only the
             // cancel can end the wait.
             pending
         });
@@ -375,7 +375,7 @@ mod tests {
     #[tokio::test]
     async fn a_bad_question_never_reaches_the_user() {
         let (tool, questions) = AskUserTool::new();
-        // Nobody listens: a question that got past the check would fail with
+        // Nobody listens, a question that got past the check would fail with
         // "nobody can answer ..." instead of the problem.
         drop(questions);
         let args = json!({"question": "Which one?", "options": []});

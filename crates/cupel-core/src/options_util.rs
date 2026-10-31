@@ -1,19 +1,19 @@
-//! Request-option helpers shared by all providers: token estimation,
-//! `max_tokens` clamping, and thinking-budget arithmetic.
+//! Request option helpers shared by all providers, token estimation,
+//! `max_tokens` clamping, and thinking budget arithmetic.
 
 use crate::types::{
     AssistantContent, Context, Message, StopReason, ThinkingBudgets, ThinkingLevel,
     ToolResultContent, Usage, UserContentBody,
 };
 
-/// Rough heuristic used across the industry: ~4 characters per token.
-/// Exact tokenization is model-specific; for clamping purposes a cheap
+/// Rough heuristic used across the industry, ~4 characters per token.
+/// Exact tokenization is model specific, for clamping purposes a cheap
 /// estimate is enough.
 const CHARS_PER_TOKEN: u64 = 4;
 /// A base64 image is roughly this many "characters" worth of tokens.
 const ESTIMATED_IMAGE_CHARS: u64 = 4800;
-/// Head-room subtracted from the context window before clamping, so a
-/// slightly-off estimate doesn't push the request over the limit.
+/// Head room subtracted from the context window before clamping, so a
+/// slightly off estimate doesn't push the request over the limit.
 const CONTEXT_SAFETY_TOKENS: u64 = 4096;
 const MIN_MAX_TOKENS: u64 = 1;
 
@@ -93,7 +93,7 @@ pub fn estimate_context_tokens(context: &Context) -> u64 {
         return usage_tokens + trailing;
     }
 
-    // No usage anchor: estimate everything, including the fixed prefix
+    // No usage anchor, estimate everything, including the fixed prefix
     // (system prompt + tool schemas) that providers count as input.
     let mut tokens: u64 = messages.iter().map(estimate_message_tokens).sum();
     if let Some(system) = &context.system_prompt {
@@ -127,7 +127,7 @@ pub fn clamp_max_tokens_to_context(
     max_tokens.min(available.max(MIN_MAX_TOKENS))
 }
 
-/// Budget-based thinking models "spend" thinking tokens out of `max_tokens`,
+/// Budget based thinking models "spend" thinking tokens out of `max_tokens`,
 /// so enabling thinking without raising `max_tokens` would starve the actual
 /// answer. `xhigh` and `max` clamps to `high` (budget models don't support it).
 #[must_use]
@@ -149,7 +149,7 @@ pub struct AdjustedThinking {
 /// model's limit), and shrink the budget when it wouldn't leave at least
 /// 1024 tokens for the visible answer.
 ///
-/// `base_max_tokens = None` means "the caller did not set an output cap":
+/// `base_max_tokens = None` means "the caller did not set an output cap",
 /// use the model cap and fit thinking inside it.
 #[must_use]
 pub fn adjust_max_tokens_for_thinking(
@@ -193,7 +193,7 @@ mod tests {
     fn budget_fits_inside_model_cap() {
         let adjusted =
             adjust_max_tokens_for_thinking(Some(4096), 8192, ThinkingLevel::Medium, None);
-        // 4096 + 8192 budget would exceed the 8192 model cap -> capped.
+        // 4096 + 8192 budget would exceed the 8192 model cap → capped.
         assert_eq!(adjusted.max_tokens, 8192);
         assert_eq!(adjusted.thinking_budget, 8192 - 1024);
     }

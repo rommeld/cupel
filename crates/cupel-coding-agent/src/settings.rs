@@ -1,10 +1,10 @@
 //! Persistent settings definition.
 //!
-//! Saves normalize formatting (pretty-printed, keys sorted): values and
+//! Saves normalize formatting (pretty printed, keys sorted), values and
 //! unknown fields are preserved. Two concurrent cupel instances saving
-//! at once each write a complete valid file; the last rename wins and
+//! at once each write a complete valid file, the last rename wins and
 //! one update can be lost. This is the same accepted caveat as concurrent
-//! `--resume` in session.rs.
+//! the resume option in session.rs.
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -22,17 +22,12 @@ pub struct Settings {
     pub loop_killer: Option<LoopKillerSettings>,
     #[serde(rename = "model", default, skip_serializing_if = "BTreeMap::is_empty")]
     pub presets: BTreeMap<String, Preset>,
-    /// `"checkForUpdates": false` turns off the TUI's startup check. `None` means
-    /// on. Home only: `layered` ignores the project's value. A key save must not
-    /// add this field to a file whose author never wrote it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_for_updates: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
-    /// User-defined helper agents, merged by name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<String, AgentDefinition>,
-    /// Explicit prompt-command to helper mappings.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_commands: BTreeMap<String, String>,
     #[serde(flatten)]
@@ -41,13 +36,13 @@ pub struct Settings {
     pub invalid_default_preset: Option<String>,
 }
 
-/// The preset `cupel` applies at startup. `--model` and `--thinking`
+/// The preset `cupel` applies at startup. the model option and the thinking option
 /// still override its fields one by one.
 pub const DEFAULT_PRESET: &str = "default";
 
 /// One named preset. `provider`, `model`, and `thinkingLevel` are
-/// required. Loading skips invalid presets individually with a warning;
-/// saving remains strict so invalid hand-written entries are not erased.
+/// required. Loading skips invalid presets individually with a warning,
+/// saving remains strict so invalid hand written entries are not erased.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preset {
@@ -63,7 +58,7 @@ impl Preset {
     /// `modelRegistry.find(provider, id)`, so a provider that does not
     /// fit the model is reported instead of silently ignored.
     ///
-    /// The explicit `'a`ties a result to `models`: without it, lifetime
+    /// The explicit `'a`ties a result to `models`, without it, lifetime
     /// elision would tie it to `&self`, and the result would keep the
     /// preset borrowed instead of the catalog.
     #[must_use]
@@ -74,7 +69,7 @@ impl Preset {
     }
 }
 
-/// A preset's `thinkingLevel`: the seven words `/thinking` accepts.
+/// A preset's `thinkingLevel`, the seven words `/thinking` accepts.
 /// `lowercase` instead of the file`s usual camelCase keeps `xhigh`
 /// spelled `xhigh` (camelCase would demand `xHigh`). An unkown word
 /// fails to parse, and serde's error lists all seven.
@@ -119,7 +114,7 @@ impl ThinkingSetting {
     }
 }
 
-/// A user-defined helper's model, instructions and permissions.
+/// A user defined helper's model, instructions and permissions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDefinition {
@@ -218,10 +213,10 @@ impl AgentOrigin {
     }
 }
 
-/// Loop-killer configuration: how many times the same tool call (same
-/// name, identical arguments) may run back-to-back before the repeat is
+/// Loop killer configuration, how many times the same tool call (same
+/// name, identical arguments) may run back to back before the repeat is
 /// blocked and the model is steered onto a new track (see
-/// `crate::loop_killer)`.
+/// `loop_killer)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoopKillerSettings {
@@ -235,34 +230,34 @@ impl Settings {
         self.providers.get(provider).map(String::as_str)
     }
 
-    /// Whether the TUI asks GitHub for a newer release at startup: yes, unless the
-    /// home settings say `"checkForUpdates": false`.
+    /// Whether the TUI asks GitHub for a newer release at startup, yes, unless the
+    /// home settings say `checkForUpdates` set to false.
     #[must_use]
     pub fn checks_for_updates(&self) -> bool {
         self.check_for_updates.unwrap_or(true)
     }
 
-    /// The effective repeat allowance; None = loop killer off. Opt-in by
-    /// decision: no loopKiller section (or maxRepeats 0) means `cupel`
+    /// The effective repeat allowance, None = loop killer off. Opt in by
+    /// decision, no loopKiller section (or maxRepeats 0) means `cupel`
     /// behaves exactly as before this feature existed.
     #[must_use]
     pub fn loop_killer_max_repeats(&self) -> Option<u32> {
         let configured = self.loop_killer?.max_repeats;
         (configured > 0).then_some(configured)
     }
-    /// Merge home and project into the runtime view, per field:
-    /// - providers: home only. A project settings.json must never supply
-    /// credentials (project_settings_warning tells the user why);
+    /// Merge home and project into the runtime view, per field,
+    /// * providers, home only. A project settings.json must never supply
+    /// credentials (project_settings_warning tells the user why),
     /// the project's map is deliverately not touched at all.
-    /// - loopKiller: project overrides home when present (the usual
-    /// later-wins layering, mirroring models.json).
-    /// - checkForUpdates: home only, like the keys.
-    /// - theme: home only. `/themes` saves there; a project value must not
+    /// * loopKiller, project overrides home when present (the usual
+    /// later wins layering, mirroring models.json).
+    /// * checkForUpdates, home only, like the keys.
+    /// * theme, home only. `/themes` saves there, a project value must not
     /// override the saved choice on the next start.
-    /// - agents: merged by name, with project definitions replacing home whole.
-    /// - agentCommands: merged by command, project wins.
-    /// extra: the home copy rides along because it exists for the save
-    /// round-trip, which only ever writes the home file.
+    /// * agents, merged by name, with project definitions replacing home whole.
+    /// * agentCommands, merged by command, project wins.
+    /// extra, the home copy rides along because it exists for the save
+    /// round trip, which only ever writes the home file.
     #[must_use]
     pub fn layered(home: Settings, project: Settings) -> Settings {
         let mut presets = home.presets;
@@ -300,8 +295,8 @@ impl Settings {
     }
 }
 
-/// Manual Debug that prints only, never key values. `{:?}` output
-/// reaces logs, panics, and failed-assertion messages, and secrets
+/// Manual Debug that prints only, never key values. Debug formatted output
+/// reaces logs, panics, and failed assertion messages, and secrets
 /// must not. (This also makes assert_eq! failures in tests
 /// safe to paste anywhere.)
 impl core::fmt::Debug for Settings {
@@ -332,7 +327,7 @@ pub fn project_settings_path(cwd: &Path) -> PathBuf {
 }
 
 /// Parse the settings file, logging warnings for invalid presets. A missing
-/// file is simply empty defaults; invalid JSON or other settings data is an
+/// file is simply empty defaults, invalid JSON or other settings data is an
 /// error the caller must surface. Startup uses the same parser but collects
 /// preset warnings for the frontend instead of logging them.
 pub fn load_settings(path: &Path) -> Result<Settings, String> {
@@ -354,7 +349,7 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
     let mut value: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("{} has invalid JSON syntax: {e}", path.display()))?;
     // Each section is parsed on its own, so one wrong entry never discards
-    // the others: a preset, a provider key, loopKiller, checkForUpdates or theme
+    // the others, a preset, a provider key, loopKiller, checkForUpdates or theme
     // that does not fit is skipped with a warning that names it.
     // Warnings never quote a provider entry's value, which may be a key.
     let presets = take_section(&mut value, "model");
@@ -483,7 +478,7 @@ fn agent_name_problem(name: &str) -> Option<&'static str> {
     (!plain).then_some("an agent name uses only a-z, 0-9, - and _")
 }
 
-/// Remove one top-level section from the parsed file, if the file is an object.
+/// Remove one top level section from the parsed file, if the file is an object.
 fn take_section(value: &mut serde_json::Value, key: &str) -> Option<serde_json::Value> {
     value.as_object_mut()?.remove(key)
 }
@@ -504,7 +499,7 @@ pub fn load_home_settings(home: Option<&Path>) -> (Settings, Vec<String>) {
 }
 
 /// The project layer (`<cwd>/.cupel/settings.json`), with the same
-/// warn-and-default policy as the home layer: a malformed hand-written
+/// warn and default policy as the home layer, a malformed hand written
 /// file is announced and skipped, never fatal. Secrets are not filtered
 /// here. `layered` simply never reads this layer's providers map, so
 /// filtering has nothing to do (security by construction beats secruity
@@ -530,7 +525,7 @@ pub enum SaveError {
     Io { path: PathBuf, reason: String },
 }
 
-/// Save one provider key using the safe [`update_settings`] write path.
+/// Save one provider key using the safe `update_settings` write path.
 /// Returns the path written for the TUI notice.
 pub fn save_provider_key(
     home: Option<&Path>,
@@ -549,22 +544,22 @@ pub fn save_theme(home: Option<&Path>, id: &str) -> Result<PathBuf, SaveError> {
     update_settings(home, |settings| settings.theme = Some(id.to_string()))
 }
 
-/// Read-modify-write `<home>/settings.json`, applying `edit` to settings
+/// Read modify write `<home>/settings.json`, applying `edit` to settings
 /// read fresh from disk. Creates the home directory if needed and returns
 /// the path written. Every settings save shares this careful write path.
 ///
-/// Design points:
-/// - The file is re-read here instead of trusting any in-memory copy:
+/// Design points,
+/// * The file is re read here instead of trusting any in memory copy,
 /// hand edits made while `cupel` runs are preserved, and a malformed file
 /// is detected and refused rather than silently overwritten.
-/// - The new content goes to a temp file in the same directory, then
+/// * The new content goes to a temp file in the same directory, then
 /// renames over the target. rename is atomic only within one filesystem
 /// (a temp_dir on another mount would fail with EXDEV), and atomicity
 /// means a reader sees either the old or the new complete file, never a
 /// torn one.
-/// - The temp file is created 0600 on Unix before any secret byte lands
-/// on disk; rename carries that mode to the final path, tightening even
-/// a pre-existing 0644 file.
+/// * The temp file is created 0600 on Unix before any secret byte lands
+/// on disk, rename carries that mode to the final path, tightening even
+/// a pre existing 0644 file.
 fn update_settings(
     home: Option<&Path>,
     edit: impl FnOnce(&mut Settings),
@@ -575,7 +570,7 @@ fn update_settings(
     let path = settings_path(home);
 
     // Fresh from disk, not from memory. NotFound is the one io error
-    // that is not an error here: first save ever.
+    // that is not an error here, first save ever.
     let mut settings = match std::fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str::<Settings>(&text).map_err(|e| SaveError::Malformed {
             path: path.clone(),
@@ -593,14 +588,14 @@ fn update_settings(
     edit(&mut settings);
 
     // The home dir may not exist yet (first run, fresh CUPEL_HOME). No
-    // exists() pre-check: create_dir_all is idempotent, and attempting
-    // unconditionally avoids a check-then-act race.
+    // exists() pre check, create_dir_all is idempotent, and attempting
+    // unconditionally avoids a check then act race.
     std::fs::create_dir_all(home).map_err(|e| SaveError::Io {
         path: home.to_path_buf(),
         reason: e.to_string(),
     })?;
 
-    // Pretty + trailing newline: this file is hand-edited; compact JSON
+    // Pretty + trailing newline, this file is hand edited, compact JSON
     // would punish the user on their next manual edit.
     let mut body = serde_json::to_string_pretty(&settings).map_err(|e| SaveError::Io {
         path: path.clone(),
@@ -608,20 +603,20 @@ fn update_settings(
     })?;
     body.push('\n');
 
-    // Same-directory temp file. A stale tmp from a crashed save must not
+    // Same directory temp file. A stale tmp from a crashed save must not
     // male create_new fail forever, so clear it first (best effort).
     let tmp = home.join("settings.json.tmp");
     let _ = std::fs::remove_file(&tmp);
 
     let mut options = std::fs::OpenOptions::new();
-    // create_new (not create+truncate): a file or symlink squatting on the
+    // create_new (not create+truncate), a file or symlink squatting on the
     // tmp path fails loudly instead of being followed.
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        // Owner-only before any secret byte lands on disk. The mode
+        // Owner only before any secret byte lands on disk. The mode
         // applies at creation, which is exactly why a fresh tmp file (and
-        // not chmod-after-write on the real file) is the safe order.
+        // not chmod after write on the real file) is the safe order.
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
@@ -630,9 +625,9 @@ fn update_settings(
         reason: e.to_string(),
     })?;
 
-    // fsync before rename: without it a power loss can publish an empty
+    // fsync before rename, without it a power loss can publish an empty
     // tmp file over a good settings.json because rename orders metadata, not
-    // data. flush would only empty userspace buffers; sync_all reaches
+    // data. flush would only empty userspace buffers, sync_all reaches
     // the disk.
     let written = file
         .write_all(body.as_bytes())
@@ -658,9 +653,9 @@ fn update_settings(
     Ok(path)
 }
 
-/// True when the file exists, parses, and defines a top-level "providers"
+/// True when the file exists, parses, and defines a top level "providers"
 /// key. A pure predicate so the warning policy is testable separately.
-/// Parsed as a generic Value (not Settings): the question here is only
+/// Parsed as a generic Value (not Settings), the question here is only
 /// "did someone put providers in a project file?", not schema validity.
 /// and a malformed files defines nothing, so it stays silent rather than
 /// training users to think project settings are honored.
@@ -728,7 +723,7 @@ mod tests {
     fn malformed_files_are_errors_and_the_wrapper_defaults() {
         let root = temp_root("malformed");
         let path = root.join("settings.json");
-        // A wrong provider entry is no longer a file error: it costs only
+        // A wrong provider entry is no longer a file error, it costs only
         // itself (see a_bad_provider_entry_or_loop_killer_section_costs_only_itself).
         for (bad, category) in [
             ("{not json", "invalid JSON syntax"),
@@ -876,7 +871,7 @@ mod tests {
         let reason = home.invalid_default_preset.clone().expect("recorded");
         assert!(reason.contains("High"), "{reason}");
 
-        // No other default: the problem survives layering.
+        // No other default, the problem survives layering.
         let merged = Settings::layered(home.clone(), Settings::default());
         assert_eq!(merged.invalid_default_preset, Some(reason));
 
@@ -1066,7 +1061,7 @@ mod tests {
     #[test]
     fn save_preserves_other_providers_and_unknown_fields() {
         let home = temp_root("save-preserve");
-        // Compact, oddly-spaced hand-written file: values must survive
+        // Compact, oddly spaced hand written file, values must survive
         // (formatting is normalized, and that is documented).
         std::fs::write(
             home.join("settings.json"),
@@ -1154,7 +1149,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let home = temp_root("save-perms");
         let path = home.join("settings.json");
-        // Pre-existing file with default (usually 0644) permissions: the
+        // Pre existing file with default (usually 0644) permissions, the
         // rename must carry the tmp file's 0600 over it because the file holds
         // secrets now.
         std::fs::write(&path, "{}").unwrap();
@@ -1190,7 +1185,7 @@ mod tests {
         // A known field now, so it must not fall into the extra map.
         assert!(parsed.extra.is_empty());
 
-        // Opt-in: absent section = off, explicit 0 = off.
+        // Opt in, absent section = off, explicit 0 = off.
         assert_eq!(Settings::default().loop_killer_max_repeats(), None);
         let zero: Settings = serde_json::from_str(r#"{"loopKiller": {"maxRepeats": 0}}"#).unwrap();
         assert_eq!(zero.loop_killer_max_repeats(), None);
@@ -1227,7 +1222,7 @@ mod tests {
         home.providers.insert("anthropic".into(), "sk-home".into());
         home.loop_killer = Some(LoopKillerSettings { max_repeats: 3 });
         let mut project = Settings::default();
-        // A hostile or careless project file: both a key and a config.
+        // A hostile or careless project file, both a key and a config.
         project
             .providers
             .insert("anthropic".into(), "sk-LEAKED".into());
@@ -1285,11 +1280,11 @@ mod tests {
         assert_eq!(default.model, "codex/gpt-6-sol");
         assert_eq!(default.thinking_level.level(), Some(ThinkingLevel::XHigh));
         assert_eq!(default.prompt, None);
-        // "off" is a real choice, not a missing value: the agent's None.
+        // "off" is a real choice, not a missing value, the agent's None.
         let fast = &parsed.presets["fast"];
         assert_eq!(fast.thinking_level.level(), None);
         assert_eq!(fast.prompt.as_deref(), Some("Answer briefly."));
-        // A known field now - it must not fall into the extra map.
+        // A known field now it must not fall into the extra map.
         assert!(parsed.extra.is_empty());
     }
 
@@ -1321,7 +1316,7 @@ mod tests {
         let expected: Settings = serde_json::from_str(written).unwrap();
         assert_eq!(saved.presets, expected.presets);
 
-        // A file without presets gets no `"model": {}` from a key save.
+        // A file without presets gets no an empty `model` object from a key save.
         let fresh = temp_root("save-no-presets");
         save_provider_key(Some(&fresh), "anthropic", "sk-a").unwrap();
         let text = std::fs::read_to_string(fresh.join("settings.json")).unwrap();
@@ -1350,7 +1345,7 @@ mod tests {
 
         let merged = Settings::layered(home, project);
         let models: Vec<&str> = merged.presets.values().map(|p| p.model.as_str()).collect();
-        // Sorted by name: default (home only), fast (project wins), plan.
+        // Sorted by name, default (home only), fast (project wins), plan.
         assert_eq!(models, ["home-default", "project-fast", "project-plan"]);
     }
 
@@ -1366,7 +1361,7 @@ mod tests {
         let found = preset.find_model(&catalog).map(|model| model.id.as_str());
         assert_eq!(found, Some("claude-haiku-5-5"));
 
-        // Right id, wrong provider: not found.
+        // Right id, wrong provider, not found.
         preset.provider = "openrouter".into();
         assert!(preset.find_model(&catalog).is_none());
     }
@@ -1405,7 +1400,7 @@ mod tests {
         );
         assert_eq!(settings.agent_commands["review"], "writer");
 
-        // Strict saving refuses invalid hand-written entries rather than erasing them.
+        // Strict saving refuses invalid hand written entries rather than erasing them.
         assert!(save_provider_key(Some(&home), "mock", "new").is_err());
         std::fs::write(&path, r#"{"agents":{"good":{"provider":"mock","model":"m","thinkingLevel":"off"}},"agentCommands":{"review":"good"}}"#).unwrap();
         save_provider_key(Some(&home), "mock", "new").unwrap();
@@ -1472,7 +1467,7 @@ mod tests {
         assert!(!settings.checks_for_updates());
         assert!(warnings.is_empty());
 
-        // A wrong value costs only itself: the key next to it survives.
+        // A wrong value costs only itself, the key next to it survives.
         std::fs::write(
             &path,
             r#"{"checkForUpdates": "no", "providers": {"anthropic": "sk-a"}}"#,

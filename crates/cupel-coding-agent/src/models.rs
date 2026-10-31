@@ -1,16 +1,16 @@
-//! The merged model catalog: built-ins + user-defined `models.json`
+//! The merged model catalog, built ins + user defined `models.json`
 //! layers + discovered local (ollama) models.
 //!
-//! `cupel_core::catalog::builtin_models()` is a hardcoded list; this module
+//! `builtin_models()` is a hardcoded list, this module
 //! layers user configuration over it so new models, proxies, and local
-//! OpenAI-compatible endpoints never require recompiling. Layer order (later
-//! wins on id collision, mirroring prompt-template precedence):
+//! OpenAI compatible endpoints never require recompiling. Layer order (later
+//! wins on id collision, mirroring prompt template precedence),
 //!
-//! 1. built-in catalog,
+//! 1. built in catalog,
 //! 2. `~/.cupel/models.json`,
-//! 3. `<cwd>/.cupel/models.json` (overrides/credential-bearing rows require
+//! 3. `<cwd>/.cupel/models.json` (overrides/credential bearing rows require
 //!    explicit project trust),
-//! 4. ollama auto-discovery (lowest: an explicit entry always beats a
+//! 4. ollama auto discovery (lowest, an explicit entry always beats a
 //!    discovered one. This is the user's override channel for context
 //!    window, reasoning, and compat flags).
 //!
@@ -18,8 +18,8 @@
 //! `ANTHROPIC_AUTH_TOKEN`) rewrite every `anthropic` row, see
 //! `AnthropicEnv`. Exported variables beat file config, as for keys.
 //!
-//! The catalog is resolved once at startup in `main::run()` (discovery is a
-//! network call; the TUI's key handlers are synchronous) and threaded to
+//! The catalog is resolved once at startup in `run()` (discovery is a
+//! network call, the TUI's key handlers are synchronous) and threaded to
 //! the frontends via `SessionMeta.models`.
 
 use std::path::Path;
@@ -28,9 +28,9 @@ use cupel_core::types::Model;
 
 use crate::settings::Settings;
 
-/// Parse one `models.json`: a JSON array of Model descriptors in the
-/// workspace-wide camelCase serde form (`baseUrl`, `contextWindow`,
-/// `maxTokens`, ...). A missing file is simply an empty layer; a malformed
+/// Parse one `models.json`, a JSON array of Model descriptors in the
+/// workspace wide camelCase serde form (`baseUrl`, `contextWindow`,
+/// `maxTokens`, ...). A missing file is simply an empty layer, a malformed
 /// file is an error the caller must surface, unlike optional context
 /// files, a config the user wrote by hand deserves a visible failure.
 pub fn load_models_file(path: &Path) -> Result<Vec<Model>, String> {
@@ -42,7 +42,7 @@ pub fn load_models_file(path: &Path) -> Result<Vec<Model>, String> {
     serde_json::from_str(&content).map_err(|e| format!("{} is not valid: {e}", path.display()))
 }
 
-/// The user layers in precedence order: cupel home first, project second.
+/// The user layers in precedence order, cupel home first, project second.
 /// Parse errors are collected as warnings and the broken layer is skipped,
 /// never aborting startup. Reuse the loaded home settings for credential
 /// checks so a malformed settings file is reported only once.
@@ -93,9 +93,9 @@ fn load_layer(path: &Path, warnings: &mut Vec<String>) -> Vec<Model> {
     }
 }
 
-/// Only new, keyless loopback Completions entries on non-credential
+/// Only new, keyless loopback Completions entries on non credential
 /// providers are safe without trust. Check credential *capability*, not just today's
-/// exported keys: /provider and /login can add credentials later. In
+/// exported keys, /provider and /login can add credentials later. In
 /// particular, a forged keyless flag must not bypass OAuth or AWS auth.
 fn untrusted_model_allowed(
     model: &Model,
@@ -134,9 +134,9 @@ fn is_loopback_endpoint(base_url: &str) -> bool {
 
 /// Merge catalog layers. An id collision replaces the earlier entry in
 /// place (keeping its position, so each provider's first model stays the
-/// `/provider` default); new ids append. Within one layer
+/// `/provider` default), new ids append. Within one layer
 /// the same rule applies, so a duplicated id in a single file is
-/// last-wins.
+/// last wins.
 #[must_use]
 pub fn merge_models(layers: Vec<Vec<Model>>) -> Vec<Model> {
     let mut merged: Vec<Model> = Vec::new();
@@ -152,7 +152,7 @@ pub fn merge_models(layers: Vec<Vec<Model>>) -> Vec<Model> {
 }
 
 /// The catalog's context ceiling survives an override (Codex CLI's
-/// with_config_overrides does the same clamp): a replacement row that
+/// with_config_overrides does the same clamp), a replacement row that
 /// names no maxContextWindow inherits the replaced row's, and its
 /// contextWindow is clamped to that ceiling. A row that pins its own
 /// ceiling owns it
@@ -168,10 +168,10 @@ fn with_context_ceiling(existing: &Model, mut replacement: Model) -> Model {
 
 /// Drop entries whose `api` has no registered provider implementation.
 /// they would only fail at request time. Guards the same invariant the
-/// built-in catalog tests enforce ("every model has a registered
-/// provider"), extended to user input: warn and skip, never abort.
+/// built in catalog tests enforce ("every model has a registered
+/// provider"), extended to user input, warn and skip, never abort.
 ///
-/// Kept rows are also checked against their provider's compat knobs: a key
+/// Kept rows are also checked against their provider's compat knobs, a key
 /// with the wrong type falls back to its default at request time, so the
 /// user sees a warning here instead of a mysterious behavior change.
 #[must_use]
@@ -242,9 +242,9 @@ impl AnthropicEnv {
     }
 }
 
-/// The full startup catalog: built-ins, user layers, then ollama
+/// The full startup catalog, built ins, user layers, then ollama
 /// discovery for ids not already defined. Async because discovery is a
-/// (bounded, fail-soft) network probe. Returns the catalog and load warnings.
+/// (bounded, fail soft) network probe. Returns the catalog and load warnings.
 pub async fn build_catalog(
     registry: &cupel_core::provider::Registry,
     home: Option<&Path>,
@@ -257,7 +257,7 @@ pub async fn build_catalog(
     let mut merged = merge_models(layers);
     AnthropicEnv::from_env().apply(&mut merged);
 
-    // Discovered models rank below everything explicit: only ids nobody
+    // Discovered models rank below everything explicit, only ids nobody
     // defined get appended.
     let host = crate::ollama::ollama_host();
     for model in crate::ollama::discover(&host).await {
@@ -268,8 +268,8 @@ pub async fn build_catalog(
     (filter_registered(merged, registry, &mut warnings), warnings)
 }
 
-/// The `--help` catalog: built-ins + user layers, no network probe (help
-/// must be instant and side-effect-free).
+/// The help output catalog, built ins + user layers, no network probe (help
+/// must be instant and side effect free).
 #[must_use]
 pub fn build_catalog_offline(home: Option<&Path>, cwd: &Path) -> (Vec<Model>, Vec<String>) {
     let (settings, mut warnings) = crate::settings::load_home_settings(home);
@@ -368,12 +368,12 @@ mod tests {
 
     #[test]
     fn overrides_inherit_and_respect_the_context_ceiling() {
-        // A long-context row: planning window 272k, ceiling 922k.
+        // A long context row, planning window 272k, ceiling 922k.
         let mut base: Vec<Model> =
             serde_json::from_value(serde_json::json!([entry_json("astra", 272_000)])).unwrap();
         base[0].max_context_window = Some(922_000);
 
-        // The user raises the window past the ceiling without naming one:
+        // The user raises the window past the ceiling without naming one,
         // the ceiling is inherited and the window clamped to it.
         let overlay: Vec<Model> =
             serde_json::from_value(serde_json::json!([entry_json("astra", 2_000_000)])).unwrap();
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("skipping model x"));
         assert!(warnings[0].contains("grpc-magic"));
-        // Sanity: a real api survives.
+        // Sanity, a real api survives.
         let ok: Vec<Model> =
             serde_json::from_value(serde_json::json!([entry_json("y", 1000)])).unwrap();
         warnings.clear();
@@ -439,7 +439,7 @@ mod tests {
         let (home, cwd) = (root.join("home"), root.join("proj"));
         std::fs::create_dir_all(home.join("")).unwrap();
         std::fs::create_dir_all(cwd.join(".cupel")).unwrap();
-        // Home defines a new model; the project overrides a built-in id.
+        // Home defines a new model, the project overrides a built in id.
         std::fs::write(
             home.join("models.json"),
             serde_json::json!([entry_json("local-model", 8192)]).to_string(),
@@ -474,7 +474,7 @@ mod tests {
         let (home, cwd) = (root.join("home"), root.join("proj"));
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(cwd.join(".cupel")).unwrap();
-        // Home entries remain trusted even if they override a built-in.
+        // Home entries remain trusted even if they override a built in.
         let mut home_model = entry_json("home-custom", 8192);
         home_model["provider"] = "home-provider".into();
         home_model["compat"] = serde_json::Value::Null;
@@ -505,7 +505,7 @@ mod tests {
             "stored-oauth-provider",
         ] {
             let mut row = entry_json(&format!("forged-{provider}"), 12345);
-            row["provider"] = provider.into(); // forged requiresApiKey:false
+            row["provider"] = provider.into(); // forged requiresApiKeyfalse
             row["baseUrl"] = "https://attacker.invalid".into();
             row["headers"] = serde_json::json!({"x-attacker": "yes"});
             rows.push(row);
@@ -577,7 +577,7 @@ mod tests {
                 .base_url,
             "https://attacker.invalid"
         );
-        // The same loader is used by /hot-reload, so revocation is honored.
+        // The same loader is used by /hot reload, so revocation is honored.
         crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Restricted)
             .unwrap();
         let (restricted, warnings) = build_catalog_offline(Some(&home), &cwd);

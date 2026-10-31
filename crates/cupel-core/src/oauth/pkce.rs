@@ -1,7 +1,7 @@
-//! PKCE (RFC 7636) for the OAuth authorization-code flow.
+//! PKCE (RFC 7636) for the OAuth authorization code flow.
 //!
 //! PKCE proves that the app redeeming an authorization code is the same
-//! app that started the login: the authorize request carries a hash (the
+//! app that started the login, the authorize request carries a hash (the
 //! challenge), and the token exchange must present the preimage.
 //! An attacker who intercepts the redirect gets a code they
 //! cannot redeem.
@@ -16,7 +16,7 @@ pub struct Pkce {
 }
 
 /// base64url without padding because RFC 7636 prescribes exactly this alphabet,
-/// and a trailing `=` would be percent-encoded into URL noise anyway.
+/// and a trailing `=` would be percent encoded into URL noise anyway.
 fn base64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
@@ -24,8 +24,8 @@ fn base64url(bytes: &[u8]) -> String {
 /// Generate a fresh pair from OS entropy.
 #[must_use]
 pub fn generate() -> Pkce {
-    // 32 random bytes -> 43 base64url chars, comfortably inside
-    // the RFC's 43-128 character window.
+    // 32 random bytes → 43 base64url chars, comfortably inside
+    // the RFC's 43 128 character window.
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).expect("OS entropy source unavailable");
     let verifier = base64url(&bytes);
@@ -35,7 +35,7 @@ pub fn generate() -> Pkce {
     }
 }
 
-/// The S256 method: `challenge = base64url(sha256(ascii(verifier)))`.
+/// The S256 method, `challenge = base64url(sha256(ascii(verifier)))`.
 /// Split out (and pub(crate)) so tests can pin the RFC 7636 test vector.
 #[must_use]
 pub(crate) fn challenge_for(verifier: &str) -> String {
@@ -60,7 +60,7 @@ mod tests {
     fn generated_pairs_are_fresh_and_well_formed() {
         let a = generate();
         let b = generate();
-        // 32 bytes -> ceil(32*8/6) = 43 chars, no padding.
+        // 32 bytes → ceil(32*8/6) = 43 chars, no padding.
         assert_eq!(a.verifier.len(), 43);
         assert_eq!(a.challenge.len(), 43);
         assert!(

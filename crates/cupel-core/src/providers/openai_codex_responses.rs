@@ -1,23 +1,23 @@
 //! ChatGPT Codex backend provider for the `OpenAI` Responses dialect behind
 //! a ChatGPT Plus/Pro subscription.
 //!
-//! The stream is the plain Responses SSE stream; what differs is
-//! everything around it:
+//! The stream is the plain Responses SSE stream, what differs is
+//! everything around it,
 //!
-//! - **URL**: `{base_url}/codex/responses` on `chatgpt.com/backend-api`,
+//! * **URL**, `{base_url}/codex/responses` on the ChatGPT backend API,
 //!   not `api.openai.com/v1/responses`.
-//! - **Auth**: the bearer token is a ChatGPT OAuth access token (see
-//!   `crate::oauth::openai_codex`), and the backend additionally demands
-//!   the `chatgpt-account-id` header, extracted from that very token's
+//! * **Auth**, the bearer token is a ChatGPT OAuth access token (see
+//!   `openai_codex`), and the backend additionally demands
+//!   the ChatGPT account id header, extracted from that very token's
 //!   JWT claim on every request.
-//! - **Body**: `store: false` is mandatory (the backend rejects true),
+//! * **Body**, `store` set to false is mandatory (the backend rejects true),
 //!   the system prompt travels in the `instructions` field instead of a
 //!   leading message item, and there is no `max_output_tokens` because the
 //!   backend manages the output budget itself.
 //!
 //! This implementation uses SSE (which the backend fully supports), not WebSocket
-//! transport. It also omits zstd request compression and the tool-search machinery.
-//! Service tiers come from the catalog: a row's compat `serviceTier` goes out as the
+//! transport. It also omits zstd request compression and the tool search machinery.
+//! Service tiers come from the catalog, a row's compat `serviceTier` goes out as the
 //! `service_tier` body field (the Ultrafast rows).
 
 use serde_json::{Value, json};
@@ -92,8 +92,8 @@ async fn run(
         .api_key
         .clone()
         .ok_or_else(|| InferenceError::MissingApiKey(model.provider.as_str().to_string()))?;
-    // The backend routes by account; the id lives inside the access
-    // token, so a non-JWT "key" (someone pasted an sk-... API key) is
+    // The backend routes by account, the id lives inside the access
+    // token, so a non JWT "key" (someone pasted an sk ... API key) is
     // caught here with a pointer at the fix, not with the server 401.
     let account_id = account_id_from_access_token(&api_key).ok_or_else(|| {
         InferenceError::Other(
@@ -103,7 +103,7 @@ async fn run(
     })?;
 
     let body = build_request_body(model, context, options);
-    // TRACE only: request bodies contain the user's code and prompts.
+    // TRACE only, request bodies contain the user's code and prompts.
     tracing::trace!(body = %body, "request body");
 
     let mut req = http.post(resolve_codex_url(&model.base_url));
@@ -137,7 +137,7 @@ fn resolve_codex_url(base_url: &str) -> String {
 }
 
 /// The headers the Codex backend requires, as data so tests can read
-/// them. `session-id`/`x-client-request-id` give the backend cache
+/// them. session and client request id headers give the backend cache
 /// affinity.
 fn codex_headers(
     api_key: &str,
@@ -187,7 +187,7 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
     let compat = openai_compat(model);
     let mut body = json!({
         "model": compat.wire_model(model),
-    // The backend rejects store:true ("Store must be set to false").
+    // The backend rejects storetrue ("Store must be set to false").
         // Stateless mode is not a choice.
         "store": false,
         "stream": true,
@@ -239,7 +239,7 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
         );
     }
 
-    // The subscription backend omits reasoning when off; it does not share
+    // The subscription backend omits reasoning when off, it does not share
     // the plain Responses API's default off effort "none".
     if let Some(effort) = thinking_effort(model, options.reasoning, EffortStyle::OpenAi) {
         body["reasoning"] = json!({"effort": effort, "summary": "auto"});
@@ -247,7 +247,7 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
     body
 }
 
-/// Codex's tool-call id normalization is same as openai_responses mechanics,
+/// Codex's tool call id normalization is same as openai_responses mechanics,
 /// but ids minted by the plain `openai` provider count as family, not foreign.
 fn normalize_tool_call_id_codex(id: &str, _model: &Model, source: &AssistantMessage) -> String {
     let Some((call_id, item_id)) = id.split_once('|') else {
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(other.to_string(), "provider returned HTTP 403: forbidden");
     }
 
-    /// A Codex fixture: reasoning on, the minimal->low rename pinned,
+    /// A Codex fixture, reasoning on, the minimal→low rename pinned,
     /// ChatGPT backend base URL, and optional compat left unset.
     fn codex_model() -> Model {
         let mut map = ThinkingLevelMap::new();
@@ -361,7 +361,7 @@ mod tests {
         );
         assert_eq!(input.len(), 1, "just the user message");
 
-        // No system prompt at all: still send the field with fallback text.
+        // No system prompt at all, still send the field with fallback text.
         let body = build_request_body(
             &model,
             &Context {
@@ -409,7 +409,7 @@ mod tests {
             json!({"effort": "medium", "summary": "auto"})
         );
 
-        // The catalog pins minimal -> "low" (the backend has no minimal).
+        // The catalog pins minimal → "low" (the backend has no minimal).
         let options = StreamOptions {
             reasoning: Some(ThinkingLevel::Minimal),
             ..StreamOptions::default()
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn astra_on_codex_sends_max_and_no_temperature() {
-        // The pinned codex/gpt-6-astra row: minimal -> low like every
+        // The pinned codex/gpt 6 astra row, minimal → low like every
         // Codex row, off unsupported, max kept by omission, no temperature.
         let mut model = codex_model();
         model.id = "codex/gpt-6-astra".to_string();
@@ -454,7 +454,7 @@ mod tests {
         );
         assert!(body.get("temperature").is_none(), "{body}");
 
-        // A custom row with max -> null clamps max down to xhigh,
+        // A custom row with max → null clamps max down to xhigh,
         // the level below it on the scale.
         let mut limited = codex_model();
         limited
@@ -481,7 +481,7 @@ mod tests {
         let tool = &body["tools"][0];
         assert_eq!(tool["type"], json!("function"));
         assert_eq!(tool["name"], json!("read"));
-        // Present and null: get() distinguishes that from absent.
+        // Present and null, get() distinguishes that from absent.
         assert!(tool.get("strict").is_some_and(Value::is_null));
     }
 
@@ -555,14 +555,14 @@ mod tests {
             timestamp: now_ms(),
         };
 
-        // openai and openai-codex ids pass through by name...
+        // openai and openai codex ids pass through by name...
         for family in ["openai", "openai-codex"] {
             assert_eq!(
                 normalize_tool_call_id_codex("call_1|fc_abc", &model, &assistant_from(family)),
                 "call_1|fc_abc"
             );
         }
-        // ...anthropic-minted ids are re-derived as fc_<hash>.
+        // ...anthropic minted ids are re derived as fc_<hash>.
         let foreign =
             normalize_tool_call_id_codex("toolu_1|toolu_1", &model, &assistant_from("anthropic"));
         let (call_id, item_id) = foreign.split_once('|').expect("two halves");
@@ -577,7 +577,7 @@ mod tests {
         // Without the knob the id goes out verbatim (user models.json).
         let body = build_request_body(&model, &context_with_prompt(), &StreamOptions::default());
         assert_eq!(body["model"], json!("gpt-6-sol"));
-        // Catalog rows carry codex/-namespaced ids plus the real name.
+        // Catalog rows carry codex/ namespaced ids plus the real name.
         model.id = "codex/gpt-6-sol".to_string();
         model.compat = Some(json!({"requestModel": "gpt-6-sol"}));
         let body = build_request_body(&model, &context_with_prompt(), &StreamOptions::default());
@@ -606,7 +606,7 @@ mod tests {
         let body = build_request_body(&model, &context_with_prompt(), &StreamOptions::default());
         assert_eq!(body["model"], json!("gpt-6.1-sol"));
         assert_eq!(body["service_tier"], json!("ultrafast"));
-        // Standard rows leave the field out; the backend then uses the
+        // Standard rows leave the field out, the backend then uses the
         // account's default tier.
         let body = build_request_body(
             &codex_model(),
@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn a_request_reports_each_compat_problem_once() {
-        // The Codex body reads three knobs (model name, temperature, tier);
+        // The Codex body reads three knobs (model name, temperature, tier),
         // one shared parse means one warning per bad key and request.
         let mut model = codex_model();
         model.compat = Some(json!({"supportsTemperature": "no", "serviceTier": "ultrafast"}));

@@ -1,8 +1,8 @@
-//! End-to-end tests of context compaction, using a mock provider that
-//! serves both request kinds the loop makes: summarization calls
+//! End to end tests of context compaction, using a mock provider that
+//! serves both request kinds the loop makes, summarization calls
 //! (recognized by the summarization system prompt) and normal turn calls.
 
-// Integration-test files are compiled as their own crate in test mode; the
+// Integration test files are compiled as their own crate in test mode, the
 // "tests outside #[cfg(test)]" restriction lint does not apply.
 #![allow(clippy::tests_outside_test_module)]
 
@@ -32,19 +32,15 @@ use cupel_core::{
     },
 };
 
-/// Serves summarization requests with a fixed summary; records every turn
+/// Serves summarization requests with a fixed summary, records every turn
 /// request's message list. Optionally fails the first N turn requests.
 struct CompactionAwareProvider {
     turn_calls: AtomicU32,
-    /// Summarization requests served, representing the LLM cost of compaction. The
-    /// pruning tier exists to keep this at zero when tool output alone
-    /// caused the overflow.
     summarization_calls: AtomicU32,
     summarization_max_tokens: Mutex<Vec<Option<u64>>>,
     fail_first_turns: u32,
     turn_error: &'static str,
     fail_summarization: bool,
-    /// First-message text + message count of each turn request, for asserts.
     seen_turn_requests: Mutex<Vec<(String, usize)>>,
     seen_turn_messages: Mutex<Vec<Vec<Message>>>,
 }
@@ -120,7 +116,7 @@ impl Provider for CompactionAwareProvider {
             return stream;
         }
 
-        // A turn request: record what the loop actually sent.
+        // A turn request, record what the loop actually sent.
         let first_text = context
             .messages
             .first()
@@ -304,8 +300,8 @@ fn big_history(count: usize) -> Vec<AgentMessage> {
 #[tokio::test]
 async fn threshold_compaction_shrinks_the_request() {
     let provider = Arc::new(CompactionAwareProvider::new(0, ""));
-    // Window 3000, reserve capped at 750 -> threshold 2250 estimated tokens.
-    // Five ~1000-token messages of history is well past that.
+    // Window 3000, reserve capped at 750 → threshold 2250 estimated tokens.
+    // Five ~1000 token messages of history is well past that.
     let config = CompactionConfig {
         enabled: true,
         reserve_tokens: 1000,
@@ -317,7 +313,7 @@ async fn threshold_compaction_shrinks_the_request() {
         compaction_events(&events),
         vec![(CompactionReason::Threshold, true)]
     );
-    // Exactly one turn request, and it was the compacted one: it starts with
+    // Exactly one turn request, and it was the compacted one, it starts with
     // the summary marker and carries far fewer messages than 5 + prompt.
     let seen = provider.seen_turn_requests.lock().expect("test mutex");
     assert_eq!(seen.len(), 1);
@@ -331,7 +327,7 @@ async fn threshold_compaction_shrinks_the_request() {
         "5 history messages should have collapsed, got {message_count}"
     );
     assert!(matches!(events.last(), Some(AgentEvent::AgentEnd { .. })));
-    // User-text history has nothing to prune, so this path did pay one
+    // User text history has nothing to prune, so this path did pay one
     // summarization call. This is the counterpart of the pruning test below.
     assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 1);
     assert!(events.iter().any(|e| matches!(
@@ -471,7 +467,7 @@ async fn tool_heavy_history_compacts_without_a_summarization_call() {
         compaction_events(&events),
         vec![(CompactionReason::Threshold, true)]
     );
-    // ...with zero LLM cost: no summarization request ever hit the provider.
+    // ...with zero LLM cost, no summarization request ever hit the provider.
     assert_eq!(provider.summarization_calls.load(Ordering::SeqCst), 0);
 
     // The turn request kept the full message count. Only bodies were elided,
@@ -648,7 +644,7 @@ async fn overflow_error_triggers_reactive_compaction_and_recovery() {
     assert_eq!(provider.turn_calls.load(Ordering::SeqCst), 2);
     let seen = provider.seen_turn_requests.lock().expect("test mutex");
     assert!(seen[1].0.starts_with(COMPACTION_MARKER));
-    // The run recovered: last assistant message is a success.
+    // The run recovered, last assistant message is a success.
     let recovered = events.iter().rev().find_map(|e| match e {
         AgentEvent::MessageEnd {
             message: AgentMessage::Llm(Message::Assistant(a)),
@@ -734,7 +730,7 @@ async fn assert_compaction_persists(reason: CompactionReason) {
 
 /// A resumed transcript keeps every message, but its newest reply reports the
 /// usage of the compacted request the original run sent. That number must not
-/// hide the reloaded history: the first prompt estimates from content and
+/// hide the reloaded history, the first prompt estimates from content and
 /// compacts, and the reply it gets makes usage trustworthy again.
 #[tokio::test]
 async fn seeded_history_does_not_trust_usage_it_did_not_observe() {
@@ -745,7 +741,7 @@ async fn seeded_history_does_not_trust_usage_it_did_not_observe() {
         &model,
         vec![AssistantContent::Text(TextContent::plain("done"))],
     );
-    // Window 3000, threshold 2250: five ~1000-token messages exceed it, but
+    // Window 3000, threshold 2250, five ~1000 token messages exceed it, but
     // this anchor from a compacted request says the context held 200 tokens.
     reply.usage.input = 200;
     history.push(AgentMessage::Llm(Message::Assistant(reply)));
@@ -782,7 +778,7 @@ async fn pruning_persists_even_when_summarization_fails() {
         let provider = Arc::new(provider);
         let mut history = tool_heavy_history(5);
         if fail_summarization {
-            // Pruning alone cannot remove this user-text bulk, so the
+            // Pruning alone cannot remove this user text bulk, so the
             // summarization tier runs and fails after the tool bodies changed.
             history.insert(0, AgentMessage::user_text("x".repeat(20_000)));
         }

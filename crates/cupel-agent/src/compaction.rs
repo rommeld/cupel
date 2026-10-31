@@ -1,12 +1,12 @@
-//! Context compaction: keep long sessions inside the model's context window,
-//! in two tiers, cheapest first:
+//! Context compaction, keep long sessions inside the model's context window,
+//! in two tiers, cheapest first,
 //!
-//! 1. **Pruning (free)**: elide the bodies of tool results outside the keep
+//! 1. **Pruning (free)**, elide the bodies of tool results outside the keep
 //!    window. In coding sessions tool output (file reads, grep, bash logs)
-//!    dominates the context and is mostly re-derivable because the agent can
-//!    re-run the tool. When pruning alone brings the estimate back under
+//!    dominates the context and is mostly re derivable because the agent can
+//!    re run the tool. When pruning alone brings the estimate back under
 //!    the threshold, no LLM call happens at all.
-//! 2. **Summarization (one LLM call)**: replace the remaining old history
+//! 2. **Summarization (one LLM call)**, replace the remaining old history
 //!    with a structured checkpoint summary.
 
 use std::sync::Arc;
@@ -31,9 +31,7 @@ pub const COMPACTION_MARKER: &str = "[Conversation summary - earlier history was
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompactionConfig {
     pub enabled: bool,
-    /// Upper limit, capped at min(16_384, context_window / 4) for each model.
     pub reserve_tokens: u64,
-    /// Upper limit, capped at min(16_384, context_window / 4) for each model.
     pub keep_recent_tokens: u64,
 }
 
@@ -97,7 +95,7 @@ pub(crate) fn estimate_message_tokens(message: &AgentMessage) -> u64 {
     chars.div_ceil(CHARS_PER_TOKEN)
 }
 
-/// Estimate total context tokens for the next request: last exact provider
+/// Estimate total context tokens for the next request, last exact provider
 /// usage + estimates for everything after it (+ fixed prefix when no usage
 /// anchor exists yet).
 #[must_use]
@@ -130,7 +128,7 @@ pub fn estimate_context_tokens(context: &AgentContext) -> u64 {
         return usage_tokens + trailing;
     }
 
-    // No anchor: estimate everything including system prompt + tool schemas.
+    // No anchor, estimate everything including system prompt + tool schemas.
     let mut tokens: u64 = messages.iter().map(estimate_message_tokens).sum();
     tokens += (context.system_prompt.len() as u64).div_ceil(CHARS_PER_TOKEN);
     for tool in &context.tools {
@@ -151,7 +149,7 @@ pub(crate) fn invalidate_usage_anchors(messages: &mut [AgentMessage]) {
     }
 }
 
-/// Old provider usage includes an older projection; do not count it twice.
+/// Old provider usage includes an older projection, do not count it twice.
 pub(crate) fn estimate_request_tokens(context: &AgentContext, extra: &[AgentMessage]) -> u64 {
     if extra.is_empty() {
         return estimate_context_tokens(context);
@@ -172,7 +170,7 @@ pub fn should_compact(context_tokens: u64, context_window: u64, config: &Compact
     context_tokens > context_window.saturating_sub(config.reserve_tokens)
 }
 
-/// A model-sized cut point, or none when the entire history must be kept.
+/// A model sized cut point, or none when the entire history must be kept.
 pub(crate) fn cut_index(
     context: &AgentContext,
     context_window: u64,
@@ -206,7 +204,7 @@ fn find_cut_index(messages: &[AgentMessage], keep_recent_tokens: u64) -> usize {
             return i;
         }
     }
-    // No user/custom boundary in the tail (one giant turn): snap forward
+    // No user/custom boundary in the tail (one giant turn), snap forward
     // to an assistant so retained results never lose their tool calls.
     // If none remains, summarize everything rather than keep orphaned results.
     messages
@@ -220,21 +218,21 @@ fn find_cut_index(messages: &[AgentMessage], keep_recent_tokens: u64) -> usize {
 }
 
 /// Replacement body for an elided tool result. Tells the model exactly how
-/// to recover: run the tool again.
+/// to recover, run the tool again.
 pub const ELIDED_TOOL_RESULT: &str =
     "[tool output elided by compaction - re-run the tool if the output is needed again]";
 
-/// Results at or below this many content bytes are left alone: replacing a
-/// small result with the ~80-byte stub gains almost nothing and loses
-/// information. The floor also makes pruning idempotent because an already-elided
+/// Results at or below this many content bytes are left alone, replacing a
+/// small result with the ~80 byte stub gains almost nothing and loses
+/// information. The floor also makes pruning idempotent because an already elided
 /// result is itself below the floor.
 const PRUNE_MIN_BYTES: u64 = 256;
 
 /// Elide the bodies of all (large) tool results in `messages`. The caller
 /// passes only the slice outside the keep window. Tool calls stay intact,
 /// so the conversation narrative ("the agent read foo.rs, then edited it")
-/// survives; only the bulky, re-derivable payloads go. Results of the tools named in
-/// `keep` are never elided (see [`AgentTool::reproducible`]). Returns how many
+/// survives, only the bulky, re derivable payloads go. Results of the tools named in
+/// `keep` are never elided (see `reproducible`). Returns how many
 /// results were elided.
 fn elide_stale_tool_results(messages: &mut [AgentMessage], keep: &[&str]) -> usize {
     let mut pruned = 0;
@@ -260,7 +258,7 @@ fn elide_stale_tool_results(messages: &mut [AgentMessage], keep: &[&str]) -> usi
         result.content = vec![ToolResultContent::Text(
             cupel_core::types::TextContent::plain(ELIDED_TOOL_RESULT),
         )];
-        // Details are tool-private metadata riding alongside the content.
+        // Details are tool private metadata riding alongside the content.
         // They can be elided for the same reason.
         result.details = None;
         pruned += 1;
@@ -338,8 +336,8 @@ fn serialize_conversation(messages: &[AgentMessage]) -> String {
     out
 }
 
-/// Why compaction failed. The loop treats failures as non-fatal (the next
-/// request may still fit; if not, the overflow error reaches the user).
+/// Why compaction failed. The loop treats failures as non fatal (the next
+/// request may still fit, if not, the overflow error reaches the user).
 #[derive(Debug, thiserror::Error)]
 pub enum CompactionError {
     #[error("nothing to compact")]
@@ -373,9 +371,9 @@ pub struct CompactionOutcome {
     pub usage: Option<cupel_core::types::Usage>,
 }
 
-/// Compact `context.messages` in place, cheapest tier first:
-/// 1. elide stale tool-result bodies (free) and stop here when that
-///    alone brings the estimate back under the compaction threshold;
+/// Compact `context.messages` in place, cheapest tier first,
+/// 1. elide stale tool result bodies (free) and stop here when that
+///    alone brings the estimate back under the compaction threshold,
 /// 2. otherwise summarize everything before the cut point via one LLM
 ///    call, then splice `[summary user message] + kept tail`.
 pub async fn compact(
@@ -412,10 +410,10 @@ pub async fn compact_with_hooks(
         .ok_or(CompactionError::NothingToCompact)?;
     let config = config.for_context_window(model.context_window);
 
-    // Tier 1: free pruning
+    // Tier 1, free pruning
     // Elide only outside the keep window (the recent tail stays verbatim, so
-    // the model may be mid-task on those outputs). When this is enough,
-    // return before any LLM call: no summarization cost, no summary at all.
+    // the model may be mid task on those outputs). When this is enough,
+    // return before any LLM call, no summarization cost, no summary at all.
     let keep: Vec<&str> = context
         .tools
         .iter()
@@ -438,13 +436,13 @@ pub async fn compact_with_hooks(
         }
     }
 
-    // Tier 2: summarize the (now pruned) old history
-    // The summary is built from the pruned messages: elided bodies cost the
+    // Tier 2, summarize the (now pruned) old history
+    // The summary is built from the pruned messages, elided bodies cost the
     // summarization call almost nothing, and the key facts from tool output
     // live in the assistant's own text anyway.
     let (to_summarize, kept) = context.messages.split_at(cut);
 
-    // Iterative update: if a previous compaction summary is in the section
+    // Iterative update, if a previous compaction summary is in the section
     // being summarized, feed it to the update prompt instead of losing it.
     let previous_summary = to_summarize.iter().find_map(|m| match m {
         AgentMessage::Llm(Message::User(user)) => match &user.content {
@@ -600,7 +598,7 @@ mod tests {
     #[test]
     fn threshold_respects_reserve() {
         let config = CompactionConfig::default();
-        // Window 100k, reserve ~16k: 80k is fine, 90k must compact.
+        // Window 100k, reserve ~16k, 80k is fine, 90k must compact.
         assert!(!should_compact(80_000, 100_000, &config));
         assert!(should_compact(90_000, 100_000, &config));
         // Disabled never compacts.
@@ -613,7 +611,7 @@ mod tests {
 
     #[test]
     fn cut_index_lands_on_a_user_boundary() {
-        // ~1000 tokens each (4000 chars); keep budget of 1500 tokens should
+        // ~1000 tokens each (4000 chars), keep budget of 1500 tokens should
         // keep roughly the last two messages, cutting at the user boundary.
         let big = "x".repeat(4000);
         let messages = vec![user(&big), user(&big), user(&big), user(&big)];
@@ -687,7 +685,7 @@ mod tests {
                 .map(estimate_message_tokens)
                 .sum();
             let cut = find_cut_index(&messages, keep_recent_tokens);
-            // Assistant boundaries stay put; result boundaries advance to
+            // Assistant boundaries stay put, result boundaries advance to
             // the next assistant (or the end when no assistant remains).
             let expected_cut = if budget_start % 2 == 0 {
                 budget_start + 1
@@ -732,11 +730,11 @@ mod tests {
         assert_eq!(pruned, 1, "only the large result is elided");
         assert_eq!(result_text(&messages[0]), ELIDED_TOOL_RESULT);
         assert_eq!(result_text(&messages[1]).len(), 100, "small one intact");
-        // Idempotent: the stub itself is below the size floor.
+        // Idempotent, the stub itself is below the size floor.
         assert_eq!(elide_stale_tool_results(&mut messages, &[]), 0);
     }
 
-    /// A model whose api has no registered provider: any summarization
+    /// A model whose api has no registered provider, any summarization
     /// attempt errors, so an Ok result proves no LLM call happened.
     fn model_with_window(context_window: u64) -> Model {
         Model {
@@ -759,8 +757,8 @@ mod tests {
 
     #[tokio::test]
     async fn pruning_alone_can_avoid_the_summarization_call() {
-        // ~10k estimated tokens of tool output before a tiny keep window;
-        // window 6k with reserve 1k -> threshold 5k. Pruning drops the
+        // ~10k estimated tokens of tool output before a tiny keep window,
+        // window 6k with reserve 1k → threshold 5k. Pruning drops the
         // estimate to almost nothing, so tier 2 must not run. This is proven by
         // the empty registry, where any LLM call would error.
         let mut context = AgentContext {
@@ -826,7 +824,7 @@ mod tests {
 
     #[tokio::test]
     async fn pruning_spares_results_a_tool_cannot_repeat() {
-        // Above the 256-byte floor, so only `keep` can save it.
+        // Above the 256 byte floor, so only `keep` can save it.
         let mut answer = tool_result(1_000);
         if let AgentMessage::Llm(Message::ToolResult(result)) = &mut answer {
             result.tool_name = "ask_user".into();
@@ -871,7 +869,7 @@ mod tests {
     async fn insufficient_pruning_still_reaches_the_summarizer() {
         // The bulk is user text, which pruning cannot touch. The estimate
         // stays over the threshold, so tier 2 runs and (empty registry)
-        // fails with SummarizationFailed: proof the LLM call was attempted.
+        // fails with SummarizationFailed, proof the LLM call was attempted.
         let big = "x".repeat(40_000);
         let mut context = AgentContext {
             system_prompt: String::new(),

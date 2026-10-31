@@ -1,4 +1,4 @@
-//! Agent-level types: messages, tools, events, hooks.
+//! Agent level types, messages, tools, events, hooks.
 
 use std::sync::Arc;
 
@@ -10,10 +10,10 @@ use cupel_core::types::{
     AssistantMessage, Message, Model, ThinkingLevel, ToolResultContent, ToolResultMessage,
 };
 
-/// A message in the agent transcript: either one the LLM understands, or an
-/// app-defined message (UI notification, artifact, ...) that is filtered out
-/// (or converted) before each LLM call by [`AgentHooks::convert_to_llm`].
-// The Llm variant is ~300 bytes vs Custom's ~64; boxing it would shrink the
+/// A message in the agent transcript, either one the LLM understands, or an
+/// app defined message (UI notification, artifact, ...) that is filtered out
+/// (or converted) before each LLM call by `convert_to_llm`.
+// The Llm variant is ~300 bytes vs Custom's ~64, boxing it would shrink the
 // enum but add indirection to the hot path (every transcript access). A few
 // hundred transcript entries at 300B is noise.
 #[allow(clippy::large_enum_variant)]
@@ -39,7 +39,7 @@ impl AgentMessage {
 }
 
 /// Errors from tool execution. Tools should *throw* (return `Err`) on
-/// failure; the loop converts errors into error tool-results for the model.
+/// failure, the loop converts errors into error tool results for the model.
 pub type ToolError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -112,14 +112,14 @@ pub enum QueueMode {
     OneAtATime,
 }
 
-/// Returned from [`AgentHooks::before_tool_call`] to veto a tool execution.
+/// Returned from `before_tool_call` to veto a tool execution.
 #[derive(Debug, Clone, Default)]
 pub struct BeforeToolCallResult {
     pub block: bool,
     pub reason: Option<String>,
 }
 
-/// Context snapshot the low-level loop works on.
+/// Context snapshot the low level loop works on.
 #[derive(Clone)]
 pub struct AgentContext {
     pub system_prompt: String,
@@ -127,15 +127,14 @@ pub struct AgentContext {
     pub tools: Vec<Arc<dyn AgentTool>>,
 }
 
-/// Automatic-retry policy for transient provider failures.
+/// Automatic retry policy for transient provider failures.
 ///
 /// Which errors count as transient is decided by
-/// [`cupel_core::retry::is_retryable_assistant_error`]; this struct only
-/// carries the budget. `max_retries: 0` disables retries entirely.
+/// `is_retryable_assistant_error`, this struct only
+/// carries the budget. `max_retries` set to zero disables retries entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryConfig {
     pub max_retries: u32,
-    /// First backoff delay; attempt N waits `base_delay_ms * 2^(N-1)`.
     pub base_delay_ms: u64,
 }
 
@@ -174,7 +173,7 @@ pub trait AgentHooks: Send + Sync {
     }
     async fn observe_usage(&self, _usage: Option<&cupel_core::types::Usage>) {}
     /// Transient, budgeted background data, placed before the latest user assignment
-    /// and its tool exchanges; never persisted or compacted into private history.
+    /// and its tool exchanges, never persisted or compacted into private history.
     async fn request_messages(&self) -> Vec<AgentMessage> {
         Vec::new()
     }
@@ -197,7 +196,7 @@ pub trait AgentHooks: Send + Sync {
     }
 
     /// Resolve an API key for a provider right before each call. Useful for
-    /// short-lived OAuth tokens that can expire during long tool phases.
+    /// short lived OAuth tokens that can expire during long tool phases.
     async fn api_key(&self, _provider: &str) -> Option<String> {
         None
     }
@@ -211,7 +210,7 @@ pub trait AgentHooks: Send + Sync {
         None
     }
 
-    /// Called after each turn; return `true` to stop the run gracefully.
+    /// Called after each turn, return `true` to stop the run gracefully.
     async fn should_stop_after_turn(
         &self,
         _message: &AssistantMessage,
@@ -227,7 +226,7 @@ pub trait AgentHooks: Send + Sync {
 
     /// Resolves once steering messages are waiting. The loop races every model reply
     /// against it and cuts the reply short when it resolves. The default never
-    /// resolves: without steering, nothing interrupts.
+    /// resolves, without steering, nothing interrupts.
     async fn steering_arrived(&self) {
         std::future::pending::<()>().await;
     }
@@ -238,7 +237,7 @@ pub trait AgentHooks: Send + Sync {
     }
 }
 
-/// The no-hooks default.
+/// The no hooks default.
 pub struct NoHooks;
 
 #[async_trait::async_trait]
@@ -257,9 +256,6 @@ pub enum AgentEvent {
     AgentEnd {
         messages: Vec<AgentMessage>,
     },
-    /// A request to the model is about to go out. Every request opens with it,
-    /// retries included, and a `TurnEnd` closes it. Until the first streamed
-    /// event arrives, the agent is waiting for the model.
     TurnStart,
     TurnEnd {
         message: Box<AgentMessage>,
@@ -280,13 +276,9 @@ pub enum AgentEvent {
         error: Option<String>,
         summary: Option<String>,
         usage: Option<cupel_core::types::Usage>,
-        /// Effective context, including any pruning retained on failure.
-        /// Replaces the agent's messages; does not rewrite the session log.
         messages: Vec<AgentMessage>,
     },
     ThinkingBlocksRemoved {
-        /// Effective context after removing invalid thinking blocks.
-        /// Replaces the agent's messages; does not rewrite the session log.
         messages: Vec<AgentMessage>,
     },
     AutoRetry {

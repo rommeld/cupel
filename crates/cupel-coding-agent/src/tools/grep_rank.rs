@@ -1,26 +1,26 @@
 //! Ranking for the grep tool's `files` output mode.
 //!
-//! `outputMode: "files"` answers "Which files matter for this pattern?"
-//! with one line per file, and the order of that list is the whole point:
+//! `outputMode` set to `files` answers "Which files matter for this pattern?"
+//! with one line per file, and the order of that list is the whole point,
 //! a model reads the top entries first, so the file that defines the
 //! searched name has to come before the twenty files that merely use it,
 //! and test code has to come after production code. Four signals, all
 //! computed from what the search already produced (no index, no git, no
-//! file reads, nothing language-specific beyond a keyword list):
+//! file reads, nothing language specific beyond a keyword list),
 //!
 //! 1. a match line defines the searched name itself
-//!    (`pub struct Foo`, `func Foo(`, `class Foo:` for the pattern `Foo`);
+//!    (`pub struct Foo`, `func Foo(`, a Python class named `Foo` for the pattern `Foo`),
 //! 2. a match line is a definition of something that mentions the name
-//!    (`func (s *Store) WriteFoo(` is a loose query a model might send);
-//! 3. the file's bucket by path convention: source before tests before the
-//!    low-signal periphery (examples, fixtures, mocks, vendored code);
+//!    (`func (s *Store) WriteFoo(` is a loose query a model might send),
+//! 3. the file's bucket by path convention, source before tests before the
+//!    low signal periphery (examples, fixtures, mocks, vendored code),
 //! 4. the number of matches, capped so a busy file cannot outrank a quiet
 //!    one on volume alone.
 //!
 //! Ties keep path order, so the output is deterministic. Measured on pgr's
 //! public offline benchmark (real agent queries on entireio/cli, relevance
-//! = the files the agent went on to read): MRR 0.455 vs pgr's 0.405 and
-//! raw ripgrep's 0.32; Hit@1 40% vs 34% vs 26%.
+//! = the files the agent went on to read), MRR 0.455 vs pgr's 0.405 and
+//! raw ripgrep's 0.32, Hit@1 40% vs 34% vs 26%.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,8 +34,8 @@ use crate::search::{SearchMatch, SearchQuery, escape_regex};
 /// more relevant.
 const DENSITY_CAP: usize = 10;
 
-/// Where a file sits in the repository. Declared worst-first so the
-/// derived `Ord` doubles as the rank: `Source > Test > LowPriority`.
+/// Where a file sits in the repository. Declared worst first so the
+/// derived `Ord` doubles as the rank, `Source > Test > LowPriority`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Bucket {
     LowPriority,
@@ -101,13 +101,13 @@ impl Ranker {
         }
     }
 
-    /// Group `matches` by file and order the files most-relevant first.
-    /// `root` is the directory the search ran in; path conventions are
+    /// Group `matches` by file and order the files most relevant first.
+    /// `root` is the directory the search ran in, path conventions are
     /// checked relative to it, so a project living under `/home/me/test/`
     /// is not test code wholesale.
     #[must_use]
     pub fn rank(&self, matches: &[SearchMatch], root: &Path) -> Vec<FileSummary> {
-        // BTreeMap keeps files in path order, so equal-ranked files come
+        // BTreeMap keeps files in path order, so equal ranked files come
         // out alphabetically without a second sort key.
         let mut per_file: BTreeMap<&Path, Vec<&SearchMatch>> = BTreeMap::new();
         for m in matches {
@@ -117,8 +117,8 @@ impl Ranker {
             .into_iter()
             .map(|(path, lines)| self.summarize(path, root, &lines))
             .collect();
-        // sort_by_key is stable, so ties keep the path order from the map;
-        // Reverse turns the ascending sort into best-first.
+        // sort_by_key is stable, so ties keep the path order from the map,
+        // Reverse turns the ascending sort into best first.
         files.sort_by_key(|f| std::cmp::Reverse(f.sort_key()));
         files
     }
@@ -157,11 +157,11 @@ const MODIFIERS: &str = r"(?:pub(?:\([^)]*\))?|export|default|async|unsafe|exter
 /// common languages. Items are definitions at any indentation.
 const ITEM_KEYWORDS: &str = "fn|func|function|def|class|struct|enum|union|trait|interface|impl|type|typedef|mod|static|macro_rules!|record|protocol";
 /// Keywords that introduce a binding. Only a binding at column 0 is a
-/// definition (a module-level `const foo = ...`); indented ones are the
+/// definition (a module level `const foo = ...`), indented ones are the
 /// locals every function body is made of.
 const BINDING_KEYWORDS: &str = "let|var|const";
 
-/// "This line defines `pattern`": optional modifiers, one or two keywords
+/// "This line defines `pattern`", optional modifiers, one or two keywords
 /// (`typedef struct Foo`), optional generics, then the pattern itself.
 fn defines_name_pattern(pattern: &str, boundary: &str) -> String {
     format!(
@@ -169,7 +169,7 @@ fn defines_name_pattern(pattern: &str, boundary: &str) -> String {
     )
 }
 
-/// "This line is a definition of something": an item keyword after
+/// "This line is a definition of something", an item keyword after
 /// optional modifiers, or a binding keyword at column 0. Comment lines
 /// never qualify.
 fn definition_shaped_pattern() -> String {
@@ -179,7 +179,7 @@ fn definition_shaped_pattern() -> String {
 }
 
 /// pgr's buckets, by path convention only. The periphery is checked first
-/// so `vendor/tests/x.go` is low-priority, not test.
+/// so `vendor/tests/x.go` is low priority, not test.
 fn bucket_of(relative: &Path) -> Bucket {
     const LOW_DIRS: &[&str] = &[
         "example",
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn unembeddable_pattern_switches_only_the_name_signal_off() {
         // An anchored pattern is valid regex but can never match inside
-        // the name template: no panic, no name definitions. The shape
+        // the name template, no panic, no name definitions. The shape
         // signal still works.
         let ranker = Ranker::new(&query("^fn main"));
         assert!(!defines(&ranker, "fn main() {}"));
@@ -365,8 +365,8 @@ mod tests {
             [
                 "/project/src/foo.rs",       // defines the name, source
                 "/project/tests/it.rs",      // defines the name, test
-                "/project/examples/demo.rs", // defines the name, low-priority
-                "/project/src/builder.rs",   // definition-shaped, source
+                "/project/examples/demo.rs", // defines the name, low priority
+                "/project/src/builder.rs",   // definition shaped, source
                 "/project/src/user.rs",      // references only
             ]
         );

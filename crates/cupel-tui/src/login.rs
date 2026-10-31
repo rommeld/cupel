@@ -1,13 +1,13 @@
 //! `/login` background flows.
 //!
-//! A login waits on things the key handler must never wait on: a browser
-//! redirect hitting port 1455, or a device-code poll loop. So the flow
+//! A login waits on things the key handler must never wait on, a browser
+//! redirect hitting port 1455, or a device code poll loop. So the flow
 //! runs as a spawned task that talks back over a channel the exact
-//! shape of a run's `AgentEventStream`: the `select!` in mod.rs wakes on
+//! shape of a run's `AgentEventStream`, the `select!` in mod.rs wakes on
 //! [`LoginEvent`]s and the App turns them into transcript notices.
 //!
 //! The browser URL arrives as a notice, and the manual fallback is a second
-//! `/login openai-codex <redirect-url>` invocation racing the callback
+//! a manual Codex login with a redirect URL invocation racing the callback
 //! server.
 
 use std::path::PathBuf;
@@ -25,11 +25,8 @@ pub enum LoginState {
 
 /// What a login task reports back to the UI.
 pub enum LoginEvent {
-    /// Progress worth a transcript notice (the URL, the device code, ...).
     Notice(String),
-    /// Explicit state, rather than inferring an auth wait from notice text.
     Progress(LoginState, String),
-    /// Terminal: the flow finished. Ok carries a success summary.
     Done(Result<String, String>),
 }
 
@@ -38,7 +35,6 @@ pub struct LoginFlow {
     state: LoginState,
     events: tokio::sync::mpsc::UnboundedReceiver<LoginEvent>,
     cancel: CancellationToken,
-    /// The manual-paste channel (browser flow only). `take`n on first use.
     manual_code: Option<tokio::sync::oneshot::Sender<String>>,
 }
 
@@ -52,7 +48,7 @@ impl LoginFlow {
         self.state = state;
     }
 
-    /// The next event from the background task; None = channel closed.
+    /// The next event from the background task, None = channel closed.
     pub async fn next_event(&mut self) -> Option<LoginEvent> {
         self.events.recv().await
     }
@@ -74,15 +70,15 @@ impl LoginFlow {
 }
 
 /// Dropping the flow cancels its task one place instead of one per
-/// exit path (esc, /new login, hot-reload, quit).
+/// exit path (esc, /new login, hot reload, quit).
 impl Drop for LoginFlow {
     fn drop(&mut self) {
         self.cancel.cancel();
     }
 }
 
-/// Spawn the browser flow: authorize URL -> browser -> localhost:1455
-/// callback (or a pasted redirect) -> token exchange -> auth.json.
+/// Spawn the browser flow, authorize URL → browser → localhost1455
+/// callback (or a pasted redirect) → token exchange → auth.json.
 #[must_use]
 pub fn spawn_browser(home: Option<PathBuf>) -> LoginFlow {
     let (event_tx, events) = tokio::sync::mpsc::unbounded_channel();
@@ -91,7 +87,7 @@ pub fn spawn_browser(home: Option<PathBuf>) -> LoginFlow {
     let task_cancel = cancel.clone();
     tokio::spawn(async move {
         let result = tokio::select! {
-            // biased: a cancel that raced the finish line still wins
+            // biased, a cancel that raced the finish line still wins
             // the user asked to stop, so stop.
             biased;
             () = task_cancel.cancelled() => Err("login cancelled".to_string()),
@@ -108,7 +104,7 @@ pub fn spawn_browser(home: Option<PathBuf>) -> LoginFlow {
     }
 }
 
-/// Spawn the device-code flow (headless: SSH sessions, containers).
+/// Spawn the device code flow (headless, SSH sessions, containers).
 #[must_use]
 pub fn spawn_device(home: Option<PathBuf>) -> LoginFlow {
     let (event_tx, events) = tokio::sync::mpsc::unbounded_channel();
@@ -142,8 +138,8 @@ async fn browser_flow(
     let flow = openai_codex::authorization_flow();
 
     // Bind before opening the browser, so a fast redirect cannot land on
-    // a closed port. A taken port (another Codex-family login?) degrades
-    // to paste-only instead of failing the login.
+    // a closed port. A taken port (another Codex family login?) degrades
+    // to paste only instead of failing the login.
     let server = match CallbackServer::bind().await {
         Ok(server) => Some(server),
         Err(e) => {
@@ -171,13 +167,13 @@ async fn browser_flow(
         ),
     ));
 
-    // The callback server and manual entry race: whichever produces a code
+    // The callback server and manual entry race, whichever produces a code
     // first settles the login.
     let code = {
         let served = async {
             match &server {
                 Some(server) => server.wait_for_code(&flow.state).await,
-                // No server: this branch must never win, only the paste can.
+                // No server, this branch must never win, only the paste can.
                 None => std::future::pending().await,
             }
         };
@@ -239,7 +235,7 @@ fn manual_input_to_code(input: &str, state: &str) -> Result<String, String> {
     code.ok_or_else(|| "no authorization code in the pasted input".to_string())
 }
 
-/// Persist and summarize. Saving is the login's last step: a credential
+/// Persist and summarize. Saving is the login's last step, a credential
 /// that never reaches auth.json is a login the next session forgets.
 fn finish(home: Option<PathBuf>, credential: &OAuthCredential) -> Result<String, String> {
     match cupel_coding_agent::auth::save_credential(
@@ -256,9 +252,9 @@ fn finish(home: Option<PathBuf>, credential: &OAuthCredential) -> Result<String,
     }
 }
 
-/// Open a URL in the platform browser:
-/// never through a shell (cmd.exe re-parses metacharacters, which would
-/// make URLs injectable), always detached, always best-effort (the
+/// Open a URL in the platform browser,
+/// never through a shell (cmd.exe re parses metacharacters, which would
+/// make URLs injectable), always detached, always best effort (the
 /// notice above shows the URL either way).
 fn open_browser(url: &str) {
     let (command, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
@@ -276,7 +272,7 @@ fn open_browser(url: &str) {
         .spawn();
 }
 
-/// Test-only flow around dummy channels lets App tests exercise the
+/// Test only flow around dummy channels lets App tests exercise the
 /// esc/paste/event paths without a server, browser, or network.
 #[cfg(test)]
 pub(crate) fn stub_flow() -> (
@@ -286,7 +282,7 @@ pub(crate) fn stub_flow() -> (
     tokio::sync::oneshot::Receiver<String>,
 ) {
     let (event_tx, events) = tokio::sync::mpsc::unbounded_channel();
-    // The receiver is handed out: a dropped receiver would make every
+    // The receiver is handed out, a dropped receiver would make every
     // paste fail as "already used" (oneshot send errors then).
     let (code_tx, code_rx) = tokio::sync::oneshot::channel();
     let cancel = CancellationToken::new();
@@ -329,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn manual_code_channel_is_single_use() {
         // A LoginFlow shell around dummy channels no server, no
-        // browser, no network; only the paste state machine.
+        // browser, no network, only the paste state machine.
         let (_event_tx, events) = tokio::sync::mpsc::unbounded_channel();
         let (code_tx, mut code_rx) = tokio::sync::oneshot::channel();
         let mut flow = LoginFlow {
@@ -366,7 +362,7 @@ mod tests {
         };
         assert!(!observed.is_cancelled());
         drop(flow);
-        // This is the one line that makes esc, /login-again, hot-reload,
+        // This is the one line that makes esc, /login again, hot reload,
         // and quit all stop the background task.
         assert!(observed.is_cancelled());
     }

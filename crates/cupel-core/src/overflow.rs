@@ -1,32 +1,32 @@
-//! Context-overflow detection.
+//! Context overflow detection.
 //!
 //! When the transcript outgrows the model's context window, providers fail
 //! in three different ways. The caller must recognize all of them to
-//! trigger compaction instead of surfacing a dead-end error:
+//! trigger compaction instead of surfacing a dead end error,
 //!
-//! 1. **Error-based** (most providers): `stop_reason: Error` with a
-//!    provider-specific message ("prompt is too long", "exceeds the context
+//! 1. **Error based** (most providers), `stop_reason` set to `Error` with a
+//!    provider specific message ("prompt is too long", "exceeds the context
 //!    window", ...). Matched against a pattern table below.
-//! 2. **Silent acceptance** (z.ai style): the request "succeeds" but
+//! 2. **Silent acceptance** (z.ai style), the request "succeeds" but
 //!    `usage.input` exceeds the context window.
-//! 3. **Silent truncation** (Xiaomi MiMo style): input is truncated to fill
+//! 3. **Silent truncation** (Xiaomi MiMo style), input is truncated to fill
 //!    the window exactly, leaving no room to generate. This is detected as
-//!    `stop_reason: Length` with zero output and a full window.
+//!    `stop_reason` set to `Length` with zero output and a full window.
 //!
-//! Pattern matching uses the same compression trick as [`crate::retry`]
+//! Pattern matching uses the same compression trick as `retry`
 //! (lowercase, alphanumerics only) instead of regexes.
 
 use crate::retry::{compress, legacy_http_status};
 use crate::types::{AssistantMessage, ErrorKind, StopReason};
 
-/// Overflow indicators. Multi-part entries require all parts present.
+/// Overflow indicators. Multi part entries require all parts present.
 /// Comments name the provider whose wording each entry matches.
 const OVERFLOW_PATTERNS: &[&[&str]] = &[
     &["promptistoolong"],                      // Anthropic (token overflow)
     &["requesttoolarge"],                      // Anthropic (byte overflow, HTTP 413)
     &["inputistoolongforrequestedmodel"],      // Amazon Bedrock
     &["exceedsthecontextwindow"],              // OpenAI (Completions & Responses)
-    &["exceeds", "maximumcontextlength"],      // OpenAI-compatible proxies (LiteLLM)
+    &["exceeds", "maximumcontextlength"],      // OpenAI compatible proxies (LiteLLM)
     &["inputtokencount", "exceedsthemaximum"], // Google (Gemini)
     &["maximumpromptlengthis"],                // xAI (Grok)
     &["reducethelengthofthemessages"],         // Groq
@@ -47,7 +47,7 @@ const OVERFLOW_PATTERNS: &[&[&str]] = &[
 ];
 
 /// Messages matching these are not overflow even when an overflow pattern
-/// also matches. Example: Bedrock throttling says "Too many tokens, please
+/// also matches. Example, Bedrock throttling says "Too many tokens, please
 /// wait before trying again" because that's rate limiting, not overflow.
 const NON_OVERFLOW_PATTERNS: &[&str] = &[
     "throttling",
@@ -59,7 +59,7 @@ const NON_OVERFLOW_PATTERNS: &[&str] = &[
 /// Overflow errors arrive as provider text or as HTTP 400, 413 or 422. A
 /// rate limit can use the same words ("too many tokens"), so an explicit
 /// status outside that set rules overflow out, whether it comes from the
-/// error kind or from a status wrapper in the text ("Error Code 429: ...").
+/// error kind or from a status wrapper in the text ("Error Code 429, ...").
 /// The retry check reads the status the same way.
 fn may_report_overflow(kind: Option<ErrorKind>, error_message: &str) -> bool {
     let status = match kind {
@@ -71,11 +71,11 @@ fn may_report_overflow(kind: Option<ErrorKind>, error_message: &str) -> bool {
 }
 
 /// Does this assistant message indicate the request overflowed the model's
-/// context window? `context_window` (tokens) enables the silent-overflow
-/// checks; pass 0 to skip them.
+/// context window? `context_window` (tokens) enables the silent overflow
+/// checks, pass 0 to skip them.
 #[must_use]
 pub fn is_context_overflow(message: &AssistantMessage, context_window: u64) -> bool {
-    // Case 1: explicit overflow error.
+    // Case 1, explicit overflow error.
     if message.stop_reason == StopReason::Error
         && let Some(error_message) = &message.error_message
         && may_report_overflow(message.error_kind, error_message)
@@ -98,12 +98,12 @@ pub fn is_context_overflow(message: &AssistantMessage, context_window: u64) -> b
     }
     let input_tokens = message.usage.input + message.usage.cache_read;
 
-    // Case 2: silent acceptance means "success" with more input than fits.
+    // Case 2, silent acceptance means "success" with more input than fits.
     if message.stop_reason == StopReason::Stop && input_tokens > context_window {
         return true;
     }
 
-    // Case 3: silent truncation means the window is full and generation got
+    // Case 3, silent truncation means the window is full and generation got
     // zero tokens of room.
     if message.stop_reason == StopReason::Length
         && message.usage.output == 0
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn throttling_that_mentions_tokens_is_not_overflow() {
-        // Bedrock: matches "too many tokens" but the prefix excludes it.
+        // Bedrock, matches "too many tokens" but the prefix excludes it.
         assert!(!is_context_overflow(
             &message(
                 StopReason::Error,
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn status_wrappers_in_the_text_decide_like_error_kinds() {
-        // A gateway reports a rate limit mid-stream with overflow-like words:
+        // A gateway reports a rate limit mid stream with overflow like words,
         // the 429 makes it a retry, not a compaction.
         let rate_limit = message(
             StopReason::Error,
@@ -256,7 +256,7 @@ mod tests {
             &message(StopReason::Length, None, usage),
             200_000
         ));
-        // Same shape but output was generated: an ordinary length stop.
+        // Same shape but output was generated, an ordinary length stop.
         let usage = Usage {
             input: 199_500,
             output: 400,

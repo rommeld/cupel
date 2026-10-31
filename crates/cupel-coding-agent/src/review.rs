@@ -1,37 +1,37 @@
-//! The `/review` built-in: bundle code into a review prompt.
+//! The `/review` built in, bundle code into a review prompt.
 //!
-//! Unlike the other built-ins, `/review` is not UI-local. It builds a
+//! Unlike the other built ins, `/review` is not UI local. It builds a
 //! prompt (files or a git diff, with truncation) and the frontend sends it
 //! through the normal prompt path. Gathering is synchronous filesystem/git
-//! work, cheap enough for the TUI's key handler; the actual model call
+//! work, cheap enough for the TUI's key handler, the actual model call
 //! then runs through each frontend's usual async machinery.
 //!
-//! Invocations:
-//! - `/review`: the whole project (cwd, gitignore-aware)
-//! - `/review <path> [<path>...]`: specific files and/or directories
-//! - `/review --diff`: the current git diff (HEAD vs working tree)
+//! Invocations,
+//! * `/review`, the whole project (cwd, gitignore aware)
+//! * `/review <path> [<path>...]`, specific files and/or directories
+//! * review with the diff option, the current git diff (HEAD vs working tree)
 //!
-//! Content limits lean on `truncate.rs`: a single explicitly named file
-//! gets the full tool budget; files swept up by a directory walk share a
-//! smaller per-file budget plus a global cap, so `/review` on a large repo
+//! Content limits lean on `truncate.rs`, a single explicitly named file
+//! gets the full tool budget, files swept up by a directory walk share a
+//! smaller per file budget plus a global cap, so `/review` on a large repo
 //! produces a bounded prompt instead of a context explosion.
 
 use std::path::{Path, PathBuf};
 
 use crate::truncate::{TruncationOptions, format_size, truncate_head};
 
-/// Per-file budget when a directory walk collects many files.
+/// Per file budget when a directory walk collects many files.
 const WALK_FILE_OPTIONS: TruncationOptions = TruncationOptions {
     max_lines: Some(400),
     max_bytes: Some(16 * 1024),
 };
-/// Budget for one explicitly named file (and for the diff): the standard
-/// tool-output budget from truncate.rs.
+/// Budget for one explicitly named file (and for the diff), the standard
+/// tool output budget from truncate.rs.
 const EXPLICIT_OPTIONS: TruncationOptions = TruncationOptions {
     max_lines: None,
     max_bytes: None,
 };
-/// Walk caps: at most this many files, and the whole bundle stops growing
+/// Walk caps, at most this many files, and the whole bundle stops growing
 /// past this many bytes (whichever hits first).
 const MAX_WALK_FILES: usize = 40;
 const MAX_BUNDLE_BYTES: usize = 150 * 1024;
@@ -41,9 +41,9 @@ const INSTRUCTIONS: &str = "Review the following code for correctness bugs, secu
      worthwhile simplifications. Be specific: cite file paths and line numbers, explain why each \
      finding is a problem, and rank findings by severity. Do not modify any files - report only.";
 
-/// Build the `/review` prompt. `args` are the already-split command
-/// arguments; relative paths resolve against `cwd`. `Err` is a
-/// user-facing message (unknown path, no diff, ...). Nothing is sent.
+/// Build the `/review` prompt. `args` are the already split command
+/// arguments, relative paths resolve against `cwd`. `Err` is a
+/// user facing message (unknown path, no diff, ...). Nothing is sent.
 pub fn build_review_prompt(cwd: &Path, args: &[String]) -> Result<String, String> {
     let wants_diff = args.iter().any(|a| a == "--diff");
     if wants_diff && args.len() > 1 {
@@ -55,7 +55,7 @@ pub fn build_review_prompt(cwd: &Path, args: &[String]) -> Result<String, String
 
     let mut bundle = String::new();
     if args.is_empty() {
-        // Whole-project review: sweep the cwd.
+        // Whole project review, sweep the cwd.
         collect_directory(cwd, cwd, &mut bundle);
     } else {
         for arg in args {
@@ -77,7 +77,7 @@ pub fn build_review_prompt(cwd: &Path, args: &[String]) -> Result<String, String
     Ok(format!("{INSTRUCTIONS}\n\n{bundle}"))
 }
 
-/// `git diff HEAD` (staged + unstaged vs the last commit); falls back to
+/// `git diff HEAD` (staged + unstaged vs the last commit), falls back to
 /// plain `git diff` for repos without a commit yet.
 fn build_diff_prompt(cwd: &Path) -> Result<String, String> {
     let diff = run_git_diff(cwd, &["diff", "HEAD"])
@@ -117,7 +117,7 @@ fn run_git_diff(cwd: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Absolute args stay as-is; relative ones anchor at the cwd.
+/// Absolute args stay as is, relative ones anchor at the cwd.
 fn resolve(cwd: &Path, arg: &str) -> PathBuf {
     let path = Path::new(arg);
     if path.is_absolute() {
@@ -127,8 +127,8 @@ fn resolve(cwd: &Path, arg: &str) -> PathBuf {
     }
 }
 
-/// Sweep a directory into the bundle: gitignore-aware (the same walker
-/// knobs as the grep tool and `@path` autocomplete: hidden files in,
+/// Sweep a directory into the bundle, gitignore aware (the same walker
+/// knobs as the grep tool and `@path` autocomplete, hidden files in,
 /// `.git` out), capped by file count and total bundle size, deterministic
 /// order. Skipped files are summarized so the model knows what it is not
 /// seeing because a silently partial review reads as a complete one.
@@ -154,7 +154,7 @@ fn collect_directory(dir: &Path, cwd: &Path, bundle: &mut String) {
         if push_file(path, cwd, WALK_FILE_OPTIONS, bundle) {
             included += 1;
         } else {
-            omitted += 1; // unreadable / not UTF-8 text (binaries)
+            omitted += 1; // unreadable / not UTF 8 text (binaries)
         }
     }
     if omitted > 0 {
@@ -166,13 +166,13 @@ fn collect_directory(dir: &Path, cwd: &Path, bundle: &mut String) {
     }
 }
 
-/// Append one file as a delimited section; false = skipped (unreadable or
-/// not UTF-8, i.e. binaries).
+/// Append one file as a delimited section, false = skipped (unreadable or
+/// not UTF 8, i.e. binaries).
 fn push_file(path: &Path, cwd: &Path, options: TruncationOptions, bundle: &mut String) -> bool {
     let Ok(content) = std::fs::read_to_string(path) else {
         return false;
     };
-    // Headers show cwd-relative paths so findings cite paths the user can
+    // Headers show cwd relative paths so findings cite paths the user can
     // click/open directly.
     let display = path.strip_prefix(cwd).unwrap_or(path).display();
     let result = truncate_head(&content, options);
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn large_files_are_truncated_with_a_note() {
         let cwd = temp_root("large");
-        // 3000 lines exceeds the 2000-line default budget.
+        // 3000 lines exceeds the 2000 line default budget.
         let big: String = (0..3000).fold(String::new(), |mut s, i| {
             use std::fmt::Write as _;
             let _ = writeln!(s, "line {i}");
@@ -297,13 +297,13 @@ mod tests {
         assert!(prompt.contains("-old"));
         assert!(prompt.contains("+new"));
 
-        // Clean tree: a clear message instead of an empty prompt.
+        // Clean tree, a clear message instead of an empty prompt.
         git(&["add", "."]);
         git(&["commit", "-qm", "second"]);
         let err = build_review_prompt(&cwd, &args(&["--diff"])).unwrap_err();
         assert!(err.contains("no changes"));
 
-        // Refuse --diff mixed with paths because it is ambiguous.
+        // Refuse diff mixed with paths because it is ambiguous.
         let err = build_review_prompt(&cwd, &args(&["--diff", "x.rs"])).unwrap_err();
         assert!(err.contains("cannot be combined"));
     }

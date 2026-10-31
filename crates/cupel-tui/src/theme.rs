@@ -1,24 +1,24 @@
 //! The TUI palette every style the transcript and chrome use, in one [`Theme`] value.
 //!
-//! As a struct, the visual hierarchy of turn is a single reviewable unit:
+//! As a struct, the visual hierarchy of turn is a single reviewable unit,
 //!
 //! `task` and `answer` are the emphasized endpoints of a turn (what was asked, what
 //! came out).
-//! Reasoning and tool traffic are the de-emphasized middle, errors/notices keep their
+//! Reasoning and tool traffic are the de emphasized middle, errors/notices keep their
 //! conventional terminal colors.
 //!
-//! A theme is data, not a set of global constants: the render pass gets the active
+//! A theme is data, not a set of global constants, the render pass gets the active
 //! `&Theme` as a parameter and reads its fields, so a different theme restyles the
 //! whole screen on the next frame.
 //!
-//! [`CUPEL`] is the built-in default, using the terminal's own colors. Other
-//! themes come from JSON files in `~/.cupel/themes` (see [`Theme::from_file`]).
-//! [`registry`] hands them out as `Arc<Theme>`: shared, reference-counted values
+//! [`CUPEL`] is the built in default, using the terminal's own colors. Other
+//! themes come from JSON files in `~/.cupel/themes` (see `from_file`).
+//! [`registry`] hands them out as `Arc<Theme>`, shared, reference counted values
 //! that the sessions, the App and the event loop can all hold at once.
 //!
-//! CUPEL is a true `const`: ratatui`s `Style::new()`, `fg`, `bg`, and `add_modifier`
+//! CUPEL is a true `const`, ratatui's `Style` constructor, `fg`, `bg`, and `add_modifier`
 //! are const fns. Note the chained `add_modifier` calls where two modifiers combine.
-//! The `|` operator (BitOr) is not a const fn, so `Modifier::DIM | Modifier::ITALIC`
+//! The `|` operator (BitOr) is not a const fn, so combining `DIM` and `ITALIC` with it
 //! would not compile here.
 
 use std::borrow::Cow;
@@ -33,94 +33,50 @@ use ratatui::style::{Color, Modifier, Style};
 /// look for the same role.
 #[derive(Debug, Clone)]
 pub struct Theme {
-    /// The lowercase id used by `/themes` and settings.json. The built-in theme
-    /// borrows a string literal; a theme built at runtime owns its string.
     pub id: Cow<'static, str>,
-    /// The name shown by `/themes`.
     pub name: Cow<'static, str>,
     pub appearance: Appearance,
-    /// The file a user theme was read from; `None` for `CUPEL`.
-    /// `/themes` shows it so the file can be found and edited.
     pub file: Option<PathBuf>,
-    /// Painted over every cell before other styles. Empty in `CUPEL`,
-    /// which keeps the terminal's own foreground and background.
     pub base: Style,
-    /// User messages in the conversation.
     pub task: Style,
-    /// The open `ask_user` question: bold, in the busy input border's color.
     pub question: Style,
-    /// Mid-turn assistant prose (commentary between tool calls).
     pub assistant: Style,
-    /// The turn's final answer: the emphasized counterpart to `task`.
     pub answer: Style,
-    /// Model reasoning and context summaries.
     pub reasoning: Style,
-    /// A tool call header (`$ cargo test`, `edite src/x.rs`).
     pub tool_header: Style,
-    /// De-emphasized detail lines: pending markers, ok tool output, overflow, notes,
-    /// usage summaries.
     pub detail: Style,
-    /// Errors and failed tool results.
     pub error: Style,
-    /// Status notices (retry, compaction, /provider listings).
     pub notice: Style,
-    /// Diff lines insed a tool cell: added, removed, context. Green/red is the universal
-    /// diff convention. The context stays receded.
     pub diff_add: Style,
     pub diff_del: Style,
     pub diff_ctx: Style,
-    /// Input border while a run is active / while idle.
     pub input_border_busy: Style,
     pub input_border_idle: Style,
-    /// Box titles and the footer line.
     pub chrome: Style,
-    /// The " ↓ N more " overlay while scrolled up.
     pub scroll_marker: Style,
-    /// Border and title of the transcript frame.
     pub pane_border: Style,
-    /// Background of the click-selected conversation block (Ctrl+O copies it). Set only
-    /// a background here: a Line's own style paints under its spans, so the highlight
-    /// tints the row while evety span keeps its foreground color.
     pub selected: Style,
-    /// The scrollbar thumb; the track reuses the pane border color.
     pub scrollbar_thumb: Style,
-    /// Popup rows (autocomplete, the trust choice, the sidebar): the selected one, and the
-    /// rest.
     pub popup_selected: Style,
     pub popup_row: Style,
 
-    // Markdown patch styles: applied onto a cell's base style via Style::patch. Set fields
-    // win, unset fields keep the base. In CUPEL only code and links set a color, so a
-    // heading in an Answer cell stays in the answer color. Palette themes also color
-    // headings, bold, and italic, the way Zed's editor does.
-    /// H1/H2: bold + underlined (H3-H6 get the same style without the underline).
     pub md_heading: Style,
     pub md_bold: Style,
     pub md_italic: Style,
     pub md_strike: Style,
-    /// Inline code.
     pub md_code: Style,
-    /// Fenced code blocks: a full-width panel. Not a patch: code blocks ignore the cell's
-    /// style.
     pub md_code_block: Style,
-    /// Blockquotes: receded like reasoning, but inside the cell's color.
     pub md_quote: Style,
-    /// List bullets and ordered-list numbers.
     pub md_bullet: Style,
-    /// Link text.
     pub md_link: Style,
-    /// The "(url)" suffix behind a link whose text differs from its target.
     pub md_link_url: Style,
-    /// Table separators and horizontal rules.
     pub md_rule: Style,
-    /// Table header row.
     pub md_table_header: Style,
 }
 
 /// Which background a theme is made for, as shown by `/themes`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Appearance {
-    /// Draws on the terminal's own background.
     Terminal,
     Dark,
     Light,
@@ -136,15 +92,15 @@ impl core::fmt::Display for Appearance {
     }
 }
 
-/// cupel's own look: the terminal's 16 named colors plus three gray surfaces from the
-/// xtrem-256 palette.
+/// cupel's own look, the terminal's 16 named colors plus three gray surfaces from the
+/// xtrem 256 palette.
 pub const CUPEL: Theme = Theme {
     id: Cow::Borrowed("cupel"),
     name: Cow::Borrowed("Cupel"),
     appearance: Appearance::Terminal,
     file: None,
     base: Style::new(),
-    // White on gray surface (xtrem-256 index 240, #585858).
+    // White on gray surface (xtrem 256 index 240, #585858).
     task: Style::new().fg(Color::White).bg(Color::Indexed(240)),
     question: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     assistant: Style::new().fg(Color::White).add_modifier(Modifier::ITALIC),
@@ -165,7 +121,7 @@ pub const CUPEL: Theme = Theme {
     chrome: Style::new().add_modifier(Modifier::DIM),
     scroll_marker: Style::new().fg(Color::Black).bg(Color::Yellow),
     pane_border: Style::new().fg(Color::DarkGray),
-    // xtrem-256 index 237 (#3a3a3a).
+    // xtrem 256 index 237 (#3a3a3a).
     selected: Style::new().bg(Color::Indexed(237)),
     scrollbar_thumb: Style::new().fg(Color::DarkGray),
     // The selected row inverts, the rest match the tool color.
@@ -179,7 +135,7 @@ pub const CUPEL: Theme = Theme {
     md_strike: Style::new().add_modifier(Modifier::CROSSED_OUT),
     // cupel's cyan accent family (tools, popups).
     md_code: Style::new().fg(Color::Cyan),
-    // xtrem-256 index 235 (#262626): subtler and more portable than truecolor, and
+    // xtrem 256 index 235 (#262626), subtler and more portable than truecolor, and
     // visually "a surface", not a color. The terminal's default forground stays.
     md_code_block: Style::new().bg(Color::Indexed(235)),
     md_quote: Style::new()
@@ -195,39 +151,23 @@ pub const CUPEL: Theme = Theme {
     md_table_header: Style::new().add_modifier(Modifier::BOLD),
 };
 
-/// The 15 colors from which [`Theme::from_palette`] builds every style role.
+/// The 15 colors from which `from_palette` builds every style role.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
-    /// Screen background.
     pub bg: Color,
-    /// Ordinary text.
     pub fg: Color,
-    /// Code blocks and popups.
     pub surface: Color,
-    /// User message background.
     pub raised: Color,
-    /// Click-selected block background.
     pub selection: Color,
-    /// Pane borders and idle input border.
     pub border: Color,
-    /// Footer, titles, diff context, scrollbar thumb.
     pub muted: Color,
-    /// Errors and removed diff lines.
     pub red: Color,
-    /// Added diff lines.
     pub green: Color,
-    /// Notices and busy input border.
     pub yellow: Color,
-    /// Final answer.
     pub magenta: Color,
-    /// Tools, inline code, list bullets, popup rows.
     pub cyan: Color,
-    // Markdown accents: the colors Zed's editor gives these elements.
-    /// Headings (Zed's `syntax.title`).
     pub heading: Color,
-    /// Bold and italic text (Zed's `syntax.emphasis`).
     pub emphasis: Color,
-    /// Link text (Zed's `syntax.link_text`).
     pub link: Color,
 }
 
@@ -306,7 +246,7 @@ impl Theme {
         }
     }
 
-    /// A theme from a file in `~/.cupel/themes`: palette colors mapped to
+    /// A theme from a file in `~/.cupel/themes`, palette colors mapped to
     /// style roles, with the file's id, name, and path.
     #[must_use]
     pub fn from_file(file: &ThemeFile) -> Self {
@@ -348,7 +288,7 @@ const fn color(Rgb(red, green, blue): Rgb) -> Color {
 
 /// Every theme `/themes` can switch to, shared without copying its styles.
 /// `cupel` comes first at `themes[0]` (the default), then theme files in
-/// file-name order. A file with an existing id replaces it in place.
+/// file name order. A file with an existing id replaces it in place.
 #[must_use]
 pub fn registry(files: &[ThemeFile]) -> Vec<Arc<Theme>> {
     let mut themes = vec![Arc::new(CUPEL)];
@@ -368,7 +308,7 @@ pub fn find(themes: &[Arc<Theme>], id: &str) -> Option<Arc<Theme>> {
     themes.iter().find(|theme| theme.id == id).cloned()
 }
 
-/// Resolve a settings.json theme id. No value means the default; an unknown
+/// Resolve a settings.json theme id. No value means the default, an unknown
 /// id returns a warning so callers can fall back without blocking startup.
 pub fn from_settings(themes: &[Arc<Theme>], id: Option<&str>) -> Result<Arc<Theme>, String> {
     let Some(id) = id else {
@@ -496,7 +436,7 @@ mod tests {
             file("nightfox", "My Nightfox"),
         ]);
 
-        // Only CUPEL is built in; both file themes are appended in input order.
+        // Only CUPEL is built in, both file themes are appended in input order.
         let ids: Vec<&str> = themes.iter().map(|theme| theme.id.as_ref()).collect();
         assert_eq!(ids, ["cupel", "gruvbox-dark", "nightfox"]);
         assert_eq!(themes[2].name, "My Nightfox");
@@ -514,7 +454,7 @@ mod tests {
 
     #[test]
     fn palette_markdown_uses_zeds_editor_colors() {
-        // Nightfox's values from Zed's theme file: text, syntax.title,
+        // Nightfox's values from Zed's theme file, text, syntax.title,
         // syntax.emphasis, syntax.link_text.
         let nightfox = find(&example_themes(), "nightfox").unwrap();
         assert_eq!(nightfox.base.fg, Some(Color::Rgb(0xd6, 0xd6, 0xd7)));
@@ -533,7 +473,7 @@ mod tests {
         assert_eq!(color(Rgb(0x12, 0x34, 0x56)), Color::Rgb(0x12, 0x34, 0x56));
     }
 
-    /// WCAG contrast ratio: 4.5 is the body-text minimum.
+    /// WCAG contrast ratio, 4.5 is the body text minimum.
     fn contrast(first: Option<Color>, second: Option<Color>) -> f64 {
         let luminance = |color: Option<Color>| {
             let Some(Color::Rgb(red, green, blue)) = color else {

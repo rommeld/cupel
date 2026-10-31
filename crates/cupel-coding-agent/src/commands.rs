@@ -1,13 +1,13 @@
-//! Slash commands: `/name args` in the input.
+//! Slash commands, `/name args` in the input.
 //!
-//! Two kinds, dispatched in this order by the frontends:
+//! Two kinds, dispatched in this order by the frontends,
 //!
-//! 1. **Built-ins** (`/help`, `/new`, `/model`, ...), intercepted by the UI
+//! 1. **Built ins** (`/help`, `/new`, `/model`, ...), intercepted by the UI
 //!    and never sent to the model.
-//! 2. **Prompt templates**: markdown files in `<root>/prompts/*.md` (same
-//!    resource roots as AGENTS.md: cupel home, project `.cupel/`, project
+//! 2. **Prompt templates**, markdown files in `<root>/prompts/*.md` (same
+//!    resource roots as AGENTS.md, cupel home, project `.cupel/`, project
 //!    root). `/name args` expands the file's
-//!    body with bash-style argument substitution and sends that as the
+//!    body with bash style argument substitution and sends that as the
 //!    prompt. This is how users package reusable prompts.
 //!
 //! Anything else starting with `/` passes through to the model as literal
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::resources::split_frontmatter;
 use crate::spinoff::{SpinoffError, SpinoffName};
 
-/// Split a command's argument string bash-style: whitespace separates,
+/// Split a command's argument string bash style, whitespace separates,
 /// single or double quotes group.
 #[must_use]
 pub fn parse_command_args(args: &str) -> Vec<String> {
@@ -46,15 +46,15 @@ pub fn parse_command_args(args: &str) -> Vec<String> {
 }
 
 /// Substitute argument placeholders in a template body. Supported forms
-/// (all 1-indexed, matching bash):
+/// (all 1 indexed, matching bash),
 ///
-/// - `$1`, `$2`, ...: positional argument (empty when missing)
-/// - `$@` / `$ARGUMENTS`: all arguments joined with spaces
-/// - `${N:-default}`: positional N, or `default` when missing/empty
-/// - `${@:N}`: arguments from N onward
-/// - `${@:N:L}`: L arguments starting at N
+/// * `$1`, `$2`, ..., positional argument (empty when missing)
+/// * `$@` / `$ARGUMENTS`, all arguments joined with spaces
+/// * Braced positional N with a colon, hyphen and default for missing or empty values
+/// * Braced `@` followed by a colon and N for arguments from N onward
+/// * Braced `@` with colon separated N and L for L arguments starting at N
 ///
-/// Replacement is single-pass over the template only: argument values that
+/// Replacement is single pass over the template only, argument values that
 /// contain `$1` etc. are not recursively substituted.
 #[must_use]
 pub fn substitute_args(content: &str, args: &[String]) -> String {
@@ -113,7 +113,7 @@ pub fn substitute_args(content: &str, args: &[String]) -> String {
     out
 }
 
-/// The `${...}` forms: `N:-default`, `@:N`, `@:N:L`. `None` = leave literal.
+/// Braced positional defaults and argument slices. `None` leaves the input literal.
 fn substitute_braced(inner: &str, args: &[String]) -> Option<String> {
     if let Some((number, default)) = inner.split_once(":-") {
         let index = number.parse::<usize>().ok()?;
@@ -128,7 +128,7 @@ fn substitute_braced(inner: &str, args: &[String]) -> Option<String> {
             Some((s, l)) => (s, Some(l.parse::<usize>().ok()?)),
             None => (slice, None),
         };
-        // Bash convention: args are 1-indexed and ${@:0} behaves like ${@:1}.
+        // Bash convention, argument slices starting at zero behave like those starting at one.
         let start = start_str.parse::<usize>().ok()?.saturating_sub(1);
         let sliced = args.get(start..).unwrap_or(&[]);
         let sliced = match length {
@@ -140,7 +140,7 @@ fn substitute_braced(inner: &str, args: &[String]) -> Option<String> {
     None
 }
 
-/// One `/name`-invocable prompt loaded from `<root>/prompts/<name>.md`.
+/// One `/name` invocable prompt loaded from `<root>/prompts/<name>.md`.
 #[derive(Debug, Clone)]
 pub struct PromptTemplate {
     pub name: String,
@@ -149,9 +149,9 @@ pub struct PromptTemplate {
     pub path: PathBuf,
 }
 
-/// Load templates from `<root>/prompts/*.md` (non-recursive) for each
+/// Load templates from `<root>/prompts/*.md` (non recursive) for each
 /// resource root. Later roots win name collisions (project overrides the
-/// binary-installation defaults), mirroring the context-file precedence.
+/// binary installation defaults), mirroring the context file precedence.
 #[must_use]
 pub fn load_prompt_templates(roots: &[PathBuf]) -> Vec<PromptTemplate> {
     let mut templates: Vec<PromptTemplate> = Vec::new();
@@ -165,7 +165,7 @@ pub fn load_prompt_templates(roots: &[PathBuf]) -> Vec<PromptTemplate> {
                 continue;
             }
             if let Some(template) = load_template(&path) {
-                // Same-name template from a later root replaces the earlier.
+                // Same name template from a later root replaces the earlier.
                 templates.retain(|t| t.name != template.name);
                 templates.push(template);
             }
@@ -180,7 +180,7 @@ fn load_template(path: &Path) -> Option<PromptTemplate> {
     let (frontmatter, body) = split_frontmatter(&raw);
     let name = path.file_stem()?.to_string_lossy().into_owned();
 
-    // Description: frontmatter, else the first non-empty body line (60 chars).
+    // Description, frontmatter, else the first non empty body line (60 chars).
     let description = frontmatter
         .iter()
         .find(|(key, _)| key == "description")
@@ -217,8 +217,8 @@ pub fn expand_prompt_template(text: &str, templates: &[PromptTemplate]) -> Optio
     Some(substitute_args(&template.content, &args))
 }
 
-/// A UI-handled command: never sent to the model. The frontends match on
-/// the name; this table exists for `/help` and autocomplete.
+/// A UI handled command, never sent to the model. The frontends match on
+/// the name, this table exists for `/help` and autocomplete.
 pub struct BuiltinCommand {
     pub name: &'static str,
     pub description: &'static str,
@@ -392,7 +392,7 @@ impl core::str::FromStr for TeamCommand {
     }
 }
 
-/// The commit message of `merge <name> <message>`: the rest of the lines as typed,
+/// The commit message of `merge <name> <message>`, the rest of the lines as typed,
 /// without one pair of surrounding quotes. `None` when thre is none.
 fn merge_message(args: &str) -> Option<String> {
     let (_merge, rest) = args.trim().split_once(char::is_whitespace)?;
@@ -510,7 +510,7 @@ mod tests {
             " auth  fast ".parse::<SpinoffCommand>().unwrap(),
             with_preset
         );
-        // The name rules come from SpinoffName; a third word is a usage error.
+        // The name rules come from SpinoffName, a third word is a usage error.
         let bad_name = "Auth".parse::<SpinoffCommand>();
         assert!(matches!(bad_name, Err(SpinoffError::Blocked(_))));
         let error = "auth fast extra".parse::<SpinoffCommand>().unwrap_err();
