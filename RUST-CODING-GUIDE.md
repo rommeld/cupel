@@ -2,8 +2,10 @@
 
 Source: [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html).
 This document summarizes that page only; linked documents have not been incorporated.
-Platform-specific infrastructure rules are omitted. Project-specific additions, including
-rules retained from the former `AGENTS.md` coding guidelines, are explicitly labeled.
+
+Platform-specific infrastructure rules are omitted. Project rules retained from the former
+`AGENTS.md` coding guidelines are explicitly labeled.
+
 
 Panics are permitted only in tests, not in application code. Source recommendations that
 permit application-code panics are omitted.
