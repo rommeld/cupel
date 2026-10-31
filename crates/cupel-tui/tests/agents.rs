@@ -559,6 +559,200 @@ mod tests {
         );
     }
 
+    fn rendered_text(app: &App) -> String {
+        app.transcript
+            .to_lines(160, app.selected_cell, &cupel_tui::theme::CUPEL)
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn team_final_answer_follows_named_lifecycle_and_late_helper_updates() {
+        use cupel_coding_agent::team_conversation::Participant;
+        let (mut app, _) = app();
+        submit(&mut app, "/team add custom_42");
+        app.start_run("lead task");
+        idle(&mut app).await;
+        let text = rendered_text(&app);
+        assert!(text.contains("lead · mock/mock-model] succeeded"), "{text}");
+        assert_eq!(
+            text.matches("answer: lead task").count(),
+            1,
+            "no duplicate root result"
+        );
+        assert!(text.rfind("[team #").unwrap() < text.find("answer: lead task").unwrap());
+        assert!(text.find("answer: lead task").unwrap() < text.find("worked for").unwrap());
+        let _active = app.team_runtime.enter("custom_42");
+        app.team_runtime
+            .post(
+                Participant::Helper("custom_42".into()),
+                "late helper note".into(),
+                None,
+            )
+            .await
+            .unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), app.next_event())
+            .await
+            .unwrap();
+        app.on_event(event).await;
+        let text = rendered_text(&app);
+        assert!(text.contains("@custom_42]"), "{text}");
+        assert!(text.find("late helper note").unwrap() < text.find("answer: lead task").unwrap());
+    }
+
+    #[tokio::test]
+    async fn lead_model_labels_keep_known_provenance_and_do_not_guess_on_replay() {
+        use cupel_coding_agent::team_conversation::{Participant, TeamRuntime, TeamUpdate};
+        use cupel_tui::app::AppEvent;
+        let (mut source, _) = app();
+        submit(&mut source, "/team add custom_42");
+        source.start_run("model A task");
+        idle(&mut source).await;
+        let mut entry = source
+            .team_runtime
+            .inspect(None)
+            .await
+            .unwrap()
+            .entries
+            .pop()
+            .unwrap();
+        assert_eq!(entry.author, Participant::Lead);
+        assert!(
+            !entry.display().contains("lead ·"),
+            "presentation must not change stored identity"
+        );
+        let mut model_b = source.agent.state().model;
+        model_b.id = "model-b".into();
+        source.agent.set_model(model_b.clone());
+        entry.id += 1;
+        source
+            .on_event(AppEvent::Team(Some(TeamUpdate::Entry(entry.clone()))))
+            .await;
+        let text = rendered_text(&source);
+        assert!(text.contains("lead · mock/mock-model] succeeded"), "{text}");
+        assert!(!text.contains("lead · mock/model-b"), "{text}");
+
+        let (mut restored, _) = app();
+        restored.agent.set_model(model_b);
+        let path = std::path::Path::new(&restored.meta.cwd).join("conversation.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"schemaVersion\":1}}\n{}\n",
+                serde_json::to_string(&entry).unwrap()
+            ),
+        )
+        .unwrap();
+        let (runtime, events) = TeamRuntime::new(Some(path));
+        restored.team_runtime = runtime;
+        restored.team_events = Some(events);
+        let page = restored.team_runtime.inspect(None).await.unwrap();
+        assert_eq!(page.entries[0].author, Participant::Lead);
+        let event = tokio::time::timeout(Duration::from_secs(5), restored.next_event())
+            .await
+            .unwrap();
+        restored.on_event(event).await;
+        let text = rendered_text(&restored);
+        assert!(
+            text.contains("lead] succeeded"),
+            "unknown historical model stays unknown: {text}"
+        );
+        assert!(!text.contains("lead ·"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn task_progress_revises_one_compact_cell_instead_of_repeating_handoffs() {
+        use cupel_coding_agent::team_conversation::{TeamBody, TeamUpdate};
+        use cupel_coding_agent::team_scheduler::TaskState;
+        use cupel_tui::app::AppEvent;
+        let (mut app, _) = app();
+        submit(&mut app, "/team add custom_42");
+        app.start_run("task");
+        idle(&mut app).await;
+        let before = app.team_runtime.inspect(None).await.unwrap().entries;
+        let mut entry = before.last().unwrap().clone();
+        let TeamBody::Scheduled { task } = &mut entry.body else {
+            panic!("expected scheduled task")
+        };
+        task.state = TaskState::Running;
+        task.task = "Review the implementation\n[Handoff context: private-looking noise]\nlong repeated instructions".into();
+        task.summary.clear();
+        let count = app.transcript.cells.len();
+        for _ in 0..4 {
+            entry.id += 1;
+            app.on_event(AppEvent::Team(Some(TeamUpdate::Entry(entry.clone()))))
+                .await;
+        }
+        let text = rendered_text(&app);
+        assert_eq!(
+            app.transcript.cells.len(),
+            count,
+            "progress updates replace the existing task cell"
+        );
+        assert_eq!(text.matches("Review the implementation").count(), 1);
+        assert!(!text.contains("Handoff context") && !text.contains("long repeated instructions"));
+        assert_eq!(
+            app.team_runtime.inspect(None).await.unwrap().entries,
+            before,
+            "UI compaction must not rewrite shared records"
+        );
+    }
+
+    #[tokio::test]
+    async fn ctrl_b_hides_existing_and_future_team_updates_without_losing_history() {
+        use cupel_coding_agent::team_conversation::TeamUpdate;
+        use cupel_coding_agent::team_scheduler::CallId;
+        use cupel_tui::app::AppEvent;
+        let (mut app, _) = app();
+        app.transcript.append_assistant("visible answer");
+        app.transcript.promote_final_answer();
+        let update = |tool: &str| {
+            AppEvent::Team(Some(TeamUpdate::ToolStarted {
+                helper: "custom_42".into(),
+                tool: tool.into(),
+                call: CallId(2),
+                root: CallId(1),
+            }))
+        };
+        app.on_event(update("grep")).await;
+        assert!(rendered_text(&app).contains("@custom_42] call=2 root=1\ntool: grep"));
+        app.selected_cell = Some(1);
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('b'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(app.transcript.hide_team);
+        assert_eq!(app.selected_cell, None);
+        app.on_event(update("read")).await;
+        let hidden = rendered_text(&app);
+        assert!(hidden.contains("visible answer"));
+        assert!(!hidden.contains("tool:"));
+        assert_eq!(app.transcript.cells.len(), 3);
+        assert_eq!(app.transcript.copy_text(0), Some("visible answer"));
+        app.selected_cell = Some(0);
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('b'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!app.transcript.hide_team);
+        assert_eq!(app.selected_cell, Some(0));
+        let shown = rendered_text(&app);
+        assert!(shown.contains("tool: grep") && shown.contains("tool: read"));
+        assert!(shown.find("tool: read").unwrap() < shown.find("visible answer").unwrap());
+        let rendered = app
+            .transcript
+            .to_lines(160, Some(0), &cupel_tui::theme::CUPEL);
+        assert_eq!(rendered.cell_at.last(), Some(&Some(0)));
+    }
+
     #[tokio::test]
     async fn shared_posting_is_not_a_scheduler_and_removed_ask_tools_are_revoked() {
         use cupel_coding_agent::team_conversation::Participant;

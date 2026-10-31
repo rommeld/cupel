@@ -99,12 +99,13 @@ pub struct TeamEntry {
 impl TeamEntry {
     #[must_use]
     pub fn display(&self) -> String {
-        let author = self
-            .author
-            .to_string()
-            .chars()
-            .take(128)
-            .collect::<String>();
+        self.display_with_author(&self.author.to_string())
+    }
+
+    /// Format a presentation label without changing the participant's identity.
+    #[must_use]
+    pub fn display_with_author(&self, author: &str) -> String {
+        let author = author.chars().take(128).collect::<String>();
         let prefix = format!("[team #{} {author}]", self.id);
         match &self.body {
             TeamBody::Scheduled { task } => format!("{prefix}\n{}", task.display()),
@@ -144,6 +145,12 @@ impl TeamEntry {
 pub enum TeamUpdate {
     Entry(TeamEntry),
     Warning(String),
+    ToolStarted {
+        helper: String,
+        tool: String,
+        call: CallId,
+        root: CallId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -529,6 +536,16 @@ impl TeamRuntime {
     pub fn warn(&self, problem: impl Into<String>) {
         let _ = self.updates.send(TeamUpdate::Warning(problem.into()));
     }
+
+    /// Publish a transient UI update without adding it to the shared discussion.
+    pub fn tool_started(&self, helper: &str, tool: &str, call: CallId, root: CallId) {
+        let _ = self.updates.send(TeamUpdate::ToolStarted {
+            helper: helper.into(),
+            tool: tool.into(),
+            call,
+            root,
+        });
+    }
 }
 
 struct Writer {
@@ -877,6 +894,23 @@ mod tests {
     use crate::team_conversation::*;
     use crate::team_scheduler::{AccessScope, TaskState, TeamLimits, TeamScheduler};
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn tool_start_is_transient_not_discussion() {
+        let (team, mut events) = TeamRuntime::new(None);
+        team.tool_started("scout", "grep", CallId(2), CallId(1));
+        assert!(matches!(events.recv().await, Some(TeamUpdate::ToolStarted {
+            helper, tool, call: CallId(2), root: CallId(1),
+        }) if helper == "scout" && tool == "grep"));
+        assert!(team.inspect(None).await.unwrap().entries.is_empty());
+        assert!(
+            team.read(&Participant::Lead, None)
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn revisions_collapse_without_losing_audit_results_or_resume_cursors() {

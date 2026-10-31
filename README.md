@@ -143,6 +143,10 @@ none are built in. For example:
 - Team members share task results and discussion, not private prompts or raw
   histories. Use `/team tasks`, `/team conversation`, and `/team cancel <id>`
   to inspect or stop work. Cancellation does not undo edits or incurred costs.
+  In the TUI, Ctrl+B shows or hides live team updates. Headers identify each
+  helper by name and the lead by its known model; the final answer stays below
+  the updates. Task progress updates in place instead of repeating handoffs,
+  helper tool starts show the caller and tool name, and results render Markdown.
 - Optional `agentCommands` mappings route `/review` or prompt templates to a
   named helper. `/team roles` explains automatic role matching.
 
