@@ -25,12 +25,13 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::now_ms;
 
-use crate::process::{EXIT_STDIO_GRACE, kill_process_group, output_chunks};
+use crate::process::{EXIT_STDIO_GRACE, OutputChunk, kill_process_group, output_chunks};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, TruncationResult,
     format_size, truncate_tail,
@@ -240,6 +241,20 @@ fn resolve_shell(system_bash: &Path, path: Option<&OsStr>) -> PathBuf {
     .unwrap_or_else(|| PathBuf::from("sh"))
 }
 
+async fn next_output_chunk(
+    rx: &mut mpsc::Receiver<OutputChunk>,
+    shell_exited: bool,
+) -> Option<OutputChunk> {
+    if shell_exited {
+        tokio::time::timeout(EXIT_STDIO_GRACE, rx.recv())
+            .await
+            .ok()
+            .flatten()
+    } else {
+        rx.recv().await
+    }
+}
+
 enum RunOutcome {
     Exited(Option<i32>),
     Aborted,
@@ -342,16 +357,12 @@ impl AgentTool for BashTool {
             .timeout
             .map(|secs| tokio::time::Instant::now() + Duration::from_secs_f64(secs));
 
-        // Set once the shell exits, its status, and the moment we stop
-        // waiting for output a background process might still write.
-        let mut exited: Option<(std::process::ExitStatus, tokio::time::Instant)> = None;
+        let mut exited: Option<std::process::ExitStatus> = None;
 
         // Main loop, pump output chunks, racing cancellation, the timeout,
         // and the shell's own exit.
         let mut outcome: Option<RunOutcome> = None;
         while outcome.is_none() {
-            // A copy for the timer below, so its future doesn't borrow `exited`.
-            let quiet_until = exited.map(|(_, quiet_until)| quiet_until);
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => {
@@ -377,14 +388,11 @@ impl AgentTool for BashTool {
                     let _ = child.start_kill();
                     outcome = Some(RunOutcome::TimedOut);
                 }
-                chunk = rx.recv() => {
+                // Each chunk starts a fresh quiet interval after shell exit.
+                chunk = next_output_chunk(&mut rx, exited.is_some()) => {
                     match chunk {
                         Some(chunk) => {
                             output.append(chunk.as_bytes());
-                            // Still writing after the shell exited, keep listening.
-                            if let Some((_, quiet_until)) = &mut exited {
-                                *quiet_until = tokio::time::Instant::now() + EXIT_STDIO_GRACE;
-                            }
                             if let Some(on_update) = &on_update
                                 && last_update.elapsed() >= UPDATE_THROTTLE
                             {
@@ -393,10 +401,12 @@ impl AgentTool for BashTool {
                                 on_update(AgentToolResult::text(content));
                             }
                         }
-                        // Both pipes closed, the command is done writing.
-                        // `wait` returns at once if the shell already exited.
+                        // Both pipes closed, or the exited shell's pipes stayed quiet.
                         None => {
-                            let status = child.wait().await?;
+                            let status = match exited {
+                                Some(status) => status,
+                                None => child.wait().await?,
+                            };
                             outcome = Some(RunOutcome::Exited(status.code()));
                         }
                     }
@@ -405,16 +415,7 @@ impl AgentTool for BashTool {
                 // (`server &`) may hold the pipes open for hours. Don't wait
                 // for them to close, start the quiet timer instead.
                 status = child.wait(), if exited.is_none() => {
-                    exited = Some((status?, tokio::time::Instant::now() + EXIT_STDIO_GRACE));
-                }
-                () = async {
-                    match quiet_until {
-                        Some(quiet_until) => tokio::time::sleep_until(quiet_until).await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    // Shell gone and no output for EXIT_STDIO_GRACE, done.
-                    outcome = exited.map(|(status, _)| RunOutcome::Exited(status.code()));
+                    exited = Some(status?);
                 }
             }
         }
@@ -606,6 +607,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn captures_background_stdout_and_stderr() {
+        let out = run(json!({
+            "command": "sh -c 'echo background-out; echo background-err >&2' & echo started"
+        }))
+        .await
+        .unwrap();
+        assert!(out.contains("started"), "got: {out}");
+        assert!(out.contains("background-out"), "got: {out}");
+        assert!(out.contains("background-err"), "got: {out}");
+    }
+
+    #[tokio::test]
     async fn nonzero_exit_is_an_error_with_output() {
         let err = run(json!({"command": "echo boom; exit 3"}))
             .await
@@ -667,18 +680,51 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn output_after_the_shell_exits_is_kept() {
-        // Ten ticks take longer than the grace interval. Each chunk must
-        // extend the wait, but the gap between ticks remains comfortably
-        // below the grace interval even on a loaded macOS CI runner.
-        let out = run(json!({
-            "command": "sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do echo tick$i; sleep 0.08; done' & echo started"
-        }))
-        .await
-        .unwrap();
-        assert!(out.contains("started"), "got: {out}");
-        assert!(out.contains("tick10"), "got: {out}");
+        // Drive the same output channel with virtual time: OS scheduling gaps
+        // must not determine whether this quiet-interval regression passes.
+        let (tx, mut rx) = mpsc::channel(1);
+        let writer = tokio::spawn(async move {
+            for tick in 1..=10 {
+                tokio::time::sleep(EXIT_STDIO_GRACE / 2).await;
+                tx.send(OutputChunk::Stdout(format!("tick{tick}\n").into_bytes()))
+                    .await
+                    .unwrap();
+            }
+        });
+        let started = tokio::time::Instant::now();
+        for tick in 1..=10 {
+            let chunk = next_output_chunk(&mut rx, true)
+                .await
+                .expect("each output chunk must restart the quiet interval");
+            assert_eq!(chunk.as_bytes(), format!("tick{tick}\n").as_bytes());
+        }
+        assert!(started.elapsed() > EXIT_STDIO_GRACE);
+        assert!(next_output_chunk(&mut rx, true).await.is_none());
+        writer.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn quiet_background_output_stops_after_the_grace_interval() {
+        let (_tx, mut rx) = mpsc::channel(1);
+        let started = tokio::time::Instant::now();
+        assert!(next_output_chunk(&mut rx, true).await.is_none());
+        assert_eq!(started.elapsed(), EXIT_STDIO_GRACE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn output_before_shell_exit_can_wait_longer_than_the_grace_interval() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let writer = tokio::spawn(async move {
+            tokio::time::sleep(EXIT_STDIO_GRACE * 2).await;
+            tx.send(OutputChunk::Stderr(b"still running\n".to_vec()))
+                .await
+                .unwrap();
+        });
+        let chunk = next_output_chunk(&mut rx, false).await.unwrap();
+        assert_eq!(chunk.as_bytes(), b"still running\n");
+        writer.await.unwrap();
     }
 
     #[tokio::test]
