@@ -3,6 +3,7 @@
 !/crates/
 !/crates/**
 /crates/cupel-coding-agent/examples/
+/crates/cupel-acp/examples
 
 !.gitignore
 
@@ -37,6 +38,6 @@
 !/packaging/homebrew/**
 !/packaging/README.md
 
-!/scripts/
-!/scripts/benchmarks/
-!/scripts/benchmarks/*.py
+!/themes
+!/themes/**.json
+!/themes/README.md
