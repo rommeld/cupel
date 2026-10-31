@@ -722,8 +722,8 @@ mod tests {
                 root: CallId(1),
             }))
         };
-        app.on_event(update("grep")).await;
-        assert!(rendered_text(&app).contains("@custom_42] call=2 root=1\ntool: grep"));
+        app.on_event(update("grep pattern src/")).await;
+        assert!(rendered_text(&app).contains("@custom_42] call=2 root=1\ntool: grep pattern src/"));
         app.selected_cell = Some(1);
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('b'),
@@ -731,7 +731,7 @@ mod tests {
         )));
         assert!(app.transcript.hide_team);
         assert_eq!(app.selected_cell, None);
-        app.on_event(update("read")).await;
+        app.on_event(update("read note.md:1-2")).await;
         let hidden = rendered_text(&app);
         assert!(hidden.contains("visible answer"));
         assert!(!hidden.contains("tool:"));
@@ -745,8 +745,12 @@ mod tests {
         assert!(!app.transcript.hide_team);
         assert_eq!(app.selected_cell, Some(0));
         let shown = rendered_text(&app);
-        assert!(shown.contains("tool: grep") && shown.contains("tool: read"));
-        assert!(shown.find("tool: read").unwrap() < shown.find("visible answer").unwrap());
+        assert!(
+            shown.contains("tool: grep pattern src/") && shown.contains("tool: read note.md:1-2")
+        );
+        assert!(
+            shown.find("tool: read note.md:1-2").unwrap() < shown.find("visible answer").unwrap()
+        );
         let rendered = app
             .transcript
             .to_lines(160, Some(0), &cupel_tui::theme::CUPEL);
