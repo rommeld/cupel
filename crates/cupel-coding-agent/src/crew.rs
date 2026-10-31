@@ -1267,6 +1267,14 @@ impl Crew {
                 event = events.next() => match event {
                     None => break,
                     Some(AgentEvent::AgentEnd { .. }) => { ended = true; break; }
+                    Some(AgentEvent::ToolExecutionStart { tool_name, .. }) => {
+                        if let Some(scope) = scope
+                            && scope.visibility() == TaskVisibility::Shared
+                            && let Some(team) = self.shared_team(name)
+                        {
+                            team.tool_started(name, &tool_name, scope.id(), scope.root_id());
+                        }
+                    }
                     Some(AgentEvent::MessageEnd { message }) => {
                         helper.log.record(&message);
                         if let AgentMessage::Llm(Message::Assistant(assistant)) = message {
@@ -2048,6 +2056,50 @@ mod tests {
         team.set_members(["scout".into(), "leaf".into()].into_iter().collect());
         crew.set_team_runtime(team);
         (crew, mock)
+    }
+
+    #[tokio::test]
+    async fn tool_start_updates_are_only_published_for_shared_calls() {
+        use crate::team_conversation::TeamUpdate;
+
+        for shared in [true, false] {
+            let (crew, _) = crew(Step::WriteFail, serde_json::json!({"tools":["bash"]}));
+            let (team, mut events) = TeamRuntime::new(None);
+            team.set_members(["scout".into()].into_iter().collect());
+            crew.set_team_runtime(Arc::clone(&team));
+            let _ = crew
+                .run_with_team(
+                    "scout",
+                    "task",
+                    CancellationToken::new(),
+                    &|_| {},
+                    shared.then(|| Arc::clone(&team)),
+                )
+                .await;
+            let mut starts = Vec::new();
+            while let Ok(event) = events.try_recv() {
+                if let TeamUpdate::ToolStarted {
+                    helper,
+                    tool,
+                    call,
+                    root,
+                } = event
+                {
+                    starts.push((helper, tool, call, root));
+                }
+            }
+            if shared {
+                assert_eq!(starts.len(), 1);
+                assert_eq!(starts[0].0, "scout");
+                assert_eq!(starts[0].1, "bash");
+                assert_eq!(starts[0].2, starts[0].3);
+            } else {
+                assert!(
+                    starts.is_empty(),
+                    "private tool calls must not be broadcast"
+                );
+            }
+        }
     }
 
     #[tokio::test]

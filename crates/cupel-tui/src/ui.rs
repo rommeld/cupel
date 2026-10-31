@@ -668,9 +668,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let hints = if app.question.is_some() {
         " ↑↓ choose · enter answer (typed text wins) · alt+enter newline · @ file · esc abort"
     } else if app.mouse_captured {
-        " enter send · ctrl+enter steer · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
+        " enter send · ctrl+enter steer · alt+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+b team · ctrl+t tools · ctrl+y select"
     } else {
-        " enter send · ctrl+enter steer · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
+        " enter send · ctrl+enter steer · alt+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+b team · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =

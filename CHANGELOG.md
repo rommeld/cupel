@@ -3,6 +3,13 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.5] - 2026-10-31
+
+- fix(tui): keep final answers below live team updates and toggle updates with Ctrl+B
+- fix(team): identify helpers, lead models, and helper tool calls without repeating handoff snapshots
+- test(tui): verify agent Markdown, stable selection, and model attribution on replay
+- chore: stop tracking local benchmark scripts
+
 ## [v0.34.4] - 2026-10-31
 
 - docs(team): describe configured review workflow

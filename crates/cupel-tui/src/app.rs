@@ -98,6 +98,11 @@ pub struct App {
     pub team_events: Option<tokio::sync::mpsc::UnboundedReceiver<TeamUpdate>>,
     pub pending_team_read: Option<Option<u64>>,
     pub team_seen: u64,
+    pub team_task_cells:
+        std::collections::BTreeMap<cupel_coding_agent::team_scheduler::CallId, usize>,
+    pub team_lead_models:
+        std::collections::BTreeMap<cupel_coding_agent::team_scheduler::CallId, String>,
+    pub pending_lead_model: Option<(Arc<RunContext>, String)>,
     pub base_hooks: Arc<dyn cupel_agent::AgentHooks>,
     pub base_tools: Vec<Arc<dyn cupel_agent::AgentTool>>,
     pub pending_task_action: Option<TaskAction>,
@@ -475,6 +480,9 @@ impl App {
             team_events: Some(team_events),
             pending_team_read: None,
             team_seen: 0,
+            team_task_cells: std::collections::BTreeMap::new(),
+            team_lead_models: std::collections::BTreeMap::new(),
+            pending_lead_model: None,
             base_hooks,
             base_tools,
             pending_task_action: None,
@@ -869,6 +877,16 @@ impl App {
             // * the latest answer, so the everyday "grab the result"
             // gesture needs no mouse at all.
             (KeyCode::Char('o'), true, _) => self.copy_selected(),
+            (KeyCode::Char('b'), true, _) => {
+                self.transcript.hide_team = !self.transcript.hide_team;
+                if self.transcript.hide_team
+                    && self.selected_cell.is_some_and(|index| {
+                        matches!(self.transcript.cells.get(index), Some(Cell::Team { .. }))
+                    })
+                {
+                    self.selected_cell = None;
+                }
+            }
             // Ctrl+T shows every tool result in full (and hides them again).
             (KeyCode::Char('t'), true, _) => {
                 self.tools_expanded = !self.tools_expanded;
@@ -1067,6 +1085,7 @@ impl App {
         app.team_runtime = self.team_runtime;
         app.team_events = self.team_events;
         app.team_seen = self.team_seen;
+        app.team_lead_models = self.team_lead_models;
         app.crew.set_team_runtime(Arc::clone(&app.team_runtime));
         app.agent.set_hooks(Arc::new(
             ConversationHooks::new(
@@ -1529,17 +1548,32 @@ impl App {
     }
 
     /// A run started, keep its events, start its clock, and wait for the model.
-    fn prepare_team_root(&self, text: &str) {
+    fn prepare_team_root(&mut self, text: &str) {
         let context = self.crew.lead_context();
         if self.team.is_empty() {
             context.clear();
+            self.pending_lead_model = None;
         } else {
-            context.set(RunContext::root(
+            let run = RunContext::root(
                 Participant::Lead,
                 AccessScope::CanWrite,
                 text.into(),
                 CancellationToken::new(),
+            );
+            let model = self.agent.state().model;
+            self.pending_lead_model = Some((
+                Arc::clone(&run),
+                format!("{}/{}", model.provider.as_str(), model.id),
             ));
+            context.set(run);
+        }
+    }
+
+    async fn remember_lead_model(&mut self) {
+        if let Some((run, model)) = self.pending_lead_model.take()
+            && let Ok(scope) = run.scope(&self.crew.scheduler()).await
+        {
+            self.team_lead_models.insert(scope.root_id(), model);
         }
     }
 
@@ -2642,7 +2676,10 @@ impl App {
 
     pub async fn on_event(&mut self, event: AppEvent) {
         match event {
-            AppEvent::Team(event) => self.on_team_update(event),
+            AppEvent::Team(event) => {
+                self.remember_lead_model().await;
+                self.on_team_update(event);
+            }
             AppEvent::Agent(event) => self.on_agent_event(event).await,
             AppEvent::Login(event) => self.on_login_event(event),
             AppEvent::Helper(event) => self.on_helper_event(event),
@@ -2821,6 +2858,7 @@ impl App {
     }
 
     async fn finish_run(&mut self) {
+        self.remember_lead_model().await;
         if self.last_answer == Status::New {
             self.last_answer = Status::Failed;
         }
@@ -2893,6 +2931,15 @@ impl App {
         }
         self.run_finished = true;
         self.record_helper_spend();
+        // Scheduler completion publishes asynchronously to a separate UI stream.
+        // Settle those updates before a queued prompt starts its next turn.
+        while let Some(event) = self
+            .team_events
+            .as_mut()
+            .and_then(|events| events.try_recv().ok())
+        {
+            self.on_team_update(Some(event));
+        }
         self.start_waiting();
     }
 
@@ -2935,14 +2982,89 @@ impl App {
         match event {
             Some(TeamUpdate::Entry(entry)) if entry.id > self.team_seen => {
                 self.team_seen = entry.id;
-                self.transcript.cells.push(Cell::Team {
-                    text: entry.display(),
-                });
+                let text = self.team_entry_text(&entry);
+                if let cupel_coding_agent::team_conversation::TeamBody::Scheduled { task } =
+                    &entry.body
+                {
+                    // Usage and request progress revise a task snapshot. Replace
+                    // its live cell instead of repeating the handoff every time.
+                    if let Some(&index) = self.team_task_cells.get(&task.id) {
+                        self.transcript.cells[index] = Cell::Team { text };
+                    } else {
+                        self.team_task_cells
+                            .insert(task.id, self.transcript.cells.len());
+                        self.transcript.cells.push(Cell::Team { text });
+                    }
+                } else {
+                    self.transcript.cells.push(Cell::Team { text });
+                }
             }
             Some(TeamUpdate::Warning(problem)) => self.notice(problem),
+            Some(TeamUpdate::ToolStarted {
+                helper,
+                tool,
+                call,
+                root,
+            }) => self.transcript.cells.push(Cell::Team {
+                text: format!(
+                    "[team @{helper}] call={} root={}\ntool: {tool}",
+                    call.0, root.0
+                ),
+            }),
             Some(TeamUpdate::Entry(_)) => {}
             None => self.team_events = None,
         }
+    }
+
+    fn team_entry_text(&self, entry: &cupel_coding_agent::team_conversation::TeamEntry) -> String {
+        use cupel_coding_agent::team_conversation::TeamBody;
+        let root = match &entry.body {
+            TeamBody::Scheduled { task } => Some(task.root),
+            TeamBody::Post { root, .. } => *root,
+            TeamBody::Task { .. } => None,
+        };
+        let author = if entry.author == Participant::Lead {
+            root.and_then(|id| self.team_lead_models.get(&id))
+                .map_or_else(|| "lead".into(), |model| format!("lead · {model}"))
+        } else {
+            entry.author.to_string()
+        };
+        if let TeamBody::Scheduled { task } = &entry.body {
+            let state = match &task.state {
+                TaskState::Queued => "queued".into(),
+                TaskState::Running => "running".into(),
+                TaskState::Waiting => "waiting".into(),
+                TaskState::Cancelling => "cancelling".into(),
+                TaskState::Succeeded => "succeeded".into(),
+                TaskState::Failed(reason) => format!("failed: {reason}"),
+                TaskState::Blocked(reason) => format!("blocked: {reason}"),
+                TaskState::Cancelled => "cancelled".into(),
+                TaskState::Interrupted => "interrupted".into(),
+            };
+            if !task.state.terminal() {
+                let headline: String = task
+                    .task
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(160)
+                    .collect();
+                return format!(
+                    "[team #{} {author}] {state} call={} root={}\n{headline}",
+                    entry.id, task.id.0, task.root.0
+                );
+            }
+            if task.parent.is_none() {
+                // Root results already have an Answer/Agent cell. Do not repeat
+                // that prose in their lifecycle cell; the audit stays complete.
+                return format!(
+                    "[team #{} {author}] {state} call={} root={}\n{}",
+                    entry.id, task.id.0, task.root.0, task.changes
+                );
+            }
+        }
+        entry.display_with_author(&author)
     }
 
     fn start_waiting(&mut self) {
