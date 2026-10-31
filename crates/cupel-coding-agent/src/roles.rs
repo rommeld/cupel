@@ -164,7 +164,7 @@ impl RoleIndex {
             for role in Role::ALL {
                 let mut evidence = Vec::new();
                 let mut supported = false;
-                let mut uncertain = false;
+                let mut denied = false;
                 if names.iter().any(|token| role.aliases().contains(token)) {
                     evidence.push(format!("name tokens in {:?}", spec.name));
                 }
@@ -178,12 +178,13 @@ impl RoleIndex {
                         .replace("don't", "not")
                         .replace("doesn't", "not");
                     let words = tokens(&normalized);
-                    let negated = words.iter().any(|token| {
+                    let negated = words.iter().enumerate().any(|(index, token)| {
                         matches!(*token, "no" | "not" | "never" | "without" | "cannot")
+                            && capability(role, &words[index + 1..], false)
                     });
                     let positive = capability(role, &words, true);
                     let mention = positive
-                        || (negated && capability(role, &words, false))
+                        || negated
                         || match role {
                             Role::Review | Role::Research => {
                                 words.iter().any(|token| role.aliases().contains(token))
@@ -196,10 +197,10 @@ impl RoleIndex {
                     if !mention {
                         continue;
                     }
-                    if positive && !negated {
+                    if negated {
+                        denied = true;
+                    } else if positive {
                         supported = true;
-                    } else {
-                        uncertain = true;
                     }
                     evidence.push(format!(
                         "description{}: {}",
@@ -213,14 +214,17 @@ impl RoleIndex {
                         short(clause.trim())
                     ));
                 }
-                if evidence.is_empty() {
+                // Incidental mentions do not overturn an affirmative capability.
+                // An excluded responsibility is not a competing candidate, while
+                // contradictory affirmative/negative claims remain uncertain.
+                if evidence.is_empty() || (denied && !supported) {
                     continue;
                 }
                 evidence.truncate(8);
                 candidates.push(Candidate {
                     role,
                     agent: spec.name.clone(),
-                    confidence: if supported && !uncertain {
+                    confidence: if supported && !denied {
                         Confidence::Supported
                     } else {
                         Confidence::Uncertain
@@ -352,6 +356,7 @@ fn capability(role: Role, words: &[&str], anchored: bool) -> bool {
                 words[index - 1],
                 "and" | "also" | "then" | "can" | "will" | "that"
             )
+            || words[..index].ends_with(&["responsible", "for"])
     };
     let role_action = |verbs: &[&str]| {
         words
@@ -545,6 +550,50 @@ mod tests {
         assert!(!matches!(
             index.resolve(Role::Implement, &team(&["finder"]), AccessFilter::Any),
             RoleMatch::Unique(_)
+        ));
+    }
+
+    #[test]
+    fn affirmative_responsibilities_survive_mentions_and_excluded_other_roles() {
+        let specs = [
+            spec(
+                "developer",
+                "The Developer is responsible for implementing code changes.",
+                true,
+            ),
+            spec(
+                "reviewer",
+                "Reviews substantial code diffs. Writes an actionable Markdown review with code evidence; does not implement fixes.",
+                true,
+            ),
+        ];
+        let index = RoleIndex::new(specs.iter());
+        let members = team(&["developer", "reviewer"]);
+        for (role, expected) in [(Role::Implement, "developer"), (Role::Review, "reviewer")] {
+            let selection = index
+                .resolve(role, &members, AccessFilter::Writer)
+                .selection(role)
+                .unwrap();
+            assert_eq!(selection.agent, expected);
+        }
+        assert!(matches!(
+            index.resolve(Role::Review, &members, AccessFilter::ReadOnly),
+            RoleMatch::None
+        ));
+    }
+
+    #[test]
+    fn negation_applies_to_the_excluded_capability() {
+        let specs = [spec("lens", "Reviews diffs without editing code.", false)];
+        let index = RoleIndex::new(specs.iter());
+        let members = team(&["lens"]);
+        assert!(matches!(
+            index.resolve(Role::Review, &members, AccessFilter::Any),
+            RoleMatch::Unique(_)
+        ));
+        assert!(matches!(
+            index.resolve(Role::Implement, &members, AccessFilter::Any),
+            RoleMatch::None
         ));
     }
 

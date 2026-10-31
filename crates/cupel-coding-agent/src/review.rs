@@ -39,7 +39,10 @@ const MAX_BUNDLE_BYTES: usize = 150 * 1024;
 /// What the model is asked to do with the bundle.
 const INSTRUCTIONS: &str = "Review the following code for correctness bugs, security issues, and \
      worthwhile simplifications. Be specific: cite file paths and line numbers, explain why each \
-     finding is a problem, and rank findings by severity. Do not modify any files - report only.";
+     finding is a problem, and rank findings by severity. Preserve the reviewed code, tests, \
+     settings, and implementation guides. Report findings without implementing fixes. A separate \
+     Markdown review report may be written when the user or configured reviewer instructions \
+     request one; otherwise return the review in your answer.";
 
 /// Build the `/review` prompt. `args` are the already split command
 /// arguments, relative paths resolve against `cwd`. `Err` is a

@@ -160,6 +160,14 @@ Additional tooling features:
   own provider, model, thinking level, prompt and tool grants.
 - Direct `/agent` calls, explicit command mappings and session team membership;
   `/team roles` explains inferred roles without adding permissions.
+- This repository configures Developer and Reviewer as default team members and
+  routes `/review` explicitly to Reviewer. Developer retains private history;
+  Reviewer starts fresh and receives prior findings through task-specific reports.
+- Review reports under `.cupel/reviews/` preserve findings and follow-up
+  dispositions. `/review` permits a requested separate Markdown report while
+  preserving reviewed code. Clarification, pending review, requested changes and
+  approval are explicit handoff statuses; a successful helper invocation alone
+  is not a quality verdict. The lead schedules subsequent calls.
 - Helper construction and remembered-history loading deferred until admission,
   under a cancellable per-helper slot rather than the crew-wide lock.
 - Private helper histories, shared attributed discussion and a persistent audit
