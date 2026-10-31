@@ -1,9 +1,9 @@
-//! End-to-end tests of the agent loop's recovery from a preserved-thinking
-//! rejection: after a history edit the provider refuses every replayed
+//! End to end tests of the agent loop's recovery from a preserved thinking
+//! rejection, after a history edit the provider refuses every replayed
 //! thinking block, and the loop retries once without them. A scripted mock
 //! provider stands in for Anthropic, so no network is involved.
 
-// Integration-test files under tests/ are compiled as their own crate and
+// Integration test files under tests/ are compiled as their own crate and
 // only ever built in test mode, so the "tests outside #[cfg(test)]"
 // restriction lint does not apply here.
 #![allow(clippy::tests_outside_test_module)]
@@ -35,8 +35,6 @@ const STALE_BLOCK_ERROR: &str = "provider returned HTTP 400: messages.1.content.
 /// Rejects requests like the real API does after an edit, and records for
 /// each request whether it still replayed a thinking block.
 struct BindingProvider {
-    /// true: reject even requests without thinking blocks (a provider that
-    /// keeps failing must not make the loop spin).
     always_reject: bool,
     replayed_thinking: Mutex<Vec<bool>>,
     seen_messages: Mutex<Vec<Vec<Message>>>,
@@ -175,7 +173,7 @@ async fn run_loop_with(provider: Arc<BindingProvider>) -> Vec<AgentEvent> {
         temperature: None,
         max_tokens: None,
         tool_execution: ToolExecutionMode::Parallel,
-        // No transient retries: only the thinking recovery may resend.
+        // No transient retries, only the thinking recovery may resend.
         retry: RetryConfig {
             max_retries: 0,
             base_delay_ms: 1,
@@ -216,12 +214,12 @@ async fn stale_thinking_blocks_are_stripped_and_the_turn_retried() {
     let provider = Arc::new(BindingProvider::new(false));
     let events = run_loop_with(Arc::clone(&provider)).await;
 
-    // The first request replayed the stale block and was rejected; the
+    // The first request replayed the stale block and was rejected, the
     // retry went out without it.
     assert_eq!(provider.replayed_thinking(), vec![true, false]);
     let last = last_assistant(&events).expect("final assistant message");
     assert_eq!(last.stop_reason, StopReason::Stop);
-    // Not a transient failure: no backoff, no AutoRetry notice.
+    // Not a transient failure, no backoff, no AutoRetry notice.
     assert!(
         !events
             .iter()
@@ -249,7 +247,7 @@ async fn stale_thinking_blocks_are_stripped_and_the_turn_retried() {
 
 #[tokio::test]
 async fn stripping_happens_once_per_failure_episode() {
-    // A provider that keeps rejecting: one strip-and-retry, then the error
+    // A provider that keeps rejecting, one strip and retry, then the error
     // stands instead of looping forever.
     let provider = Arc::new(BindingProvider::new(true));
     let events = run_loop_with(Arc::clone(&provider)).await;

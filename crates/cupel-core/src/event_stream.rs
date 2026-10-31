@@ -3,8 +3,8 @@
 //! Unbounded mspc channel gives the producer/consumer split, correct wakeups,
 //! and `Stream` integration.
 //!
-//! Producer: provider holds `EventSink` and emits events.
-//! Consumer: `AssistantMessageStream` is a `future::Stream`, and `result()`
+//! Producer, provider holds `EventSink` and emits events.
+//! Consumer, `AssistantMessageStream` is a `Stream`, and `result()`
 //! consumes it to yield the final `AssistantMessage`.
 
 use core::{
@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use crate::error::MessageStreamError;
 use crate::types::{AssistantMessage, AssistantMessageEvent, StopReason, ToolCall};
 
-/// Consumer handle: iterate events, or call `result()` for jus the final message.
+/// Consumer handle, iterate events, or call `result()` for jus the final message.
 pub struct AssistantMessageStream {
     rx: mpsc::UnboundedReceiver<AssistantMessageEvent>,
 }

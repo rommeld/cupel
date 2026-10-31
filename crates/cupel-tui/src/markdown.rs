@@ -1,19 +1,19 @@
-//! Markdown rendering for conversation text, a hand-rolled subset on
-//! ratatui's primitives (Span -> Line), no parser crate.
+//! Markdown rendering for conversation text, a hand rolled subset on
+//! ratatui's primitives (Span → Line), no parser crate.
 //!
 //! ratatui ships no markdown widget its docs model text as Span/
 //! Line/Style and leave the translation to the app. Ecosystem
 //! renderers exist, but LLM output uses small, regular slice of
 //! markdown.
 //!
-//! Styling model: every accent is a patch onto the cell's base style
-//! (Style::patch set fields win, unset fields inherit), so plain text
-//! renders byte-identical to the pre-markdown path. Under CUPEL an Answer
-//! cell keeps its magenta identity under bold/italic; palette themes give
+//! Styling model, every accent is a patch onto the cell's base style
+//! (patch set fields win, unset fields inherit), so plain text
+//! renders byte identical to the pre markdown path. Under CUPEL an Answer
+//! cell keeps its magenta identity under bold/italic, palette themes give
 //! headings, bold, and italic their own colors, like Zed's editor.
-//! Streaming: to_lines re-renders every frame, so a not-yet-closed `**`
+//! Streaming, to_lines re renders every frame, so a not yet closed `**`
 //! or ``` simply styles the rest of the line/cell until the closing
-//! delimiter arrives the next delta self-corrects it.
+//! delimiter arrives the next delta self corrects it.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -35,7 +35,7 @@ pub fn render(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim_start();
-        // Fences toggle code mode; the fence line itself is chrome and
+        // Fences toggle code mode, the fence line itself is chrome and
         // not shown (the panel background marks the block).
         if trimmed.starts_with("```") {
             in_code = !in_code;
@@ -49,7 +49,7 @@ pub fn render(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<
         }
         // Tables need lookahead (a pipe row is only a table when the next
         // line is a separator row), so they are handled here where the
-        // slice is available everything else is per-line.
+        // slice is available everything else is per line.
         if trimmed.starts_with('|')
             && is_table_separator(lines.get(i + 1).copied().unwrap_or("default"))
         {
@@ -89,7 +89,7 @@ fn flush(segements: &mut Vec<(String, Style)>, current: &mut String, style: Styl
 }
 
 /// Split one line of markdown into styled segments. Delimiters toggle
-/// flags; the text between two flushes shares one style. Unclosed
+/// flags, the text between two flushes shares one style. Unclosed
 /// delimiters style the rest of the line correct for streaming, where
 /// the closing half may simply not have arrived yet.
 fn inline_spans(text: &str, base: Style, theme: &Theme) -> Vec<(String, Style)> {
@@ -146,8 +146,8 @@ fn inline_spans(text: &str, base: Style, theme: &Theme) -> Vec<(String, Style)> 
                         i += 1;
                         continue;
                     }
-                    // Simplified flanking rule: a single marker opens only
-                    // before a non-space and closes only after one so
+                    // Simplified flanking rule, a single marker opens only
+                    // before a non space and closes only after one so
                     // "a*b" and snake_case stay literal.
                     let can_open = chars.get(i + 1).is_some_and(|n| !n.is_whitespace());
                     let can_close = i > 0 && !chars[i - 1].is_whitespace();
@@ -194,7 +194,7 @@ fn inline_spans(text: &str, base: Style, theme: &Theme) -> Vec<(String, Style)> 
 }
 
 /// `[label(url)]`starting at `chars[0] == '['`. Returns (label, url,
-/// consumed chars). Subset rules: no nesting, no escaped brackets, the
+/// consumed chars). Subset rules, no nesting, no escaped brackets, the
 /// label renders literally (no emphasis inside linke).
 fn parse_link(chars: &[char]) -> Option<(String, String, usize)> {
     let close = chars.iter().position(|c| *c == ']')?;
@@ -207,10 +207,10 @@ fn parse_link(chars: &[char]) -> Option<(String, String, usize)> {
     Some((label, url, end + 1))
 }
 
-/// Word-wrap styled segments to `width`columns and append the lines.
-/// `first_prefix`(a bullet, a quote bar) leas the first line; wrapped
+/// Word wrap styled segments to `width`columns and append the lines.
+/// `first_prefix`(a bullet, a quote bar) leas the first line, wrapped
 /// continuation lines get `cont_indent`spaces of hanging indent. Same
-/// algorithm as transcript::warp_line, lifted onto styled characters.
+/// algorithm as warp_line, lifted onto styled characters.
 fn push_wrapped_spans(
     out: &mut Vec<Line<'static>>,
     segements: Vec<(String, Style)>,
@@ -218,15 +218,15 @@ fn push_wrapped_spans(
     first_prefix: Option<(String, Style)>,
     cont_indent: usize,
 ) {
-    // 1) Flatten to (char, style): the unit that survives both style
+    // 1) Flatten to (char, style), the unit that survives both style
     // boundaries and word boundaries.
     let flat: Vec<(char, Style)> = segements
         .iter()
         .flat_map(|(text, style)| text.chars().map(move |c| (c, *style)))
         .collect();
 
-    // 2) Word own their trailing spaces (split_keeping_spaces' rule):
-    // a word ends where a space run meets the next non-space.
+    // 2) Word own their trailing spaces (split_keeping_spaces' rule),
+    // a word ends where a space run meets the next non space.
     let mut words: Vec<&[(char, Style)]> = Vec::new();
     let mut start = 0;
     let mut in_space = false;
@@ -277,7 +277,7 @@ fn push_wrapped_spans(
             line_width = cont_indent;
         }
         if word_width > width.saturating_sub(cont_indent) {
-            // Hard-split on over-long word (URLs, long identifiers).
+            // Hard split on over long word (URLs, long identifiers).
             for (c, style) in word {
                 let w = c.width().unwrap_or(0);
                 if line_width + w > width && !line.is_empty() {
@@ -295,7 +295,7 @@ fn push_wrapped_spans(
     emit(&mut line, &mut first, out);
 }
 
-/// Group consecutive same-style chars back into spans the inverse of
+/// Group consecutive same style chars back into spans the inverse of
 /// the flatten in step 1, done last so wrapping never has to think about
 /// span boundaries.
 fn group_runs(chars: &[(char, Style)]) -> Vec<Span<'static>> {
@@ -321,7 +321,7 @@ fn group_runs(chars: &[(char, Style)]) -> Vec<Span<'static>> {
     spans
 }
 
-/// Display columns of a string (CJK-aware) the same math wrap_line uses.
+/// Display columns of a string (CJK aware) the same math wrap_line uses.
 fn display_width(text: &str) -> usize {
     text.chars().map(|c| c.width().unwrap_or(0)).sum()
 }
@@ -341,12 +341,12 @@ fn render_block_line(
         return;
     }
 
-    // ATX headings: 1-6 hashes plus a space (CommonMark requires the
+    // ATX headings, 1 6 hashes plus a space (CommonMark requires the
     // space, which keeps "#hashtag" literal). The hashes are chrome and
-    // are dropped; depth maps to empasis (underline fades at H3+).
+    // are dropped, depth maps to empasis (underline fades at H3+).
     let hashes = trimmed.chars().take_while(|c| *c == '#').count();
     if (1..=6).contains(&hashes) && trimmed[hashes..].starts_with(' ') {
-        // H3-H6 keep the heading style but drop the underline.
+        // H3 H6 keep the heading style but drop the underline.
         let heading = if hashes <= 2 {
             base.patch(theme.md_heading)
         } else {
@@ -363,7 +363,7 @@ fn render_block_line(
         return;
     }
 
-    // Horizontal rule: three or more of the same marker char, alone.
+    // Horizontal rule, three or more of the same marker char, alone.
     let rule_char = trimmed.chars().next().unwrap_or(' ');
     if matches!(rule_char, '-' | '*' | '_')
         && trimmed.len() >= 3
@@ -376,8 +376,8 @@ fn render_block_line(
         return;
     }
 
-    // Blockqoute: one level (nested '>' collapse into it) a receded
-    // bar-prefixed run, inline markup still active inside.
+    // Blockqoute, one level (nested '>' collapse into it) a receded
+    // bar prefixed run, inline markup still active inside.
     if let Some(rest) = trimmed.strip_prefix('>') {
         let quote = base.patch(theme.md_quote);
         let content = rest.trim_start_matches('>').trim_start();
@@ -391,7 +391,7 @@ fn render_block_line(
         return;
     }
 
-    // List items: bullet or "N." marker; nesting via 2-space indent.
+    // List items, bullet or "N." marker, nesting via 2 space indent.
     if let Some((marker, rest)) = split_list_marker(trimmed) {
         let level = (indent / 2).min(4);
         let prefix = format!("{}{marker} ", "  ".repeat(level));
@@ -409,7 +409,7 @@ fn render_block_line(
     push_wrapped_spans(out, inline_spans(line, base, theme), width, None, 0);
 }
 
-/// "- "/"* "/"+ " -> a bullet; "12. " -> the number. None = not a list.
+/// " "/"* "/"+ " → a bullet, "12. " → the number. None = not a list.
 fn split_list_marker(text: &str) -> Option<(String, &str)> {
     for bullet in ["- ", "* ", "+ "] {
         if let Some(rest) = text.strip_prefix(bullet) {
@@ -423,13 +423,13 @@ fn split_list_marker(text: &str) -> Option<(String, &str)> {
     None
 }
 
-/// One line inside a fenced block: monospace is inherent in a terminal,
-/// so the "code look" is a full-width panel every wrapped chunk is
+/// One line inside a fenced block, monospace is inherent in a terminal,
+/// so the "code look" is a full width panel every wrapped chunk is
 /// padded to the terminal width so the background forms one surface
 /// (a bg colors only the cells under its own characters).
 fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, theme: &Theme) {
-    // Deliberately not the cell's base style: code is code, in every
-    // cell. Terminal-default fg on the indexed panel tint.
+    // Deliberately not the cell's base style, code is code, in every
+    // cell. Terminal default fg on the indexed panel tint.
     let style = theme.md_code_block;
     for chunk in wrap_line(&format!(" {line}"), width.saturating_sub(1)) {
         let pad = width.saturating_sub(display_width(&chunk));
@@ -440,13 +440,13 @@ fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, theme:
     }
 }
 
-/// A separator row: pipes, dashes, colons, spaces and at least one dash.
+/// A separator row, pipes, dashes, colons, spaces and at least one dash.
 fn is_table_separator(line: &str) -> bool {
     let t = line.trim();
     t.starts_with('|') && t.contains('-') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
 }
 
-/// Cells of one pipe row: outer pipes are chrome, inner pipes split.
+/// Cells of one pipe row, outer pipes are chrome, inner pipes split.
 /// (Escaped \| is outside the subset noted in the module doc.)
 fn split_cless(row: &str) -> Vec<String> {
     let t = row.trim();
@@ -455,7 +455,7 @@ fn split_cless(row: &str) -> Vec<String> {
     t.split('|').map(|cell| cell.trim().to_string()).collect()
 }
 
-/// Render the table starting at lines[0] (header row; lines[1] is the
+/// Render the table starting at lines[0] (header row, lines[1] is the
 /// separator). Returns how many source lines were consumed, so the
 /// caller's cursor can jump past the whole block.
 fn render_table(
@@ -499,8 +499,8 @@ fn render_table(
     }
 
     // Total = columns + " │ " joints. Shave the widest column one column
-    // at a time unitl it fits (or nothing reasonable is left to shave);
-    // over-narrow cells get clipped with an ellipsis below.
+    // at a time unitl it fits (or nothing reasonable is left to shave),
+    // over narrow cells get clipped with an ellipsis below.
     let joints = 3 * (columns - 1);
     let mut total: usize = widths.iter().sum::<usize>() + joints;
     while total > width {
@@ -540,7 +540,7 @@ fn segments_width(segments: &[(String, Style)]) -> usize {
 }
 
 /// Emit a cell's segments clipped to `budget`columns (ellipsis when it
-/// does not fit) and padded to exactly `budget`- table columns must
+/// does not fit) and padded to exactly `budget` table columns must
 /// stay aligned no matter what the cell contains.
 fn clip_segments(segments: &[(String, Style)], budget: usize) -> Vec<Span<'static>> {
     let full = segments_width(segments);
@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn plain_text_renders_exactly_like_before() {
-        // The invariant: no markdown syntax = one span, base style,
+        // The invariant, no markdown syntax = one span, base style,
         // identical wrapping the renderer is a strict superset.
         let base = Style::new().fg(Color::Magenta);
         let lines = render("hello brave new world", 11, base, &CUPEL);
@@ -695,13 +695,13 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::UNDERLINED)
         );
-        // Same label and target: no noisy duplicate.
+        // Same label and target, no noisy duplicate.
         assert!(!text.contains("src/main.rs (src/main.rs)"), "{text}");
     }
 
     #[test]
     fn a_word_crossing_a_style_boundary_never_splits() {
-        // "**bo**ld" is one word of two styled halves; at width 6 it must
+        // "**bo**ld" is one word of two styled halves, at width 6 it must
         // wrap as a unit, not break between "bo" and "ld".
         let lines = render("xxxx **bo**ld", 6, Style::new(), &CUPEL);
         let text = flat_text(&lines);
@@ -710,8 +710,8 @@ mod tests {
 
     #[test]
     fn unclosed_streaming_delimiters_style_the_tail() {
-        // Mid-stream a closing ** may not have arrived yet the tail
-        // renders bold and self-corrects on the next delta.
+        // Mid stream a closing ** may not have arrived yet the tail
+        // renders bold and self corrects on the next delta.
         let lines = render("a **stream", 80, Style::new(), &CUPEL);
         assert!(
             style_of(&lines, "stream")
@@ -732,7 +732,7 @@ mod tests {
         let top = style_of(&lines, "Top");
         assert_eq!(top.fg, nightfox.md_heading.fg);
         assert!(top.add_modifier.contains(Modifier::UNDERLINED));
-        // H3: the heading color and bold, without the underline.
+        // H3, the heading color and bold, without the underline.
         let sub = style_of(&lines, "Sub");
         assert_eq!(sub.fg, nightfox.md_heading.fg);
         assert!(sub.add_modifier.contains(Modifier::BOLD));
@@ -815,7 +815,7 @@ mod tests {
 
     #[test]
     fn an_unclosed_fence_streams_as_code() {
-        // The closing ``` has not arrived yet: everything after the fence
+        // The closing ``` has not arrived yet, everything after the fence
         // renders as code until it does.
         let lines = render("text\n```\nstill code", 20, Style::new(), &CUPEL);
         assert_eq!(style_of(&lines, "still code").bg, Some(Color::Indexed(235)));

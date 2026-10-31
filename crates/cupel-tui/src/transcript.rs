@@ -1,18 +1,18 @@
 //! The transcript render model.
 //!
-//! Agent events describe *what happened*; the transcript describes *what to
+//! Agent events describe *what happened*, the transcript describes *what to
 //! draw*. Keeping a separate render model (a `Vec<Cell>`) instead of drawing
-//! straight from `AgentMessage`s has two payoffs:
+//! straight from `AgentMessage`s has two payoffs,
 //!
 //! 1. Streaming deltas mutate the last cell in place (append to the text
-//!    being typed out) instead of re-deriving the whole view per event.
-//! 2. UI-only state (tool results attached to their calls, expansion
+//!    being typed out) instead of re deriving the whole view per event.
+//! 2. UI only state (tool results attached to their calls, expansion
 //!    ) has an obvious home that the agent knows nothing about.
 //!
-//! The view is one column: cells render top to bottom in the order they
+//! The view is one column, cells render top to bottom in the order they
 //! happened, tool calls inline between the reasoning that triggered them
-//! and the prose that follows. [`Transcript::to_lines`] flattens the cells
-//! into styled lines plus a line->cell map for mouse hit-testing.
+//! and the prose that follows. `to_lines` flattens the cells
+//! into styled lines plus a line→cell map for mouse hit testing.
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -76,11 +76,9 @@ pub struct ToolOutcome {
     pub took: Option<Duration>,
 }
 
-/// The rendered column plus its hit-test map, rebuilt every frame.
+/// The rendered column plus its hit test map, rebuilt every frame.
 pub struct Rendered {
     pub lines: Vec<Line<'static>>,
-    /// For each visual line: which cell it renders. `None` for the blank
-    /// spacer between cells. A mouse click resolves through this map.
     pub cell_at: Vec<Option<usize>>,
 }
 
@@ -181,12 +179,12 @@ impl Transcript {
     }
 
     /// Promote the trailing assistant prose to an Answer cell. Called when
-    /// a run ends: only then is "the last text the model wrote" known to
-    /// be its final answer; during streaming every Assistant cell might
+    /// a run ends, only then is "the last text the model wrote" known to
+    /// be its final answer, during streaming every Assistant cell might
     /// still be followed by another tool call.
     ///
     /// Walks back over trailing bookkeeping (usage, notices) and stops at
-    /// anything substantive: a run that ended in an Error cell keeps its
+    /// anything substantive, a run that ended in an Error cell keeps its
     /// plain cells. There is no "answer" to celebrate.
     pub fn promote_final_answer(&mut self) {
         for cell in self.cells.iter_mut().rev() {
@@ -207,9 +205,9 @@ impl Transcript {
 
     /// Flatten every cell into styled, wrapped lines for the given inner
     /// width. `selected` tints that cell's lines so the user sees what
-    /// Ctrl+O would copy. Called once per frame; the event loop batches ready
+    /// Ctrl+O would copy. Called once per frame, the event loop batches ready
     /// background events so buffered deltas do not each rebuild the lines.
-    /// All text is sanitized before layout; raw cells remain unchanged for
+    /// All text is sanitized before layout, raw cells remain unchanged for
     /// streaming, session history, and explicit clipboard copying.
     #[must_use]
     pub fn to_lines(&self, width: u16, selected: Option<usize>, theme: &Theme) -> Rendered {
@@ -245,7 +243,7 @@ impl Transcript {
 
     /// The raw text a copy places on the clipboard. The unrendered cell
     /// content (no marker, no wrapping, markdown source exactly as
-    /// the model wrote it). Tool cells return None: a click on them toggles
+    /// the model wrote it). Tool cells return None, a click on them toggles
     /// the preview instead of selecting, so they stay out of the copy
     /// feature.
     #[must_use]
@@ -267,7 +265,7 @@ impl Transcript {
 }
 
 /// Styled, wrapped lines for one cell. Tool cells delegate to
-/// [`tool_lines`]; everything else is conversation.
+/// [`tool_lines`], everything else is conversation.
 fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut out: Vec<Line<'static>> = Vec::new();
     match cell {
@@ -275,7 +273,7 @@ fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             out.extend(user_lines(text, width, theme));
         }
         Cell::Assistant { text } => {
-            // Assistant prose is markdown; the base style keeps the cell
+            // Assistant prose is markdown, the base style keeps the cell
             // identity (markdown accents patch onto it).
             out.extend(crate::markdown::render(text, width, theme.assistant, theme));
         }
@@ -313,7 +311,7 @@ fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     out
 }
 
-/// A full-width user surface with a `>>` marker on the first content row.
+/// A full width user surface with a `>>` marker on the first content row.
 /// Render Markdown before adding the marker so
 /// headings and code fences are recognized at the start of source lines.
 fn user_lines(text: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
@@ -339,7 +337,7 @@ fn user_lines(text: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// Styled, wrapped lines for one tool cell: the call's header line, then
+/// Styled, wrapped lines for one tool cell, the call's header line, then
 /// the result. The full output already went to the model. The preview is a
 /// digest, and the marker line says how to see the rest.
 fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
@@ -382,7 +380,7 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             } else {
                 theme.detail
             };
-            // Strip whole sequences before previewing: an OSC payload can
+            // Strip whole sequences before previewing, an OSC payload can
             // span lines, including lines hidden by the preview window.
             let text = sanitize(&outcome.text);
             let lines: Vec<&str> = text.lines().collect();
@@ -439,7 +437,7 @@ fn previews_the_tail(tool_name: &str) -> bool {
 
 /// Diff lines, styled by their first byte. The patch tool's diff format
 /// (text_diff.rs) puts the marker first.
-/// `-12 old`, `+12 new`, `12 context`, and a `   ...` row between hunks.
+/// a removed line numbered 12, `+12 new`, `12 context`, and a `   ...` row between hunks.
 fn push_diff(out: &mut Vec<Line<'static>>, diff: &str, width: usize, theme: &Theme) {
     let diff = sanitize(diff);
     for line in diff.lines() {
@@ -465,9 +463,9 @@ fn push_wrapped(out: &mut Vec<Line<'static>>, text: &str, width: usize, style: S
 
 /// Greedy word wrap by display width.
 ///
-/// Why not a crate: `textwrap` exists, but this is ~30 lines, teaches how
-/// display-column math works (a CJK char occupies 2 columns), and gives us
-/// the exact break behavior we want (hard-split words longer than the line).
+/// Why not a crate, `textwrap` exists, but this is ~30 lines, teaches how
+/// display column math works (a CJK char occupies 2 columns), and gives us
+/// the exact break behavior we want (hard split words longer than the line).
 #[must_use]
 pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
     if line.is_empty() {
@@ -487,13 +485,13 @@ pub fn wrap_line(line: &str, width: usize) -> Vec<String> {
             current_width += word_width;
             continue;
         }
-        // The word doesn't fit on this line. Emit the line (if non-empty)
+        // The word doesn't fit on this line. Emit the line (if non empty)
         // and start fresh.
         if !current.is_empty() {
             out.push(core::mem::take(&mut current));
             current_width = 0;
         }
-        // A word longer than the whole line gets hard-split by columns.
+        // A word longer than the whole line gets hard split by columns.
         if word_width > width {
             for c in word.chars() {
                 let w = c.width().unwrap_or(0);
@@ -564,7 +562,7 @@ mod tests {
 
     #[test]
     fn wrap_counts_wide_chars_as_two_columns() {
-        // Each CJK char is 2 columns; 4 columns fit 2 chars.
+        // Each CJK char is 2 columns, 4 columns fit 2 chars.
         assert_eq!(wrap_line("日本語だ", 4), vec!["日本", "語だ"]);
     }
 

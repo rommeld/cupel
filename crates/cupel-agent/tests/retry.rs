@@ -1,9 +1,9 @@
-//! End-to-end tests of the agent loop's automatic retry, using a scripted
-//! mock provider. No network involved: the mock implements the same
+//! End to end tests of the agent loop's automatic retry, using a scripted
+//! mock provider. No network involved, the mock implements the same
 //! [`Provider`] trait the real adapters do and fails on cue, which exercises
 //! the exact code path a live 529 would take.
 
-// Integration-test files under tests/ are compiled as their own crate and
+// Integration test files under tests/ are compiled as their own crate and
 // only ever built in test mode, so the "tests outside #[cfg(test)]"
 // restriction lint does not apply here.
 #![allow(clippy::tests_outside_test_module)]
@@ -130,7 +130,7 @@ async fn run_loop_with(provider: Arc<FlakyProvider>, retry: RetryConfig) -> Vec<
         max_tokens: None,
         tool_execution: ToolExecutionMode::Parallel,
         retry,
-        // Zero-size mock model window: compaction never interferes here.
+        // Zero size mock model window, compaction never interferes here.
         compaction: cupel_agent::CompactionConfig::default(),
     };
     let context = AgentContext {
@@ -211,7 +211,7 @@ async fn transient_failure_is_retried_and_recovers() {
 
 #[tokio::test]
 async fn retry_budget_exhaustion_surfaces_the_error() {
-    // Fails more times than the budget allows: 1 initial try + 2 retries.
+    // Fails more times than the budget allows, 1 initial try + 2 retries.
     let provider = Arc::new(FlakyProvider::new(10, "503 Service Unavailable"));
     let events = run_loop_with(Arc::clone(&provider), fast_retry(2)).await;
 

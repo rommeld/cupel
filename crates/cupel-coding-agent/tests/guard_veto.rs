@@ -1,8 +1,8 @@
-//! End-to-end proof that the bash denylist actually stops execution: a
-//! scripted mock provider asks for `rm -rf /`, and the assertion is on
-//! what flows back through the real agent loop: a blocked error
-//! tool-result, not the guard in isolation (guard.rs unit tests cover
-//! that). Pattern copied from cupel-agent/tests/retry.rs.
+//! End to end proof that the bash denylist actually stops execution, a
+//! scripted mock provider asks for recursive forced deletion of the root directory, and the assertion is on
+//! what flows back through the real agent loop, a blocked error
+//! tool result, not the guard in isolation (guard.rs unit tests cover
+//! that). Pattern copied from cupel agent/tests/retry.rs.
 
 #![allow(clippy::tests_outside_test_module)]
 
@@ -23,7 +23,7 @@ use cupel_core::{
     },
 };
 
-/// Turn 1: request the forbidden bash command. Turn 2: acknowledge and
+/// Turn 1, request the forbidden bash command. Turn 2, acknowledge and
 /// stop. The guard must intercept between the two.
 struct DeleteHappyProvider {
     calls: AtomicU32,
@@ -113,7 +113,7 @@ async fn denied_bash_command_never_executes_and_the_model_learns_why() {
     let mut options = AgentOptions::new(mock_model(), Arc::new(registry));
     options.api_key = Some("test".into());
     options.tools = vec![Arc::new(BashTool::new(&cwd)) as Arc<dyn AgentTool>];
-    // No config files: the built-in defaults alone must block rm -rf.
+    // No config files, the built in defaults alone must block rm rf.
     let (guard, warnings) = BashGuard::from_config(None, &cwd);
     assert!(warnings.is_empty());
     options.hooks = Arc::new(guard);

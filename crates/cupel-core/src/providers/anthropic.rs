@@ -1,10 +1,10 @@
 //! Anthropic Messages API provider.
 //!
-//! Flow: build JSON request -> POST `/v1/messages` with `stream: true` ->
-//! decode the SSE body -> translate Anthropic events into unified
-//! [`AssistantMessageEvent`]s.
+//! Flow, build JSON request → POST `/v1/messages` with `stream` set to true →
+//! decode the SSE body → translate Anthropic events into unified
+//! `AssistantMessageEvent` values.
 //!
-//! Callers set `StreamOptions::reasoning` and the provider derives the right
+//! Callers set `reasoning` and the provider derives the right
 //! thinking configuration for the model (adaptive effort vs. token budget).
 
 use serde::Deserialize;
@@ -36,38 +36,19 @@ const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
 const FINE_GRAINED_TOOL_STREAMING_BETA: &str = "fine-grained-tool-streaming-2025-05-14";
 const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
 
-/// API-specific compatibility knobs, deserialized from `model.compat`.
+/// API specific compatibility knobs, deserialized from `model.compat`.
 /// `#[serde(default)]` on the struct means absent fields use `Default`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct AnthropicCompat {
-    /// Use `thinking.type: "adaptive"` + `output_config.effort` instead of a
-    /// token budget. Claude 5+ models require this.
     force_adaptive_thinking: bool,
-    /// Adaptive Claude models reject a non-default `temperature`.
     supports_temperature: bool,
-    /// Whether the endpoint supports `eager_input_streaming` on tools. When
-    /// it does not, we request the fine-grained tool streaming beta instead.
     supports_eager_tool_input_streaming: bool,
-    /// Whether `cache_control` may be attached to tool definitions.
     supports_cache_control_on_tools: bool,
-    /// Whether 1h cache TTL is available.
     supports_long_cache_retention: bool,
-    /// Some Anthropic-compatible gateways emit (and accept) empty thinking
-    /// signatures; real Anthropic requires converting those blocks to text.
     allow_empty_signature: bool,
-    /// Send `x-session-affinity` so a gateway (e.g. Fireworks) routes all of
-    /// a session's requests to the same cache shard. Without it requests
-    /// still succeed, but prompt-cache hit rates suffer.
     send_session_affinity_headers: bool,
     bearer_auth: bool,
-    /// Preserved thinking (Opus 5.5, Sonnet 5.5, Haiku 5.5): every thinking
-    /// block is bound to the conversation that produced it (system prompt,
-    /// tools, earlier messages). After an edit there (a resumed session's
-    /// new date line, a compaction), the API rejects the replayed block with a 400.
-    /// `"drop_block"` asks it to drop such blocks instead. Sent as
-    /// `thinking.block_binding.prefix_mismatch_behavior`, which only adaptive
-    /// and budget thinking accept, together with the thinking-binding beta.
     prefix_mismatch_behavior: Option<String>,
 }
 
@@ -92,7 +73,7 @@ fn anthropic_compat(model: &Model) -> AnthropicCompat {
 }
 
 /// Claude Code subscription tokens only allow the Claude Code tool names.
-/// Outgoing tool names are canonicalized case-insensitively,
+/// Outgoing tool names are canonicalized case insensitively,
 /// incoming ones are mapped back to the caller's original names.
 const CLAUDE_CODE_TOOLS: &[&str] = &[
     "Read",
@@ -173,7 +154,7 @@ impl Provider for AnthropicProvider {
 }
 
 /// The streaming worker. Returns `Err` only for failures *before* a terminal
-/// event was emitted; protocol-complete stops emit their terminal event
+/// event was emitted, protocol complete stops emit their terminal event
 /// themselves (including mapped error stops) and return `Ok`.
 #[tracing::instrument(name = "anthropic_request", skip_all, fields(model = %model.id, provider = %model.provider.as_str()))]
 async fn run(
@@ -192,7 +173,7 @@ async fn run(
     let compat = anthropic_compat(model);
 
     let body = build_request_body(model, context, options, &compat, is_oauth);
-    // TRACE only: request bodies contain the user's code and prompts.
+    // TRACE only, request bodies contain the user's code and prompts.
     tracing::trace!(body = %body, "request body");
     let url = format!("{}/v1/messages", model.base_url.trim_end_matches('/'));
 
@@ -205,7 +186,7 @@ async fn run(
     let betas = request_betas(&compat, context, &body);
 
     if is_oauth {
-        // OAuth: Bearer auth + Claude Code identity headers.
+        // OAuth, Bearer auth + Claude Code identity headers.
         let mut oauth_betas = vec!["claude-code-20250219", "oauth-2025-04-20"];
         oauth_betas.extend(betas.iter().copied());
         req = req
@@ -221,7 +202,7 @@ async fn run(
         if !betas.is_empty() {
             req = req.header("anthropic-beta", betas.join(","));
         }
-        // Cache-shard affinity for gateways that ask for it (see compat).
+        // Cache shard affinity for gateways that ask for it (see compat).
         // Only meaningful when caching is on, hence the retention check.
         if compat.send_session_affinity_headers
             && options.cache_retention != Some(CacheRetention::None)
@@ -240,12 +221,12 @@ async fn run(
     // Stream + decode the SSE body.
     let mut output = new_output_message(model);
     if !sink.start() {
-        return Ok(()); // Consumer dropped the stream; stop working.
+        return Ok(()); // Consumer dropped the stream, stop working.
     }
 
     // Anthropic addresses content blocks by an `index` field. We track the
     // mapping from that index to our position in `output.content`, plus the
-    // partial-JSON scratch buffer for tool calls (which must never leak into
+    // partial JSON scratch buffer for tool calls (which must never leak into
     // the persisted message).
     struct BlockState {
         anthropic_index: u64,
@@ -276,7 +257,7 @@ async fn run(
         }
 
         for sse in events.drain(..) {
-            // The server signals hard errors as `event: error`.
+            // The server signals hard errors as an `event` field set to `error`.
             if sse.event.as_deref() == Some("error") {
                 return Err(InferenceError::Other(sse.data));
             }
@@ -343,8 +324,8 @@ async fn run(
                             }
                         }
                         Some("redacted_thinking") => {
-                            // The encrypted payload arrives in `data`; keep it
-                            // in the signature so multi-turn replay works.
+                            // The encrypted payload arrives in `data`, keep it
+                            // in the signature so multi turn replay works.
                             let signature = block
                                 .and_then(|b| b.get("data"))
                                 .and_then(Value::as_str)
@@ -495,7 +476,7 @@ async fn run(
                             }
                         }
                         BlockKind::ToolCall { partial_json } => {
-                            // Final parse of the completed JSON; the scratch
+                            // Final parse of the completed JSON, the scratch
                             // buffer lives in `blocks` and is dropped here.
                             let parsed = parse_streaming_json(partial_json);
                             if let Some(AssistantContent::ToolCall(tc)) =
@@ -521,7 +502,7 @@ async fn run(
                             output.error_message = Some(error);
                         }
                     }
-                    // Only update usage fields that are present (not null):
+                    // Only update usage fields that are present (not null),
                     // some proxies omit input_tokens here, and we must keep
                     // the value captured at message_start.
                     if let Some(u) = data.get("usage") {
@@ -565,7 +546,7 @@ async fn run(
         }
     }
 
-    // A 200 response may still be a non-streaming JSON body or gateway HTML.
+    // A 200 response may still be a non streaming JSON body or gateway HTML.
     // Neither is a completed assistant turn, even when the body closes cleanly.
     if !saw_message_start {
         return Err(InferenceError::Transport(
@@ -582,12 +563,12 @@ async fn run(
     Ok(())
 }
 
-/// The `anthropic-beta` values this request needs; OAuth adds its own on
+/// The Anthropic beta header values this request needs, OAuth adds its own on
 /// top. A free function (not inline in `run`) so tests can check it.
 fn request_betas(compat: &AnthropicCompat, context: &Context, body: &Value) -> Vec<&'static str> {
     let has_tools = context.tools.as_ref().is_some_and(|t| !t.is_empty());
     let mut betas = Vec::new();
-    // Adaptive-thinking models have interleaved thinking built in -> skip beta.
+    // Adaptive thinking models have interleaved thinking built in → skip beta.
     if !compat.force_adaptive_thinking {
         betas.push(INTERLEAVED_THINKING_BETA);
     }
@@ -603,7 +584,7 @@ fn request_betas(compat: &AnthropicCompat, context: &Context, body: &Value) -> V
     betas
 }
 
-/// Anthropic doesn't send `total_tokens`; compute it from the components,
+/// Anthropic doesn't send `total_tokens`, compute it from the components,
 /// then derive cost from the model's pricing.
 fn finalize_usage(model: &Model, output: &mut AssistantMessage) {
     output.usage.total_tokens = output.usage.input
@@ -643,8 +624,8 @@ fn map_stop_reason(reason: &str, stop_details: Option<&Value>) -> (StopReason, O
 }
 
 /// The `cache_control` JSON attached to cacheable blocks, or `None` when the
-/// caller disabled caching. Prompt caching is what makes multi-turn agent
-/// loops affordable: unchanged prefix tokens are re-read at ~10% of the price.
+/// caller disabled caching. Prompt caching is what makes multi turn agent
+/// loops affordable, unchanged prefix tokens are re read at ~10% of the price.
 fn cache_control_value(options: &StreamOptions, compat: &AnthropicCompat) -> Option<Value> {
     let retention = options.cache_retention.unwrap_or(CacheRetention::Short);
     match retention {
@@ -666,8 +647,8 @@ fn build_request_body(
     let cache_control = cache_control_value(options, compat);
 
     // The unified reasoning level decides
-    // between adaptive effort and token budgets (Anthropic-compatible gateways),
-    // and budget-based thinking needs max_tokens head-room.
+    // between adaptive effort and token budgets (Anthropic compatible gateways),
+    // and budget based thinking needs max_tokens head room.
     let mut thinking: Option<Value> = None;
     let mut output_config: Option<Value> = None;
     let mut thinking_enabled = false;
@@ -682,9 +663,9 @@ fn build_request_body(
         match options.reasoning {
             Some(level) => {
                 if compat.force_adaptive_thinking {
-                    // Adaptive: the model decides when/how much to think; we
+                    // Adaptive, the model decides when/how much to think, we
                     // only steer with an effort level. "summarized" keeps the
-                    // display behavior consistent with budget-based thinking.
+                    // display behavior consistent with budget based thinking.
                     if let Some(effort) = thinking_effort(
                         model,
                         Some(level),
@@ -718,12 +699,12 @@ fn build_request_body(
             }
             None => {
                 // "off" reads the model's level map like the OpenAI
-                // providers do: no entry sends the classic `disabled`, a
+                // providers do, no entry sends the classic `disabled`, a
                 // named entry is the thinking type to send instead
                 // (Sonnet 5.5 rejects `disabled`, its off is
                 // `between_tools`), and null means the model cannot be
                 // switched off, so `thinking` is left out entirely.
-                // The type travels alone: `between_tools` answers any
+                // The type travels alone, `between_tools` answers any
                 // other field (even `display`) with a 400.
                 thinking =
                     off_effort(model, Some("disabled")).map(|off_type| json!({"type": off_type}));
@@ -731,9 +712,9 @@ fn build_request_body(
         }
     }
 
-    // Preserved thinking (see compat): only adaptive and budget thinking
+    // Preserved thinking (see compat), only adaptive and budget thinking
     // take `block_binding`. `between_tools` answers it with a 400, and an
-    // omitted `thinking` has nothing to attach it to; for those requests
+    // omitted `thinking` has nothing to attach it to, for those requests
     // the agent loop strips the stale blocks and retries instead.
     if let Some(behavior) = &compat.prefix_mismatch_behavior
         && let Some(config) = &mut thinking
@@ -873,7 +854,7 @@ fn convert_messages(
                             blocks.push(json!({"type": "text", "text": text.text}));
                         }
                         AssistantContent::Thinking(thinking) => {
-                            // Redacted thinking: pass the opaque payload back.
+                            // Redacted thinking, pass the opaque payload back.
                             if thinking.redacted == Some(true) {
                                 blocks.push(json!({
                                     "type": "redacted_thinking",
@@ -889,7 +870,7 @@ fn convert_messages(
                                 .as_ref()
                                 .is_none_or(|s| s.trim().is_empty());
                             if signature_missing {
-                                // No signature (e.g. from an aborted stream):
+                                // No signature (e.g. from an aborted stream),
                                 // real Anthropic rejects the block, so demote
                                 // to plain text unless the endpoint accepts
                                 // empty signatures.
@@ -935,8 +916,8 @@ fn convert_messages(
             }
 
             Message::ToolResult(_) => {
-                // Collect all consecutive tool results into one user message;
-                // some Anthropic-compatible endpoints require this.
+                // Collect all consecutive tool results into one user message,
+                // some Anthropic compatible endpoints require this.
                 let mut tool_results: Vec<Value> = Vec::new();
                 while let Some(Message::ToolResult(result)) = transformed.get(i) {
                     tool_results.push(json!({
@@ -965,7 +946,7 @@ fn convert_messages(
                 }
             }
             Some(content @ Value::String(_)) => {
-                // Plain string content can't carry cache_control; convert to
+                // Plain string content can't carry cache_control, convert to
                 // a single text block first.
                 let text = content.as_str().unwrap_or("").to_string();
                 *content = json!([{"type": "text", "text": text, "cache_control": cc}]);
@@ -1064,7 +1045,7 @@ mod tests {
         UserContentBody, UserMessage, now_ms,
     };
 
-    /// A row from the shipped catalog, not a hand-built fixture: these
+    /// A row from the shipped catalog, not a hand built fixture, these
     /// tests break if catalog.json and this provider drift apart.
     fn catalog_model(id: &str) -> Model {
         crate::catalog::builtin_models()
@@ -1355,7 +1336,7 @@ mod tests {
 
     #[test]
     fn opus55_off_omits_thinking_and_temperature() {
-        // `/thinking off` arrives as `reasoning: None`. A budget model
+        // `/thinking off` arrives as `reasoning` set to `None`. A budget model
         // turns that into an explicit `disabled` and keeps temperature ...
         let options = StreamOptions {
             temperature: Some(0.2),
@@ -1366,10 +1347,10 @@ mod tests {
         assert_eq!(body["thinking"], json!({"type": "disabled"}));
         assert_eq!(body["temperature"], json!(0.2));
 
-        // ... both of which Opus 5.5 answers with a 400. Its "off": null
+        // ... both of which Opus 5.5 answers with a 400. Its "off", null
         // entry makes the provider send no `thinking` at all (the API then
         // thinks adaptively at its default effort, medium), and
-        // supportsTemperature: false drops the sampling parameter.
+        // supportsTemperature, false drops the sampling parameter.
         let opus = catalog_model("claude-opus-5-5");
         let body = body_for(&opus, &options);
         assert!(body.get("thinking").is_none(), "{body}");
@@ -1381,7 +1362,7 @@ mod tests {
     fn opus55_levels_map_to_adaptive_effort() {
         let opus = catalog_model("claude-opus-5-5");
         for (level, effort) in [
-            // No "minimal" effort upstream: the map's null entry falls
+            // No "minimal" effort upstream, the map's null entry falls
             // back to the provider default, which is "low".
             (ThinkingLevel::Minimal, "low"),
             (ThinkingLevel::Low, "low"),
@@ -1448,10 +1429,10 @@ mod tests {
     fn sonnet5_and_opus5_off_never_send_temperature() {
         // `/thinking off` with a temperature set. Sonnet 5 has no "off"
         // entry in its map (models.dev lists a toggle), so it gets the
-        // explicit `disabled` that it accepts. Opus 5 has "off": null
-        // and gets no `thinking` at all: the API then thinks adaptively
+        // explicit `disabled` that it accepts. Opus 5 has "off", null
+        // and gets no `thinking` at all, the API then thinks adaptively
         // at its default effort, high. Neither may carry `temperature`,
-        // a non-default value is a 400 on both.
+        // a non default value is a 400 on both.
         let options = StreamOptions {
             temperature: Some(0.2),
             ..StreamOptions::default()
@@ -1546,11 +1527,11 @@ mod tests {
     #[test]
     fn sonnet55_off_sends_between_tools() {
         // `/thinking off` with a temperature set. Sonnet 5.5 answers
-        // `disabled` with a 400; its lowest setting is the thinking type
+        // `disabled` with a 400, its lowest setting is the thinking type
         // `between_tools`, taken from the "off" entry of its level map.
-        // Three more 400s this body must avoid: any field next to the
+        // Three more 400s this body must avoid, any field next to the
         // type (`display` too), an effort above high (no output_config
-        // means the API default, high), and a non-default temperature.
+        // means the API default, high), and a non default temperature.
         let options = StreamOptions {
             temperature: Some(0.2),
             ..StreamOptions::default()
@@ -1583,11 +1564,11 @@ mod tests {
     #[test]
     fn sonnet55_and_haiku55_levels_map_to_adaptive_effort() {
         // Both models reject `budget_tokens` and need summarized display
-        // plus preserved-thinking controls, like Opus 5.5.
+        // plus preserved thinking controls, like Opus 5.5.
         for id in ["claude-sonnet-5-5", "claude-haiku-5-5"] {
             let model = catalog_model(id);
             for (level, effort) in [
-                // No "minimal" effort upstream: the map's null entry falls
+                // No "minimal" effort upstream, the map's null entry falls
                 // back to the provider default, which is "low".
                 (ThinkingLevel::Minimal, "low"),
                 (ThinkingLevel::Low, "low"),
@@ -1623,7 +1604,7 @@ mod tests {
 
     #[test]
     fn preserved_thinking_binds_adaptive_requests_only() {
-        // Opus 5.5, Sonnet 5.5 and Haiku 5.5 run the preserved-thinking check.
+        // Opus 5.5, Sonnet 5.5 and Haiku 5.5 run the preserved thinking check.
         // Their adaptive requests ask the API to drop blocks that a history
         // edit invalidated, plus the beta header that field needs (the field
         // without the header is a 400 of its own).
@@ -1644,9 +1625,9 @@ mod tests {
             assert_eq!(betas, vec![THINKING_BINDING_BETA], "{id}");
         }
 
-        // Off never carries it: `between_tools` and `disabled` reject the
+        // Off never carries it, `between_tools` and `disabled` reject the
         // field, and omitted `thinking` has no object to put it in. No
-        // field, no header; the agent loop covers these requests.
+        // field, no header, the agent loop covers these requests.
         for id in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] {
             let model = catalog_model(id);
             let body = body_for(&model, &StreamOptions::default());

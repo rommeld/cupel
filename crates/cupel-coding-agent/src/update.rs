@@ -1,15 +1,15 @@
-//! Is a newer cupel version available, and putting it in place of this one: the
+//! Is a newer cupel version available, and putting it in place of this one, the
 //! release check behind the startup notice, and the installation behind `/update`.
 //!
 //! GitHub's API names the newest published release. Its tag (`v0.32.0`) is the
 //! version, and Cargo compiled this binary's own version in, so the comparison needs
-//! no file on disk and no help from the installer. Versions compare as semver:
-//! `0.10.0` is newer than `0.9.0`, and `0.30.0-beta.1` comes before `0.30.0`.
+//! no file on disk and no help from the installer. Versions compare as semver,
+//! `0.10.0` is newer than `0.9.0`, and the first beta of `0.30.0` comes before `0.30.0`.
 //!
 //! [`install`] downloads the archive for this platform and the release's
 //! `sha256sums.txt`, compares the checksum, and renames the new binary over the old
 //! one. It replaces only a binary that install.sh put in place (its [`INSTALL_MARKER`]
-//! sits next to it): Homebrew or a build from source belongs to whoever put it there.
+//! sits next to it), Homebrew or a build from source belongs to whoever put it there.
 //!
 //! Nothing here knows about the terminal. The TUI decides when to ask and what to
 //! show.
@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-/// The version type of this module's API. The re-export lets the TUI name it without a
+/// The version type of this module's API. The re export lets the TUI name it without a
 /// `semver` dependency of its own.
 pub use semver::Version;
 
@@ -39,7 +39,7 @@ const CHECKSUMS: &str = "sha256sums.txt";
 /// install.sh writes this file next to the binary it installs.
 pub const INSTALL_MARKER: &str = ".cupel-installer";
 
-/// The one-line install that README.md shows.
+/// The one line install that README.md shows.
 const INSTALL_COMMAND: &str =
     "curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh";
 
@@ -53,7 +53,7 @@ pub fn current_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo versions are semver")
 }
 
-/// A published release: its version and its files.
+/// A published release, its version and its files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
     pub version: Version,
@@ -76,7 +76,6 @@ impl Release {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Asset {
     pub name: String,
-    /// Where to download it. GitHub answers with a redirect, which reqwest follows.
     #[serde(rename = "browser_download_url")]
     pub url: String,
 }
@@ -93,27 +92,19 @@ struct ReleaseJson {
 /// Why a check or an update did not work. The variants say what helps.
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
-    /// GitHub could not be reached, or refused: offline, a timeout, the rate limit.
-    /// Trying again later can work.
     #[error("cannot reach GitHub: {0}")]
     Network(String),
-    /// The release is not usable as it is: a tag that is no version, a missing file.
-    /// Trying again does not help until another release is out.
     #[error("{0}")]
     BadRelease(String),
-    /// This binary may not replace itself: another install method, another
-    /// platform. The message says what to do instead.
     #[error("{0}")]
     Unsupported(String),
-    /// Putting the new binary in place failed: no permission, a full disk, `tar`.
-    /// The old binary is untouched.
     #[error("cannot install: {0}")]
     Install(String),
 }
 
-/// The HTTP client for GitHub, which refuses API requests without a `User-Agent`.
+/// The HTTP client for GitHub, which refuses API requests without a user agent header.
 ///
-/// One client per task, shared by its requests: a `Client` keeps a pool of open
+/// One client per task, shared by its requests, a `Client` keeps a pool of open
 /// connections, and building one sets up TLS.
 #[must_use]
 pub fn client() -> reqwest::Client {
@@ -123,10 +114,10 @@ pub fn client() -> reqwest::Client {
         .expect("the TLS backend initializes")
 }
 
-/// The newest release, asked from `url`: [`LATEST_RELEASE_URL`], or a local server in
+/// The newest release, asked from `url`, [`LATEST_RELEASE_URL`], or a local server in
 /// the tests.
 pub async fn latest_release(client: &reqwest::Client, url: &str) -> Result<Release, UpdateError> {
-    // `send` fails without an answer; `error_for_status` turns an answer such as 403
+    // `send` fails without an answer, `error_for_status` turns an answer such as 403
     // (the rate limit) or 404 into an error too.
     let response = client
         .get(url)
@@ -139,7 +130,7 @@ pub async fn latest_release(client: &reqwest::Client, url: &str) -> Result<Relea
     let json: ReleaseJson = response.json().await.map_err(|error| {
         UpdateError::BadRelease(format!("GitHub's answer is not a release: {error}"))
     })?;
-    // Tags are `v0.30.0`; semver itself has no `v`.
+    // Tags are `v0.30.0`, semver itself has no `v`.
     let tag = json.tag_name.strip_prefix('v').unwrap_or(&json.tag_name);
     let version = Version::parse(tag).map_err(|error| {
         UpdateError::BadRelease(format!(
@@ -164,10 +155,10 @@ pub async fn check(
 }
 
 /// A request error as one line. reqwest's own message names only the URL ("error
-/// sending request for url (...)"); the reason (refused, time out, no DNS) sits in its
+/// sending request for url (...)"), the reason (refused, time out, no DNS) sits in its
 /// chain of sources.
 fn network_error(error: reqwest::Error) -> UpdateError {
-    // `successors` walks the chain: each cause yields the next, until `source()`
+    // `successors` walks the chain, each cause yields the next, until `source()`
     // returns `None`.
     let causes = std::iter::successors(std::error::Error::source(&error), |cause| cause.source());
     let message = std::iter::once(error.to_string())
@@ -177,7 +168,7 @@ fn network_error(error: reqwest::Error) -> UpdateError {
     UpdateError::Network(message)
 }
 
-/// The release archive for a platform, named by `std::env::consts::OS` and `ARCH`:
+/// The release archive for a platform, named by `OS` and `ARCH`,
 /// the platform this binary was compiled for. install.sh picks the same files.
 #[must_use]
 pub fn archive_name(os: &str, arch: &str) -> Option<&'static str> {
@@ -190,7 +181,7 @@ pub fn archive_name(os: &str, arch: &str) -> Option<&'static str> {
     }
 }
 
-/// The file this process runs, with symlinks resolved: `~/bin/cupel` may link to
+/// The file this process runs, with symlinks resolved, `~/bin/cupel` may link to
 /// `~/.cupel/bin/cupel`, and the file to replace is the one the link points to.
 pub fn running_binary() -> Result<PathBuf, UpdateError> {
     std::env::current_exe()
@@ -225,15 +216,13 @@ pub fn managed_elsewhere(binary: &Path) -> Option<String> {
 /// What `/update` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Nothing: the newest release, this version, is not newer.
     UpToDate(Version),
-    /// `binary` is now release `version`. The running process is still the old one.
     Installed { version: Version, binary: PathBuf },
 }
 
 /// Put the newest release in place of `binary` when it is newer than `current`.
 ///
-/// The order keeps every failure harmless: ask GitHub, refuse a binary install.sh did
+/// The order keeps every failure harmless, ask GitHub, refuse a binary install.sh did
 /// not put there, download the archive and the checksum list of that one release,
 /// compare, and only then touch the disk. `notify` hears about the download and the
 /// installation, for notices.
@@ -258,7 +247,7 @@ pub async fn install(
     let name = archive_name(os, arch).ok_or_else(|| {
         UpdateError::Unsupported(format!("there is no release archive for {os} {arch}"))
     })?;
-    // Archive and checksum list come from the same release: two separate "latest"
+    // Archive and checksum list come from the same release, two separate "latest"
     // downloads could straddle a new release.
     let archive = release.asset(name)?;
     let checksums = release.asset(CHECKSUMS)?;
@@ -317,7 +306,7 @@ fn listed_checksum<'a>(listed: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-/// The SHA-256 of `bytes` as lowercase hex, the way sha256sum prints it.
+/// The SHA 256 of `bytes` as lowercase hex, the way sha256sum prints it.
 fn sha256_hex(bytes: &[u8]) -> String {
     use core::fmt::Write as _;
     use sha2::Digest as _;
@@ -333,7 +322,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// Put the `cupel` inside `archive` (a release's .tar.gz) in place of `binary`.
 ///
 /// The new file is unpacked into a directory next to `binary` and then renamed over
-/// it. A rename inside one file system is atomic: whoever starts cupel gets the old
+/// it. A rename inside one file system is atomic, whoever starts cupel gets the old
 /// file or the new one, never half of one, and every failure before the rename
 /// leaves the old binary as it was. A running process keeps the file it started
 /// from (the old file lives on until the process ends), so replacing the binary of
@@ -348,7 +337,7 @@ pub fn replace(binary: &Path, archive: &[u8]) -> Result<(), UpdateError> {
     let packed = staging.0.join("cupel.tar.gz");
     std::fs::write(&packed, archive).map_err(|error| install_error(&packed, &error))?;
     // `tar` comes with macOS and Linux, and install.sh relies on it too. Only the
-    // member `cupel` comes out; README.md and LICENSE stay in the archive.
+    // member `cupel` comes out, README.md and LICENSE stay in the archive.
     let output = std::process::Command::new("tar")
         .arg("-xzf")
         .arg(&packed)
@@ -371,7 +360,7 @@ pub fn replace(binary: &Path, archive: &[u8]) -> Result<(), UpdateError> {
 }
 
 /// A scratch directory next to the binary. `Drop` removes it however `replace`
-/// ends: by returning, by `?`, or by a panic.
+/// ends, by returning, by `?`, or by a panic.
 struct Staging(PathBuf);
 
 impl Staging {
@@ -406,10 +395,10 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    /// One route of the fake GitHub: a path, the status and the body it answers with.
+    /// One route of the fake GitHub, a path, the status and the body it answers with.
     type Route = (String, u16, Vec<u8>);
 
-    /// A local stand-in for GitHub. `routes` gets the server's base URL, so a release
+    /// A local stand in for GitHub. `routes` gets the server's base URL, so a release
     /// can point its files at the same server. Each request gets the route of its
     /// path, or a 404. The server lives until the test's runtime ends.
     async fn serve(routes: impl FnOnce(&str) -> Vec<Route>) -> String {
@@ -467,7 +456,7 @@ mod tests {
             .into_bytes()
     }
 
-    /// The tests' client: no proxy, so a proxy set on the machine never sees the
+    /// The tests' client, no proxy, so a proxy set on the machine never sees the
     /// requests to 127.0.0.1.
     fn test_client() -> reqwest::Client {
         reqwest::Client::builder().no_proxy().build().unwrap()
@@ -563,7 +552,7 @@ mod tests {
 
     #[tokio::test]
     async fn offline_is_a_network_error() {
-        // A port that was free a moment ago: nothing listens there now.
+        // A port that was free a moment ago, nothing listens there now.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
@@ -617,7 +606,7 @@ mod tests {
         std::fs::read(packed).unwrap()
     }
 
-    /// A cupel that install.sh installed: the binary and the marker next to it.
+    /// A cupel that install.sh installed, the binary and the marker next to it.
     fn installed(name: &str) -> PathBuf {
         let dir = temp_dir(name);
         std::fs::write(dir.join(INSTALL_MARKER), "install.sh").unwrap();
@@ -660,7 +649,7 @@ mod tests {
         let found = listed_checksum(listed, "cupel-macos-universal.tar.gz");
         assert_eq!(found, Some("ccc"));
         assert_eq!(listed_checksum(listed, "cupel-linux-aarch64.tar.gz"), None);
-        // The SHA-256 of "abc" from FIPS 180-2.
+        // The SHA 256 of "abc" from FIPS 180 2.
         assert_eq!(
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
@@ -723,7 +712,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&binary).unwrap(), "old");
     }
 
-    /// A fake GitHub with release `tag`: every platform's archive is `packed`, and
+    /// A fake GitHub with release `tag`, every platform's archive is `packed`, and
     /// `sha256sums.txt` lists `checksum` for each.
     async fn release_server(tag: &str, packed: Vec<u8>, checksum: &str) -> String {
         let names = [
@@ -820,7 +809,7 @@ mod tests {
     #[tokio::test]
     async fn install_refuses_a_missing_checksum_before_downloading_the_archive() {
         let name = archive_name(std::env::consts::OS, std::env::consts::ARCH).unwrap();
-        // No archive route: trying to download it would give a Network error.
+        // No archive route, trying to download it would give a Network error.
         let base = serve(|base| {
             vec![
                 (

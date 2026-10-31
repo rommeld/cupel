@@ -1,23 +1,23 @@
 //! Runs bash in the agent's working directory, streaming
 //! stdout+stderr into a bounded accumulator. The design constraints all come
-//! from real agent behavior:
+//! from real agent behavior,
 //!
-//! - **Bounded memory, full fidelity.** A command can print gigabytes. The
+//! * **Bounded memory, full fidelity.** A command can print gigabytes. The
 //!   accumulator keeps only a rolling tail in memory. The model gets the
 //!   last 2000 lines or 50 KB, since errors tend to be at the end. It spills
 //!   the complete output to a temp file the moment limits are exceeded, so the
-//!   truncation notice can say "Full output: /tmp/...".
-//! - **Kill the whole tree.** `cargo test` spawns children. Killing just the
+//!   truncation notice can say "Full output, /tmp/...".
+//! * **Kill the whole tree.** `cargo test` spawns children. Killing just the
 //!   shell leaves them running. The child gets its own process group, and
 //!   abort/timeout kills the group. Because this workspace forbids `unsafe`
-//!   (no direct `libc::kill`), the group kill shells out to `kill -9 -PGID`
-//!   - one extra process spawn on the rare abort path is a fine trade.
-//! - **Exit codes are errors.** A non-zero exit becomes an error tool result
+//!   (no direct `kill`), the group kill shells out to a forceful kill of the process group
+//!   * one extra process spawn on the rare abort path is a fine trade.
+//! * **Exit codes are errors.** A non zero exit becomes an error tool result
 //!   (with the output attached) so the model *sees* failure as failure.
-//! - **The shell's exit ends the call, not the pipes'.** A background
+//! * **The shell's exit ends the call, not the pipes'.** A background
 //!   process (`server &`) inherits stdout/stderr and can hold them open for
 //!   hours. Once the shell exits, reading stops as soon as the pipes stay
-//!   quiet for 500 ms; the background process itself keeps running.
+//!   quiet for 500 ms, the background process itself keeps running.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -42,7 +42,6 @@ const UPDATE_THROTTLE: Duration = Duration::from_millis(100);
 #[derive(Debug, Deserialize)]
 struct BashArgs {
     command: String,
-    /// Timeout in seconds. No default: builds can legitimately take an hour.
     timeout: Option<f64>,
 }
 
@@ -50,7 +49,6 @@ struct BashArgs {
 struct OutputAccumulator {
     max_lines: usize,
     max_bytes: usize,
-    /// In-memory rolling tail, trimmed to ~2x `max_bytes`.
     tail: Vec<u8>,
     tail_at_line_boundary: bool,
     total_bytes: usize,
@@ -84,7 +82,7 @@ impl OutputAccumulator {
     fn append(&mut self, data: &[u8]) {
         self.total_bytes += data.len();
 
-        // Line accounting: count newlines, track the open last line's size
+        // Line accounting, count newlines, track the open last line's size
         // (needed for the "line is 3MB" message when one line eats the budget).
         let mut last_newline = None;
         for (i, byte) in data.iter().enumerate() {
@@ -110,7 +108,7 @@ impl OutputAccumulator {
         let rolling_cap = self.max_bytes * 2;
         if self.tail.len() > rolling_cap * 2 {
             let mut start = self.tail.len() - rolling_cap;
-            // Never cut a UTF-8 character in half (continuation bytes are
+            // Never cut a UTF 8 character in half (continuation bytes are
             // 0b10xx_xxxx).
             while start < self.tail.len() && (self.tail[start] & 0xC0) == 0x80 {
                 start += 1;
@@ -119,7 +117,7 @@ impl OutputAccumulator {
             self.tail.drain(..start);
         }
 
-        // Full-output preservation: buffer in memory until limits trip, then
+        // Full output preservation, buffer in memory until limits trip, then
         // spill everything to a temp file and stream into it from then on.
         if let Some((_, file)) = &mut self.temp {
             use std::io::Write as _;
@@ -153,8 +151,8 @@ impl OutputAccumulator {
         }
     }
 
-    /// Current display view: tail-truncated text plus truncation metadata
-    /// with true totals (the tail alone under-counts what scrolled past).
+    /// Current display view, tail truncated text plus truncation metadata
+    /// with true totals (the tail alone under counts what scrolled past).
     fn snapshot(&self) -> (String, TruncationResult, Option<PathBuf>) {
         let mut text = String::from_utf8_lossy(&self.tail).into_owned();
         if !self.tail_at_line_boundary
@@ -169,7 +167,7 @@ impl OutputAccumulator {
                 max_bytes: Some(self.max_bytes),
             },
         );
-        // Overlay the real totals: the tail buffer only saw part of it all.
+        // Overlay the real totals, the tail buffer only saw part of it all.
         truncation.truncated = self.over_limits();
         truncation.total_lines = self.total_lines();
         truncation.total_bytes = self.total_bytes;
@@ -235,7 +233,7 @@ fn resolve_shell(system_bash: &Path, path: Option<&OsStr>) -> PathBuf {
         std::env::split_paths(path)
             .map(|dir| dir.join("bash"))
             .filter(|candidate| is_executable(candidate))
-            // PATH entries can be relative to cupel's process directory;
+            // PATH entries can be relative to cupel's process directory,
             // commands execute with the agent's (possibly different) cwd.
             .find_map(|candidate| candidate.canonicalize().ok())
     })
@@ -335,7 +333,7 @@ impl AgentTool for BashTool {
         let mut rx = output_chunks(&mut child);
 
         let mut output = OutputAccumulator::new();
-        // Backdated so the first chunk sends an update immediately; falls
+        // Backdated so the first chunk sends an update immediately, falls
         // back to "now" on platforms where Instant can't go that far back.
         let mut last_update = std::time::Instant::now()
             .checked_sub(UPDATE_THROTTLE)
@@ -344,11 +342,11 @@ impl AgentTool for BashTool {
             .timeout
             .map(|secs| tokio::time::Instant::now() + Duration::from_secs_f64(secs));
 
-        // Set once the shell exits: its status, and the moment we stop
+        // Set once the shell exits, its status, and the moment we stop
         // waiting for output a background process might still write.
         let mut exited: Option<(std::process::ExitStatus, tokio::time::Instant)> = None;
 
-        // Main loop: pump output chunks, racing cancellation, the timeout,
+        // Main loop, pump output chunks, racing cancellation, the timeout,
         // and the shell's own exit.
         let mut outcome: Option<RunOutcome> = None;
         while outcome.is_none() {
@@ -360,9 +358,9 @@ impl AgentTool for BashTool {
                     if let Some(pid) = pid {
                         kill_process_group(pid);
                     }
-                    // Also SIGKILL the direct child via tokio: even if the
+                    // Also SIGKILL the direct child via tokio, even if the
                     // external `kill` misbehaves, the shell itself dies (and
-                    // `bash -c` usually execs the command, so the shell is
+                    // bash executing a command string usually execs the command, so the shell is
                     // the command).
                     let _ = child.start_kill();
                     outcome = Some(RunOutcome::Aborted);
@@ -383,7 +381,7 @@ impl AgentTool for BashTool {
                     match chunk {
                         Some(chunk) => {
                             output.append(chunk.as_bytes());
-                            // Still writing after the shell exited: keep listening.
+                            // Still writing after the shell exited, keep listening.
                             if let Some((_, quiet_until)) = &mut exited {
                                 *quiet_until = tokio::time::Instant::now() + EXIT_STDIO_GRACE;
                             }
@@ -395,7 +393,7 @@ impl AgentTool for BashTool {
                                 on_update(AgentToolResult::text(content));
                             }
                         }
-                        // Both pipes closed: the command is done writing.
+                        // Both pipes closed, the command is done writing.
                         // `wait` returns at once if the shell already exited.
                         None => {
                             let status = child.wait().await?;
@@ -405,7 +403,7 @@ impl AgentTool for BashTool {
                 }
                 // The shell exited, but a background process it started
                 // (`server &`) may hold the pipes open for hours. Don't wait
-                // for them to close; start the quiet timer instead.
+                // for them to close, start the quiet timer instead.
                 status = child.wait(), if exited.is_none() => {
                     exited = Some((status?, tokio::time::Instant::now() + EXIT_STDIO_GRACE));
                 }
@@ -415,7 +413,7 @@ impl AgentTool for BashTool {
                         None => std::future::pending().await,
                     }
                 } => {
-                    // Shell gone and no output for EXIT_STDIO_GRACE: done.
+                    // Shell gone and no output for EXIT_STDIO_GRACE, done.
                     outcome = exited.map(|(status, _)| RunOutcome::Exited(status.code()));
                 }
             }
@@ -429,7 +427,7 @@ impl AgentTool for BashTool {
             {
                 output.append(chunk.as_bytes());
             }
-            // Bounded reap: if the process somehow survived both kills, give
+            // Bounded reap, if the process somehow survived both kills, give
             // up after a beat instead of hanging the turn. The OS reaps the
             // zombie when cupel exits, which beats a frozen agent.
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
@@ -548,7 +546,7 @@ mod tests {
             tool.describe_call(&json!({"command": "sleep 5", "timeout": 30})),
             "$ sleep 5 (timeout 30s)"
         );
-        // Arguments still streaming in (or malformed): the bare name.
+        // Arguments still streaming in (or malformed), the bare name.
         assert_eq!(tool.describe_call(&json!({})), "bash");
     }
 
@@ -685,7 +683,7 @@ mod tests {
 
     #[tokio::test]
     async fn long_output_truncates_to_tail_and_saves_full_output() {
-        // 3000 lines exceeds the 2000-line limit; the model sees the tail.
+        // 3000 lines exceeds the 2000 line limit, the model sees the tail.
         let err_or_ok = run(json!({"command": "seq 1 3000"})).await.unwrap();
         assert!(err_or_ok.contains("3000"), "tail should include the end");
         assert!(!err_or_ok.contains("\n1\n"), "head should be gone");

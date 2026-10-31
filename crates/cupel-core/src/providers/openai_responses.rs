@@ -1,20 +1,20 @@
 //! `OpenAI` Responses API provider.
 //!
-//! Flow: build JSON request -> POST `{base_url}/responses` with
-//! `stream: true` -> decode the SSE body -> translate Responses events into
-//! unified [`AssistantMessageEvent`]s.
+//! Flow, build JSON request → POST `{base_url}/responses` with
+//! `stream` set to true → decode the SSE body → translate Responses events into
+//! unified `AssistantMessageEvent` values.
 //!
 //! The Responses API differs from Anthropic's in two ways that shape this
-//! code:
+//! code,
 //!
-//! 1. **Item-based transcript.** Instead of role-tagged messages, requests
+//! 1. **Item based transcript.** Instead of role tagged messages, requests
 //!    and responses are flat lists of typed *items* (`message`, `reasoning`,
 //!    `function_call`, `function_call_output`). Replaying a conversation
-//!    means reconstructing those items, including their server-assigned ids.
-//!    We smuggle the ids through our unified types: a text block keeps its
+//!    means reconstructing those items, including their server assigned ids.
+//!    We smuggle the ids through our unified types, a text block keeps its
 //!    item id in `text_signature`, a reasoning item is stored *whole* as JSON
-//!    in `thinking_signature`, and a tool-call id is `"{call_id}|{item_id}"`.
-//! 2. **Stateless encrypted reasoning.** With `store: false` the server
+//!    in `thinking_signature`, and a tool call id is `"{call_id}|{item_id}"`.
+//! 2. **Stateless encrypted reasoning.** With `store` set to false the server
 //!    returns reasoning as an encrypted blob (`reasoning.encrypted_content`)
 //!    which must be replayed verbatim on the next turn.
 
@@ -82,8 +82,8 @@ impl Provider for OpenAiResponsesProvider {
     }
 }
 
-/// Encode `{"v":1,"id":...}`. Versioning the payload
-/// lets future formats coexist with already-persisted sessions.
+/// Encode a versioned object with `v` set to 1 and an `id` field. Versioning the payload
+/// lets future formats coexist with already persisted sessions.
 fn encode_text_signature(id: &str, phase: Option<&str>) -> String {
     let mut payload = json!({"v": 1, "id": id});
     if let Some(phase) = phase {
@@ -110,8 +110,8 @@ fn parse_text_signature(signature: &str) -> (String, Option<String>) {
     (signature.to_string(), None)
 }
 
-/// Cheap deterministic hash used to shorten foreign/oversized ids. FNV-1a is
-/// tiny, dependency-free, and collision-resistant enough for id dedup.
+/// Cheap deterministic hash used to shorten foreign/oversized ids. FNV 1a is
+/// tiny, dependency free, and collision resistant enough for id dedup.
 pub(crate) fn short_hash(input: &str) -> String {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -138,9 +138,9 @@ pub(crate) fn normalize_id_part(part: &str) -> String {
     sanitized.trim_end_matches('_').to_string()
 }
 
-/// Tool-call id normalization for replay. Our ids are `"{call_id}|{item_id}"`;
+/// Tool call id normalization for replay. Our ids are `"{call_id}|{item_id}"`,
 /// the item id must start with `fc_` or the API rejects it, and ids minted by
-/// a *different* provider are replaced by a hash-derived one to avoid
+/// a *different* provider are replaced by a hash derived one to avoid
 /// colliding with OpenAI's pairing validation.
 fn normalize_tool_call_id(id: &str, model: &Model, source: &AssistantMessage) -> String {
     let Some((call_id, item_id)) = id.split_once('|') else {
@@ -173,7 +173,7 @@ async fn run(
         .ok_or_else(|| InferenceError::MissingApiKey(model.provider.as_str().to_string()))?;
 
     let body = build_request_body(model, context, options);
-    // TRACE only: request bodies contain the user's code and prompts.
+    // TRACE only, request bodies contain the user's code and prompts.
     tracing::trace!(body = %body, "request body");
     let url = format!("{}/responses", model.base_url.trim_end_matches('/'));
 
@@ -204,8 +204,8 @@ pub(crate) async fn process_response_stream(
         return Ok(());
     }
 
-    // The Responses API addresses items by `output_index`. Each in-flight
-    // item maps to a slot: our content index + the tool-call JSON scratch.
+    // The Responses API addresses items by `output_index`. Each in flight
+    // item maps to a slot, our content index + the tool call JSON scratch.
     struct Slot {
         content_index: usize,
         kind: SlotKind,
@@ -223,7 +223,7 @@ pub(crate) async fn process_response_stream(
     let mut decoder = SseDecoder::new();
     let mut events: Vec<ServerSentEvent> = Vec::new();
 
-    // Creating a slot when `response.output_item.added` arrives; `.done`
+    // Creating a slot when `response.output_item.added` arrives, `.done`
     // events can also create one defensively.
     fn create_slot(
         slots: &mut std::collections::HashMap<u64, Slot>,
@@ -275,7 +275,7 @@ pub(crate) async fn process_response_stream(
                     .unwrap_or("")
                     .to_string();
                 output.content.push(AssistantContent::ToolCall(ToolCall {
-                    // Both halves are needed for replay; see module docs.
+                    // Both halves are needed for replay, see module docs.
                     id: format!("{call_id}|{item_id}"),
                     name: item
                         .get("name")
@@ -333,8 +333,8 @@ pub(crate) async fn process_response_stream(
                     }
                 }
 
-                // Reasoning arrives either as summaries (o-series) or as raw
-                // reasoning text; both append to the same thinking block.
+                // Reasoning arrives either as summaries (o series) or as raw
+                // reasoning text, both append to the same thinking block.
                 "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                     let delta = data.get("delta").and_then(Value::as_str).unwrap_or("");
                     if let Some(slot) = output_index.and_then(|i| slots.get(&i))
@@ -397,7 +397,7 @@ pub(crate) async fn process_response_stream(
                 }
 
                 "response.function_call_arguments.done" => {
-                    // The event carries the full argument string; emit only
+                    // The event carries the full argument string, emit only
                     // the suffix we haven't already streamed as a delta.
                     let full = data.get("arguments").and_then(Value::as_str).unwrap_or("");
                     if let Some(slot) = output_index.and_then(|i| slots.get_mut(&i))
@@ -425,7 +425,7 @@ pub(crate) async fn process_response_stream(
                     let Some(item) = data.get("item") else {
                         continue;
                     };
-                    // Defensive: create the slot if `.added` was never seen.
+                    // Defensive, create the slot if `.added` was never seen.
                     if !slots.contains_key(&index)
                         && !create_slot(&mut slots, index, item, &mut output, sink)
                     {
@@ -449,7 +449,7 @@ pub(crate) async fn process_response_stream(
                                 } else if !content.is_empty() {
                                     block.thinking = content;
                                 }
-                                // Store the entire reasoning item; replaying it
+                                // Store the entire reasoning item, replaying it
                                 // verbatim is what keeps encrypted reasoning
                                 // valid across turns.
                                 block.thinking_signature = Some(item.to_string());
@@ -594,7 +594,7 @@ fn finalize_response(response: &Value, model: &Model, output: &mut AssistantMess
             .get("input_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        // OpenAI counts cached tokens inside input_tokens; our unified model
+        // OpenAI counts cached tokens inside input_tokens, our unified model
         // keeps them separate, so subtract.
         output.usage.input = input.saturating_sub(cached);
         output.usage.output = usage
@@ -629,7 +629,7 @@ fn finalize_response(response: &Value, model: &Model, output: &mut AssistantMess
         // terminal in practice) all map to a clean stop.
         _ => StopReason::Stop,
     };
-    // The Responses API has no "tool_use" stop status; infer it.
+    // The Responses API has no "tool_use" stop status, infer it.
     if output.stop_reason == StopReason::Stop
         && output
             .content
@@ -644,20 +644,10 @@ fn finalize_response(response: &Value, model: &Model, output: &mut AssistantMess
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct OpenAiCompat {
-    /// Reasoning models take the system prompt in a `developer` role.
     supports_developer_role: bool,
-    /// Whether 24h prompt-cache retention is available.
     supports_long_cache_retention: bool,
-    /// Whether the model accepts the `temperature` request field. GPT-6
-    /// Astra rejects it.
     supports_temperature: bool,
-    /// The API's name for the model when the catalog id differs from it:
-    /// "codex/gpt-6.1-sol" and "gpt-6.1-sol-ultrafast" both go out as
-    /// "gpt-6.1-sol". None = the catalog id is the API name.
     request_model: Option<String>,
-    /// The `service_tier` request field. "ultrafast" runs the same model
-    /// on OpenAI's fastest (and 6x pricier) tier. None = leave the field
-    /// out, so the account's default tier applies.
     service_tier: Option<String>,
 }
 
@@ -674,9 +664,9 @@ impl Default for OpenAiCompat {
 }
 
 impl OpenAiCompat {
-    /// The model name the wire wants: compat's `requestModel`, or the catalog id when
+    /// The model name the wire wants, compat's `requestModel`, or the catalog id when
     /// there is none. cupel's catalog is one flat id namespace (merge_models replaces by
-    /// id, /model addresses by id), so two rows for the same API model need two ids; the
+    /// id, /model addresses by id), so two rows for the same API model need two ids, the
     /// compat blob carries the real name.
     pub(crate) fn wire_model(&self, model: &Model) -> String {
         self.request_model
@@ -693,13 +683,13 @@ impl OpenAiCompat {
     }
 }
 
-/// Parse the knobs once per request: every parse logs the blob's problems, so
+/// Parse the knobs once per request, every parse logs the blob's problems, so
 /// the Codex provider calls this too instead of reading knob by knob.
 pub(crate) fn openai_compat(model: &Model) -> OpenAiCompat {
     compat(model)
 }
 
-/// Problems in the knobs this dialect reads; the Codex provider shares them.
+/// Problems in the knobs this dialect reads, the Codex provider shares them.
 pub(crate) fn compat_problems(model: &Model) -> Vec<String> {
     parse_compat::<OpenAiCompat>(model).1
 }
@@ -712,13 +702,13 @@ fn build_request_body(model: &Model, context: &Context, options: &StreamOptions)
         "model": compat.wire_model(model),
         "input": convert_messages(model, context, &compat),
         "stream": true,
-        // Stateless mode: nothing is persisted server-side; reasoning comes
+        // Stateless mode, nothing is persisted server side, reasoning comes
         // back encrypted and is replayed by us (see module docs).
         "store": false,
     });
 
     // The prompt cache key routes requests with the same prefix to the same
-    // cache shard. Session ids serve nicely; the API caps the key at 64 chars.
+    // cache shard. Session ids serve nicely, the API caps the key at 64 chars.
     if cache_retention != CacheRetention::None
         && let Some(session_id) = &options.session_id
     {
@@ -792,7 +782,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &OpenAiCompat) -> 
 
 /// The transcript as Responses items without the system prompt. It is shared with the
 /// Codex provider, which carries the system prompt in the `instructions` body field
-/// instead of a leading message item. The tool-call id normalizer is a parameter
+/// instead of a leading message item. The tool call id normalizer is a parameter
 /// because Codex counts the plain `openai` provider as family (ids stay usable
 /// across a switch).
 pub(crate) fn convert_items(
@@ -835,7 +825,7 @@ pub(crate) fn convert_items(
             Message::Assistant(assistant) => {
                 // A previous response from this model id? Ids stay usable.
                 // Same provider+api but a different model id needs the item
-                // ids dropped so OpenAI's reasoning/function-call pairing
+                // ids dropped so OpenAI's reasoning/function call pairing
                 // validation doesn't fire.
                 let is_different_model = assistant.model != model.id
                     && assistant.provider == model.provider
@@ -898,7 +888,7 @@ pub(crate) fn convert_items(
                                 "name": tool_call.name,
                                 "arguments": tool_call.arguments.to_string(),
                             });
-                            // Omitting the item id for different-model replay
+                            // Omitting the item id for different model replay
                             // sidesteps the fc/rs pairing validation.
                             if let Some(item_id) = item_id
                                 && !(is_different_model && item_id.starts_with("fc_"))
@@ -974,7 +964,7 @@ mod tests {
         ThinkingLevelMap, ToolResultMessage, UserMessage, now_ms,
     };
 
-    /// A GPT-6 Astra catalog row as the generator emits it: no off, no
+    /// A GPT 6 Astra catalog row as the generator emits it, no off, no
     /// minimal, max kept by omission, and the temperature knob off.
     fn astra_model() -> Model {
         let mut map = ThinkingLevelMap::new();
@@ -1153,7 +1143,7 @@ mod tests {
         );
         assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
 
-        // minimal is unsupported: the clamp walks up to low (OpenAI's own
+        // minimal is unsupported, the clamp walks up to low (OpenAI's own
         // migration advice for none/minimal users).
         let body = build_request_body(
             &model,
@@ -1165,13 +1155,13 @@ mod tests {
 
     #[test]
     fn astra_off_omits_the_reasoning_field() {
-        // off -> null in the map: the model cannot be switched off, so the
+        // off → null in the map, the model cannot be switched off, so the
         // request carries no reasoning field (never effort "none", which
         // Astra rejects) and the server applies its default effort.
         let body = build_request_body(&astra_model(), &context(), &with_reasoning(None));
         assert!(body.get("reasoning").is_none(), "{body}");
 
-        // A row with off -> "none" still sends the explicit none.
+        // A row with off → "none" still sends the explicit none.
         let mut switchable = astra_model();
         let mut map = ThinkingLevelMap::new();
         map.insert("off".to_string(), Some("none".to_string()));
@@ -1182,7 +1172,7 @@ mod tests {
 
     #[test]
     fn ultrafast_rows_send_the_base_model_and_the_tier() {
-        // The catalog's Ultrafast row: its own id, the API's model name
+        // The catalog's Ultrafast row, its own id, the API's model name
         // in requestModel, the tier in serviceTier.
         let mut model = astra_model();
         model.id = "gpt-6.1-sol-ultrafast".to_string();
@@ -1197,7 +1187,7 @@ mod tests {
         // The old knob still applies next to the two new ones.
         assert!(body.get("temperature").is_none(), "{body}");
 
-        // Rows without the knobs: the id goes out as-is, and no tier
+        // Rows without the knobs, the id goes out as is, and no tier
         // field, so the account's default tier applies.
         let body = build_request_body(&astra_model(), &context(), &with_reasoning(None));
         assert_eq!(body["model"], json!("gpt-6-astra"));

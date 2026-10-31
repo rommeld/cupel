@@ -276,6 +276,6 @@ async fn every_request_opens_with_turn_start_and_closes_with_turn_end() {
             _ => None,
         })
         .collect();
-    // Two requests: the tool call, then the answer after the tool result.
+    // Two requests, the tool call, then the answer after the tool result.
     assert_eq!(turns, ["start", "reply", "end", "start", "reply", "end"]);
 }

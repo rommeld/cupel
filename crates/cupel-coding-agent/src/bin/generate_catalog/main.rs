@@ -1,12 +1,10 @@
-//! Dev-time model-catalog generator.
+//! Dev time model catalog generator.
 //!
-//! Uses the checked-in models_dev.json snapshot, applies curation.rs, validates,
-//! and writes crates/cupel-core/src/catalog.json. --fetch refreshes the snapshot
-//! from <https://models.dev/api.json>, keeping only curated models and consumed
-//! fields. Run on demand:
-//!
-//!     cargo run -p cupel-coding-agent --bin generate-catalog
-//!     cargo run -p cupel-coding-agent --bin generate-catalog -- --fetch
+//! Uses the checked in models_dev.json snapshot, applies curation.rs, validates,
+//! and writes the core crate's catalog.json. The fetch option refreshes the snapshot
+//! from the models.dev API, keeping only curated models and consumed
+//! fields. Run the catalog generator binary with Cargo on demand,
+//! optionally passing the fetch option to update the snapshot.
 //!
 //! It never runs at cupel runtime. The catalog is data checked into git.
 
@@ -23,8 +21,6 @@ use crate::curation::{
     ULTRAFAST_BASES, ULTRAFAST_PRICE_FACTOR, Window,
 };
 use crate::models_dev::ProviderEntry;
-
-// const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Command {
@@ -72,7 +68,7 @@ async fn run() -> Result<(), String> {
         std::fs::read_to_string(&snapshot_path)
             .map_err(|error| format!("read {}: {error}", snapshot_path.display()))?
     };
-    // Offline, "models.dev no longer lists ..." means the checked-in snapshot
+    // Offline, "models.dev no longer lists ..." means the checked in snapshot
     // lacks a row that curation.rs now wants, not that models.dev dropped it.
     let (models, json) = generate(&raw).map_err(|error| {
         if use_fetch {
@@ -85,7 +81,7 @@ async fn run() -> Result<(), String> {
         }
     })?;
     print_summary(&models);
-    // Validate everything before updating either checked-in artifact.
+    // Validate everything before updating either checked in artifact.
     if use_fetch {
         std::fs::write(&snapshot_path, raw)
             .map_err(|error| format!("write {}: {error}", snapshot_path.display()))?;
@@ -106,7 +102,7 @@ fn generate(raw: &str) -> Result<(Vec<Model>, String), String> {
     // curation table.
     models.extend(openai_codex_models());
     let mut models = with_ultrafast_twins(models, ULTRAFAST_BASES)?;
-    // JSON-valued fields must keep their historical ordering even when another
+    // JSON valued fields must keep their historical ordering even when another
     // workspace member enables serde_json/preserve_order.
     for compat in models.iter_mut().filter_map(|model| model.compat.as_mut()) {
         compat.sort_all_objects();
@@ -114,7 +110,7 @@ fn generate(raw: &str) -> Result<(Vec<Model>, String), String> {
     validate(&models)?;
 
     let json = to_pretty_json(&models)?;
-    // Round-trip self-check: the bytes we are about to commit must parse
+    // Round trip self check, the bytes we are about to commit must parse
     // back into the exact same models (catches serde asymmetries early).
     let reparsed: Vec<Model> =
         serde_json::from_str(&json).map_err(|error| format!("round-trip parse: {error}"))?;
@@ -124,7 +120,7 @@ fn generate(raw: &str) -> Result<(Vec<Model>, String), String> {
     Ok((models, json))
 }
 
-/// A deterministic, normalized subset: only curated models and fields represented
+/// A deterministic, normalized subset, only curated models and fields represented
 /// by the models.dev mirror. Unused upstream schema changes stay out of the snapshot.
 fn curated_snapshot(raw: &str) -> Result<String, String> {
     let wanted: Vec<&str> = PROVIDERS.iter().map(|p| p.models_dev_id).collect();
@@ -152,7 +148,7 @@ fn curated_snapshot(raw: &str) -> Result<String, String> {
     to_pretty_json(&snapshot)
 }
 
-/// One bounded GET, like the ollama probe: explicit
+/// One bounded GET, like the ollama probe, explicit
 /// timeout, HTTP errors surfaced with the URL in the message.
 async fn fetch(url: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
@@ -267,7 +263,7 @@ fn with_ultrafast_twins(models: Vec<Model>, bases: &[&str]) -> Result<Vec<Model>
     }
     Ok(models
         .into_iter()
-        // flat_map turns each row into one or two rows: the row itself, then its twin
+        // flat_map turns each row into one or two rows, the row itself, then its twin
         // when `then` produced one (`Option` iterates as zero or one items, so `chain`
         // appends nothing for None).
         .flat_map(|model| {
@@ -279,12 +275,12 @@ fn with_ultrafast_twins(models: Vec<Model>, bases: &[&str]) -> Result<Vec<Model>
         .collect())
 }
 
-/// The base row on the Ultrafast tier: the same model on the wire with the same limits
+/// The base row on the Ultrafast tier, the same model on the wire with the same limits
 /// and effort scale, under its own id, name and prices.
 fn ultrafast_twin(base: &Model) -> Model {
     let mut compat = base.compat.clone().unwrap_or_else(|| serde_json::json!({}));
-    // Codex rows already carry the backend name ("gpt-6.1-sol" for
-    // "codex/gpt-6.1-sol"); a plain openai row's id is its API name.
+    // Codex rows already carry the backend name ("gpt 6.1 sol" for
+    // "codex/gpt 6.1 sol"), a plain openai row's id is its API name.
     if compat.get("requestModel").is_none() {
         compat["requestModel"] = serde_json::json!(base.id);
     }
@@ -298,7 +294,7 @@ fn ultrafast_twin(base: &Model) -> Model {
     }
 }
 
-/// Every price times `factor`, long-context tiers included.
+/// Every price times `factor`, long context tiers included.
 fn scaled_cost(cost: &ModelCost, factor: f64) -> ModelCost {
     // f64 is binary, so 0.1 has no exact representation and
     // 0.1 * 6.0 == 0.6000000000000001. Rounding to a millionth of a
@@ -359,7 +355,7 @@ fn to_model(
     let (context_window, max_context_window) = match row.window {
         Window::ModelsDev => (entry.limit.context, None),
         Window::PriceTier => {
-            // The lowest price-tier threshold is the planning window; a
+            // The lowest price tier threshold is the planning window, a
             // PriceTier row whose models.dev entry lists no tier is a
             // curation error, not a silent fallback to the full window.
             let threshold = cost
@@ -414,8 +410,8 @@ fn to_model(
     })
 }
 
-/// models.dev's `temperature: false` becomdes the OpenAI-family compat
-/// knob `supportsTemperature: false`. Anthropic rows keep their explicit
+/// models.dev's `temperature` set to false becomdes the OpenAI family compat
+/// knob `supportsTemperature` set to false. Anthropic rows keep their explicit
 /// templates.
 fn with_temperature_knob(
     compat: Option<serde_json::Value>,
@@ -430,7 +426,7 @@ fn with_temperature_knob(
     Some(compat)
 }
 
-/// models.dev knows text/image/pdf/audio/video; cupel's InputModality
+/// models.dev knows text/image/pdf/audio/video, cupel's InputModality
 /// only text/image. The rest is dropped (documented deviation).
 fn input_modalities(raw: &[String]) -> Vec<InputModality> {
     let mut out = Vec::new();
@@ -465,7 +461,7 @@ fn to_pretty_json(value: &(impl serde::Serialize + ?Sized)) -> Result<String, St
     Ok(json)
 }
 
-/// Resolve crates/cupel-core/src/catalog.json relative to this crate's
+/// Resolve crates/cupel core/src/catalog.json relative to this crate's
 /// manifest, so the generator works from any working directory.
 fn output_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../cupel-core/src/catalog.json")
@@ -524,9 +520,9 @@ fn validate(models: &[Model]) -> Result<(), String> {
             ));
         }
     }
-    // The catalog-order contract: fixtures across the workspace take
+    // The catalog order contract, fixtures across the workspace take
     // builtin_models().remove(0) as "a plain Anthropic model", and the
-    // /provider default is first-in-order.
+    // /provider default is first in order.
     match models.first() {
         Some(first)
             if first.id == "claude-sonnet-5" && first.provider.as_str() == Provider::ANTHROPIC => {}
@@ -556,8 +552,8 @@ mod tests {
 
     #[test]
     fn checked_in_snapshot_holds_exactly_the_curated_subset() {
-        // A row removed from curation.rs, or a hand-edited field, would
-        // otherwise linger in the snapshot until the next --fetch diff.
+        // A row removed from curation.rs, or a hand edited field, would
+        // otherwise linger in the snapshot until the next fetch diff.
         let source = include_str!("models_dev.json");
         assert_eq!(
             curated_snapshot(source).expect("the snapshot covers every curated row"),
@@ -664,12 +660,12 @@ mod tests {
         assert!((model.cost.cached_write - 2.5).abs() < f64::EPSILON);
         assert_eq!(model.context_window, 1_000_000);
         assert_eq!(model.max_tokens, 128_000);
-        // Budget thinking: no map at all.
+        // Budget thinking, no map at all.
         assert!(model.thinking_level_map.is_none());
         assert!(model.compat.is_none());
     }
 
-    /// GPT-6 Astra exactly as models.dev lists it (2026-09-06).
+    /// GPT 6 Astra exactly as models.dev lists it (2026 09 06).
     fn astra_entry() -> models_dev::ModelEntry {
         serde_json::from_value(serde_json::json!({
             "name": "GPT-6 Astra",
@@ -707,7 +703,7 @@ mod tests {
     #[test]
     fn price_tier_rows_plan_against_the_tier_threshold() {
         let model = to_model(&OPENAI_PROVIDER, &ASTRA_ROW, &astra_entry()).expect("maps");
-        // 272k planning window (the price tier), 922k opt-in ceiling (the
+        // 272k planning window (the price tier), 922k opt in ceiling (the
         // documented max input), tier prices carried along.
         assert_eq!(model.context_window, 272_000);
         assert_eq!(model.max_context_window, Some(922_000));
@@ -730,12 +726,12 @@ mod tests {
         ] {
             assert_close(actual, expected);
         }
-        // The effort scale: off/minimal disabled, xhigh/max kept by omission.
+        // The effort scale, off/minimal disabled, xhigh/max kept by omission.
         let map = model.thinking_level_map.expect("map");
         assert_eq!(map.get("off"), Some(&None));
         assert_eq!(map.get("minimal"), Some(&None));
         assert!(!map.contains_key("xhigh") && !map.contains_key("max"));
-        // temperature: false -> the compat knob, created from nothing.
+        // temperature, false → the compat knob, created from nothing.
         assert_eq!(
             model.compat,
             Some(serde_json::json!({"supportsTemperature": false}))
@@ -797,7 +793,7 @@ mod tests {
         assert!(error.contains("not an http(s) URL"), "{error}");
         assert!(error.contains("inverted: maxContextWindow"), "{error}");
 
-        // The order contract: anything but sonnet-5 first is an error.
+        // The order contract, anything but sonnet 5 first is an error.
         let mut renamed = good;
         renamed.id = "claude-opus-5".to_string();
         let error = validate(&[renamed]).unwrap_err();
@@ -857,9 +853,9 @@ mod tests {
                 .and_then(|c| c.get("supportsTemperature")),
             Some(&serde_json::json!(false))
         );
-        // GPT-6.1 Sol and Terra plan past their price tier:
+        // GPT 6.1 Sol and Terra plan past their price tier,
         // the window is Codex's 500k default, yet turns above 272k still
-        // show the tier's API-equivalent prices.
+        // show the tier's API equivalent prices.
         for id in ["codex/gpt-6.1-sol", "codex/gpt-6.1-terra"] {
             let model = models.iter().find(|m| m.id == id).expect(id);
             assert_eq!(model.context_window, 500_000, "{id}");
@@ -871,7 +867,7 @@ mod tests {
 
     #[test]
     fn ultrafast_twins_follow_their_base_rows() {
-        // A small catalog: the Astra fixture stands in for a plain openai
+        // A small catalog, the Astra fixture stands in for a plain openai
         // row (no requestModel yet), the pinned rows for Codex.
         let mut models =
             vec![to_model(&OPENAI_PROVIDER, &ASTRA_ROW, &astra_entry()).expect("maps")];
@@ -912,7 +908,7 @@ mod tests {
             }))
         );
         // OpenAI's Ultrafast table, both context tiers. Comparing whole
-        // structs works because scaled_cost rounds: 0.1 * 6.0 alone
+        // structs works because scaled_cost rounds, 0.1 * 6.0 alone
         // would be 0.6000000000000001, not the 0.6 written here.
         assert_eq!(
             twin.cost,

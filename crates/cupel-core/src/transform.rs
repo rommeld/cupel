@@ -1,21 +1,22 @@
-//! Cross-provider message normalization, applied by every provider before it
+//! Cross provider message normalization, applied by every provider before it
 //! converts the unified transcript to its wire format.
 //!
 //! A transcript can contain messages produced by a *different* model than the
-//! one about to be called (the user switched models mid-session, or a tool
+//! one about to be called (the user switched models mid session, or a tool
 //! result came from elsewhere). Providers are strict about what they accept
-//! back, so this pass:
+//! back, so this pass,
 //!
 //! 1. Replaces images with a text placeholder for models without vision.
 //! 2. Converts foreign thinking blocks to plain text (signatures are only
 //!    valid for the exact model that produced them) and drops redacted
 //!    thinking that a different model cannot decrypt.
-//! 3. Normalizes tool-call ids to the target provider's format (Anthropic
-//!    requires `^[a-zA-Z0-9_-]{1,64}$`; `OpenAI` Responses ids can be 450+
+//! 3. Normalizes tool call ids to the target provider's format (Anthropic
+//!    requires 1 to 64 ASCII letters, digits, underscores or hyphens,
+//!    `OpenAI` Responses ids can be 450+
 //!    chars with `|`).
 //! 4. Skips errored/aborted assistant messages entirely (incomplete turns
 //!    that would be rejected on replay).
-//! 5. Inserts synthetic error tool-results for tool calls that never got an
+//! 5. Inserts synthetic error tool results for tool calls that never got an
 //!    answer, because every provider requires call/result pairing.
 //! 6. Adds text to empty tool results, referencing an attached image only
 //!    when one remains after image normalization.
@@ -30,9 +31,9 @@ const NON_VISION_USER_IMAGE_PLACEHOLDER: &str = "(image omitted: model does not 
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER: &str =
     "(tool image omitted: model does not support images)";
 
-/// How a provider rewrites tool-call ids for cross-model replay.
+/// How a provider rewrites tool call ids for cross model replay.
 ///
-/// A function pointer (not a closure trait object) keeps the signature simple;
+/// A function pointer (not a closure trait object) keeps the signature simple,
 /// none of the normalizers need captured state beyond the arguments.
 pub type NormalizeToolCallId = fn(&str, &Model, &AssistantMessage) -> String;
 
@@ -43,10 +44,10 @@ pub fn transform_messages(
     model: &Model,
     normalize_tool_call_id: Option<NormalizeToolCallId>,
 ) -> Vec<Message> {
-    // Old id -> normalized id, so tool *results* can follow their calls.
+    // Old id → normalized id, so tool *results* can follow their calls.
     let mut tool_call_id_map: HashMap<String, String> = HashMap::new();
 
-    // ---- Pass 1: per-message rewrites -----------------------------------
+    // Pass 1, per message rewrites
     let transformed: Vec<Message> = messages
         .iter()
         .map(|msg| match msg {
@@ -73,7 +74,7 @@ pub fn transform_messages(
     let mut existing_result_ids: HashSet<String> = HashSet::new();
 
     // Local helper as a closure won't work here (it would borrow `result`
-    // mutably while we also push to it), so use a fn-style helper.
+    // mutably while we also push to it), so use a fn style helper.
     fn insert_synthetic_results(
         result: &mut Vec<Message>,
         pending: &mut Vec<ToolCall>,
@@ -99,14 +100,14 @@ pub fn transform_messages(
     for msg in transformed {
         match msg {
             Message::Assistant(assistant) => {
-                // A new assistant turn: resolve any dangling calls first.
+                // A new assistant turn, resolve any dangling calls first.
                 insert_synthetic_results(
                     &mut result,
                     &mut pending_tool_calls,
                     &mut existing_result_ids,
                 );
 
-                // Errored/aborted turns are incomplete; replaying them causes
+                // Errored/aborted turns are incomplete, replaying them causes
                 // API errors (e.g. OpenAI's "reasoning without following item").
                 if matches!(
                     assistant.stop_reason,
@@ -130,7 +131,7 @@ pub fn transform_messages(
                 result.push(Message::ToolResult(tool_result));
             }
             Message::User(user) => {
-                // A user message interrupts the tool flow; close it out.
+                // A user message interrupts the tool flow, close it out.
                 insert_synthetic_results(
                     &mut result,
                     &mut pending_tool_calls,
@@ -213,7 +214,7 @@ fn normalize_tool_result(mut result: ToolResultMessage, model: &Model) -> ToolRe
 }
 
 /// Borrowed view over "text or image" blocks so one replacement routine can
-/// serve both user content and tool-result content. The image payload is
+/// serve both user content and tool result content. The image payload is
 /// irrelevant here (it gets replaced), so the variant carries no data.
 enum ContentRef<'a> {
     Text(&'a TextContent),
@@ -255,8 +256,8 @@ fn transform_assistant(
     normalize_tool_call_id: Option<NormalizeToolCallId>,
     tool_call_id_map: &mut HashMap<String, String>,
 ) -> AssistantMessage {
-    // "Same model" means id and provider and api all match; only then are
-    // opaque signatures (thinking, tool-call pairing) valid for replay.
+    // "Same model" means id and provider and api all match, only then are
+    // opaque signatures (thinking, tool call pairing) valid for replay.
     let is_same_model = assistant.provider == model.provider
         && assistant.api == model.api
         && assistant.model == model.id;
@@ -267,7 +268,7 @@ fn transform_assistant(
         .filter_map(|block| match block {
             AssistantContent::Thinking(thinking) => {
                 // Redacted thinking is encrypted content only the producing
-                // model can decrypt; drop it cross-model.
+                // model can decrypt, drop it cross model.
                 if thinking.redacted == Some(true) {
                     return is_same_model.then(|| block.clone());
                 }
@@ -282,7 +283,7 @@ fn transform_assistant(
                 if is_same_model {
                     Some(block.clone())
                 } else {
-                    // Cross-model: demote to plain text so it survives.
+                    // Cross model, demote to plain text so it survives.
                     Some(AssistantContent::Text(TextContent::plain(
                         thinking.thinking.clone(),
                     )))
@@ -292,7 +293,7 @@ fn transform_assistant(
                 if is_same_model {
                     Some(block.clone())
                 } else {
-                    // Strip the text signature; it references foreign ids.
+                    // Strip the text signature, it references foreign ids.
                     Some(AssistantContent::Text(TextContent::plain(
                         text.text.clone(),
                     )))

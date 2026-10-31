@@ -1,8 +1,8 @@
-//! Steering against a scripted provider: a message steered in while the
+//! Steering against a scripted provider, a message steered in while the
 //! model streams cuts that reply short, one steered in while a tool runs
 //! waits for the tool and interrupts nothing.
 
-// Integration-test files under tests/ are compiled as their own crate and
+// Integration test files under tests/ are compiled as their own crate and
 // only ever built in test mode, so the "tests outside #[cfg(test)]"
 // restriction lint does not apply here.
 #![allow(clippy::tests_outside_test_module)]
@@ -28,10 +28,7 @@ use cupel_core::{
 /// What the provider does on one call.
 #[derive(Clone, Copy)]
 enum Reply {
-    /// Stream `n` words, 10 ms apart, and stop early when the request's
-    /// signal fires, the way a real provider does.
     Slow(usize),
-    /// Ask for the `wait` tool.
     Tool,
 }
 
@@ -195,7 +192,7 @@ async fn steering_cuts_a_streaming_reply_short() {
     let mut steered = false;
     while let Some(event) = events.next().await {
         match event {
-            // The first word proves the reply is streaming: steer now.
+            // The first word proves the reply is streaming, steer now.
             AgentEvent::MessageUpdate { .. } if !steered => {
                 agent.steer(AgentMessage::user_text("use the other file"));
                 steered = true;
@@ -246,7 +243,7 @@ async fn steering_waits_for_a_running_tool_and_interrupts_nothing() {
     agent.wait_for_idle().await;
 
     // The tool ran to the end, the steering message followed its result,
-    // and the next reply finished: the signal left behind by `steer` did
+    // and the next reply finished, the signal left behind by `steer` did
     // not cut it short once its message was delivered.
     assert_eq!(
         ended,
@@ -270,7 +267,7 @@ async fn abort_still_ends_a_steered_run() {
     let mut steered = false;
     while let Some(event) = events.next().await {
         match event {
-            // Steer and abort at the same moment: abort wins.
+            // Steer and abort at the same moment, abort wins.
             AgentEvent::MessageUpdate { .. } if !steered => {
                 agent.steer(AgentMessage::user_text("use the other file"));
                 agent.abort();

@@ -1,4 +1,4 @@
-//! Code search abstraction + the grep-based default backend.
+//! Code search abstraction + the grep based default backend.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -58,7 +58,7 @@ pub enum SearchError {
 
 /// The backend interface the grep tool is written against.
 ///
-/// Iteration two adds an index-backed implementation in `cupel-index`;
+/// Iteration two adds an index backed implementation in the future indexing crate,
 /// see the module docs for why this indirection exists.
 #[async_trait::async_trait]
 pub trait CodeSearch: Send + Sync {
@@ -69,7 +69,7 @@ pub trait CodeSearch: Send + Sync {
     ) -> Result<SearchOutcome, SearchError>;
 }
 
-/// Resolve a query path against the search root: absolute paths pass
+/// Resolve a query path against the search root, absolute paths pass
 /// through, `~` expands, everything else is joined onto the root.
 #[must_use]
 pub fn resolve_to_root(path: &str, root: &Path) -> PathBuf {
@@ -90,7 +90,7 @@ pub fn resolve_to_root(path: &str, root: &Path) -> PathBuf {
     }
 }
 
-/// File-scan search backend using ripgrep's engine. Respects `.gitignore`,
+/// File scan search backend using ripgrep's engine. Respects `.gitignore`,
 /// includes hidden files (but never the `.git` directory itself).
 pub struct GrepSearch {
     root: PathBuf,
@@ -121,7 +121,7 @@ impl CodeSearch for GrepSearch {
 }
 
 /// Escape regex metacharacters so the pattern matches literally
-/// (rg's `--fixed-strings`).
+/// (rg's literal string matching).
 pub(crate) fn escape_regex(pattern: &str) -> String {
     let mut escaped = String::with_capacity(pattern.len() * 2);
     for c in pattern.chars() {
@@ -208,14 +208,14 @@ fn search_blocking(
     };
 
     let mut matches: Vec<SearchMatch> = Vec::new();
-    // Shared counter lets the per-file sink stop the whole search at the
+    // Shared counter lets the per file sink stop the whole search at the
     // limit. Atomic because sink closures can't borrow `matches` mutably
     // while the outer loop also does.
     let count = Arc::new(AtomicUsize::new(0));
     let mut files_with_matches = 0_usize;
     let mut limit_reached = false;
 
-    // Stored, single-threaded walk => deterministic result order.
+    // Stored, single threaded walk => deterministic result order.
     for entry in walker.build() {
         if cancel.is_cancelled() {
             return Err(SearchError::Aborted);
@@ -245,8 +245,8 @@ fn search_blocking(
                     line: line.trim_end_matches(['\r', '\n']).to_string(),
                 });
                 let seen = count_for_sink.fetch_add(1, Ordering::Relaxed) + 1;
-                // Returning Ok(false) stops the search in this file: at the
-                // global match limit or at the per-file cap.
+                // Returning Ok(false) stops the search in this file, at the
+                // global match limit or at the per file cap.
                 Ok(seen < max_matches && file_matches.len() < per_file)
             }),
         );
@@ -285,8 +285,8 @@ mod tests {
             PathBuf::from("/project/src/main.rs")
         );
         assert_eq!(resolve_to_root("@/abs/x", root), PathBuf::from("/abs/x"));
-        // Plain paths are untouched; only one @ is stripped (a literal
-        // `@@weird` file stays reachable as `@@weird` -> `@weird`... rare
+        // Plain paths are untouched, only one @ is stripped (a literal
+        // `@@weird` file stays reachable as `@@weird` → `@weird`... rare
         // enough to accept the trade).
         assert_eq!(
             resolve_to_root("src/main.rs", root),
@@ -358,7 +358,7 @@ mod tests {
                 ("kept.txt", "secret\n"),
             ],
         );
-        // .gitignore applies to repositories; init a fake .git dir.
+        // .gitignore applies to repositories, init a fake .git dir.
         std::fs::create_dir_all(root.join(".git")).unwrap();
         let outcome = run(&root, base_query("secret"));
         assert_eq!(outcome.matches.len(), 1);
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn walk_order_is_sorted_by_path() {
         let root = temp_root("sorted");
-        // Written in reverse order on purpose: the walk must not depend on
+        // Written in reverse order on purpose, the walk must not depend on
         // creation or readdir order.
         write_tree(
             &root,

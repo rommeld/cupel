@@ -1,7 +1,7 @@
 //! Program Status Protocol revision 0.4 (OSC 7501).
 //!
 //! Frontends opt in only for terminal output. Nothing is emitted by agent or ACP
-//! code. Reports are complete replacements; output failures are best-effort.
+//! code. Reports are complete replacements, output failures are best effort.
 
 use std::collections::BTreeMap;
 use std::io::{IsTerminal as _, Write};

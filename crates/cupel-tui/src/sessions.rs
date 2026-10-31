@@ -1,4 +1,4 @@
-//! Several session in one TUI: the origin in the main checkout and its spinoffs, each
+//! Several session in one TUI, the origin in the main checkout and its spinoffs, each
 //! a complete [`App`] of its own. `Sessions` decides which one is on screen and sends
 //! input there, while every session's agent keeps working, on screen or not.
 
@@ -38,7 +38,7 @@ pub struct Sessions {
     pub checkout_gates: std::sync::Mutex<cupel_coding_agent::tools::checkout_write::CheckoutGates>,
 }
 
-/// How cupel starts again on a new release: the binary, its arguments, and what to
+/// How cupel starts again on a new release, the binary, its arguments, and what to
 /// say on the terminal before it happens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Restart {
@@ -109,7 +109,7 @@ impl Sessions {
                     && key.modifiers.contains(KeyModifiers::CONTROL)
                     && matches!(key.code, KeyCode::Char('n' | 'p')) =>
             {
-                // Backwards is "len - 1 forwards": the index never goes below 0.
+                // Backwards is "len 1 forwards", the index never goes below 0.
                 let step = if key.code == KeyCode::Char('n') {
                     1
                 } else {
@@ -142,7 +142,7 @@ impl Sessions {
         self.active_mut().mouse_captured = captured;
     }
 
-    /// A session off screen must be read too: its transcript file and its hooks only
+    /// A session off screen must be read too, its transcript file and its hooks only
     /// move on when its events are handled.
     pub async fn next_event(&mut self) -> (usize, AppEvent) {
         let waits = self.list.iter_mut().enumerate().map(|(index, session)| {
@@ -155,7 +155,7 @@ impl Sessions {
     /// next one. The event loop calls this before drawing a single frame for the batch.
     pub async fn drain_ready_events(&mut self) {
         for session in &mut self.list {
-            // Only the readiness probe is unconstrained: Tokio's receive budget
+            // Only the readiness probe is unconstrained, Tokio's receive budget
             // must not end the batch while events are still buffered.
             while let Some(event) =
                 tokio::task::unconstrained(session.app.next_event()).now_or_never()
@@ -177,7 +177,7 @@ impl Sessions {
         }
     }
 
-    /// `/new` and `/hot-reload` in the session on screen, rebuild that one `App` and
+    /// `/new` and hot reload in the session on screen, rebuild that one `App` and
     /// put it back in its place.
     pub async fn reload(&mut self, target: ReloadTarget) {
         let Session { label, app } = self.list.remove(self.active);
@@ -189,7 +189,7 @@ impl Sessions {
             .gate(Path::new(&app.meta.cwd));
         app.set_write_gate(gate);
         self.list.insert(self.active, Session { label, app });
-        // Show the active theme's new version after re-reading the files.
+        // Show the active theme's new version after re reading the files.
         // If its file disappeared or broke, keep the current look until a switch.
         if let Some(theme) = crate::theme::find(&self.active().themes, &self.theme.id) {
             self.theme = theme;
@@ -197,7 +197,7 @@ impl Sessions {
     }
 
     /// The session on screen asked to quit (Ctrl+C, Ctrl+D, `/quit`). Quit, unless
-    /// another session is still working: then warn once, and quit on the next attempt.
+    /// another session is still working, then warn once, and quit on the next attempt.
     pub fn quit_requested(&mut self) -> bool {
         if !core::mem::take(&mut self.active_mut().should_quit) {
             return false;
@@ -221,7 +221,7 @@ impl Sessions {
     }
 
     /// Stop every session by aborting running agents, wait for them, and let each
-    /// recorder announce its end (the `session-end` hook).
+    /// recorder announce its end (the session end hook).
     pub async fn shutdown(&mut self) {
         for session in &mut self.list {
             if session.app.is_running() {
@@ -245,9 +245,9 @@ impl Sessions {
     /// The restart onto `binary`, the release `version` that `/update` installed, or
     /// why a restart now would lose something.
     ///
-    /// A restart keeps what is on disk. The origin comes back through `--resume <id>`
+    /// A restart keeps what is on disk. The origin comes back through the resume option with an id
     /// when it has a history, with its model and thinking level. The spinoffs come
-    /// back the way they do at every start (`restore`): each with the newest transcript
+    /// back the way they do at every start (`restore`), each with the newest transcript
     /// of its worktree.
     pub fn restart(&self, binary: &Path, version: &Version) -> Result<Restart, String> {
         for (index, session) in self.list.iter().enumerate() {
@@ -256,7 +256,7 @@ impl Sessions {
                 return Err(format!("{} {blocker}", session.label));
             }
             // When the newest transcript in a spinoff's worktree is not this session's
-            // (after `/hot-reload <id>`), `restore` would bring back another
+            // (after hot reload with an id), `restore` would bring back another
             // conversation.
             if index > 0 && !app.agent.state().messages.is_empty() {
                 let cwd = Path::new(&app.meta.cwd);
@@ -272,7 +272,7 @@ impl Sessions {
         }
         let origin = &self.list[0].app;
         let state = origin.agent.state();
-        // The words `--thinking` takes. No level is off.
+        // The words the thinking option takes. No level is off.
         let thinking = state
             .thinking_level
             .map_or("off", |level| ModelThinkingLevel::from(level).as_str());
@@ -353,7 +353,7 @@ impl Sessions {
         }
     }
 
-    /// `/spinoff`: the origin and every spinoff git knows, and which of them have no
+    /// `/spinoff`, the origin and every spinoff git knows, and which of them have no
     /// session in this TUI.
     fn list_group(&mut self) -> Result<(), SpinoffError> {
         let group = self.group()?;
@@ -381,7 +381,7 @@ impl Sessions {
         Ok(())
     }
 
-    /// `/spinoff <name> [preset]`: a worktree for the spinoff and a new session in it,
+    /// `/spinoff <name> [preset]`, a worktree for the spinoff and a new session in it,
     /// shown right away.
     async fn create(
         &mut self,
@@ -458,7 +458,7 @@ impl Sessions {
         Ok(())
     }
 
-    /// After a restart: every spinoff worktree git knows becomes a session again,
+    /// After a restart, every spinoff worktree git knows becomes a session again,
     /// continuing its newest transcript. Inside a spinoff's worktree, cupel stays
     /// single session and says so.
     pub async fn restore(&mut self) {
@@ -494,9 +494,9 @@ impl Sessions {
         ));
     }
 
-    /// A session for `spinoff` that continues its newest transcript, as `--resume`
-    /// does: the same session id, the history on screen and in the context. The model
-    /// is the one of the last answer; thinking level and preset prompt come from the
+    /// A session for `spinoff` that continues its newest transcript, as the resume option
+    /// does, the same session id, the history on screen and in the context. The model
+    /// is the one of the last answer, thinking level and preset prompt come from the
     /// origin, because the transcript records neither.
     async fn reopen(&self, spinoff: &Spinoff) -> App {
         let origin = &self.list[0].app;
@@ -549,9 +549,9 @@ impl Sessions {
         app
     }
 
-    /// `/spinoff merge <name> [message]`: the next step of merging spinoff `name` into
+    /// `/spinoff merge <name> [message]`, the next step of merging spinoff `name` into
     /// the origin's branch, with `message` for the merge commit. Conflicts go to the
-    /// origin's model as a prompt; the next `/spinoff merge` finishes the merge and
+    /// origin's model as a prompt, the next `/spinoff merge` finishes the merge and
     /// cleans up.
     async fn merge(&mut self, name: &str, message: Option<&str>) -> Result<(), SpinoffError> {
         let (group, spinoff) = self.prepare(name)?;
@@ -587,7 +587,7 @@ impl Sessions {
         }
     }
 
-    /// `/spinoff` drop <name>`: delete the spinoff, and leave the origin's checkout,
+    /// `/spinoff` drop <name>`, delete the spinoff, and leave the origin's checkout,
     /// branch and history alone. Its leftovers are committed to its branch first, so
     /// the commit in the notice holds all of its work.
     async fn drop_spinoff(&mut self, name: &str) -> Result<(), SpinoffError> {
@@ -628,7 +628,7 @@ impl Sessions {
     }
 
     /// The checkouts this TUI works with. Refused when cupel runs inside a spinoff's
-    /// worktree: there it is a single session, and spinoffs belong to the main
+    /// worktree, there it is a single session, and spinoffs belong to the main
     /// checkout.
     fn group(&self) -> Result<Group, SpinoffError> {
         let cwd = Path::new(&self.list[0].app.meta.cwd);
@@ -654,7 +654,7 @@ impl Sessions {
             .find(|&index| Path::new(&self.list[index].app.meta.cwd) == spinoff.path)
     }
 
-    /// What the spinoff was started for: the first prompt of its oldest transcript.
+    /// What the spinoff was started for, the first prompt of its oldest transcript.
     fn first_prompt(&self, spinoff: &Spinoff) -> String {
         let home = self.list[0].app.meta.home.as_deref();
         session::sessions_dir(home, &spinoff.path)
@@ -665,7 +665,7 @@ impl Sessions {
     }
 
     /// Close the spinoff's session, remove its worktree and branch, then archive its
-    /// transcript . In this order, the `session-end` hook still findes the worktree,
+    /// transcript . In this order, the session end hook still findes the worktree,
     /// and nothing is archived when a removal fails.
     async fn clean_up(
         &mut self,
@@ -800,8 +800,8 @@ impl Sessions {
 }
 
 /// Gice `worktree` the trust decision made for the origin's directory, so the spinoff
-/// runs with the same project hooks and model rows: the trust popup only asks at
-/// startup. Returns a warning when saving fails; the spinoff then runs restricted,
+/// runs with the same project hooks and model rows, the trust popup only asks at
+/// startup. Returns a warning when saving fails, the spinoff then runs restricted,
 /// which is safe.
 fn copy_trust(home: Option<&Path>, origin: &Path, worktree: &Path) -> Option<String> {
     let home = home?;

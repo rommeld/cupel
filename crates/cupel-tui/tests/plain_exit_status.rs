@@ -13,7 +13,7 @@ mod tests {
         let project = root.join("project");
         std::fs::create_dir_all(&project).unwrap();
 
-        // No configured or exported key: the provider fails before any HTTP
+        // No configured or exported key, the provider fails before any HTTP
         // request. A real agent turn still runs, exercising plain mode's exit.
         let mut child = Command::new(env!("CARGO_BIN_EXE_cupel"))
             .args(["--plain", "--model", "gpt-6-sol"])
@@ -97,7 +97,7 @@ mod tests {
         assert!(stderr.contains("API keys belong"), "{stderr}");
         assert!(!stderr.contains("project-secret"), "{stderr}");
 
-        // --help also consumes the offline catalog's returned warnings.
+        // help also consumes the offline catalog's returned warnings.
         let output = Command::new(env!("CARGO_BIN_EXE_cupel"))
             .arg("--help")
             .current_dir(&project)

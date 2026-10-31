@@ -1,12 +1,12 @@
-//! Apply the `@@` chunks of an `*** Update File:` hunk to a file's text.
+//! Apply the `@@` chunks of an an update file marker hunk to a file's text.
 //!
 //! A port of Codex's seek_sequence.rs and file_update.rs. The tool hands this module
-//! BOM-free, LF-normalized text (the round trip lives in [`super::text_diff`]); line
+//! BOM free, LF normalized text (the round trip lives in `text_diff`), line
 //! endings and the BOM are restored by the tool on write.
 //!
-//! Two ideas carry the whole module:
+//! Two ideas carry the whole module,
 //!
-//! 1. A chunk is located, not addressed. There are no line numbers in the format;
+//! 1. A chunk is located, not addressed. There are no line numbers in the format,
 //! `old_lines` (context + removed lines) are searched for in the file, starting after
 //! the previous chunk, with decreasing strictness. Ignoring trailing whitespce,
 //! ignoring surrounding whitespace, then with typographic punctuation folded to ASCII.
@@ -19,7 +19,7 @@
 use crate::tools::patch_parser::UpdateFileChunk;
 use unicode_normalization::UnicodeNormalization as _;
 
-/// `(start_index, old_len, new_lines)`: replace `old_len` lines from `start_index`
+/// `(start_index, old_len, new_lines)`, replace `old_len` lines from `start_index`
 /// with `new_lines`. `old_len == 0` is a pure inseration.
 type Replacement = (usize, usize, Vec<String>);
 
@@ -28,10 +28,10 @@ type Replacement = (usize, usize, Vec<String>);
 ///
 /// With `eof` the search begins where a match would end the file, so a chunk marked
 /// `*** End of File` lands on the last occurence even when an identical block appears
-/// earlier (Codex tries only that position in this mode; a miss falls through to the
+/// earlier (Codex tries only that position in this mode, a miss falls through to the
 /// same start, i.e. to `None`).
 ///
-/// Edge cases, defensively: an empty pattern matches at `start`; a pattern longer than
+/// Edge cases, defensively, an empty pattern matches at `start`, a pattern longer than
 /// the fle cannot match.
 #[must_use]
 pub fn seek_sequence(
@@ -71,7 +71,7 @@ pub fn seek_sequence(
     None
 }
 
-/// Normalize text for fuzzy matching: NFKC, strip trailing whitespace per
+/// Normalize text for fuzzy matching, NFKC, strip trailing whitespace per
 /// line, fold typographic quotes/dashes/spaces to their ASCII equivalents.
 #[must_use]
 pub fn normalize_for_fuzzy_match(text: &str) -> String {
@@ -87,7 +87,7 @@ pub fn normalize_for_fuzzy_match(text: &str) -> String {
                     '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
                     // Hyphens, dashes, minus signs.
                     '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
-                    // Non-breaking and typographic spaces.
+                    // Non breaking and typographic spaces.
                     '\u{00A0}' | '\u{2002}'..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' => {
                         ' '
                     }
@@ -99,22 +99,22 @@ pub fn normalize_for_fuzzy_match(text: &str) -> String {
         .join("\n")
 }
 
-/// The most permissive comparison key: surrounding whitespace dropped and smart
+/// The most permissive comparison key, surrounding whitespace dropped and smart
 /// quotes, dashes and typographic spaces folded as ASCII, so a patch typed in
 /// plain ASCII still applies to a file with typographic punctuation. The folding
-/// table came over from the former edit tool; NFKC on top of Codex's table is the
+/// table came over from the former edit tool, NFKC on top of Codex's table is the
 /// one difference.
 fn normalise(line: &str) -> String {
     normalize_for_fuzzy_match(line.trim())
 }
 
-/// Rewrite `original` (LF-normalize) with `chunks`, `path` only labels error messages.
+/// Rewrite `original` (LF normalize) with `chunks`, `path` only labels error messages.
 ///
-/// Codex semantics, kept deliberately:
-/// - The result always ends with a newline.
-/// - A chunk with no context and no removed lines is appended at the end of the file,
+/// Codex semantics, kept deliberately,
+/// * The result always ends with a newline.
+/// * A chunk with no context and no removed lines is appended at the end of the file,
 /// whatever `@@` said.
-/// - `old_lines` may end with an empty line that stands for the file's final newline.
+/// * `old_lines` may end with an empty line that stands for the file's final newline.
 pub fn apply_chunks(
     original: &str,
     chunks: &[UpdateFileChunk],
@@ -143,7 +143,7 @@ fn compute_replacements(
     let mut line_index = 0;
 
     for chunk in chunks {
-        // `@@` fn name()`: jump to the line that matches, then search below it.
+        // `@@` fn name()`, jump to the line that matches, then search below it.
         if let Some(context) = &chunk.change_context {
             let Some(index) =
                 seek_sequence(lines, std::slice::from_ref(context), line_index, false)
@@ -154,7 +154,7 @@ fn compute_replacements(
         }
 
         if chunk.old_lines.is_empty() {
-            // Nothing to anchor on: append. (Before a trailing empty line if the file
+            // Nothing to anchor on, append. (Before a trailing empty line if the file
             // has one, so the blank line stays last.)
             let insertion = if lines.last().is_some_and(String::is_empty) {
                 lines.len() - 1
@@ -170,7 +170,7 @@ fn compute_replacements(
         let mut found = seek_sequence(lines, pattern, line_index, chunk.is_end_of_file);
         if found.is_none() && pattern.last().is_some_and(String::is_empty) {
             // The trailing empty line stood for the final newline, which is not a line
-            // of its own after `split`; retry without it.
+            // of its own after `split`, retry without it.
             pattern = &pattern[..pattern.len() - 1];
             if new_lines.last().is_some_and(String::is_empty) {
                 new_lines = &new_lines[..new_lines.len() - 1];
@@ -191,7 +191,7 @@ fn compute_replacements(
     Ok(replacements)
 }
 
-/// Apply back to front: a replacement never shifts the indices of the ones before it.
+/// Apply back to front, a replacement never shifts the indices of the ones before it.
 /// `splice` removes the old range and inserts the new lines in one move of the tail.
 fn apply_replacements(mut lines: Vec<String>, replacements: &[Replacement]) -> Vec<String> {
     for (start, old_len, new_lines) in replacements.iter().rev() {
@@ -279,7 +279,7 @@ mod tests {
         let file = lines(&["x", "y", "x", "y"]);
         assert_eq!(seek_sequence(&file, &lines(&["x"]), 1, false), Some(2));
         assert_eq!(seek_sequence(&file, &lines(&["y"]), 0, true), Some(3));
-        // eof pins the search to the end: an earlier-only block is a miss.
+        // eof pins the search to the end, an earlier only block is a miss.
         assert_eq!(
             seek_sequence(&file, &lines(&["x", "y", "x"]), 0, true),
             None

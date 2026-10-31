@@ -18,7 +18,7 @@ pub struct ModelKey {
     pub model: String,
 }
 
-/// Matches the footer: cached means cache reads, not cache writes.
+/// Matches the footer, cached means cache reads, not cache writes.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct UsageTotals {
     pub input: u64,
@@ -43,7 +43,7 @@ impl UsageTotals {
     }
 }
 
-/// Sorted rows; totals are derived from the same rows rather than counted twice.
+/// Sorted rows, totals are derived from the same rows rather than counted twice.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UsageByModel {
     pub models: BTreeMap<ModelKey, UsageTotals>,
@@ -100,7 +100,7 @@ impl HistoryUsage {
 }
 
 /// All projects and archives under `<home>/sessions`, except the active file. The
-/// caller adds its in-memory current-session snapshot exactly once. No environment
+/// caller adds its in memory current session snapshot exactly once. No environment
 /// lookup, directory creation, symlink traversal, or writes.
 #[must_use]
 pub fn load_history(home: Option<&Path>, exclude: Option<&Path>) -> HistoryUsage {
@@ -122,7 +122,7 @@ fn scan_dir(dir: &Path, exclude: Option<&Path>, history: &mut HistoryUsage) {
             return;
         }
     };
-    // Stable ordering makes floating-point cost sums and warning order repeatable.
+    // Stable ordering makes floating point cost sums and warning order repeatable.
     let mut entries: Vec<_> = entries
         .filter_map(|entry| match entry {
             Ok(entry) => Some(entry),
@@ -173,7 +173,7 @@ fn is_team_journal(path: &Path) -> bool {
             .is_some_and(|name| name == "conversation.jsonl" || name.starts_with("conversation-"))
 }
 
-/// Stream one file; do not retain its conversation content in memory.
+/// Stream one file, do not retain its conversation content in memory.
 fn read_usage(path: &Path) -> Result<(UsageByModel, Vec<String>), String> {
     let file = std::fs::File::open(path)
         .map_err(|error| format!("Cannot open {}: {error}", path.display()))?;

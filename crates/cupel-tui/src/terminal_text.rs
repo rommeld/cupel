@@ -14,13 +14,13 @@ enum State {
     StringEscape { osc: bool },
 }
 
-/// Expand tabs to four-column stops and remove terminal control sequences,
+/// Expand tabs to four column stops and remove terminal control sequences,
 /// C0/C1 controls, and DEL. LF is retained only as a logical line separator.
-/// Both ESC-prefixed and Unicode C1 CSI/OSC forms are recognized; other
+/// Both ESC prefixed and Unicode C1 CSI/OSC forms are recognized, other
 /// escape/control strings (DCS/SOS/PM/APC) are stripped too.
 ///
 /// Sanitize the complete text *before* splitting, previewing, or wrapping.
-/// Incomplete sequences suppress their tail: streaming cells retain the raw
+/// Incomplete sequences suppress their tail, streaming cells retain the raw
 /// source and are sanitized again when the next delta arrives. Stored/model
 /// text and explicit clipboard copying are not changed by rendering.
 #[must_use]

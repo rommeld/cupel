@@ -1,4 +1,4 @@
-//! System prompt construction: tool list, per-tool guidelines
+//! System prompt construction, tool list, per tool guidelines
 
 use std::path::Path;
 
@@ -53,7 +53,7 @@ pub fn build_system_prompt(
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Forward slashes even on Windows: models handle them more reliably.
+    // Forward slashes even on Windows, models handle them more reliably.
     let prompt_cwd = cwd.display().to_string().replace('\\', "/");
     let date = current_date();
 
@@ -86,7 +86,7 @@ Guidelines:
     prompt
 }
 
-/// Extend the system prompt with a preset's `prompt`: base, a blank line,
+/// Extend the system prompt with a preset's `prompt`, base, a blank line,
 /// the prompt. No prompt (or an empty one) returns `base` unchanged, which
 /// is also how a switch to a preset without a prompt drops the previous one.
 #[must_use]
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn civil_date_known_value() {
-        // 2026-07-03 is 20_637 days after the epoch.
+        // 2026 07 03 is 20_637 days after the epoch.
         assert_eq!(civil_from_days(20_637), (2026, 7, 3));
     }
 

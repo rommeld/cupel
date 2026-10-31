@@ -1,10 +1,10 @@
 //! Tool output flows straight into the model's context window, so every tool
 //! caps its output. Two independent limits apply, and whichever is hit first
-//! wins:
-//! - line limit (default 2000 lines)
-//! - byte limit (default 50 KB)
+//! wins,
+//! * line limit (default 2000 lines)
+//! * byte limit (default 50 KB)
 //!
-//! Truncation never returns partial lines (except the tail-truncation edge
+//! Truncation never returns partial lines (except the tail truncation edge
 //! case where a single line exceeds the whole byte budget).
 
 pub const DEFAULT_MAX_LINES: usize = 2000;
@@ -21,7 +21,6 @@ pub enum TruncatedBy {
 
 #[derive(Debug, Clone)]
 pub struct TruncationResult {
-    /// The (possibly truncated) content.
     pub content: String,
     pub truncated: bool,
     pub truncated_by: Option<TruncatedBy>,
@@ -29,10 +28,7 @@ pub struct TruncationResult {
     pub total_bytes: usize,
     pub output_lines: usize,
     pub output_bytes: usize,
-    /// Tail truncation only: the first output line is a partial line.
     pub last_line_partial: bool,
-    /// Head truncation only: the first line alone exceeded the byte limit,
-    /// so nothing could be kept.
     pub first_line_exceeds_limit: bool,
 }
 
@@ -42,7 +38,7 @@ pub struct TruncationOptions {
     pub max_bytes: Option<usize>,
 }
 
-/// Split for counting: a trailing newline does not create a phantom line.
+/// Split for counting, a trailing newline does not create a phantom line.
 fn split_lines(content: &str) -> Vec<&str> {
     if content.is_empty() {
         return Vec::new();
@@ -51,7 +47,7 @@ fn split_lines(content: &str) -> Vec<&str> {
     trimmed.split('\n').collect()
 }
 
-/// Format bytes human-readably: `512B`, `50.0KB`, `1.2MB`.
+/// Format bytes human readably, `512B`, `50.0KB`, `1.2MB`.
 #[must_use]
 pub fn format_size(bytes: usize) -> String {
     if bytes < 1024 {
@@ -168,8 +164,8 @@ pub fn truncate_tail(content: &str, options: TruncationOptions) -> TruncationRes
         let line_bytes = line.len() + usize::from(!kept.is_empty());
         if kept_bytes + line_bytes > max_bytes {
             truncated_by = TruncatedBy::Bytes;
-            // Edge case: not even one full line fits. Keep the line's tail,
-            // cut at a char boundary (Rust: byte slicing must respect UTF-8).
+            // Edge case, not even one full line fits. Keep the line's tail,
+            // cut at a char boundary (Rust, byte slicing must respect UTF 8).
             if kept.is_empty() {
                 let mut start = line.len().saturating_sub(max_bytes);
                 while !line.is_char_boundary(start) {
@@ -206,7 +202,7 @@ pub fn truncate_tail(content: &str, options: TruncationOptions) -> TruncationRes
 }
 
 /// Truncate a single line to `max_chars`, appending `... [truncated]`.
-/// Counts characters (not bytes), so multi-byte text truncates
+/// Counts characters (not bytes), so multi byte text truncates
 /// consistently.
 #[must_use]
 pub fn truncate_line(line: &str, max_chars: usize) -> (String, bool) {
@@ -251,7 +247,7 @@ mod tests {
                 max_bytes: Some(10),
             },
         );
-        // "aaaa" (4) + "\nbbbb" (5) = 9 fits; adding "\ncccc" would exceed.
+        // "aaaa" (4) + "\nbbbb" (5) = 9 fits, adding "\ncccc" would exceed.
         assert_eq!(result.content, "aaaa\nbbbb");
         assert_eq!(result.truncated_by, Some(TruncatedBy::Bytes));
     }
@@ -283,7 +279,7 @@ mod tests {
 
     #[test]
     fn tail_partial_line_respects_utf8() {
-        // One long line of multi-byte chars, tiny budget.
+        // One long line of multi byte chars, tiny budget.
         let content = "éééééééééé"; // 10 chars, 20 bytes
         let result = truncate_tail(
             content,
@@ -293,7 +289,7 @@ mod tests {
             },
         );
         assert!(result.last_line_partial);
-        // 5 bytes budget -> 2 chars (4 bytes) after boundary adjustment.
+        // 5 bytes budget → 2 chars (4 bytes) after boundary adjustment.
         assert_eq!(result.content, "éé");
     }
 

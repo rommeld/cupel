@@ -1,5 +1,5 @@
-//! Opt-in, billable M8 verification against Fireworks. Never runs in normal CI.
-//! Run with CUPEL_LIVE_AGENTS=1 cargo test -p cupel-tui --test live_agents -- --ignored --nocapture.
+//! Opt in, billable M8 verification against Fireworks. Never runs in normal CI.
+//! Run with CUPEL_LIVE_AGENTS=1 cargo test p cupel tui test live_agents  ignored nocapture.
 
 #[cfg(test)]
 mod tests {
@@ -24,7 +24,7 @@ mod tests {
 
     struct Workspace(PathBuf);
 
-    /// Opt-in diagnostics for this synthetic fixture only. Never records credentials.
+    /// Opt in diagnostics for this synthetic fixture only. Never records credentials.
     struct Trace {
         file: Mutex<std::fs::File>,
         next: AtomicUsize,
@@ -272,7 +272,7 @@ mod tests {
             bootstrap::load(&cwd, Some(home.clone()), &registry, Frontend::Tui).await;
         // Bound each request, independently of provider catalog output limits.
         for model in &mut ingredients.models {
-            // MiniMax's low thinking budget is 1024; max_tokens must exceed it.
+            // MiniMax's low thinking budget is 1024, max_tokens must exceed it.
             model.max_tokens = model.max_tokens.min(4096);
         }
         let bounded_models = ingredients
@@ -594,7 +594,7 @@ mod tests {
     async fn reload(app: &mut App, settings_path: &Path, settings: &serde_json::Value) {
         std::fs::write(settings_path, settings.to_string()).unwrap();
         assert!(!app.is_running());
-        // App consumes itself on reload; use an independently constructed placeholder
+        // App consumes itself on reload, use an independently constructed placeholder
         // only to satisfy ownership. It has no credentials, history or running work.
         let model = app.meta.models[0].clone();
         let placeholder = App::new(
@@ -632,7 +632,7 @@ mod tests {
         settings.as_object_mut().unwrap().remove("agentCommands");
         // Baseline already verifies remembered history. Extension scenarios use a
         // fresh private writer history so old cancellation instructions do not
-        // steer a new, unrelated live-test task.
+        // steer a new, unrelated live test task.
         settings["agents"]["diff-auditor"]["remember"] = false.into();
         reload(app, settings_path, &settings).await;
         submit(app, "/team roles");
@@ -709,7 +709,7 @@ mod tests {
             "PASS nested role-based review, attributed discussion and integrated lead awareness"
         );
 
-        // Force same-specialist concurrency directly through the real task tools,
+        // Force same specialist concurrency directly through the real task tools,
         // rather than depending on a model deciding to emit parallel tool calls.
         app.crew.lead_context().set(RunContext::root(
             Participant::Lead,

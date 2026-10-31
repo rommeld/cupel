@@ -1,8 +1,8 @@
 //! A minimal serde mirror of the models.dev catalog containing only what the
 //! generator reads. models.dev ships ~60 providers in fluctuating
-//! shapes, so parsing happens in two stages: the outer file is read as
+//! shapes, so parsing happens in two stages, the outer file is read as
 //! generic JSON, and only the providers named in curation.rs are
-//! typed-parsed. A malformed entry in some unrelated provider can then
+//! typed parsed. A malformed entry in some unrelated provider can then
 //! never break catalog generation.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,8 +17,8 @@ pub struct ProviderEntry {
     pub models: BTreeMap<String, serde_json::Value>,
 }
 
-/// The per-model subset the generator maps into `cupel_core::types::Model`.
-/// Every field is defaulted so sparse upstream entries still parse; hard
+/// The per model subset the generator maps into `Model`.
+/// Every field is defaulted so sparse upstream entries still parse, hard
 /// requirements (cost present, usable limits) are enforced later, where
 /// the error message can name the curated model.
 #[derive(Debug, Deserialize, Serialize)]
@@ -33,7 +33,7 @@ pub struct ModelEntry {
     pub temperature: bool,
 }
 
-/// Hand-written because `temperature` must default to true.
+/// Hand written because `temperature` must default to true.
 impl Default for ModelEntry {
     fn default() -> Self {
         Self {
@@ -49,14 +49,13 @@ impl Default for ModelEntry {
 }
 
 /// How a model's thinking is switched upstream. Internally tagged on
-/// "type"; struct variants tolerate extra fields, and `Unknown` swallows
+/// "type", struct variants tolerate extra fields, and `Unknown` swallows
 /// any tag models.dev invents later.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningOption {
     Toggle,
     Effort {
-        /// models.dev allows JSON null inside the list.
         values: Vec<Option<String>>,
     },
     BudgetTokens,
@@ -77,13 +76,11 @@ pub struct Cost {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
-    /// Absent for providers that do not bill cache writes (Fireworks).
     pub cache_write: f64,
-    /// Long-context price tiers (e.g. Haiku 5.5 above 100k prompt tokens).
     pub tiers: Vec<RawTier>,
 }
 
-/// models.dev nests the threshold: `tier: {type: "context", size: N}`.
+/// models.dev nests the threshold, a `tier` object with `type` set to `context` and `size` set to N.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RawTier {
     pub input: f64,
@@ -108,14 +105,14 @@ pub struct Limit {
     pub input: Option<u64>,
 }
 
-/// Stage 1 + 2: parse the outer object generically, then typed-parse
+/// Stage 1 + 2, parse the outer object generically, then typed parse
 /// only the `wanted` provider blocks.
 pub fn parse_wanted(raw: &str, wanted: &[&str]) -> Result<BTreeMap<String, ProviderEntry>, String> {
     let root: serde_json::Value =
         serde_json::from_str(raw).map_err(|error| format!("models.dev JSON: {error}"))?;
-    // Keep each message on one source line: a line break inside a string
+    // Keep each message on one source line, a line break inside a string
     // literal is part of the string, and so is the next line's indentation.
-    // To wrap a long literal, end the line with `\`: Rust then drops the
+    // To wrap a long literal, end the line with `\`, Rust then drops the
     // line break and the next line's leading whitespace.
     let providers = root
         .as_object()
@@ -133,7 +130,7 @@ pub fn parse_wanted(raw: &str, wanted: &[&str]) -> Result<BTreeMap<String, Provi
 }
 
 impl ProviderEntry {
-    /// Typed view of one curated model; failures names the exact entry.
+    /// Typed view of one curated model, failures names the exact entry.
     pub fn model(&self, provider_id: &str, model_id: &str) -> Result<ModelEntry, String> {
         let value = self.models.get(model_id).ok_or_else(|| {
             format!("models.dev no longer lists {provider_id}/{model_id} - update curation.rs")
@@ -145,12 +142,12 @@ impl ProviderEntry {
 
 /// Derive cupel's thinkingLevelMap from models.dev effort values.
 ///
-/// - an entry 'level -> null` disables that level,
-/// - a supported level needs no entry (the provider's identity fallback
+/// * an entry 'level → null` disables that level,
+/// * a supported level needs no entry (the provider's identity fallback
 /// sends the level's own name),
-/// xhigh is special-cased by supported_thinking_levels: it is
+/// xhigh is special cased by supported_thinking_levels, it is
 /// selectable only while its key is absent. Supported xhigh/max
-/// therefore means: omit the key.
+/// therefore means, omit the key.
 pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<ThinkingLevelMap> {
     let mut effort: Vec<String> = Vec::new();
     let mut has_toggle = false;
@@ -164,14 +161,14 @@ pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<Thi
             _ => {}
         }
     }
-    // No effort scale at all (budget/toggle-only models) means no map because
+    // No effort scale at all (budget/toggle only models) means no map because
     // every cupel level stays selectable, the provider maps levels to
     // token budgets.
     if effort.is_empty() {
         return None;
     }
     let supported: BTreeSet<&str> = effort.iter().map(String::as_str).collect();
-    // Effort values without any cupel equivalent (e.g. only "default"):
+    // Effort values without any cupel equivalent (e.g. only "default"),
     // treat as if models.dev had said nothing, rather than disabling
     // every level.
     let known = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -180,9 +177,9 @@ pub fn thinking_level_map_from_effort(options: &[ReasoningOption]) -> Option<Thi
     }
 
     let mut map = ThinkingLevelMap::new();
-    // "off": an explicit "none" effort value is sent as effort "none",;
-    // a toggle-capable model switches off natively (no entry needed); a
-    // pure-effort model without "none" cannot be switched off (-> null).
+    // "off", an explicit "none" effort value is sent as effort "none",,
+    // a toggle capable model switches off natively (no entry needed), a
+    // pure effort model without "none" cannot be switched off (→ null).
     if supported.contains("none") {
         map.insert("off".to_string(), Some("none".to_string()));
     } else if !has_toggle {
@@ -247,7 +244,7 @@ mod tests {
 
     #[test]
     fn parse_wanted_ignores_unrelated_broken_providers() {
-        // "weird-provider" is malformed, but we never asked for it.
+        // "weird provider" is malformed, but we never asked for it.
         let catalog = parse_wanted(FIXTURE, &["anthropic"]).expect("wanted providers parse");
         assert_eq!(catalog.len(), 1);
         assert_eq!(catalog["anthropic"].models.len(), 3);
@@ -275,7 +272,7 @@ mod tests {
             entry.reasoning_options[2],
             ReasoningOption::Unknown
         ));
-        // The sparse image model parses too; only cost is missing.
+        // The sparse image model parses too, only cost is missing.
         let painter = catalog["anthropic"]
             .model("anthropic", "paint-o-matic")
             .expect("sparse entry parses");
@@ -324,7 +321,7 @@ mod tests {
 
     #[test]
     fn sol_shaped_effort_keeps_xhigh_by_omission() {
-        // The trap this derivation exists for: xhigh must not appear in
+        // The trap this derivation exists for, xhigh must not appear in
         // the map when it is supported (see model.rs XHigh arm).
         let options = [effort(&["none", "low", "medium", "high", "xhigh", "max"])];
         let map = thinking_level_map_from_effort(&options).expect("map derived");
@@ -346,7 +343,7 @@ mod tests {
 
     #[test]
     fn toggle_plus_full_effort_needs_no_map_at_all() {
-        // Everything supported, off handled by the toggle: empty map
+        // Everything supported, off handled by the toggle, empty map
         // collapses to None.
         let options = [
             ReasoningOption::Toggle {},
@@ -357,7 +354,7 @@ mod tests {
 
     #[test]
     fn astra_shaped_effort_disables_off_and_minimal_only() {
-        // GPT-6 Astra on models.dev: low..max, no none, no toggle. Both
+        // GPT 6 Astra on models.dev, low..max, no none, no toggle. Both
         // top levels are supported, so both keys stay absent.
         let options = [effort(&["low", "medium", "high", "xhigh", "max"])];
         let map = thinking_level_map_from_effort(&options).expect("map derived");
@@ -366,8 +363,8 @@ mod tests {
 
     #[test]
     fn scales_without_max_get_an_explicit_null() {
-        // The mirror image of the omission rule: a model whose scale stops
-        // at xhigh must carry `max: null`, or max would be selectable.
+        // The mirror image of the omission rule, a model whose scale stops
+        // at xhigh must carry `max` set to null, or max would be selectable.
         let options = [effort(&[
             "none", "minimal", "low", "medium", "high", "xhigh",
         ])];
@@ -377,7 +374,7 @@ mod tests {
 
     #[test]
     fn glm53_shaped_effort_keeps_low_and_max_and_disables_the_rest() {
-        // GLM 5.3 (OpenRouter and Fireworks): low/high/max, no toggle. Low
+        // GLM 5.3 (OpenRouter and Fireworks), low/high/max, no toggle. Low
         // keeps its own name, off cannot be switched, medium/xhigh clamp at
         // request time.
         let options = [effort(&["low", "high", "max"])];
@@ -391,7 +388,7 @@ mod tests {
                 ("xhigh", None),
             ])
         );
-        // DeepSeek V4 and Kimi K3: the same scale plus a toggle, so off is
+        // DeepSeek V4 and Kimi K3, the same scale plus a toggle, so off is
         // left to the toggle (no entry) and the rest stays.
         let options = [ReasoningOption::Toggle {}, effort(&["low", "high", "max"])];
         let map = thinking_level_map_from_effort(&options).expect("map derived");
@@ -403,8 +400,8 @@ mod tests {
 
     #[test]
     fn inkling_shaped_effort_disables_xhigh_but_keeps_max() {
-        // The mirror image of scales_without_max_get_an_explicit_null: a
-        // scale that skips xhigh but ends at max pins xhigh -> null and
+        // The mirror image of scales_without_max_get_an_explicit_null, a
+        // scale that skips xhigh but ends at max pins xhigh → null and
         // leaves max absent (a present key would disable it).
         let options = [effort(&["none", "minimal", "low", "medium", "high", "max"])];
         let map = thinking_level_map_from_effort(&options).expect("map derived");
@@ -413,7 +410,7 @@ mod tests {
 
     #[test]
     fn temperature_defaults_to_supported() {
-        // The hand-written Default: a sparse entry (no `temperature` key)
+        // The hand written Default, a sparse entry (no `temperature` key)
         // must not read as "rejects temperature".
         let catalog = parse_wanted(FIXTURE, &["anthropic"]).expect("fixture parses");
         let sparse = catalog["anthropic"]

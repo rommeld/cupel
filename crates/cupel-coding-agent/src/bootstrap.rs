@@ -1,7 +1,7 @@
-//! Session ingredients: everything a fresh agent session loads from disk,
-//! assembled in one place so startup (`main::run`) and the TUI's
-//! `/hot-reload` produce byte-identical results. Before this module the
-//! assembly lived inline in main.rs. Hot-reload would have had to copy
+//! Session ingredients, everything a fresh agent session loads from disk,
+//! assembled in one place so startup (`run`) and the TUI's
+//! hot reload produce byte identical results. Before this module the
+//! assembly lived inline in main.rs. Hot reload would have had to copy
 //! it, and the two paths would drift.
 
 use async_trait::async_trait;
@@ -26,7 +26,7 @@ use crate::tools::{
     read::ReadTool,
 };
 
-/// Name + one-line snippet per tool for the system prompt (full
+/// Name + one line snippet per tool for the system prompt (full
 /// descriptions travel in the tool schemas).
 pub const TOOL_SUMMARIES: &[(&str, &str)] = &[
     ("read", "Read file contents"),
@@ -69,7 +69,7 @@ pub struct Ingredients {
 }
 
 /// Load every ingredient fresh from disk (and the bounded ollama probe).
-/// Parameterized on `home` instead of reading `CUPEL_HOME` so hot-reload
+/// Parameterized on `home` instead of reading `CUPEL_HOME` so hot reload
 /// and tests share the exact code path with startup.
 pub async fn load(
     cwd: &Path,
@@ -148,18 +148,15 @@ pub fn coding_tools(cwd: &Path) -> Vec<Arc<dyn AgentTool>> {
     ]
 }
 
-/// The one [`AgentHooks`] object a session runs with: the bash guard and
+/// The one [`AgentHooks`] object a session runs with, the bash guard and
 /// the loop killer behind a single trait object (`AgentOptions.hooks`
 /// holds exactly one). Fans out only `before_tool_call`, the sole hook
-/// either member cares about; every other AgentHooks method keeps its
-/// trait default. Extend the fan-out when a member grwos a new hook.
+/// either member cares about, every other AgentHooks method keeps its
+/// trait default. Extend the fan out when a member grwos a new hook.
 pub struct SessionHooks {
     guard: BashGuard,
     loop_killer: LoopKiller,
-    /// Where auth.json lives. The api_key hook resolves subscription
-    /// tokens per call (refreshing them near expiry).
     home: Option<PathBuf>,
-    /// One shared client for those refresh calls.
     http: reqwest::Client,
 }
 
@@ -177,9 +174,9 @@ impl SessionHooks {
 
 #[async_trait]
 impl AgentHooks for SessionHooks {
-    /// The agent loop calls this before every provider request (types.rs:
+    /// The agent loop calls this before every provider request (types.rs,
     /// "Resolve an API key for a provider right before each call"). The
-    /// designed home for expiring OAuth tokens. Key-based providers
+    /// designed home for expiring OAuth tokens. Key based providers
     /// return None here and keep riding AgentOptions.api_key.
     async fn api_key(&self, provider: &str) -> Option<String> {
         if provider != cupel_core::types::Provider::OPENAI_CODEX {
@@ -193,11 +190,11 @@ impl AgentHooks for SessionHooks {
         tool_call: &ToolCall,
     ) -> Option<BeforeToolCallResult> {
         // The killer observes every request call first, including ones
-        // the guard is about to veto: a model hammering a denied bash
+        // the guard is about to veto, a model hammering a denied bash
         // command is looping too, and each guard block would otherwise
         // reset nothing while the loop spins forever. Once the killer
-        // trips, its message takes over: "take a different approach"
-        // redirects harder than the guard's per-command veto, which is
+        // trips, its message takes over, "take a different approach"
+        // redirects harder than the guard's per command veto, which is
         // exactly what a stuck model needs to hear.
         if let Some(reason) = self.loop_killer.note_call(tool_call) {
             return Some(BeforeToolCallResult {
@@ -264,7 +261,7 @@ mod tests {
         assert_eq!(ingredients.settings.loop_killer_max_repeats(), Some(2));
         assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
         // The guard carries defaults and the project rule.
-        // (Verified through the public hook in guard.rs tests; here the
+        // (Verified through the public hook in guard.rs tests, here the
         // cheap signal is that construction succeeded with both layers.)
     }
 

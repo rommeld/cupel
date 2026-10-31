@@ -1,26 +1,18 @@
 //! OAuth credential storage in `~/.cupel/auth.json`.
 //!
-//! The subscription-login counterpart to settings.rs: settings.json holds
+//! The subscription login counterpart to settings.rs, settings.json holds
 //! API keys the user typed, auth.json holds tokens a login flow minted
 //! (and rotates on refresh). The file is a map of provider id to a
-//! type-tagged credential:
+//! type tagged credential. An OAuth entry has `type` set to `oauth`,
+//! `access` and `refresh` tokens, an `expires` timestamp in milliseconds,
+//! and an `accountId`.
 //!
-//! ```json
-//! {
-//!   "openai-codex": {
-//!     "type": "oauth",
-//!     "access": "...", "refresh": "...",
-//!     "expires": 1756500000000, "accountId": "..."
-//!   }
-//! }
-//! ```
-//!
-//! Writes reuse settings.rs's mechanics verbatim: re-read from disk,
+//! Writes reuse settings.rs's mechanics verbatim, re read from disk,
 //! refuse malformed files, 0600 temp file, fsync, atomic rename. There is
-//! no cross-process file lock. Two instances refreshing at once both write
+//! no cross process file lock. Two instances refreshing at once both write
 //! a complete valid file and the last rename wins. This is the same
 //! accepted caveat settings.rs documents for keys. Refresh tokens rotate,
-//! so the slower of two concurrent refreshes may be rejected; it then
+//! so the slower of two concurrent refreshes may be rejected, it then
 //! adopts the pair the faster one already saved (see `token_after_refresh`).
 
 use std::collections::BTreeMap;
@@ -47,8 +39,8 @@ pub fn auth_path(home: &Path) -> PathBuf {
     home.join("auth.json")
 }
 
-/// Parse the auth file. Missing = empty; malformed = an error the caller
-/// surfaces (same tiers as settings::load_settings because a credentials file
+/// Parse the auth file. Missing = empty, malformed = an error the caller
+/// surfaces (same tiers as load_settings because a credentials file
 /// that stopped parsing deserves a visible failure, not silent logouts).
 fn load_auth_file(path: &Path) -> Result<BTreeMap<String, StoredCredential>, String> {
     let content = match std::fs::read_to_string(path) {
@@ -59,7 +51,7 @@ fn load_auth_file(path: &Path) -> Result<BTreeMap<String, StoredCredential>, Str
     serde_json::from_str(&content).map_err(|e| format!("{} is not valid: {e}", path.display()))
 }
 
-/// All stored credentials; malformed files are warn-and-empty (via
+/// All stored credentials, malformed files are warn and empty (via
 /// tracing, never stderr, since this runs while the TUI owns the screen).
 #[must_use]
 pub fn load_auth(home: Option<&Path>) -> BTreeMap<String, StoredCredential> {
@@ -78,23 +70,23 @@ pub fn load_auth(home: Option<&Path>) -> BTreeMap<String, StoredCredential> {
 /// The stored OAuth credential for one provider, if any.
 #[must_use]
 pub fn credential(home: Option<&Path>, provider: &str) -> Option<OAuthCredential> {
-    // The closure pattern is irrefutable: Oauth is the only variant.
+    // The closure pattern is irrefutable, Oauth is the only variant.
     load_auth(home)
         .remove(provider)
         .map(|StoredCredential::Oauth(credential)| credential)
 }
 
 /// Whether a login is stored. Used by `/provider` status lines and
-/// startup model selection (never inspects token validity: an expired
+/// startup model selection (never inspects token validity, an expired
 /// access token still counts, the refresh token is what matters).
 #[must_use]
 pub fn has_credential(home: Option<&Path>, provider: &str) -> bool {
     credential(home, provider).is_some()
 }
 
-/// Read-modify-write one credential into auth.json using settings.rs's
-/// save_provider_key with a different payload: fresh read (hand edits
-/// survive, malformed files are refused), 0600 same-directory temp file,
+/// Read modify write one credential into auth.json using settings.rs's
+/// save_provider_key with a different payload, fresh read (hand edits
+/// survive, malformed files are refused), 0600 same directory temp file,
 /// fsync, atomic rename.
 pub fn save_credential(
     home: Option<&Path>,
@@ -175,8 +167,8 @@ fn modify_auth(
     })?;
     body.push('\n');
 
-    // Same-directory temp file, owner-only before any token byte lands
-    // on disk; rename carries the mode over a pre-existing looser file.
+    // Same directory temp file, owner only before any token byte lands
+    // on disk, rename carries the mode over a pre existing looser file.
     let tmp = home.join("auth.json.tmp");
     let _ = std::fs::remove_file(&tmp);
     let mut options = std::fs::OpenOptions::new();
@@ -211,19 +203,19 @@ fn modify_auth(
     Ok(path)
 }
 
-/// The refresh decision, pure for tests: inside the margin (or past
+/// The refresh decision, pure for tests, inside the margin (or past
 /// expiry) means refresh now.
 #[must_use]
 pub fn needs_refresh(credential: &OAuthCredential, now_ms: u64) -> bool {
     now_ms + REFRESH_MARGIN_MS >= credential.expires
 }
 
-/// A request-ready Codex access token: the stored one while it is fresh,
-/// or a refreshed (and re-persisted) one. A failed refresh still permits the
+/// A request ready Codex access token, the stored one while it is fresh,
+/// or a refreshed (and re persisted) one. A failed refresh still permits the
 /// stored token until its actual expiry. `None` = not logged in, or refresh
 /// failed with no valid access token left. The provider points at `/login`.
-/// This runs on every request via the agent-loop api_key hook, which keeps
-/// week-long sessions alive across token expiry.
+/// This runs on every request via the agent loop api_key hook, which keeps
+/// week long sessions alive across token expiry.
 pub async fn openai_codex_access_token(
     home: Option<&Path>,
     http: &reqwest::Client,
@@ -245,8 +237,8 @@ fn token_after_refresh(
 ) -> Option<String> {
     match refreshed {
         Ok(fresh) => {
-            // Persist the rotated pair. A failed save is only a warning: the
-            // fresh token serves this request, but the next one re-reads the
+            // Persist the rotated pair. A failed save is only a warning, the
+            // fresh token serves this request, but the next one re reads the
             // file and refreshes again with the old refresh token, which the
             // server may already have rotated away. Then the stored token
             // serves until it expires, and /login is needed after that.
@@ -310,7 +302,7 @@ mod tests {
         let stored = credential(Some(&home), "openai-codex").expect("stored");
         assert_eq!(stored.access, "access-1");
         assert_eq!(stored.expires, 42);
-        // Unknown provider and no-home stay empty.
+        // Unknown provider and no home stay empty.
         assert!(credential(Some(&home), "anthropic").is_none());
         assert!(credential(None, "openai-codex").is_none());
 
@@ -358,7 +350,7 @@ mod tests {
     fn auth_json_is_owner_only_even_over_a_looser_file() {
         use std::os::unix::fs::PermissionsExt as _;
         let home = temp_home("perms");
-        // Pre-existing world-readable file: the rename must tighten it.
+        // Pre existing world readable file, the rename must tighten it.
         std::fs::write(home.join("auth.json"), "{}").unwrap();
         save_credential(Some(&home), "openai-codex", &credential_fixture(1)).unwrap();
         let mode = std::fs::metadata(home.join("auth.json"))
@@ -372,7 +364,7 @@ mod tests {
     fn refresh_decision_uses_the_five_minute_margin() {
         let now = 1_000_000_000;
         let margin = 5 * 60 * 1000;
-        // Comfortably fresh: margin + 1ms of headroom.
+        // Comfortably fresh, margin + 1ms of headroom.
         assert!(!needs_refresh(&credential_fixture(now + margin + 1), now));
         // Exactly on the line, inside it, and already expired.
         assert!(needs_refresh(&credential_fixture(now + margin), now));
@@ -463,7 +455,7 @@ mod tests {
             "no resurrection"
         );
 
-        // A new /login replaced the pair meanwhile: it stays.
+        // A new /login replaced the pair meanwhile, it stays.
         let mut relogin = credential_fixture(now + 2 * 60 * 60 * 1000);
         relogin.refresh = "refresh-new-login".to_string();
         save_credential(Some(&home), "openai-codex", &relogin).unwrap();
@@ -478,7 +470,7 @@ mod tests {
     fn failed_refresh_adopts_a_pair_another_session_rotated() {
         let home = temp_home("rotated-elsewhere");
         let now = 1_000_000_000;
-        // This session still holds refresh-1, which expired meanwhile...
+        // This session still holds refresh 1, which expired meanwhile...
         let stored = credential_fixture(now - 1);
         // ...while another session already saved the rotated pair.
         let mut rotated = credential_fixture(now + 60 * 60 * 1000);
@@ -494,7 +486,7 @@ mod tests {
         let token = token_after_refresh(Some(&home), stored.clone(), Err(rejected()), now);
         assert_eq!(token.as_deref(), Some("access-2"));
 
-        // An expired pair on disk is no rescue: back to the stored rules.
+        // An expired pair on disk is no rescue, back to the stored rules.
         let mut stale = rotated.clone();
         stale.expires = now - 1;
         save_credential(Some(&home), "openai-codex", &stale).unwrap();
@@ -529,11 +521,11 @@ mod tests {
         let home = temp_home("fresh-token");
         let far_future = cupel_core::types::now_ms() + 60 * 60 * 1000;
         save_credential(Some(&home), "openai-codex", &credential_fixture(far_future)).unwrap();
-        // Fresh: no network is touched (a refresh would hit
+        // Fresh, no network is touched (a refresh would hit
         // auth.openai.com and fail in tests).
         let token = openai_codex_access_token(Some(&home), &reqwest::Client::new()).await;
         assert_eq!(token.as_deref(), Some("access-1"));
-        // Not logged in: None, no panic.
+        // Not logged in, None, no panic.
         assert!(
             openai_codex_access_token(None, &reqwest::Client::new())
                 .await

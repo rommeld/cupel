@@ -55,10 +55,10 @@ pub fn thinking_level(
     }
 }
 
-/// Pick a model + API key from CLI args and the merged catalog (built-ins, models.json
+/// Pick a model + API key from CLI args and the merged catalog (built ins, models.json
 /// layers, discovered local models). Credential knowledge lives in `providers.rs`,
-/// shared with the TUI's `/provider` command; keys sources at startup: exported env
-/// var, then ~/.cupel/settings.json. Precedence: `--model`> the `default`preset > a
+/// shared with the TUI's `/provider` command, keys sources at startup, exported env
+/// var, then ~/.cupel/settings.json. Precedence, the model option> the `default`preset > a
 /// ChatGPT login > the first provider with credentials > a keyless local model.
 pub fn select_model(
     wanted: Option<&str>,
@@ -78,8 +78,8 @@ pub fn select_model(
         return Ok((model, key));
     }
 
-    // The default preset is explicit configuration: an unknown model is an error like
-    // a mistyped --model, never a silent start on something else. A default preset
+    // The default preset is explicit configuration, an unknown model is an error like
+    // a mistyped model, never a silent start on something else. A default preset
     // that does not even parse is the same mistake.
     if let Some(reason) = &settings.invalid_default_preset {
         return Err(format!(
@@ -112,7 +112,7 @@ pub fn select_model(
     // Bedrock carries on key through StreamOptions because the AWS chain
     // resolves inside the provider. Keyless local models fall through here (no env
     // var, and normally not settings entry), so a configured cloud key always beats a
-    // merely-running ollama.
+    // merely running ollama.
     for model in catalog {
         match model.provider.as_str() {
             "amazon-bedrock" if providers::has_aws_credentials() => {
@@ -126,7 +126,7 @@ pub fn select_model(
             }
         }
     }
-    // Pass 2: with no cloud credentials anywhere, a keyless local model (discovered
+    // Pass 2, with no cloud credentials anywhere, a keyless local model (discovered
     // ollama, models.json entry) is the last resort before giving up.
     if let Some(model) = catalog.iter().find(|m| providers::is_keyless(m)) {
         return Ok((model.clone(), None));

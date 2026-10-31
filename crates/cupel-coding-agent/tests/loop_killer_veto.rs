@@ -1,8 +1,8 @@
-//! End-to-end proof that the loop killer cuts off a repeating tool call:
-//! a scripted mock provider requests the same bash append five times;
+//! End to end proof that the loop killer cuts off a repeating tool call,
+//! a scripted mock provider requests the same bash append five times,
 //! with maxRepeats = 2 the counter file gains exactly two lines, and
 //! attempts three to five come back through the real agent loop as
-//! blocked error tool-results. Pattern copied from tests/guard_veto.rs.
+//! blocked error tool results. Pattern copied from tests/guard_veto.rs.
 
 #![allow(clippy::tests_outside_test_module)]
 
@@ -145,7 +145,7 @@ async fn repeated_identical_calls_are_cut_off_and_redirected() {
     }
     agent.wait_for_idle().await;
 
-    // Physical proof: the command really ran exactly maxRepeats times.
+    // Physical proof, the command really ran exactly maxRepeats times.
     let counter = std::fs::read_to_string(cwd.join("counter.txt")).unwrap();
     assert_eq!(counter.lines().count(), 2, "counter.txt:\n{counter}");
     assert_eq!(executions, 2);

@@ -76,7 +76,7 @@ try:
 
     if signal_name == "close":
         # Closing the controlling terminal delivers a real hangup and makes
-        # further terminal I/O fail; cleanup must still reach session-end.
+        # further terminal I/O fail, cleanup must still reach session end.
         os.close(master)
         master = None
     else:

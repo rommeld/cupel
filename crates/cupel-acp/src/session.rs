@@ -100,7 +100,7 @@ impl Runtime {
         if !cupel_coding_agent::project_trust::is_trusted(config.home.as_deref(), &cwd) {
             tracing::warn!(cwd = %&cwd.display(), "prompt hooks and sesitive model rows disabled: project is not trusted");
         }
-        // The Plain capability set deliberately omits ask_user: no blocking from UI.
+        // The Plain capability set deliberately omits ask_user, no blocking from UI.
         let ingredients = bootstrap::load(
             &cwd,
             config.home.clone(),

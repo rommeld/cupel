@@ -82,7 +82,7 @@ mod tests {
         .concat()
     }
 
-    // AWS event-stream lengths and checksums are big-endian on the wire.
+    // AWS event stream lengths and checksums are big endian on the wire.
     #[allow(clippy::big_endian_bytes)]
     fn frame(event_type: &str, payload: &Value) -> Vec<u8> {
         let mut headers = Vec::new();
@@ -93,7 +93,7 @@ mod tests {
         ] {
             headers.push(u8::try_from(name.len()).unwrap());
             headers.extend_from_slice(name.as_bytes());
-            // Value type 7 is a string with a 2-byte length.
+            // Value type 7 is a string with a 2 byte length.
             headers.push(7);
             headers.extend_from_slice(&u16::try_from(value.len()).unwrap().to_be_bytes());
             headers.extend_from_slice(value.as_bytes());

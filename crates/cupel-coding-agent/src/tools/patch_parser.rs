@@ -1,26 +1,19 @@
-//! The apply_patch enevlope: text -> hunks.
+//! The apply_patch envelope, text → hunks.
 //!
 //! This is a port of Codex's patch parser, minus streaming (TODO), environment ids
-//! and the shell heredoc detection. The format, from Codex's Lark Grammer:
+//! and the shell heredoc detection. The format follows Codex's Lark grammar.
 //!
-//! ```text
-//! start: begin_patch hunk+ end_patch
-//! begin_patch: "*** Begin Patch" LF
-//! end_patch: "*** End Patch" LF?
+//! A patch begins with `*** Begin Patch`, contains one or more file hunks,
+//! and ends with `*** End Patch`. File markers use three asterisks, an operation
+//! name, a colon and a filename. The operations are Add File, Delete File,
+//! Update File and the optional Move to within an update.
 //!
-//! hunk: add_hunk | delete_hunk | update_hunk
-//! add_hunk: "*** Add File: " filename LF add_line+
-//! delete_hunk: "*** Delete File: " filename LF
-//! update_hunk: "*** Update File: " filename LF change_move? change?
+//! Added lines begin with a plus sign. Update chunks optionally begin with an
+//! `@@` context header, followed by added, removed or unchanged lines marked
+//! with a plus sign, hyphen or space. An optional `*** End of File` marker
+//! anchors the last chunk to the end of the file.
 //!
-//! change_move: "*** Move to: " filename LF
-//! change: (change_context | change_line)+ eof_line?
-//! chagen_context: ("@@" | "@@ " /(.+)/) LF
-//! chagen_line: ("+" | "-" | " ") /(.*)/ LF
-//! eof_line: "*** End of File" LF
-//! ```
-//!
-//! Like Codex, the parser is more lenient than the grammer: markers may carry leading/
+//! Like Codex, the parser is more lenient than the grammar, markers may carry leading/
 //! trailing whitespace, a bare empty line inside an update hunk counts as an empty
 //! context line, and a `<<EOF` heredoc wrapper around the whole patch stripped (some
 //! models wrap the patch the way Codex's shell tool taught them).
@@ -622,7 +615,7 @@ mod tests {
                 Ok(expected.clone())
             );
         }
-        // Mismatched quotes are not a heredoc; the strict error stands.
+        // Mismatched quotes are not a heredoc, the strict error stands.
         assert_eq!(
             parse_patch(&format!("<<\"EOF'\n{body}\nEOF\n")),
             Err(ParseError::InvalidPatch(

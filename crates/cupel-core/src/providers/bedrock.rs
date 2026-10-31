@@ -1,18 +1,18 @@
 //! AWS Bedrock `ConverseStream` provider.
 //!
-//! Unlike Anthropic/`OpenAI`, Bedrock does not speak SSE:
-//! responses use AWS's binary event-stream encoding, and requests use
-//! SigV4 signing or bearer-token auth. Rather than hand-rolling
-//! either (both are security-sensitive and finicky), we use the official
-//! `aws-sdk-bedrockruntime` crate. The SDK also gives us the standard
+//! Unlike Anthropic/`OpenAI`, Bedrock does not speak SSE,
+//! responses use AWS's binary event stream encoding, and requests use
+//! SigV4 signing or bearer token auth. Rather than hand rolling
+//! either (both are security sensitive and finicky), we use the official
+//! AWS Bedrock runtime crate. The SDK also gives us the standard
 //! credential chain (env vars, `~/.aws/credentials`, SSO, IMDS) for free.
 //! It also reads two variables an LLM gateway (LiteLLM's `/bedrock` route)
-//! needs: `AWS_BEARER_TOKEN_BEDROCK` replaces signing with
-//! `Authorization: Bearer <token>`, and `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`
+//! needs, `AWS_BEARER_TOKEN_BEDROCK` replaces signing with
+//! a bearer token in the `Authorization` header, and `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`
 //! points every request at the gateway.
 //!
-//! Intentional first-iteration simplifications (documented, not
-//! forgotten): no HTTP proxy override, no GovCloud
+//! Intentional first iteration simplifications (documented, not
+//! forgotten), no HTTP proxy override, no GovCloud
 //! schema workaround, no 1h cache TTL (the Rust SDK exposes cache points but
 //! not their TTL yet).
 
@@ -79,9 +79,9 @@ impl Provider for BedrockProvider {
     }
 }
 
-// Bedrock hosts many model families behind one API; Claude-specific features
+// Bedrock hosts many model families behind one API, Claude specific features
 // (thinking, prompt caching, signatures) must only be sent to Claude models.
-// The model id may be a bare id, an inference-profile id, or an ARN, so we
+// The model id may be a bare id, an inference profile id, or an ARN, so we
 // match against both id and display name, in several normalizations.
 
 fn match_candidates(model: &Model) -> Vec<String> {
@@ -111,12 +111,10 @@ fn match_candidates(model: &Model) -> Vec<String> {
 #[derive(Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct BedrockCompat {
-    /// Claude 5+ generation: adaptive thinking with native `xhigh` and
-    /// prompt caching. `Some(false)` forces token-budget thinking.
     force_adaptive_thinking: Option<bool>,
 }
 
-/// Parsed several times per request, so it stays silent here; [`run`] logs
+/// Parsed several times per request, so it stays silent here, [`run`] logs
 /// the problems once per request.
 fn bedrock_compat(model: &Model) -> BedrockCompat {
     parse_compat(model).0
@@ -148,7 +146,7 @@ fn supports_adaptive_thinking(model: &Model) -> bool {
 }
 
 /// Claude 5+ models support native xhigh effort.
-/// "opus-5" also matches Opus 5.5, "sonnet-5" Sonnet 5.5.
+/// "opus 5" also matches Opus 5.5, "sonnet 5" Sonnet 5.5.
 fn supports_native_xhigh(model: &Model) -> bool {
     bedrock_compat(model)
         .force_adaptive_thinking
@@ -164,7 +162,7 @@ fn supports_native_xhigh(model: &Model) -> bool {
 
 /// Prompt caching is only available on newer Claude models. Application
 /// inference profiles hide the model name in the ARN. There the catalog
-/// compat or the model's display name (user-controlled) is the only signal.
+/// compat or the model's display name (user controlled) is the only signal.
 fn supports_prompt_caching(model: &Model) -> bool {
     if bedrock_compat(model).force_adaptive_thinking == Some(true) {
         return true;
@@ -195,7 +193,7 @@ async fn run(
     // max_tokens / thinking budget
     let is_claude = is_claude_model(model);
     let mut max_tokens: Option<u64> = options.max_tokens.or_else(|| {
-        // Claude models get an explicit cap; other families use their own
+        // Claude models get an explicit cap, other families use their own
         // defaults when we omit the field.
         is_claude.then_some(model.max_tokens)
     });
@@ -266,8 +264,8 @@ async fn consume_stream(
     pin_mut!(stream);
     let mut output = new_output_message(model);
 
-    // Bedrock indexes content blocks like Anthropic does; track the mapping
-    // to our positions plus tool-call JSON scratch buffers.
+    // Bedrock indexes content blocks like Anthropic does, track the mapping
+    // to our positions plus tool call JSON scratch buffers.
     struct BlockState {
         bedrock_index: i32,
         kind: BlockKind,
@@ -298,7 +296,7 @@ async fn consume_stream(
             }
 
             bedrock::ConverseStreamOutput::ContentBlockStart(start) => {
-                // Only tool_use blocks announce themselves with a start event;
+                // Only tool_use blocks announce themselves with a start event,
                 // text and reasoning blocks appear directly as deltas.
                 let index = start.content_block_index;
                 if let Some(bedrock::ContentBlockStart::ToolUse(tool_use)) = start.start {
@@ -326,7 +324,7 @@ async fn consume_stream(
                 let Some(delta) = event.delta else { continue };
                 match delta {
                     bedrock::ContentBlockDelta::Text(text) => {
-                        // Text blocks get no start event: create lazily.
+                        // Text blocks get no start event, create lazily.
                         let pos = match find(&blocks, index) {
                             Some(pos) => pos,
                             None => {
@@ -486,13 +484,13 @@ async fn consume_stream(
     Ok(())
 }
 
-/// Region resolution, in precedence order:
-/// ARN-embedded region > env override > SDK default chain > `us-east-1`.
+/// Region resolution, in precedence order,
+/// ARN embedded region > env override > SDK default chain > the US East Northern Virginia region.
 async fn build_client(model: &Model, options: &StreamOptions) -> aws_sdk_bedrockruntime::Client {
-    // 1. When the model id is an inference-profile ARN
-    //    (`arn:aws:bedrock:REGION:...`), the region is baked into it.
+    // 1. When the model id is an inference profile ARN
+    //    (an ARN containing the region), the region is baked into it.
     let arn_region = model.id.strip_prefix("arn:").and_then(|rest| {
-        // Skip the partition segment (aws / aws-cn / aws-us-gov).
+        // Skip the partition segment (aws / aws cn / aws us gov).
         let mut parts = rest.split(':');
         let _partition = parts.next()?;
         let service = parts.next()?;
@@ -501,7 +499,7 @@ async fn build_client(model: &Model, options: &StreamOptions) -> aws_sdk_bedrock
     });
 
     // 2. Explicit override via options.env, letting embedders inject config
-    //    without touching process-wide environment variables.
+    //    without touching process wide environment variables.
     let env_region = options.env.as_ref().and_then(|env| {
         env.get("AWS_REGION")
             .or_else(|| env.get("AWS_DEFAULT_REGION"))
@@ -512,7 +510,7 @@ async fn build_client(model: &Model, options: &StreamOptions) -> aws_sdk_bedrock
     if let Some(region) = arn_region.or(env_region) {
         loader = loader.region(aws_config::Region::new(region));
     } else {
-        // 3./4. Default chain (env, profile, IMDS) with us-east-1 fallback.
+        // 3./4. Default chain (env, profile, IMDS) with us east 1 fallback.
         loader = loader.region(
             aws_config::meta::region::RegionProviderChain::default_provider().or_else("us-east-1"),
         );
@@ -525,7 +523,7 @@ async fn build_client(model: &Model, options: &StreamOptions) -> aws_sdk_bedrock
     let mut builder = aws_sdk_bedrockruntime::config::Builder::from(&sdk_config);
 
     // Custom endpoints (VPC endpoints, proxies) are configured via the
-    // model's base_url. Standard bedrock-runtime hosts are left to the SDK
+    // model's base_url. Standard bedrock runtime hosts are left to the SDK
     // so region config stays authoritative. A row without a base_url keeps
     // the endpoint the SDK read from AWS_ENDPOINT_URL_BEDROCK_RUNTIME.
     if !model.base_url.is_empty() && !is_standard_bedrock_endpoint(&model.base_url) {
@@ -545,16 +543,16 @@ fn is_standard_bedrock_endpoint(base_url: &str) -> bool {
 }
 
 /// Classify an AWS SDK failure by what a retry can do about it, the same way
-/// `InferenceError::kind` does for the reqwest-based providers.
+/// `kind` does for the reqwest based providers.
 ///
-/// - A service exception (throttling, validation, a model error) keeps its
+/// * A service exception (throttling, validation, a model error) keeps its
 ///   API message, where the retry and overflow tables read it. The SDK's own
 ///   `Display` would only say "service error".
-/// - A connection that failed or broke, or timed out, is a transport error,
+/// * A connection that failed or broke, or timed out, is a transport error,
 ///   so the turn is retried like the same failure on the other providers.
-///   The text keeps the cause chain ("dispatch failure: io error: connection
+///   The text keeps the cause chain ("dispatch failure, io error, connection
 ///   reset by peer") instead of the bare "dispatch failure".
-/// - A request that could not be built is configuration; resending it
+/// * A request that could not be built is configuration, resending it
 ///   cannot help.
 fn sdk_error<E, R>(err: &aws_sdk_bedrockruntime::error::SdkError<E, R>) -> InferenceError
 where
@@ -573,14 +571,14 @@ where
             "Bedrock request could not be built: {}",
             with_causes(err)
         )),
-        // `SdkError` is non-exhaustive; a future variant stays a provider error.
+        // `SdkError` is non exhaustive, a future variant stays a provider error.
         _ => InferenceError::Other(format!("Bedrock error: {}", with_causes(err))),
     }
 }
 
 fn map_stop_reason(reason: &bedrock::StopReason) -> (StopReason, Option<String>) {
-    // Matching on the string form keeps us forward-compatible: the enum is
-    // non-exhaustive and AWS adds variants (e.g. model_context_window_exceeded).
+    // Matching on the string form keeps us forward compatible, the enum is
+    // non exhaustive and AWS adds variants (e.g. model_context_window_exceeded).
     match reason.as_str() {
         "end_turn" | "stop_sequence" => (StopReason::Stop, None),
         "max_tokens" | "model_context_window_exceeded" => (StopReason::Length, None),
@@ -769,7 +767,7 @@ fn convert_messages(
                                 .filter(|s| !s.trim().is_empty());
                             if supports_signature {
                                 match signature {
-                                    // Signatures arrive after thinking deltas;
+                                    // Signatures arrive after thinking deltas,
                                     // an aborted stream leaves them empty and
                                     // Bedrock rejects the replayed block. Fall
                                     // back to plain text (same as Anthropic).
@@ -790,7 +788,7 @@ fn convert_messages(
                                     }
                                 }
                             } else {
-                                // Non-Claude models reject the signature field.
+                                // Non Claude models reject the signature field.
                                 let text_block = bedrock::ReasoningTextBlock::builder()
                                     .text(&thinking.thinking)
                                     .build()
@@ -815,7 +813,7 @@ fn convert_messages(
 
             Message::ToolResult(_) => {
                 // Bedrock requires all tool results for one assistant turn in
-                // a single user message; collect the consecutive run.
+                // a single user message, collect the consecutive run.
                 let mut content: Vec<bedrock::ContentBlock> = Vec::new();
                 while let Some(Message::ToolResult(tool_result)) = transformed.get(i) {
                     let block = bedrock::ToolResultBlock::builder()
@@ -887,7 +885,7 @@ fn convert_tool_config(context: &Context) -> Result<Option<bedrock::ToolConfigur
 }
 
 /// Thinking configuration travels in `additionalModelRequestFields`, a
-/// free-form JSON escape hatch for model-family-specific parameters that the
+/// free form JSON escape hatch for model family specific parameters that the
 /// Converse schema doesn't cover.
 fn build_additional_model_request_fields(
     model: &Model,
@@ -898,8 +896,8 @@ fn build_additional_model_request_fields(
         return None;
     }
     let Some(level) = options.reasoning else {
-        // Match Anthropic's off convention: no entry explicitly disables
-        // thinking, a named entry sends that type alone (Sonnet 5.5:
+        // Match Anthropic's off convention, no entry explicitly disables
+        // thinking, a named entry sends that type alone (Sonnet 5.5,
         // `between_tools`), and null means thinking cannot be switched off.
         return off_effort(model, Some("disabled"))
             .map(|off_type| json!({"thinking": {"type": off_type}}));
@@ -922,7 +920,7 @@ fn build_additional_model_request_fields(
         }));
     }
 
-    // Budget-based thinking for older Claude models.
+    // Budget based thinking for older Claude models.
     let budget = thinking_budget_override.unwrap_or_else(|| {
         adjust_max_tokens_for_thinking(
             options.max_tokens,
@@ -939,14 +937,14 @@ fn build_additional_model_request_fields(
             "budget_tokens": budget,
             "display": "summarized",
         },
-        // Interleaved thinking (thinking between tool calls) is opt-in via
-        // beta flag on budget models; adaptive models have it built in.
+        // Interleaved thinking (thinking between tool calls) is opt in via
+        // beta flag on budget models, adaptive models have it built in.
         "anthropic_beta": ["interleaved-thinking-2025-05-14"],
     }))
 }
 
-/// Convert `serde_json::Value` into the AWS SDK's `Document` type. The two
-/// are structurally identical; the SDK just refuses to depend on serde_json.
+/// Convert `Value` into the AWS SDK's `Document` type. The two
+/// are structurally identical, the SDK just refuses to depend on serde_json.
 fn json_to_document(value: &Value) -> Document {
     match value {
         Value::Null => Document::Null,
@@ -988,7 +986,7 @@ mod tests {
         AssistantMessageEvent, ErrorKind, Model, StopReason, StreamOptions, ThinkingLevel,
     };
 
-    /// A row from the shipped catalog, not a hand-built fixture: these
+    /// A row from the shipped catalog, not a hand built fixture, these
     /// tests break if catalog.json and this provider drift apart.
     fn catalog_model(id: &str) -> Model {
         crate::catalog::builtin_models()
@@ -1259,7 +1257,7 @@ mod tests {
 
     #[test]
     fn sonnet55_off_sends_between_tools() {
-        // Same rule as on the Anthropic API: `disabled` is a 400, the "off"
+        // Same rule as on the Anthropic API, `disabled` is a 400, the "off"
         // entry names the thinking type, and the type travels alone.
         let sonnet = catalog_model("global.anthropic.claude-sonnet-5-5");
         assert_eq!(
@@ -1270,7 +1268,7 @@ mod tests {
 
     #[test]
     fn sonnet55_levels_reach_xhigh_and_max() {
-        // Before, "sonnet-5" had no native xhigh and max fell back to high,
+        // Before, "sonnet 5" had no native xhigh and max fell back to high,
         // so both top levels quietly became high on Bedrock.
         let sonnet = catalog_model("global.anthropic.claude-sonnet-5-5");
         for (level, effort) in [
@@ -1336,7 +1334,7 @@ mod tests {
     #[test]
     fn compat_decides_capabilities_where_the_id_says_nothing() {
         // An application inference profile hides the model in its ARN and
-        // carries a user-chosen name; the curated compat is the only signal.
+        // carries a user chosen name, the curated compat is the only signal.
         let mut profile = catalog_model("us.anthropic.claude-sonnet-5");
         profile.id =
             "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123".into();
@@ -1352,7 +1350,7 @@ mod tests {
             }))
         );
 
-        // An explicit `false` wins over the id tables: token-budget thinking.
+        // An explicit `false` wins over the id tables, token budget thinking.
         let mut budget = catalog_model("us.anthropic.claude-sonnet-5");
         budget.compat = Some(json!({"forceAdaptiveThinking": false}));
         let thinking = fields(&budget, Some(ThinkingLevel::High)).unwrap();
@@ -1361,7 +1359,7 @@ mod tests {
 
     #[test]
     fn opus_and_haiku_5_ids_without_compat_use_adaptive_effort() {
-        // A user's models.json row without compat: the id tables decide.
+        // A user's models.json row without compat, the id tables decide.
         let mut model = catalog_model("us.anthropic.claude-sonnet-5");
         model.compat = None;
         for id in [

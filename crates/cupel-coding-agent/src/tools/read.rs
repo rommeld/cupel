@@ -4,7 +4,7 @@
 //! *actionable* continuation notices. "use offset=N to continue" teaches
 //! the model how to page through big files instead of giving up. Images are
 //! detected by extension, checked for matching signatures and a 4 MiB size
-//! limit, and returned as base64 attachments; the core
+//! limit, and returned as base64 attachments, the core
 //! transform layer already downgrades them to a text placeholder for models
 //! without vision, so the tool doesn't need to know the active model.
 
@@ -25,7 +25,7 @@ use crate::truncate::{
     truncate_head,
 };
 
-// Leave headroom below providers' per-image limits (Anthropic: 5 MiB).
+// Leave headroom below providers' per image limits (Anthropic, 5 MiB).
 const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -36,7 +36,7 @@ struct ReadArgs {
     limit: Option<usize>,
 }
 
-/// Map a file extension to a provider-supported image MIME type.
+/// Map a file extension to a provider supported image MIME type.
 fn image_mime_type(path: &std::path::Path) -> Option<&'static str> {
     match path
         .extension()
@@ -230,7 +230,7 @@ impl AgentTool for ReadTool {
             .into());
         }
 
-        // A user-provided limit is honored first; truncate_head still applies
+        // A user provided limit is honored first, truncate_head still applies
         // its own line/byte caps afterwards.
         let (selected, user_limited_lines) = match args.limit {
             Some(limit) => {

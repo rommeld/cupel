@@ -1,4 +1,4 @@
-//! Process configuration; session working directories arrive over ACP.
+//! Process configuration, session working directories arrive over ACP.
 
 use std::path::PathBuf;
 

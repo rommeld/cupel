@@ -1,16 +1,16 @@
-# Homebrew formula for cupel - a BINARY formula: it downloads release
+# Homebrew formula for cupel a BINARY formula, it downloads release
 # archives instead of compiling, so `brew install` needs no Rust toolchain.
 #
-# This file is the TEMPLATE that lives with the code. To publish it:
-#   1. Create a repository named `homebrew-tap` under your GitHub account.
+# This file is the TEMPLATE that lives with the code. To publish it,
+#   1. Create a repository named homebrew followed by a hyphen and tap under your GitHub account.
 #   2. Copy this file to `Formula/cupel.rb` in that repository.
 #   3. After each release, update `version` and the three sha256 values from
-#      the release's sha256sums.txt (see packaging/README.md for a one-liner).
-# Users then install with:
+#      the release's sha256sums.txt (see packaging/README.md for a one liner).
+# Users then install with,
 #   brew install rommeld/tap/cupel
 #
-# The checksums below are the REAL values for v0.1.3-beta, fetched from that
-# release's sha256sums.txt. Regenerate them for a release containing cupel-acp
+# The checksums below are the REAL values for v0.1.3 beta, fetched from that
+# release's sha256sums.txt. Regenerate them for a release containing the ACP binary
 # before publishing this updated template (see packaging/README.md).
 
 class Cupel < Formula

@@ -1,10 +1,10 @@
-/// The git side of `/spinoff`: parallel sessions, each in its own git worktree. This
+/// The git side of `/spinoff`, parallel sessions, each in its own git worktree. This
 /// module knows nothing about sessions or the UI. If finds the checkouts that belong
 /// together, creates a spinoff's worktree, and tells whether two checkout's changes
 /// would conflict.
 ///
-/// Every git call is a plain `std::process::Command`, as in `reviews.rs`. Only
-/// machine-readable output (`porcelain` and plumbing) is parsed, because git
+/// Every git call is a plain `Command`, as in `reviews.rs`. Only
+/// machine readable output (`porcelain` and plumbing) is parsed, because git
 /// translates its message for people.
 use std::path::{Path, PathBuf};
 
@@ -25,7 +25,7 @@ pub enum SpinoffError {
     },
 }
 
-/// The checkouts that work together: the main checkout, where the origin session runs,
+/// The checkouts that work together, the main checkout, where the origin session runs,
 /// and every worktree on a `cupel/spinoff/<name>` branch. Other worktrees, such as
 /// Claude Code's `.claude/worktrees/*`, are not part of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,7 +64,7 @@ impl Group {
             .ok_or_else(|| SpinoffError::Unsupported("git listed no worktree".to_string()))
     }
 
-    /// Parse `git worktree list --porcelain`: one record per worktree, separated by
+    /// Parse the porcelain listing of git worktrees, one record per worktree, separated by
     /// blank lines. The first record is always the main checkout.
     fn parse(listing: &str) -> Option<Self> {
         let mut entries = listing.split("\n\n").filter_map(Entry::parse);
@@ -89,8 +89,8 @@ impl Group {
     }
 }
 
-/// One record of `git worktree list --porcelain`. It borrows its text from the listing
-/// (the lifetime `'a`) instead of copying it; `Group::parse` copies only what it keeps.
+/// One record of the porcelain listing of git worktrees. It borrows its text from the listing
+/// (the lifetime `'a`) instead of copying it, the `parse` method of `Group` copies only what it keeps.
 struct Entry<'a> {
     path: &'a str,
     head: &'a str,
@@ -113,7 +113,7 @@ impl<'a> Entry<'a> {
                 "HEAD" => entry.head = value,
                 "branch" => entry.branch = value.strip_prefix("refs/heads/"),
                 "prunable" => entry.prunable = true,
-                // "detached", "bare", "locked": nothing `/spinoff` needs
+                // "detached", "bare", "locked", nothing `/spinoff` needs
                 _ => {}
             }
         }
@@ -121,8 +121,8 @@ impl<'a> Entry<'a> {
     }
 }
 
-/// Start `git -C <dir> <args>`, optionally with another index file (`GIT_INDEX_FILE`,
-/// see [`snapshot`]). Fails only when git cannot be started at all; a git command that
+/// Start git in the selected directory, optionally with another index file (`GIT_INDEX_FILE`,
+/// see [`snapshot`]). Fails only when git cannot be started at all, a git command that
 /// fails still returns its output.
 fn run(
     dir: &Path,
@@ -139,7 +139,7 @@ fn run(
         .map_err(|error| SpinoffError::Unsupported(format!("cannot run git: {error}")))
 }
 
-/// [`run`] for commands that must succeed: their stdout, or [`SpinoffError::Git`] with
+/// [`run`] for commands that must succeed, their stdout, or `Git` with
 /// git's own explanation.
 fn git_in(dir: &Path, index: Option<&Path>, args: &[&str]) -> Result<String, SpinoffError> {
     let output = run(dir, index, args)?;
@@ -163,8 +163,8 @@ fn failure(args: &[&str], output: &std::process::Output) -> SpinoffError {
     }
 }
 
-/// A spinoff name that passed validation: 3 to 24 characters from `a-z`, `0-9` and
-/// `-`, and not a `/spinoff` subcommand. The only way to get one is to parse a string,
+/// A spinoff name that passed validation, 3 to 24 characters from lowercase ASCII letters, ASCII digits and
+/// a hyphen, and not a `/spinoff` subcommand. The only way to get one is to parse a string,
 /// so a function that takes a `&SpinoffName` never has to check it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpinoffName(String);
@@ -200,7 +200,7 @@ impl SpinoffName {
 
 const EXCLUDE_LINE: &str = "/.cupel/worktrees/";
 
-/// Create spinoff `name`: the branch `cupel/spinoff/<name>` at the origin's HEAD,
+/// Create spinoff `name`, the branch `cupel/spinoff/<name>` at the origin's HEAD,
 /// checked out in `<origin>/.cupel/worktrees/<name>`.
 pub fn create(group: &Group, name: &SpinoffName) -> Result<Spinoff, SpinoffError> {
     let origin = &group.origin;
@@ -268,7 +268,7 @@ pub fn create(group: &Group, name: &SpinoffName) -> Result<Spinoff, SpinoffError
     })
 }
 
-/// Make the main checkout ignore `.cupel/worktrees/`. Without the line, `git add -A`
+/// Make the main checkout ignore `.cupel/worktrees/`. Without the line, staging all changes with git
 /// there would add every spinoff as an ambedded repository. `.git/info/exclude` works
 /// like `.gitignore`, but is never committed.
 fn ensure_excluded(origin: &Path) -> Result<(), SpinoffError> {
@@ -316,7 +316,7 @@ impl Drop for TempIndex {
 
 /// Record the checkout at `dir` as it is right now, tracked changes and untracked
 /// files alike (`.gitignore` respected), as a commit whose parent is its HEAD. Returns
-/// the commit id. The checkout's index, files and branches stay untouched: the file go
+/// the commit id. The checkout's index, files and branches stay untouched, the file go
 /// into a copy of the index, and no branch points at the commit, so git's garbage
 /// collection removes it.
 pub fn snapshot(dir: &Path) -> Result<String, SpinoffError> {
@@ -327,7 +327,7 @@ pub fn snapshot(dir: &Path) -> Result<String, SpinoffError> {
     let index = PathBuf::from(index.trim_end());
     // Next to the real index, so every checkout gets its own copy.
     let temp = TempIndex(index.with_extension("cupel-snapshot"));
-    // A copy keeps git's file timestamp, so `add --all` only reads the files that
+    // A copy keeps git's file timestamp, so staging all changes only reads the files that
     // changed.
     std::fs::copy(&index, &temp.0).map_err(|source| SpinoffError::Io {
         path: index.clone(),
@@ -375,8 +375,8 @@ pub fn conflicts(repo: &Path, ours: &str, theirs: &str) -> Result<Vec<String>, S
     }
 }
 
-/// Read `mege-tree -z --name-only` output. The merged tree's id, then the conflicted
-/// paths verbatim; without it, git would quote unusual ones (`ü.rs` becomes
+/// Read the NUL delimited name listing from git merge tree output. The merged tree's id, then the conflicted
+/// paths verbatim, without it, git would quote unusual ones (`ü.rs` becomes
 /// `"\303\274.rs"`).
 fn parse_conflicts(stdout: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(stdout)
@@ -416,7 +416,7 @@ impl Conflict {
 }
 
 /// Every pair of checkouts in `group` whose current changes conflict. Each checkout is
-/// snapshotted once; then every pair is merged in the object store, so nothing in any
+/// snapshotted once, then every pair is merged in the object store, so nothing in any
 /// checkout changes.
 pub fn check(group: &Group) -> Result<Vec<Conflict>, SpinoffError> {
     let mut members = vec![(Side::Origin, snapshot(&group.origin.path)?)];
@@ -448,11 +448,11 @@ pub enum MergeOutcome {
 }
 
 /// Take the next of merging `spinoff` into the origin's branch. Every call reads the
-/// state from git, so it can simply be repeated:
+/// state from git, so it can simply be repeated,
 ///
-/// - a merge of this spinoff in progress: commit it once no file has conflict markers
-///   left, else report the files;
-/// - otherwise: refuse while the main checkout has changes, commit what the spinoff
+/// * a merge of this spinoff in progress, commit it once no file has conflict markers
+///   left, else report the files,
+/// * otherwise, refuse while the main checkout has changes, commit what the spinoff
 ///   left uncommitted (message `leftovers`), and merge.
 ///
 /// The merge commit gets `message`, or `Merge <leftovers>` without one. A merge that
@@ -551,9 +551,9 @@ pub fn commit_leftovers(spinoff: &Spinoff, message: &str) -> Result<bool, Spinof
     Ok(true)
 }
 
-/// Remove the spinoff's worktree, then its branch: with `-d` after a merge, which
-/// refuses to delete unmerged work, with `-D` for a drop. Returns the branch's last
-/// commit; `git branch <name> <commit>` brings the branch back until git's garbage
+/// Remove the spinoff's worktree, then its branch, with safe branch deletion after a merge, which
+/// refuses to delete unmerged work, with forced branch deletion for a drop. Returns the branch's last
+/// commit, `git branch <name> <commit>` brings the branch back until git's garbage
 /// collection removes the commit.
 pub fn remove(group: &Group, spinoff: &Spinoff, merged: bool) -> Result<String, SpinoffError> {
     let origin = &group.origin.path;
@@ -566,7 +566,7 @@ pub fn remove(group: &Group, spinoff: &Spinoff, merged: bool) -> Result<String, 
     Ok(tip)
 }
 
-/// The commits a stipped merge brings in, one line each at most 20: what the spinoff
+/// The commits a stipped merge brings in, one line each at most 20, what the spinoff
 /// did, for the prompt that asks to resolve the conflicts.
 pub fn incoming_log(group: &Group) -> Result<String, SpinoffError> {
     git(
@@ -599,14 +599,14 @@ fn unmerged_files(dir: &Path) -> Result<Vec<String>, SpinoffError> {
     Ok(paths(&listing))
 }
 
-/// Tracked files that differ from HEAD, staged or not. Untracked files don't count:
+/// Tracked files that differ from HEAD, staged or not. Untracked files don't count,
 /// git refuses a merge that would overwrite one, and says so.
 fn tracked_changes(dir: &Path) -> Result<Vec<String>, SpinoffError> {
     let listing = git(dir, &["diff", "--name-only", "-z", "HEAD"])?;
     Ok(paths(&listing))
 }
 
-/// The paths of a `-z` listing: each ended by a NUL byte.
+/// The paths of a NUL delimited listing, each ended by a NUL byte.
 fn paths(listing: &str) -> Vec<String> {
     listing
         .split('\0')
@@ -615,10 +615,10 @@ fn paths(listing: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether `file` still contains conflict markers. A bare `======` doesn`t count:
+/// Whether `file` still contains conflict markers. A bare `======` doesn`t count,
 /// Markdown underlines headlines with it. A deleted file is resolved, since deleting
 /// is one way to settle a conflict. A file that can`t be read as text (a binary
-/// conflict) counts as unresolved: only `git add` can mark it resolved.
+/// conflict) counts as unresolved, only `git add` can mark it resolved.
 fn has_markers(file: &Path) -> bool {
     match std::fs::read_to_string(file) {
         Ok(text) => text
@@ -632,13 +632,13 @@ fn has_markers(file: &Path) -> bool {
 mod tests {
     use super::*;
 
-    /// Ten numbered lines: edits to line 2 and line 9 are far enough apart
+    /// Ten numbered lines, edits to line 2 and line 9 are far enough apart
     /// for git to merge them.
     const LINES: &str = "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
 
     /// An empty repository on `main`. Every test passes its own name,
     /// because tests run in parallel. The path is canonical because git
-    /// prints canonical paths: on macOS the temp dir `/var/...` is really
+    /// prints canonical paths, on macOS the temp dir `/var/...` is really
     /// `/private/var/...`.
     fn init(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("cupel-spinoff-{name}"));
@@ -677,7 +677,7 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
-    /// `git worktree add -b <branch> <origin>/<dir>` by hand; `create`
+    /// creating a branch and worktree with git by hand, `create`
     /// follows in step 1.3. Returns the worktree's path.
     fn add_worktree(origin: &Path, branch: &str, dir: &str) -> PathBuf {
         let path = origin.join(dir);
@@ -693,7 +693,7 @@ mod tests {
         let auth = add_worktree(&origin, "cupel/spinoff/auth", ".cupel/worktrees/auth");
         // A worktree that is not a spinoff, like Claude Code's.
         add_worktree(&origin, "other", ".claude/worktrees/other");
-        // A spinoff whose directory was deleted by hand: git marks it prunable.
+        // A spinoff whose directory was deleted by hand, git marks it prunable.
         let gone = add_worktree(&origin, "cupel/spinoff/gone", ".cupel/worktrees/gone");
         std::fs::remove_dir_all(gone).unwrap();
 
@@ -722,7 +722,7 @@ mod tests {
         assert!(matches!(result, Err(SpinoffError::Unsupported(_))));
     }
 
-    /// The message of a `Blocked` error; panics on anything else. The UI
+    /// The message of a `Blocked` error, panics on anything else. The UI
     /// shows it as one notice line, so it must not contain a line break,
     /// which a wrapped string literal without a trailing `\` would add.
     fn blocked<T>(result: Result<T, SpinoffError>) -> String
@@ -785,7 +785,7 @@ mod tests {
         sh(&origin, &["branch", "cupel/spinoff/left"]);
         let left = create(&Group::discover(&origin).unwrap(), &"left".parse().unwrap());
         assert!(blocked(left).contains("git branch -D cupel/spinoff/left"));
-        // A detached HEAD: there is no branch to merge back into.
+        // A detached HEAD, there is no branch to merge back into.
         sh(&origin, &["checkout", "--quiet", "--detach"]);
         let detached = create(&Group::discover(&origin).unwrap(), &"docs".parse().unwrap());
         assert!(blocked(detached).contains("detached"));
@@ -892,7 +892,7 @@ mod tests {
         let group = Group::discover(&origin).unwrap();
         assert!(check(&group).unwrap().is_empty(), "nothing changed yet");
 
-        // The origin and auth both change line 5; docs only changes line 2,
+        // The origin and auth both change line 5, docs only changes line 2,
         // which merges with both.
         edit(&origin, 5, "5 origin");
         edit(&auth.path, 5, "5 auth");
@@ -946,7 +946,7 @@ mod tests {
         let subject = |commit: &str| sh(&origin, &["log", "-1", "--format=%s", commit]);
         assert_eq!(subject("HEAD"), "Merge spinoff auth: line 9\n");
         assert_eq!(subject("HEAD^2"), "spinoff auth: line 9\n");
-        // HEAD is a merge commit: it has a second parent.
+        // HEAD is a merge commit, it has a second parent.
         sh(&origin, &["rev-parse", "--verify", "HEAD^2"]);
         // Asking again only confirms it.
         assert_eq!(
@@ -974,12 +974,12 @@ mod tests {
             MergeOutcome::Conflicts(a_txt.clone())
         );
         assert!(incoming_log(&group).unwrap().contains("auth work"));
-        // Nothing resolved yet: the markers are still there.
+        // Nothing resolved yet, the markers are still there.
         assert_eq!(
             merge(&group, auth, "unused", None).unwrap(),
             MergeOutcome::StillConflicted(a_txt)
         );
-        // Resolved the way a model would: by editing the file, without git add.
+        // Resolved the way a model would, by editing the file, without git add.
         let resolved = LINES.replace("5\n", "5 origin and auth\n");
         std::fs::write(origin.join("a.txt"), &resolved).unwrap();
         assert_eq!(
@@ -1008,7 +1008,7 @@ mod tests {
             "{message}"
         );
 
-        // A merge of another commit in progress: git keeps its id in MERGE_HEAD.
+        // A merge of another commit in progress, git keeps its id in MERGE_HEAD.
         sh(
             &origin,
             &["commit", "--quiet", "--all", "--message", "work"],
@@ -1019,7 +1019,7 @@ mod tests {
         assert!(message.contains("another merge"), "{message}");
         std::fs::remove_file(origin.join(".git/MERGE_HEAD")).unwrap();
 
-        // An untracked file that the merge would overwrite: git itself refuses.
+        // An untracked file that the merge would overwrite, git itself refuses.
         std::fs::write(auth.path.join("b.txt"), "auth\n").unwrap();
         std::fs::write(origin.join("b.txt"), "origin\n").unwrap();
         let refused = merge(&group, auth, "spinoff auth: b.txt", None);

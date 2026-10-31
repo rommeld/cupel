@@ -1,6 +1,6 @@
-//! User-defined helpers, constructed only on their first call.
+//! User defined helpers, constructed only on their first call.
 //! Each helper owns its prompt, tools and private provider history. Calls to
-//! the same helper serialize; cancellation also covers callers waiting in line.
+//! the same helper serialize, cancellation also covers callers waiting in line.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
@@ -90,7 +90,7 @@ pub fn resolve(
     (specs, warnings)
 }
 
-/// Eligibility does not depend on the optional fresh-session preference.
+/// Eligibility does not depend on the optional fresh session preference.
 #[must_use]
 pub fn team_member_problem(crew: &Crew, name: &str) -> Option<String> {
     match crew.spec(name) {
@@ -627,7 +627,7 @@ impl Crew {
             .collect()
     }
 
-    /// Already-cancelled calls do not consume a second Esc intended for the lead.
+    /// Already cancelled calls do not consume a second Esc intended for the lead.
     pub fn stop_running(&self) -> Vec<String> {
         let scoped = self.scheduler.stop_helpers();
         self.running
@@ -821,7 +821,7 @@ impl Crew {
         let name = request.name.clone();
         let (sender, receipt) = tokio::sync::oneshot::channel();
         let (updates, mut update_events) = tokio::sync::mpsc::unbounded_channel();
-        // Admission itself is owned: dropping a caller while the journal is loading
+        // Admission itself is owned, dropping a caller while the journal is loading
         // must not strand a queue reservation before a managed worker exists.
         tokio::spawn(async move {
             let result = async {
@@ -1168,7 +1168,7 @@ impl Crew {
         let helper = value
             .as_mut()
             .expect("helper initialized under its exclusive slot lock");
-        // A dropped caller cancels its inner run; never reuse its history mid-run.
+        // A dropped caller cancels its inner run, never reuse its history mid run.
         tokio::select! {
             biased;
             () = stop.cancelled() => return Err(stopped()),

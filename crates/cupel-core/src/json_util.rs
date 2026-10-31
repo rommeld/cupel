@@ -1,11 +1,12 @@
-//! Streaming-JSON parsing.
+//! Streaming JSON parsing.
 //!
-//! While a model streams a tool call, the argument JSON arrives in fragments:
-//! `{"pat` ... `{"pattern": "fo` ... `{"pattern": "foo"}`. This module
-//! keeps the *parsed-so-far* object updated on every delta so UIs can
+//! While a model streams a tool call, the argument JSON arrives in fragments,
+//! progressing from an incomplete key to an incomplete value and finally a full object.
+//! This module
+//! keeps the *parsed so far* object updated on every delta so UIs can
 //! render arguments live.
 //!
-//! Strategy: try a normal parse first. If the document is incomplete, *repair*
+//! Strategy, try a normal parse first. If the document is incomplete, *repair*
 //! it by closing whatever is still open (strings, objects, arrays), trimming a
 //! trailing comma or dangling key, then parse again. If everything fails,
 //! return an empty object. The contract is "always return a usable value,
@@ -13,7 +14,7 @@
 
 use serde_json::Value;
 
-/// Parse potentially-incomplete JSON. Always returns a `Value`; incomplete or
+/// Parse potentially incomplete JSON. Always returns a `Value`, incomplete or
 /// malformed input degrades to `{}` rather than an error.
 #[must_use]
 pub fn parse_streaming_json(partial: &str) -> Value {
@@ -21,11 +22,11 @@ pub fn parse_streaming_json(partial: &str) -> Value {
     if trimmed.is_empty() {
         return Value::Object(serde_json::Map::new());
     }
-    // Fast path: the JSON is already complete.
+    // Fast path, the JSON is already complete.
     if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
         return value;
     }
-    // Slow path: close open structures and retry.
+    // Slow path, close open structures and retry.
     if let Some(completed) = complete_json(trimmed)
         && let Ok(value) = serde_json::from_str::<Value>(&completed)
     {
@@ -37,9 +38,9 @@ pub fn parse_streaming_json(partial: &str) -> Value {
 /// Attempt to turn a JSON *prefix* into a complete document by appending the
 /// missing closers. Returns `None` when the input can't be a JSON prefix.
 ///
-/// This is a single left-to-right scan that tracks:
-/// - whether we are inside a string (and whether the last char was `\`),
-/// - the stack of open containers (`{` / `[`).
+/// This is a single left to right scan that tracks,
+/// * whether we are inside a string (and whether the last char was `\`),
+/// * the stack of open containers (`{` / `[`).
 fn complete_json(input: &str) -> Option<String> {
     let mut stack: Vec<char> = Vec::new();
     let mut in_string = false;
@@ -48,7 +49,7 @@ fn complete_json(input: &str) -> Option<String> {
     for c in input.chars() {
         if in_string {
             if escaped {
-                escaped = false; // The escaped char itself; no state change.
+                escaped = false; // The escaped char itself, no state change.
             } else if c == '\\' {
                 escaped = true;
             } else if c == '"' {
@@ -61,7 +62,7 @@ fn complete_json(input: &str) -> Option<String> {
             '{' => stack.push('}'),
             '[' => stack.push(']'),
             // A closer must match the innermost opener. The pop in the guard
-            // is intentional: it must run for every closer.
+            // is intentional, it must run for every closer.
             '}' | ']' if stack.pop() != Some(c) => return None,
             _ => {}
         }
@@ -69,7 +70,7 @@ fn complete_json(input: &str) -> Option<String> {
 
     let mut completed = input.to_string();
 
-    // A dangling escape (`"abc\`) can't be completed meaningfully: drop the
+    // A dangling escape (`"abc\`) can't be completed meaningfully, drop the
     // backslash so the string can be closed.
     if escaped {
         completed.pop();
@@ -78,8 +79,8 @@ fn complete_json(input: &str) -> Option<String> {
         completed.push('"');
     }
 
-    // Trim trailing commas / colons so `{"a": 1,` and `{"a":` become valid
-    // once closed. A dangling key like `{"a"` needs a `: null`.
+    // Trim trailing commas or add a null value after a trailing colon so the
+    // object becomes valid once closed. A dangling key needs a colon and null.
     let tail_trimmed = completed.trim_end();
     if tail_trimmed.ends_with(',') {
         completed.truncate(completed.trim_end().len() - 1);
@@ -88,7 +89,7 @@ fn complete_json(input: &str) -> Option<String> {
     } else if stack.last() == Some(&'}') && tail_trimmed.ends_with('"') {
         // Inside an object and the last complete token is a string. It could
         // be a key missing its value, or a complete value. Distinguish by the
-        // preceding significant character: after `{` or `,` it's a key.
+        // preceding significant character, after `{` or `,` it's a key.
         let before = tail_trimmed[..tail_trimmed.len() - 1]
             .rfind('"')
             .map(|open| tail_trimmed[..open].trim_end())
@@ -98,7 +99,7 @@ fn complete_json(input: &str) -> Option<String> {
         }
     }
 
-    // Close remaining open containers innermost-first.
+    // Close remaining open containers innermost first.
     while let Some(closer) = stack.pop() {
         completed.push(closer);
     }

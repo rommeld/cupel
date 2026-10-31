@@ -1,19 +1,19 @@
 //! Provider credential resolution, shared by startup (`select_model` in
-//! main.rs) and the runtime `/provider` + `/model` built-ins. This module
+//! main.rs) and the runtime `/provider` + `/model` built ins. This module
 //! knows which environment variable each provider reads and how the
-//! key sources layer: session-entered key > exported env var >
-//! `~/.cupel/settings.json` (see `crate::settings`).
+//! key sources layer, session entered key > exported env var >
+//! `~/.cupel/settings.json` (see `settings`).
 //!
-//! Note on `export`: keys entered at runtime cannot be written back into
-//! the process environment. `std::env::set_var` is unsafe in edition 2024
-//! (not thread-safe) and this workspace forbids unsafe code. Runtime keys
-//! therefore live in the frontend's session state; settings.json is the
-//! persistent home for keys, and exported variables remain a startup-time
-//! override (the 12-factor convention: env beats file config).
+//! Note on `export`, keys entered at runtime cannot be written back into
+//! the process environment. `set_var` is unsafe in edition 2024
+//! (not thread safe) and this workspace forbids unsafe code. Runtime keys
+//! therefore live in the frontend's session state, settings.json is the
+//! persistent home for keys, and exported variables remain a startup time
+//! override (the 12 factor convention, env beats file config).
 
 use cupel_core::types::Model;
 
-/// The environment variable a provider reads its API key from; `None` for
+/// The environment variable a provider reads its API key from, `None` for
 /// providers with their own credential mechanism (Bedrock's AWS chain).
 #[must_use]
 pub fn env_var_name(provider: &str) -> Option<&'static str> {
@@ -26,7 +26,7 @@ pub fn env_var_name(provider: &str) -> Option<&'static str> {
     }
 }
 
-/// The bearer-token variable a provider reads before its API-key variable.
+/// The bearer token variable a provider reads before its API key variable.
 #[must_use]
 pub fn env_token_var_name(provider: &str) -> Option<&'static str> {
     match provider {
@@ -57,25 +57,25 @@ pub fn env_api_key(provider: &str) -> Option<String> {
     exported_key(provider).map(|(_, key)| key)
 }
 
-/// The pure precedence core: an exported env var beats the settings file.
-/// Parameterized (like resources::resolve_config_home) so tests can prove
-/// the order without reading process-global env vars. This is the only
-/// env-free place where the prcedence is provable.
+/// The pure precedence core, an exported env var beats the settings file.
+/// Parameterized (like resolve_config_home) so tests can prove
+/// the order without reading process global env vars. This is the only
+/// env free place where the prcedence is provable.
 #[must_use]
 pub fn resolve_key_layers(env: Option<String>, settings: Option<&str>) -> Option<String> {
     env.or_else(|| settings.map(str::to_string))
 }
 
-/// Startup-side key resoultion: env var first, then settings.json. The
-/// TUI layers session-entered keys on top of this (App::resolve_key).
+/// Startup side key resoultion, env var first, then settings.json. The
+/// TUI layers session entered keys on top of this (resolve_key).
 #[must_use]
 pub fn resolve_api_key(provider: &str, settings: &crate::settings::Settings) -> Option<String> {
     resolve_key_layers(env_api_key(provider), settings.api_key(provider))
 }
 
 /// Whether the AWS credential chain has anything to work with. (Bedrock
-/// resolves credentials inside the provider; this only decides whether to
-/// offer Bedrock as a usable default.) `AWS_BEARER_TOKEN_BEDROCK` counts:
+/// resolves credentials inside the provider, this only decides whether to
+/// offer Bedrock as a usable default.) `AWS_BEARER_TOKEN_BEDROCK` counts,
 /// with it the SDK sends a bearer token (a Bedrock API key, or an LLM
 /// gateway's key) and needs no other AWS credentials.
 #[must_use]
@@ -88,7 +88,7 @@ pub fn has_aws_credentials() -> bool {
 /// The distinct providers of the given catalog, in catalog order, each
 /// with its first (= default) model. Drives `/provider` listing, switching,
 /// and argument autocomplete. Takes the merged catalog (SessionMeta.models)
-/// so user-defined and discovered providers appear alongside built-ins.
+/// so user defined and discovered providers appear alongside built ins.
 #[must_use]
 pub fn catalog_providers(models: &[Model]) -> Vec<(String, Model)> {
     let mut providers: Vec<(String, Model)> = Vec::new();
@@ -102,10 +102,10 @@ pub fn catalog_providers(models: &[Model]) -> Vec<(String, Model)> {
 }
 
 /// Whether a model's endpoint takes no API key at all (compat
-/// `requiresApiKey: false` for local servers like ollama/llama-server).
-/// Only the Chat Completions provider honors that knob (see cupel-core's
+/// `requiresApiKey` set to false for local servers like ollama/llama server).
+/// Only the Chat Completions provider honors that knob (see cupel core's
 /// CompletionsCompat), so on any other API a row still needs its key.
-/// A non-boolean value is rejected there too, so both agree.
+/// A non boolean value is rejected there too, so both agree.
 #[must_use]
 pub fn is_keyless(model: &Model) -> bool {
     model.api.as_str() == cupel_core::types::Api::OPENAI_COMPLETIONS
@@ -118,7 +118,7 @@ pub fn is_keyless(model: &Model) -> bool {
 }
 
 /// A provider counts as keyless when every one of its models is. This drives
-/// the `/provider` status line and select_model's last-resort local
+/// the `/provider` status line and select_model's last resort local
 /// default. (A mixed provider still needs its key.)
 #[must_use]
 pub fn provider_is_keyless(models: &[Model], provider: &str) -> bool {
@@ -132,15 +132,15 @@ pub fn provider_is_keyless(models: &[Model], provider: &str) -> bool {
     any
 }
 
-/// Whether `/provider <name> <key>` has anywhere to put a key: everything
-/// except amazon-bedrock (its AWS chain has no key slot) and all-keyless
+/// Whether `/provider <name> <key>` has anywhere to put a key, everything
+/// except amazon bedrock (its AWS chain has no key slot) and all keyless
 /// local providers. Custom models.json providers do qualify. Session
-/// memory and settings.jons are per-provider-id maps, unlike the closed
+/// memory and settings.jons are per provider id maps, unlike the closed
 /// env_var_name match that used to gate this (and locked custom providers
 /// out of keys entirely).
 #[must_use]
 pub fn takes_api_key(models: &[Model], provider: &str) -> bool {
-    // openai-codex authenticates with /login (OAuth tokens in auth.json);
+    // openai codex authenticates with /login (OAuth tokens in auth.json),
     // a pasted key has no slot there, exactly like Bedrock's AWS chain.
     provider != "amazon-bedrock"
         && provider != "openai-codex"
@@ -188,7 +188,7 @@ mod tests {
     fn catalog_providers_are_distinct_with_a_default_model() {
         let providers = catalog_providers(&cupel_core::catalog::builtin_models());
         assert!(providers.len() >= 4, "anthropic/openai/bedrock/fireworks");
-        // Catalog order: anthropic first, and each provider appears once.
+        // Catalog order, anthropic first, and each provider appears once.
         assert_eq!(providers[0].0, "anthropic");
         let mut names: Vec<&str> = providers.iter().map(|(n, _)| n.as_str()).collect();
         names.dedup();
@@ -214,7 +214,7 @@ mod tests {
         }
     }
 
-    /// A local OpenAI-compatible row, the only API that honors `requiresApiKey`.
+    /// A local OpenAI compatible row, the only API that honors `requiresApiKey`.
     fn completions_row() -> Model {
         let mut model = cupel_core::catalog::builtin_models().remove(0);
         model.api = cupel_core::types::Api::from(cupel_core::types::Api::OPENAI_COMPLETIONS);
@@ -229,7 +229,7 @@ mod tests {
         assert!(is_keyless(&model));
         model.compat = Some(serde_json::json!({"requiresApiKey": true}));
         assert!(!is_keyless(&model));
-        // The adapter rejects a non-boolean value, so this is not keyless either.
+        // The adapter rejects a non boolean value, so this is not keyless either.
         model.compat = Some(serde_json::json!({"requiresApiKey": "false"}));
         assert!(!is_keyless(&model));
 

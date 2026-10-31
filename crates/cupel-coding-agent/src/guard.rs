@@ -1,26 +1,26 @@
-//! The bash denylist guard: cupel's first tool-execution guardrail.
+//! The bash denylist guard, cupel's first tool execution guardrail.
 //!
-//! The agent loop asks [`AgentHooks::before_tool_call`] before every tool
-//! execution. This veto point has existed in cupel-agent from the start
+//! The agent loop asks `before_tool_call` before every tool
+//! execution. This veto point has existed in cupel agent from the start
 //! but was unused until now. [`BashGuard`] implements it for the `bash`
-//! tool: a command matching any deny pattern is blocked, and the model
-//! receives an error tool-result naming the pattern (so it can adapt
+//! tool, a command matching any deny pattern is blocked, and the model
+//! receives an error tool result naming the pattern (so it can adapt
 //! instead of retrying blindly).
 //!
-//! Patterns are regexes (the same engine as the grep tool), one per line:
+//! Patterns are regexes (the same engine as the grep tool), one per line,
 //!
 //! ```text
-//! # ~/.cupel/bash-deny (global) or <project>/.cupel/bash-deny
-//! git\s+push\s+--force
+//! # Global or project bash denylist
+//! git\s+push\s+\x2d\x2dforce
 //! DROP\s+TABLE
 //! ```
 //!
-//! The effective list is the union of the built-in defaults (`rm -rf` and
+//! The effective list is the union of the built in defaults (recursive forced deletion and
 //! friends) and both files. Deny rules from different layers never cancel
-//! each other. Matching is deliberately conservative: every line of the
+//! each other. Matching is deliberately conservative, every line of the
 //! command is tested, and a match anywhere blocks, even inside a quoted
-//! string (`echo "rm -rf"` is blocked too). A false positive costs one
-//! polite error the model can rephrase around; a false negative costs the
+//! string (an echo containing a recursive forced deletion command is blocked too). A false positive costs one
+//! polite error the model can rephrase around, a false negative costs the
 //! user's files.
 
 use std::path::Path;
@@ -30,16 +30,16 @@ use cupel_agent::{AgentHooks, types::BeforeToolCallResult};
 use cupel_core::types::{AssistantMessage, ToolCall};
 use grep_matcher::Matcher as _;
 
-/// Built-in deny patterns, active even with no config files: the classic
-/// recursive-force delete in its common spellings (`rm -rf`, `rm -fr`,
-/// combined flag groups like `-Rf`, and a `sudo` prefix all match because
+/// Built in deny patterns, active even with no config files, the classic
+/// recursive force delete in its common spellings (recursive forced deletion, the reversed flag order,
+/// combined flag groups like uppercase recursive flags, and a `sudo` prefix all match because
 /// the regex anchors on the `rm` word, not the line start).
 const DEFAULT_DENY: &[&str] = &[
     r"\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*f",
     r"\brm\s+-[a-zA-Z]*f[a-zA-Z]*[rR]",
 ];
 
-/// One compiled deny rule; the source text rides along for the error
+/// One compiled deny rule, the source text rides along for the error
 /// message the model sees.
 struct DenyRule {
     source: String,
@@ -54,7 +54,7 @@ pub struct BashGuard {
 
 impl BashGuard {
     /// Compile a pattern list. Invalid regexes are returned as warnings and
-    /// skipped (warn-and-continue): a typo in one rule must not disable
+    /// skipped (warn and continue), a typo in one rule must not disable
     /// the session or silently drop the rest of the list.
     #[must_use]
     pub fn new(patterns: &[String]) -> (Self, Vec<String>) {
@@ -79,8 +79,8 @@ impl BashGuard {
         (Self { rules }, warnings)
     }
 
-    /// The production constructor: built-in defaults + `~/.cupel/bash-deny`
-    /// + `<cwd>/.cupel/bash-deny`.
+    /// The production constructor, built in defaults + the global bash denylist
+    /// + the project bash denylist.
     #[must_use]
     pub fn from_config(home: Option<&Path>, cwd: &Path) -> (Self, Vec<String>) {
         let mut patterns: Vec<String> = DEFAULT_DENY.iter().map(ToString::to_string).collect();
@@ -91,8 +91,8 @@ impl BashGuard {
         Self::new(&patterns)
     }
 
-    /// The first rule matching any line of `command`, if any. Line-by-line
-    /// because the grep engine is line-oriented and multi-line commands
+    /// The first rule matching any line of `command`, if any. Line by line
+    /// because the grep engine is line oriented and multi line commands
     /// (heredocs, `&&` continuations) must not smuggle a denied command
     /// past the guard on line two.
     fn deny_match(&self, command: &str) -> Option<&str> {
@@ -107,7 +107,7 @@ impl BashGuard {
     }
 }
 
-/// Read one deny file: a pattern per line, `#` comments and blank lines
+/// Read one deny file, a pattern per line, `#` comments and blank lines
 /// skipped. A missing file is an empty list (the resources.rs idiom).
 fn read_deny_file(path: &Path) -> Vec<String> {
     let Ok(content) = std::fs::read_to_string(path) else {
@@ -136,7 +136,7 @@ impl AgentHooks for BashGuard {
         tracing::warn!(pattern, command, "bash command blocked by denylist");
         Some(BeforeToolCallResult {
             block: true,
-            // Addressed to the model: name the rule and point at a way
+            // Addressed to the model, name the rule and point at a way
             // forward, so it does not retry the same command verbatim.
             reason: Some(format!(
                 "Command blocked by cupel's bash denylist (pattern: {pattern}). \
@@ -202,7 +202,7 @@ mod tests {
 
         let (guard, warnings) = BashGuard::from_config(Some(&home), &cwd);
         assert!(warnings.is_empty());
-        // Union: defaults and both layers are all active.
+        // Union, defaults and both layers are all active.
         assert!(guard.deny_match("rm -rf /").is_some(), "defaults kept");
         assert!(guard.deny_match("git push --force").is_some(), "home rule");
         assert!(guard.deny_match("psql -c 'DROP TABLE x'").is_some());
@@ -215,7 +215,7 @@ mod tests {
             BashGuard::new(&["[unclosed".to_string(), r"\brm\s+-rf".to_string()]);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("invalid bash-deny pattern \"[unclosed\""));
-        // The bad rule is dropped; the good one still guards.
+        // The bad rule is dropped, the good one still guards.
         assert!(guard.deny_match("rm -rf /").is_some());
         assert!(guard.deny_match("[unclosed").is_none());
     }
@@ -244,7 +244,7 @@ mod tests {
             arguments: args,
         };
 
-        // Denied bash command: blocked, reason names the pattern.
+        // Denied bash command, blocked, reason names the pattern.
         let verdict = guard
             .before_tool_call(
                 &assistant,
@@ -255,7 +255,7 @@ mod tests {
         assert!(verdict.block);
         assert!(verdict.reason.unwrap().contains("denylist"));
 
-        // Harmless bash command and non-bash tools pass untouched.
+        // Harmless bash command and non bash tools pass untouched.
         let ok = guard
             .before_tool_call(
                 &assistant,

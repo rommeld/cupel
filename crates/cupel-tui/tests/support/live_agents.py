@@ -43,7 +43,7 @@ def main():
         path = home / "settings.json"
         path.touch(mode=0o600)
         path.write_text(json.dumps(settings))
-        # Explicitly restrict this disposable project; no trust popup is needed.
+        # Explicitly restrict this disposable project, no trust popup is needed.
         (home / "project-trust.json").write_text(json.dumps({str(project): "restricted"}))
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 140, 0, 0))

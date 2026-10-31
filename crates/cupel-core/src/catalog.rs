@@ -1,28 +1,28 @@
-//! The built-in model catalog contains generated data. Do not edit by hand.
+//! The built in model catalog contains generated data. Do not edit by hand.
 //!
-//! `catalog.json` is produced by the dev-time generator
-//! (`cargo run -p cupel-coding-agent --bin generate-catalog`), which
-//! uses a checked-in models.dev snapshot and applies the curation tables in
-//! crates/cupel-coding-agent/src/bin/generate_catalog/curation.rs
-//! Add `-- --fetch` to update the snapshot. Generator tests verify that
-//! snapshot plus curation produces the exact checked-in catalog bytes.
+//! `catalog.json` is produced by the dev time generator
+//! (the catalog generator binary), which
+//! uses a checked in models.dev snapshot and applies the curation tables in
+//! the generator's curation.rs module
+//! Add the fetch option to update the snapshot. Generator tests verify that
+//! snapshot plus curation produces the exact checked in catalog bytes.
 //! The JSON uses the exact same schema as a user `model.json`(a flat
 //! array of camelCase [`Model`]s), so one serde derive covers both.
-//! Prices are USD per million tokens; users can stll layer their own
+//! Prices are USD per million tokens, users can stll layer their own
 //! models over these via ~/.cupel/model.json.
 
 use crate::types::Model;
 
 /// Embedded at compile time, so the runtime never touches the network or
-/// the filesystem for the built-in catalog.
+/// the filesystem for the built in catalog.
 const CATALOG_JSON: &str = include_str!("catalog.json");
 
 #[must_use]
 pub fn builtin_models() -> Vec<Model> {
-    // Invariant-backed expect: the file is generated, validated, and
-    // round-trip-checked by generate-catalog and committed to git. A
-    // failure here means catalog.json types::Model diverged (or the
-    // file was hand-edited). Regenerate instead of editing.
+    // Invariant backed expect, the file is generated, validated, and
+    // round trip checked by generate catalog and committed to git. A
+    // failure here means catalog.json Model diverged (or the
+    // file was hand edited). Regenerate instead of editing.
     serde_json::from_str(CATALOG_JSON).expect(
         "catalog.json is generated data; regenrate it with \
          `cargo run -p cupel-coding-agent --bin generate-catalog`",
@@ -37,9 +37,9 @@ mod tests {
     #[test]
     fn first_model_is_the_anthropic_default() {
         // Fixtures across the workspace call builtin_models().remove(0)
-        // and expect an Anthropic model; the ones that need a specific
+        // and expect an Anthropic model, the ones that need a specific
         // compat blob (keyless, codex) overwrite it themselves.
-        // /provider's per-provider default is first-in-catalog-order.
+        // /provider's per provider default is first in catalog order.
         let first = builtin_models().remove(0);
         assert_eq!(first.id, "claude-sonnet-5");
         assert_eq!(first.provider.as_str(), Provider::ANTHROPIC);
@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn catalog_is_generated_and_plausible() {
-        // Deliberately a floor, not an exact count: exact counts break
+        // Deliberately a floor, not an exact count, exact counts break
         // on every curation edit without catching real defects.
         let models = builtin_models();
         assert!(models.len() >= 20, "suspiciously small: {}", models.len());
@@ -68,9 +68,9 @@ mod tests {
 
     #[test]
     fn fireworks_models_ride_the_expected_endpoints() {
-        // The invariant the old 10/2 count test was really protecting:
-        // Fireworks models pair anthropic-messages with /inference and
-        // openai-completions with /inference/v1, never mixed up.
+        // The invariant the old 10/2 count test was really protecting,
+        // Fireworks models pair anthropic messages with /inference and
+        // openai completions with /inference/v1, never mixed up.
         let mut seen = 0;
         for model in builtin_models() {
             if model.provider.as_str() != Provider::FIREWORKS {
@@ -99,7 +99,7 @@ mod tests {
         // `/provider fireworks` switches to the first Fireworks row in
         // catalog order. Pinned here so that removing rows from curation.rs
         // cannot quietly promote another model to the default. `find` stops
-        // at the first match: the same first-in-order rule /provider uses.
+        // at the first match, the same first in order rule /provider uses.
         let first = builtin_models()
             .into_iter()
             .find(|m| m.provider.as_str() == Provider::FIREWORKS)
@@ -109,8 +109,8 @@ mod tests {
 
     #[test]
     fn referenced_ids_are_present() {
-        // cupel-coding-agent tests hardcode these ids (autocomplete,
-        // models.json layering); removing them from curation.rs must
+        // cupel coding agent tests hardcode these ids (autocomplete,
+        // models.json layering), removing them from curation.rs must
         // fail here with a clear message, not somewhere in the TUI tests.
         let models = builtin_models();
         for id in [
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn every_catalog_model_has_a_registered_provider() {
-        // A model whose `api` has no provider would fail at request time;
+        // A model whose `api` has no provider would fail at request time,
         // catch it at test time instead.
         let registry = crate::default_registry();
         for model in builtin_models() {
@@ -219,8 +219,8 @@ mod tests {
 
     #[test]
     fn openrouter_models_ride_the_completions_endpoint() {
-        // OpenRouter is a router, not a vendor: every curated model speaks
-        // plain openai-completions against the one openrouter.ai base URL,
+        // OpenRouter is a router, not a vendor, every curated model speaks
+        // plain openai completions against the one openrouter.ai base URL,
         // with the openrouter thinking format pinned in compat.
         let mut seen = 0;
         for model in builtin_models() {
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(model.provider.as_str(), Provider::OPENROUTER);
         assert!(model.reasoning);
         assert_eq!(model.input, vec![InputModality::Text, InputModality::Image]);
-        // Off explicitly sends "none"; low/high/max keep their own names.
+        // Off explicitly sends "none", low/high/max keep their own names.
         // A max key would disable that level, even if mapped to "max".
         assert_eq!(
             serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
@@ -459,10 +459,10 @@ mod tests {
 
     #[test]
     fn price_tier_rows_plan_against_the_threshold() {
-        // The long-context family: the planning window is the price-tier
+        // The long context family, the planning window is the price tier
         // threshold (requests never drift into 2x pricing unnoticed), the
-        // documented max input is the opt-in ceiling above it. Named rows,
-        // not numbers: curation.rs gives these `Window::PriceTier`, and a row
+        // documented max input is the opt in ceiling above it. Named rows,
+        // not numbers, curation.rs gives these `PriceTier`, and a row
         // that lost it would plan against its full window again.
         let mut seen = 0;
         for model in builtin_models() {
@@ -501,8 +501,8 @@ mod tests {
 
     #[test]
     fn sol_luna_rows_switch_off_where_the_scale_has_none() {
-        // GPT-6 Sol and Luna share Astra's shape (no temperature, xhigh
-        // and max selectable) with one difference: models.dev lists
+        // GPT 6 Sol and Luna share Astra's shape (no temperature, xhigh
+        // and max selectable) with one difference, models.dev lists
         // "none" on their effort scale, so off is sent as effort "none".
         // The Codex backend's scale has no none, so off stays disabled.
         let models = builtin_models();
@@ -541,8 +541,8 @@ mod tests {
     #[test]
     fn gpt_61_sol_rows_cannot_switch_off() {
         // Unlike Sol, its effort scale has no "none" (OpenAI's
-        // model page: "none" and "minimal" are not supported). So off ->
-        // null in every dialect: the provider leaves `reasoning` out and
+        // model page, "none" and "minimal" are not supported). So off →
+        // null in every dialect, the provider leaves `reasoning` out and
         // never sends the unsupported effort "none".
         let models = builtin_models();
         for (id, api) in [
@@ -554,7 +554,7 @@ mod tests {
             assert_eq!(model.name, "GPT-6.1 Sol");
             assert_eq!(model.api.as_str(), api);
             let map = model.thinking_level_map.as_ref().expect("effort map");
-            // `Some(&None)` = the key exists with a JSON null: "off" is
+            // `Some(&None)` = the key exists with a JSON null, "off" is
             // unsupported. `Some(&Some("none"))` would send effort "none".
             assert_eq!(map.get("off"), Some(&None), "{id}");
             assert!(!map.contains_key("max"));
@@ -684,12 +684,12 @@ mod tests {
             let (base, twin) = (&models[at], &models[at + 1]);
             assert_eq!(twin.id, format!("{base_id}-ultrafast"));
             assert_eq!(twin.name, "GPT-6.1 Sol Ultrafast");
-            // Same model on the wire; only the tier field is new.
+            // Same model on the wire, only the tier field is new.
             let compat = twin.compat.as_ref().expect("compat");
             assert_eq!(compat["requestModel"], "gpt-6.1-sol", "{base_id}");
             assert_eq!(compat["serviceTier"], "ultrafast", "{base_id}");
             assert_eq!(compat["supportsTemperature"], false, "{base_id}");
-            // OpenAI's Ultrafast price table (checked 2026-10-09).
+            // OpenAI's Ultrafast price table (checked 2026 10 09).
             assert_eq!(
                 twin.cost,
                 ModelCost {
@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn astra_rows_keep_the_documented_effort_scale() {
-        // GPT-6 Astra in all three dialects: no temperature, no off, no
+        // GPT 6 Astra in all three dialects, no temperature, no off, no
         // minimal, and both top levels selectable (keys absent).
         let models = builtin_models();
         for id in ["gpt-6-astra", "openai/gpt-6-astra", "codex/gpt-6-astra"] {
@@ -739,7 +739,7 @@ mod tests {
             );
             assert!(!map.contains_key("max"), "{id}: max key would DISABLE it");
         }
-        // minimal: unsupported on the API (clamps up to low), pinned to
+        // minimal, unsupported on the API (clamps up to low), pinned to
         // "low" on Codex like every other Codex row. The wire result is the same.
         let api = models
             .iter()
@@ -753,11 +753,11 @@ mod tests {
 
     #[test]
     fn opus55_row_is_adaptive_only() {
-        // Claude Opus 5.5 answers `thinking: {type: "disabled"}` and
+        // Claude Opus 5.5 answers `thinking` with `type` set to `disabled` and
         // `budget_tokens` with a 400 at every effort level. The row must
         // take the adaptive path (effort, no temperature) and pin "off"
         // to null, so the provider omits `thinking` instead of disabling it.
-        // It also runs the preserved-thinking check: drop, don't reject.
+        // It also runs the preserved thinking check, drop, don't reject.
         let models = builtin_models();
         let model = models
             .iter()
@@ -781,12 +781,12 @@ mod tests {
 
     #[test]
     fn sonnet5_and_opus5_rows_are_adaptive() {
-        // Both models answer `budget_tokens` with a 400, like Opus 5.5:
+        // Both models answer `budget_tokens` with a 400, like Opus 5.5,
         // both rows take the adaptive path (effort, no temperature).
         // "off" is where they differ. models.dev lists a toggle for
         // Sonnet 5, so "off" gets no entry and the provider sends
-        // `disabled`, which Sonnet 5 accepts. Opus 5 has no toggle:
-        // off -> null, and the provider leaves `thinking` out.
+        // `disabled`, which Sonnet 5 accepts. Opus 5 has no toggle,
+        // off → null, and the provider leaves `thinking` out.
         let models = builtin_models();
         for (id, off) in [("claude-sonnet-5", None), ("claude-opus-5", Some(&None))] {
             let model = models.iter().find(|m| m.id == id).expect("row in catalog");
@@ -813,11 +813,11 @@ mod tests {
     fn sonnet55_row_switches_off_with_between_tools() {
         // Claude Sonnet 5.5 takes the adaptive path like Opus 5.5 (effort,
         // no temperature, `budget_tokens` is a 400), but `disabled` is a
-        // 400 too: its off is the thinking type `between_tools`, pinned
+        // 400 too, its off is the thinking type `between_tools`, pinned
         // in curation.rs. Without that entry the provider would send
-        // `disabled`; with a null entry it would leave `thinking` out and
+        // `disabled`, with a null entry it would leave `thinking` out and
         // the model would think at its default effort, high. Like Opus 5.5
-        // it runs the preserved-thinking check: drop, don't reject.
+        // it runs the preserved thinking check, drop, don't reject.
         let models = builtin_models();
         let model = models
             .iter()
@@ -832,7 +832,7 @@ mod tests {
                 "prefixMismatchBehavior": "drop_block",
             }))
         );
-        // The whole map, not single keys: an extra xhigh or max key would
+        // The whole map, not single keys, an extra xhigh or max key would
         // DISABLE that level.
         let map = model.thinking_level_map.as_ref().expect("map");
         assert_eq!(
@@ -860,7 +860,7 @@ mod tests {
                 "prefixMismatchBehavior": "drop_block",
             }))
         );
-        // Haiku's toggle sends `disabled`; Sonnet's `between_tools` is a 400.
+        // Haiku's toggle sends `disabled`, Sonnet's `between_tools` is a 400.
         assert_eq!(
             serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
             serde_json::json!({"minimal": null})
@@ -870,7 +870,7 @@ mod tests {
     #[test]
     fn fireworks_glm53_rows_keep_the_native_effort_scale() {
         // GLM 5.3, its fast router, and 5.3 Flash ride completions with the
-        // map derived from models.dev's low/high/max scale: low stays low,
+        // map derived from models.dev's low/high/max scale, low stays low,
         // off cannot be switched (no reasoning_effort is sent), medium and
         // xhigh clamp to their neighbours at request time, max stays absent.
         let models = builtin_models();
@@ -892,13 +892,13 @@ mod tests {
 
     #[test]
     fn openrouter_mimo_and_ember_keep_their_reasoning_scales() {
-        // The whole map, not single keys: an extra xhigh or max key would
-        // DISABLE that level. Prices and limits stay out of this test:
+        // The whole map, not single keys, an extra xhigh or max key would
+        // DISABLE that level. Prices and limits stay out of this test,
         // OpenRouter's prices change within hours, and the generator copies
         // them from models.dev anyway.
-        // - MiMo V2.6 has only a toggle (like Laguna S 2.1): no map, so off
+        // * MiMo V2.6 has only a toggle (like Laguna S 2.1), no map, so off
         //   sends effort "none" and every other level goes out by its name.
-        // - Ember-1 has Kimi K3's shape: none/low/high/max efforts.
+        // * Ember 1 has Kimi K3's shape, none/low/high/max efforts.
         let models = builtin_models();
         for (id, map) in [
             ("xiaomi/mimo-v2.6-pro", serde_json::Value::Null),
@@ -924,7 +924,7 @@ mod tests {
     fn fireworks_inkling_thinks_through_token_budgets() {
         // models.dev lists no reasoning options for Fireworks' Inkling
         // (OpenRouter's Inkling has a none..max effort scale). The row takes
-        // the Fireworks Anthropic template anyway: no map, so every level
+        // the Fireworks Anthropic template anyway, no map, so every level
         // stays selectable, and Fireworks turns `budget_tokens` into its
         // own effort bands.
         let model = builtin_models()
@@ -948,7 +948,7 @@ mod tests {
     #[test]
     fn codex_models_ride_the_chatgpt_backend() {
         // The subscription rows have namespaced ids because cupel's flat id
-        // space gives the bare GPT-6 ids to the openai provider. They use
+        // space gives the bare GPT 6 ids to the openai provider. They use
         // the ChatGPT backend URL and a compat requestModel carrying the wire name
         // the namespacing hid.
         let mut seen = 0;
@@ -981,8 +981,8 @@ mod tests {
                 "{}: id must be codex/<requestModel>[-ultrafast]",
                 model.id
             );
-            // The minimal -> "low" pin survives. `xhigh` stays absent so
-            // cupel's key-absence rule keeps the level available.
+            // The minimal → "low" pin survives. `xhigh` stays absent so
+            // cupel's key absence rule keeps the level available.
             let map = model.thinking_level_map.as_ref().expect("map pinned");
             assert_eq!(
                 map.get("minimal"),
@@ -1042,7 +1042,7 @@ mod tests {
     #[test]
     fn every_builtin_compat_blob_parses_cleanly() {
         // A shipped row with a mistyped knob would quietly run on that knob's
-        // default; users would see a load warning for something they never wrote.
+        // default, users would see a load warning for something they never wrote.
         let registry = crate::default_registry();
         for model in builtin_models() {
             let provider = registry.get(model.api.as_str()).expect("registered");

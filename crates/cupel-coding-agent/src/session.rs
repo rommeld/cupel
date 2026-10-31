@@ -1,19 +1,20 @@
-//! Session persistence: every conversation is recorded as a JSONL
-//! transcript so it can be resumed (`cupel --resume`).
-//! Project lifecycle hooks require an explicit, home-stored trust grant.
+//! Session persistence, every conversation is recorded as a JSONL
+//! transcript so it can be resumed (the resume option).
+//! Project lifecycle hooks require an explicit, home stored trust grant.
 //!
-//! Layout: `<cupel home>/sessions/<project-slug>/<session-id>.jsonl`, where
-//! the slug is the cwd with every non-alphanumeric character mapped to `-`
+//! Layout, `<cupel home>/sessions/<project slug>/<session id>.jsonl`, where
+//! the slug preserves ASCII letters, digits, underscores and hyphens,
+//! replacing every other cwd character with a hyphen
 //! (the same scheme Claude Code uses for `~/.claude/projects/`). Line 1 is
-//! a header object; every following line is one [`AgentMessage`] in its
+//! a header object, every following line is one [`AgentMessage`] in its
 //! existing serde form. Appends are flushed per message, so a crash loses
-//! at most the in-flight message.
+//! at most the in flight message.
 //!
 //! Like `.cupel/` scaffolding, the transcript is created lazily on the
 //! first agent interaction. Launching and quitting cupel leaves no trace.
 //! Persisted history is never rewritten by compaction (compaction only
 //! mutates a run's private context snapshot), so a transcript is always the
-//! full conversation; resume replays it and the loop re-compacts as needed.
+//! full conversation, resume replays it and the loop re compacts as needed.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -23,12 +24,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::hooks::{HookEvent, HookRunner};
 
-/// Bumped when the transcript format changes incompatibly; the loader
+/// Bumped when the transcript format changes incompatibly, the loader
 /// refuses to resume a version it doesn't understand.
 pub const TRANSCRIPT_VERSION: u32 = 1;
 
-/// Line 1 of every transcript: session facts at start. Deliberately not
-/// updated afterwards (a mid-session `/model` switch is visible in the
+/// Line 1 of every transcript, session facts at start. Deliberately not
+/// updated afterwards (a mid session `/model` switch is visible in the
 /// assistant messages themselves).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,9 +41,10 @@ pub struct TranscriptHeader {
     pub started_at: u64,
 }
 
-/// The cwd as a filesystem-safe directory name: every char outside
-/// `[A-Za-z0-9_-]` becomes `-`. `/a/b` and `/a-b` can collide. This is
-/// acceptable for a per-user layout because the header records the real cwd.
+/// The cwd as a filesystem safe directory name, ASCII letters, digits,
+/// underscores and hyphens are preserved. All other characters become hyphens.
+/// Paths differing only by separators and hyphens can collide. This is
+/// acceptable for a per user layout because the header records the real cwd.
 #[must_use]
 pub fn project_slug(cwd: &Path) -> String {
     cwd.display()
@@ -66,7 +68,7 @@ pub fn sessions_dir(home: Option<&Path>, cwd: &Path) -> Option<PathBuf> {
 }
 
 /// The newest transcript (by modification time) for this project is what a
-/// bare `--resume` picks.
+/// bare the resume option picks.
 #[must_use]
 pub fn find_latest(home: Option<&Path>, cwd: &Path) -> Option<PathBuf> {
     let dir = sessions_dir(home, cwd)?;
@@ -84,9 +86,9 @@ pub fn find_latest(home: Option<&Path>, cwd: &Path) -> Option<PathBuf> {
 
 /// Move every transcript of the project at `from_cwd` into `archive/` in the sessins
 /// directory of the project at `into_cwd`, then remove the emptied directory.
-/// Listings, the `/hot-reload` completion and a bare `--resume` read only top-level
-/// files, so archived sessions leave all of them; moving a file back restores it. A
-/// name the archive has gets a number (`cupel-1-1.jsonl`), so no file is ever
+/// Listings, the hot reload completion and a bare the resume option read only top level
+/// files, so archived sessions leave all of them, moving a file back restores it. A
+/// name the archive has gets a number appended after a hyphen, so no file is ever
 /// overwritten. Returns how many transcripts moved.
 pub fn archive_sessions(
     home: Option<&Path>,
@@ -129,8 +131,8 @@ pub fn archive_sessions(
     Ok(transcripts.len())
 }
 
-/// The first name in `dir` that no file has: `<stem>.jsonl`, else `<stem>-1.jsonl`,
-/// `<stem>-2.jsonl`, and so on.
+/// The first unused name in `dir`, starting with `<stem>.jsonl` and then
+/// appending a hyphen and increasing number to the stem until it is free.
 fn free_name(dir: &Path, stem: &str) -> PathBuf {
     let mut target = dir.join(format!("{stem}.jsonl"));
     let mut number = 0;
@@ -141,9 +143,9 @@ fn free_name(dir: &Path, stem: &str) -> PathBuf {
     target
 }
 
-/// One row of the `/session-id` listing. There is no stored summary in a
+/// One row of the session id listing. There is no stored summary in a
 /// transcript (compaction summaries live only inside a run's context
-/// snapshot and are never persisted), so the closest human-readable label
+/// snapshot and are never persisted), so the closest human readable label
 /// is the session's first user prompt, plus countable facts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSummary {
@@ -194,8 +196,8 @@ fn summarize(header: &TranscriptHeader, messages: &[AgentMessage]) -> SessionSum
             _ => None,
         })
         .unwrap_or("");
-    // Truncate on character boundaries (a byte slice could split a multi-byte
-    // character and panic) and flatten newlines for a one-line listing.
+    // Truncate on character boundaries (a byte slice could split a multi byte
+    // character and panic) and flatten newlines for a one line listing.
     let mut label: String = label.chars().take(LABEL_MAX_CHARS).collect();
     label = label.replace('\n', " ");
     SessionSummary {
@@ -207,29 +209,29 @@ fn summarize(header: &TranscriptHeader, messages: &[AgentMessage]) -> SessionSum
     }
 }
 
-/// Unix milliseconds -> `YYYY-MM-DD` (UTC), for the session listing.
-/// Hand-rolled instead of a chrono dependency: the civil-from-days
+/// Unix milliseconds → year, month and day separated by hyphens (UTC), for the session listing.
+/// Hand rolled instead of a chrono dependency, the civil from days
 /// algorithm (Howard Hinnant's) is ~10 lines and easily tested.
 #[must_use]
 pub fn date_ymd(ms: u64) -> String {
     let days = (ms / 86_400_000).cast_signed();
-    // Shift the epoch from 1970-01-01 to 0000-03-01 so leap days land at
+    // Shift the epoch from 1970 01 01 to 0000 03 01 so leap days land at
     // the end of the counting year, making month lengths regular.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097); // day of 400-year era
+    let doe = z.rem_euclid(146_097); // day of 400 year era
     let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153; // March-based month 0..11
+    let mp = (5 * doy + 2) / 153; // March based month 0..11
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// Parse a transcript: header off line 1, one message per following line.
-/// Malformed message lines are skipped with a warning (a crash mid-append
-/// can truncate the last line); a malformed or wrong-version header is an
+/// Parse a transcript, header off line 1, one message per following line.
+/// Malformed message lines are skipped with a warning (a crash mid append
+/// can truncate the last line), a malformed or wrong version header is an
 /// error, because resuming without trusted session facts would be a guess.
 pub fn load_transcript(path: &Path) -> Result<(TranscriptHeader, Vec<AgentMessage>), String> {
     let content = std::fs::read_to_string(path)
@@ -253,7 +255,7 @@ pub fn load_transcript(path: &Path) -> Result<(TranscriptHeader, Vec<AgentMessag
         }
         match serde_json::from_str::<AgentMessage>(line) {
             Ok(message) => messages.push(message),
-            // +2: 1-based and the header consumed line 1.
+            // +2, 1 based and the header consumed line 1.
             Err(e) => tracing::warn!(line = i + 2, "skipping malformed transcript line: {e}"),
         }
     }
@@ -261,28 +263,25 @@ pub fn load_transcript(path: &Path) -> Result<(TranscriptHeader, Vec<AgentMessag
 }
 
 /// Owns one session's transcript file and hook dispatch. Constructed
-/// unconditionally by `main` and threaded into the frontends; with no
-/// resolvable cupel home it degrades to a no-op (hooks still run, since they
+/// unconditionally by `main` and threaded into the frontends, with no
+/// resolvable cupel home it degrades to a no op (hooks still run, since they
 /// only need directories, not the home).
 pub struct SessionRecorder {
     header: TranscriptHeader,
-    /// Full transcript path; `None` disables persistence.
     path: Option<PathBuf>,
-    /// Opened lazily on the first write (no trace before interaction).
     file: Option<std::fs::File>,
     hooks: HookRunner,
-    /// Whether `session-start` has fired in this process.
     started: bool,
 }
 
 impl SessionRecorder {
     /// Pure constructor that touches no filesystem. `home` should be
-    /// [`crate::resources::config_home`].
+    /// `config_home`.
     #[must_use]
     pub fn new(home: Option<PathBuf>, cwd: &Path, session_id: &str, model_id: &str) -> Self {
         let path =
             sessions_dir(home.as_deref(), cwd).map(|d| d.join(format!("{session_id}.jsonl")));
-        // Home hooks are user-installed. Repository executables are never
+        // Home hooks are user installed. Repository executables are never
         // loaded merely because cupel was launched inside a checkout.
         let mut hook_roots = Vec::new();
         if let Some(home) = &home {
@@ -313,15 +312,15 @@ impl SessionRecorder {
     }
 
     /// The directory holding this project's transcripts (parent of this
-    /// session's file); `None` when persistence is disabled. Threading it
-    /// from here keeps the TUI's session listing env-free and testable.
+    /// session's file), `None` when persistence is disabled. Threading it
+    /// from here keeps the TUI's session listing env free and testable.
     #[must_use]
     pub fn sessions_dir(&self) -> Option<&Path> {
         self.path.as_deref().and_then(Path::parent)
     }
 
     /// This session's transcript file, whether it exists yet or not (it appears with
-    /// the first message); `None` when persistence is off.
+    /// the first message), `None` when persistence is off.
     #[must_use]
     pub fn transcript(&self) -> Option<&Path> {
         self.path.as_deref()
@@ -329,8 +328,8 @@ impl SessionRecorder {
 
     /// A prompt is about to start a run. Settles any pending `stop` hook
     /// first (ordering guarantee for external consumers), lazily creates
-    /// the transcript, then fires `session-start` (once) and
-    /// `user-prompt-submit`, both awaited and bounded by the hook timeout.
+    /// the transcript, then fires session start (once) and
+    /// user prompt submission, both awaited and bounded by the hook timeout.
     pub async fn before_prompt(&mut self, prompt: &str) {
         self.ensure_file();
         if !self.started {
@@ -342,7 +341,7 @@ impl SessionRecorder {
             .await;
     }
 
-    /// A prompt was queued mid-run: fire its hook now, at submit time, in the
+    /// A prompt was queued mid run, fire its hook now, at submit time, in the
     /// background (the TUI key handler must not block on hook processes).
     pub fn on_queued_prompt(&mut self, prompt: &str) {
         self.hooks
@@ -368,14 +367,14 @@ impl SessionRecorder {
         }
     }
 
-    /// The agent run finished: fire `stop` without blocking the frontend.
+    /// The agent run finished, fire `stop` without blocking the frontend.
     pub fn on_agent_end(&mut self) {
         self.hooks.fire_background(HookEvent::Stop);
     }
 
-    /// cupel is exiting normally: drain the hook chain, then `session-end`.
+    /// cupel is exiting normally, drain the hook chain, then session end.
     /// (A killed process skips this, but the transcript is still intact thanks
-    /// to per-message flushing.)
+    /// to per message flushing.)
     pub async fn end_session(&mut self) {
         // Only a session that actually started (had a prompt) announces an
         // end. Launch+quit stays completely silent.
@@ -463,7 +462,7 @@ mod tests {
     #[test]
     fn date_ymd_converts_known_dates() {
         assert_eq!(date_ymd(0), "1970-01-01");
-        // 2026-07-13 00:00:00 UTC (verified against `date -u`) and a leap day.
+        // 2026 07 13 000000 UTC (verified against the date command in UTC) and a leap day.
         assert_eq!(date_ymd(1_783_900_800_000), "2026-07-13");
         assert_eq!(date_ymd(1_709_164_800_000), "2024-02-29");
     }
@@ -473,7 +472,7 @@ mod tests {
         let root = temp_root("listing");
         let dir = root.join("sessions");
         std::fs::create_dir_all(&dir).unwrap();
-        // Two hand-written transcripts with different start times.
+        // Two hand written transcripts with different start times.
         let write = |id: &str, started: u64, prompt: &str| {
             let header = serde_json::to_string(&TranscriptHeader {
                 version: TRANSCRIPT_VERSION,
@@ -508,7 +507,7 @@ mod tests {
         assert_eq!(sessions[1].id, "cupel-1");
         assert_eq!(sessions[1].label.chars().count(), 60, "label truncated");
         assert_eq!(sessions[1].model, "mock-model");
-        // No sessions dir at all: empty, not an error.
+        // No sessions dir at all, empty, not an error.
         assert!(list_sessions_in(&root.join("missing")).is_empty());
     }
 
@@ -521,7 +520,7 @@ mod tests {
         let path = dir.join("cupel-42.jsonl");
         assert_eq!(rec.transcript(), Some(path.as_path()));
         assert!(!path.exists(), "the transcript is created lazily");
-        // Disabled persistence (no home): no dir either.
+        // Disabled persistence (no home), no dir either.
         let disabled = SessionRecorder::new(None, &root.join("proj"), "cupel-1", "m");
         assert!(disabled.sessions_dir().is_none());
         assert!(disabled.transcript().is_none());
@@ -584,7 +583,7 @@ mod tests {
         let path = sessions_dir(Some(&home), &cwd)
             .unwrap()
             .join("cupel-42.jsonl");
-        // Corrupt the middle: truncate the second message line.
+        // Corrupt the middle, truncate the second message line.
         let mut lines: Vec<String> = std::fs::read_to_string(&path)
             .unwrap()
             .lines()
@@ -595,7 +594,7 @@ mod tests {
         let (_, messages) = load_transcript(&path).unwrap();
         assert_eq!(messages.len(), 1, "corrupt line skipped, good one kept");
 
-        // Unknown version: refuse.
+        // Unknown version, refuse.
         let versioned = path.with_file_name("versioned.jsonl");
         std::fs::write(
             &versioned,
@@ -611,7 +610,7 @@ mod tests {
                 .contains("version 99")
         );
 
-        // Garbage header: refuse.
+        // Garbage header, refuse.
         let garbage = path.with_file_name("garbage.jsonl");
         std::fs::write(&garbage, "not json\n").unwrap();
         assert!(load_transcript(&garbage).is_err());
@@ -648,7 +647,7 @@ mod tests {
         first.record(&AgentMessage::user_text("first session"));
         drop(first);
 
-        // Same session id = same file: the header must not repeat.
+        // Same session id = same file, the header must not repeat.
         let mut resumed = recorder(&home, &cwd);
         resumed.record(&AgentMessage::user_text("resumed"));
 
@@ -749,7 +748,7 @@ mod tests {
         for id in ["cupel-1", "cupel-2"] {
             std::fs::write(from.join(format!("{id}.jsonl")), id).unwrap();
         }
-        // An earlier spinoff left a cupel-1 in the archive.
+        // An earlier spinoff left a cupel 1 in the archive.
         let archive = sessions_dir(Some(&home), &origin).unwrap().join("archive");
         std::fs::create_dir_all(&archive).unwrap();
         std::fs::write(archive.join("cupel-1.jsonl"), "older").unwrap();
@@ -766,9 +765,9 @@ mod tests {
         assert_eq!(read("cupel-1.jsonl"), "older");
         assert_eq!(read("cupel-1-1.jsonl"), "cupel-1");
         assert_eq!(read("cupel-2.jsonl"), "cupel-2");
-        // A bare --resume in the origin doesn't look into the archive.
+        // A bare resume in the origin doesn't look into the archive.
         assert!(find_latest(Some(&home), &origin).is_none());
-        // Nothing recorded, or no home: nothing to move.
+        // Nothing recorded, or no home, nothing to move.
         assert_eq!(archive_sessions(Some(&home), &spinoff, &origin).unwrap(), 0);
         assert_eq!(archive_sessions(None, &spinoff, &origin).unwrap(), 0);
     }

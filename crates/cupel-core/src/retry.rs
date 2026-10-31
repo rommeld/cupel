@@ -1,26 +1,26 @@
-//! Transient-error classification for failed assistant messages.
+//! Transient error classification for failed assistant messages.
 //!
-//! When a turn ends with `stop_reason: Error`, the agent needs to decide:
+//! When a turn ends with `stop_reason` set to `Error`, the agent needs to decide,
 //! is this worth retrying (a 529 "overloaded", a dropped connection), or
 //! would a retry just burn money (invalid request, exhausted quota)? The
 //! retained error category takes precedence over text heuristics. Provider
-//! errors and older messages still use HTTP wrappers and provider wording;
+//! errors and older messages still use HTTP wrappers and provider wording,
 //! quota/billing wording can veto retries even for a 429 response.
 //!
 //! This module only classifies. Retry policy (budget, backoff, restarting
 //! the turn) lives in the agent loop.
 //!
-//! Implementation note: instead of pulling in the `regex` crate, we
-//! *compress* both the message and the patterns: lowercase, keep
-//! only `[a-z0-9]`. This makes "Rate Limit", "rate-limit", and "RateLimit" all
+//! Implementation note, instead of pulling in the `regex` crate, we
+//! *compress* both the message and the patterns, lowercase, keep
+//! only lowercase ASCII letters and digits. This makes "Rate Limit", "rate limit", and "RateLimit" all
 //! become "ratelimit". Same effect, one allocation, and the pattern tables
 //! stay readable.
 
 use crate::types::{AssistantMessage, ErrorKind, StopReason};
 
-/// Hard request/account failures: retrying cannot help and may mask a real
+/// Hard request/account failures, retrying cannot help and may mask a real
 /// problem from the user. Checked first because some of these arrive
-/// wrapped in otherwise-retryable-looking 429 responses.
+/// wrapped in otherwise retryable looking 429 responses.
 const NON_RETRYABLE_PATTERNS: &[&str] = &[
     // Safety refusals can carry a generic "Provider returned error" wrapper.
     "contentfilter",
@@ -30,7 +30,7 @@ const NON_RETRYABLE_PATTERNS: &[&str] = &[
     "monthlyusagelimitreached",
     "availablebalance",
     // Quota/budget/billing exhaustion. "insufficientquota" is OpenAI's
-    // billing error code; the rest cover common gateway wording.
+    // billing error code, the rest cover common gateway wording.
     "insufficientquota",
     "outofbudget",
     "quotaexceeded",
@@ -39,7 +39,7 @@ const NON_RETRYABLE_PATTERNS: &[&str] = &[
 
 /// Transient provider/transport failures worth retrying.
 const RETRYABLE_PATTERNS: &[&str] = &[
-    // Provider load and server-side transient failures.
+    // Provider load and server side transient failures.
     "overloaded",
     "ratelimit",
     "toomanyrequests",
@@ -64,9 +64,9 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "timedout",
     "timeout",
     "terminated",
-    // The same failures in reqwest's words: "error sending request" means
+    // The same failures in reqwest's words, "error sending request" means
     // nothing came back. "error decoding response body" means the stream
-    // broke mid-response.
+    // broke mid response.
     "errorsendingrequest",
     "errordecodingresponsebody",
     // WebSocket transports report close/error text instead of HTTP text.
@@ -76,17 +76,17 @@ const RETRYABLE_PATTERNS: &[&str] = &[
     "endedwithout",
     "streamendedbeforemessagestop",
     "http2requestdidnotgetaresponse",
-    // Provider-requested retry-delay failures should flow through the
+    // Provider requested retry delay failures should flow through the
     // outer retry policy.
     "retrydelay",
-    // Explicit retry guidance emitted mid-stream by OpenAI and Bedrock.
+    // Explicit retry guidance emitted mid stream by OpenAI and Bedrock.
     "youcanretryyourrequest",
     "tryyourrequestagain",
     "pleaseretryyourrequest",
 ];
 
 /// Lowercase and strip everything but letters and digits, so word
-/// separators never defeat a match. Shared with [`crate::overflow`].
+/// separators never defeat a match. Shared with `overflow`.
 pub(crate) fn compress(text: &str) -> String {
     text.chars()
         .filter(char::is_ascii_alphanumeric)
@@ -101,7 +101,7 @@ fn retryable_status(status: u16) -> bool {
 }
 
 /// Recognize only explicit status wrappers, never numbers inside arbitrary bodies.
-/// Shared with [`crate::overflow`] so both classifiers read the same status.
+/// Shared with `overflow` so both classifiers read the same status.
 pub(crate) fn legacy_http_status(text: &str) -> Option<u16> {
     let status = if let Some(rest) = text.strip_prefix("Error Code ") {
         rest.split_once(':')?.0.trim().parse().ok()?
@@ -120,7 +120,7 @@ pub(crate) fn legacy_http_status(text: &str) -> Option<u16> {
 /// Does this failed assistant message look like a transient provider or
 /// transport error, i.e. should the caller consider restarting the turn?
 ///
-/// Only `stop_reason: Error` qualifies because an `Aborted` message means the
+/// Only `stop_reason` set to `Error` qualifies because an `Aborted` message means the
 /// user cancelled, and retrying against the user's intent would be hostile.
 #[must_use]
 pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
@@ -150,7 +150,7 @@ pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
             .any(|pattern| compressed.contains(pattern))
 }
 
-/// Preserved thinking: Anthropic binds every thinking block to the
+/// Preserved thinking, Anthropic binds every thinking block to the
 /// conversation that produced it and answers a replayed block with a 400
 /// once that conversation changed ("... The block is bound to a different
 /// conversation. ..."). A tampered signature fails with the same first
@@ -159,7 +159,7 @@ const THINKING_BINDING_PATTERN: &str = "boundtoadifferentconversation";
 
 /// Did the provider reject a replayed thinking block because the history
 /// changed since the block was produced? Unlike the transient errors above,
-/// resending the same request fails the same way; it succeeds once the
+/// resending the same request fails the same way, it succeeds once the
 /// stale thinking blocks are gone (the agent loop strips them).
 #[must_use]
 pub fn is_thinking_binding_mismatch(message: &AssistantMessage) -> bool {
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn non_error_stop_reasons_never_retry() {
-        // Aborted = the user cancelled; retrying would override their intent.
+        // Aborted = the user cancelled, retrying would override their intent.
         assert!(!is_retryable_assistant_error(&message(
             StopReason::Aborted,
             Some("overloaded")
@@ -340,13 +340,13 @@ mod tests {
             StopReason::Error,
             Some(stale)
         )));
-        // A tampered signature has only the first sentence: not ours.
+        // A tampered signature has only the first sentence, not ours.
         let tampered = "provider returned HTTP 400: messages.5.content.0: Invalid `signature` in `thinking` block";
         assert!(!is_thinking_binding_mismatch(&message(
             StopReason::Error,
             Some(tampered)
         )));
-        // Cancelled by the user: never recovered behind their back.
+        // Cancelled by the user, never recovered behind their back.
         assert!(!is_thinking_binding_mismatch(&message(
             StopReason::Aborted,
             Some(stale)

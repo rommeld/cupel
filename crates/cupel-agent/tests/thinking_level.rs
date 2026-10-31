@@ -1,7 +1,7 @@
-//! "Thinking off" on a model that cannot turn reasoning off: the request
+//! "Thinking off" on a model that cannot turn reasoning off, the request
 //! carries the model's lowest level, not a missing setting.
 
-// Integration-test files under tests/ are compiled as their own crate and
+// Integration test files under tests/ are compiled as their own crate and
 // only ever built in test mode, so the "tests outside #[cfg(test)]"
 // restriction lint does not apply here.
 #![allow(clippy::tests_outside_test_module)]
@@ -94,7 +94,7 @@ async fn thinking_off_sends_the_lowest_level_where_off_does_not_exist() {
     agent.wait_for_idle().await;
 
     assert_eq!(*levels.lock().unwrap(), [Some(ThinkingLevel::Minimal)]);
-    // The request changed; the wish did not.
+    // The request changed, the wish did not.
     assert_eq!(agent.thinking_level(), None);
     assert_eq!(
         agent.effective_thinking_level(),

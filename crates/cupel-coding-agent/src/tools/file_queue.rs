@@ -1,13 +1,13 @@
-//! Per-file mutation serialization.
+//! Per file mutation serialization.
 //!
 //! The agent loop runs tool calls in parallel by default. Two edits to the
 //! same file racing each other means the second one reads stale content and
 //! either fails to match or silently reverts the first. Mutations to the
 //! same file must run one at a time, while different files stay parallel.
 //!
-//! One `tokio::Mutex` per file provides this guarantee: lock, do the work,
+//! One `Mutex` per file provides this guarantee, lock, do the work,
 //! drop the guard. Files are keyed by their *canonical* path so `./src/a.rs`
-//! and `src/a.rs` (or a symlink) share a lock; a file that doesn't exist yet
+//! and `src/a.rs` (or a symlink) share a lock, a file that doesn't exist yet
 //! (a patch adding it) falls back to the absolute path.
 
 use std::collections::HashMap;
@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use tokio::sync::Mutex as AsyncMutex;
 
-/// Global registry: canonical path -> its mutation lock.
+/// Global registry, canonical path → its mutation lock.
 ///
-/// A `std::sync::Mutex` protects the map (held only for microseconds while
-/// looking up/inserting); the `tokio::sync::Mutex` inside is the actual
-/// per-file lock (held across await points for the whole mutation). Mixing
+/// A `StdMutex` protects the map (held only for microseconds while
+/// looking up/inserting), the `AsyncMutex` inside is the actual
+/// per file lock (held across await points for the whole mutation). Mixing
 /// the two like this is the standard pattern. Never hold a std mutex across
 /// an await.
 fn registry() -> &'static StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>> {
@@ -30,23 +30,19 @@ fn registry() -> &'static StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>> {
 
 fn queue_key(path: &Path) -> PathBuf {
     // canonicalize resolves symlinks and relative segments, but requires the
-    // path to exist; fall back to the plain absolute path for new files.
+    // path to exist, fall back to the plain absolute path for new files.
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Acquire the mutation lock for `path`, returning a guard. Mutating tools
-/// hold the guard for their whole read-modify-write cycle:
-///
-/// ```ignore
-/// let _guard = lock_file_for_mutation(&absolute_path).await;
-/// // read, edit, write without another mutation interleaving on this file
-/// ```
+/// await this function and hold the guard for their whole read modify write cycle,
+/// preventing another mutation from interleaving on the same file.
 pub async fn lock_file_for_mutation(path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
     let lock = {
         let mut map = registry().lock().expect("file queue registry poisoned");
         Arc::clone(map.entry(queue_key(path)).or_default())
     };
-    // Entries are never removed: a lock is 16 bytes and the set of files an
+    // Entries are never removed, a lock is 16 bytes and the set of files an
     // agent session touches is small. Locks hold nothing once unlocked.
     lock.lock_owned().await
 }
@@ -85,7 +81,7 @@ mod tests {
     #[tokio::test]
     async fn different_files_do_not_block_each_other() {
         let _guard_a = lock_file_for_mutation(Path::new("/tmp/cupel-test-queue-a")).await;
-        // If files shared a lock this second acquisition would deadlock;
+        // If files shared a lock this second acquisition would deadlock,
         // the timeout proves it doesn't.
         let guard_b = tokio::time::timeout(
             std::time::Duration::from_millis(100),

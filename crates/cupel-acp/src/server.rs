@@ -1,4 +1,4 @@
-//! Short protocol handlers admit work; owned tasks finish it and settle on shutdown.
+//! Short protocol handlers admit work, owned tasks finish it and settle on shutdown.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
