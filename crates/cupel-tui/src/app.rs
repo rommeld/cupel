@@ -817,7 +817,7 @@ impl App {
         }
 
         // An open question takes the keys that answer it. Everything else works as
-        // usual, typing writes an answer of one's own, Alt+Enter adds a line to it,
+        // usual, typing writes an answer of one's own, Ctrl+Enter adds a line to it,
         // and Esc aborts the run.
         if let Some(open) = &mut self.question {
             let last = open.pending.question().options.len().saturating_sub(1);
@@ -830,9 +830,9 @@ impl App {
                     open.selected = (open.selected + 1).min(last);
                     return;
                 }
-                // Ctrl+Enter answers too, a steered prompt would wait behind the very
+                // Alt+Enter answers too, a steered prompt would wait behind the very
                 // question it should answer.
-                (KeyCode::Enter, _, false) | (KeyCode::Char('j'), true, _) => {
+                (KeyCode::Enter, false, _) | (KeyCode::Char('j'), true, _) => {
                     self.answer_question();
                     return;
                 }
@@ -899,16 +899,15 @@ impl App {
                 self.scroll_by(-i64::from(self.last_transcript_height / 2).max(1));
             }
 
-            // Ctrl+Enter steers. A terminal reports it only with the keyboard
+            // Ctrl+Enter inserts a newline. A terminal reports it only with the keyboard
             // enhancement lib.rs switches on. Without it, most send a plain Enter.
-            // Ctrl+J is the same key in every terminal. It sends the line feed
-            // byte, which some terminals also send for Ctrl+Enter.
-            (KeyCode::Enter | KeyCode::Char('j'), true, _) => self.submit(Delivery::Steer),
-            // Alt+Enter inserts a newline (Shift+Enter is indistinguishable
-            // from Enter in most terminals, so Alt is the portable choice).
-            (KeyCode::Enter, _, true) => {
+            (KeyCode::Enter, true, _) => {
                 self.input.insert('\n');
                 self.refresh_autocomplete();
+            }
+            // Alt+Enter steers; keep Ctrl+J as an alternative binding.
+            (KeyCode::Enter, _, true) | (KeyCode::Char('j'), true, _) => {
+                self.submit(Delivery::Steer);
             }
             (KeyCode::Enter, ..) => self.submit(Delivery::Queue),
             (KeyCode::Backspace, ..) => {
@@ -1324,7 +1323,7 @@ impl App {
         self.scroll_from_bottom = usize::try_from(next.max(0)).unwrap_or(0).min(max);
     }
 
-    /// Enter or Ctrl+Enter, dispatch commands locally, expand templates, or
+    /// Enter or Alt+Enter, dispatch commands locally, expand templates, or
     /// send the text as a prompt (queued or steered when a run is active).
     fn submit(&mut self, delivery: Delivery) {
         // Enter is consumed by the popup while open, so this is normally a
