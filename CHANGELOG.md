@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.7] - 2026-11-01
+
+- fix(tui): use Ctrl+Enter for prompt newlines and Alt+Enter for agent steering
+- test(tui): verify the swapped bindings while idle, running, and answering questions
+
 ## [v0.34.6] - 2026-10-31
 
 - fix(team): show standalone-style tool-call details, including file paths, line ranges, search arguments, commands, and patch summaries
