@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.6] - 2026-10-31
+
+- fix(team): show standalone-style tool-call details, including file paths, line ranges, search arguments, commands, and patch summaries
+- test(team): verify distinct tool-call descriptions, shared-only notifications, and Ctrl+B visibility
+
 ## [v0.34.5] - 2026-10-31
 
 - fix(tui): keep final answers below live team updates and toggle updates with Ctrl+B

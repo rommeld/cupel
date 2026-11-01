@@ -1251,6 +1251,7 @@ impl Crew {
             .map_err(|error| failed(error.to_string()))?;
         on_duty.agent_stop = helper.agent.cancel_token();
         let mut lines = Vec::new();
+        let mut descriptions = HashMap::new();
         let mut spend = Spend {
             calls: 1,
             ..Spend::default()
@@ -1267,12 +1268,13 @@ impl Crew {
                 event = events.next() => match event {
                     None => break,
                     Some(AgentEvent::AgentEnd { .. }) => { ended = true; break; }
-                    Some(AgentEvent::ToolExecutionStart { tool_name, .. }) => {
+                    Some(AgentEvent::ToolExecutionStart { tool_call_id, tool_name, .. }) => {
+                        let description = descriptions.remove(&tool_call_id).unwrap_or(tool_name);
                         if let Some(scope) = scope
                             && scope.visibility() == TaskVisibility::Shared
                             && let Some(team) = self.shared_team(name)
                         {
-                            team.tool_started(name, &tool_name, scope.id(), scope.root_id());
+                            team.tool_started(name, &description, scope.id(), scope.root_id());
                         }
                     }
                     Some(AgentEvent::MessageEnd { message }) => {
@@ -1282,7 +1284,9 @@ impl Crew {
                             let known = lines.len();
                             for content in &assistant.content {
                                 if let AssistantContent::ToolCall(call) = content {
-                                    lines.push(helper.agent.describe_tool_call(&call.name, &call.arguments));
+                                    let description = helper.agent.describe_tool_call(&call.name, &call.arguments);
+                                    descriptions.insert(call.id.clone(), description.clone());
+                                    lines.push(description);
                                 }
                             }
                             if lines.len() > known { progress(lines.join("\n")); }
@@ -1645,6 +1649,7 @@ mod tests {
     enum Step {
         Say,
         Read,
+        ReadPair,
         Fail,
         Hang,
         Long,
@@ -1710,10 +1715,6 @@ mod tests {
                         signal.cancelled().await;
                         (Vec::new(), StopReason::Aborted)
                     }
-                    Step::Say | Step::Nested => (
-                        vec![AssistantContent::Text(TextContent::plain("answer"))],
-                        StopReason::Stop,
-                    ),
                     Step::Read => (
                         vec![AssistantContent::ToolCall(ToolCall {
                             id: "read-1".into(),
@@ -1721,6 +1722,25 @@ mod tests {
                             arguments: serde_json::json!({"path":"note.md"}),
                         })],
                         StopReason::ToolUse,
+                    ),
+                    Step::ReadPair if call == 1 => (
+                        vec![
+                            AssistantContent::ToolCall(ToolCall {
+                                id: "read-1".into(),
+                                name: "read".into(),
+                                arguments: serde_json::json!({"path":"note.md","offset":1,"limit":2}),
+                            }),
+                            AssistantContent::ToolCall(ToolCall {
+                                id: "read-2".into(),
+                                name: "read".into(),
+                                arguments: serde_json::json!({"path":"other.md"}),
+                            }),
+                        ],
+                        StopReason::ToolUse,
+                    ),
+                    Step::Say | Step::Nested | Step::ReadPair => (
+                        vec![AssistantContent::Text(TextContent::plain("answer"))],
+                        StopReason::Stop,
                     ),
                 };
                 let message = AssistantMessage {
@@ -2063,7 +2083,7 @@ mod tests {
         use crate::team_conversation::TeamUpdate;
 
         for shared in [true, false] {
-            let (crew, _) = crew(Step::WriteFail, serde_json::json!({"tools":["bash"]}));
+            let (crew, _) = crew(Step::ReadPair, serde_json::json!({"tools":["read"]}));
             let (team, mut events) = TeamRuntime::new(None);
             team.set_members(["scout".into()].into_iter().collect());
             crew.set_team_runtime(Arc::clone(&team));
@@ -2089,10 +2109,12 @@ mod tests {
                 }
             }
             if shared {
-                assert_eq!(starts.len(), 1);
+                assert_eq!(starts.len(), 2);
                 assert_eq!(starts[0].0, "scout");
-                assert_eq!(starts[0].1, "bash");
-                assert_eq!(starts[0].2, starts[0].3);
+                assert_eq!(starts[0].1, "read note.md:1-2");
+                assert_eq!(starts[1].0, "scout");
+                assert_eq!(starts[1].1, "read other.md");
+                assert!(starts.iter().all(|start| start.2 == start.3));
             } else {
                 assert!(
                     starts.is_empty(),
