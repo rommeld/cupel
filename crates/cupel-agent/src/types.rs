@@ -21,6 +21,12 @@ use cupel_core::types::{
 #[serde(untagged)]
 pub enum AgentMessage {
     Llm(Message),
+    Metadata {
+        metadata: MetadataMarker,
+        kind: String,
+        payload: Value,
+        timestamp: u64,
+    },
     Custom {
         kind: String,
         payload: Value,
@@ -28,7 +34,25 @@ pub enum AgentMessage {
     },
 }
 
+/// Required wire discriminator for local-only transcript records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MetadataMarker {
+    Local,
+}
+
 impl AgentMessage {
+    /// Data retained locally across compaction, never supplied to inference.
+    #[must_use]
+    pub fn metadata(kind: impl Into<String>, payload: Value, timestamp: u64) -> Self {
+        Self::Metadata {
+            metadata: MetadataMarker::Local,
+            kind: kind.into(),
+            payload,
+            timestamp,
+        }
+    }
+
     #[must_use]
     pub fn user_text(text: impl Into<String>) -> Self {
         AgentMessage::Llm(Message::User(cupel_core::types::UserMessage {
@@ -157,6 +181,7 @@ pub struct AgentLoopConfig {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub tool_execution: ToolExecutionMode,
+    pub tool_gate: Option<Arc<dyn crate::ToolExecutionGate>>,
     pub retry: RetryConfig,
     pub compaction: crate::compaction::CompactionConfig,
 }
@@ -185,7 +210,7 @@ pub trait AgentHooks: Send + Sync {
             .iter()
             .filter_map(|m| match m {
                 AgentMessage::Llm(message) => Some(message.clone()),
-                AgentMessage::Custom { .. } => None,
+                AgentMessage::Custom { .. } | AgentMessage::Metadata { .. } => None,
             })
             .collect()
     }

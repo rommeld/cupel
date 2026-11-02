@@ -173,6 +173,7 @@ async fn run_loop_with(provider: Arc<BindingProvider>) -> Vec<AgentEvent> {
         temperature: None,
         max_tokens: None,
         tool_execution: ToolExecutionMode::Parallel,
+        tool_gate: None,
         // No transient retries, only the thinking recovery may resend.
         retry: RetryConfig {
             max_retries: 0,

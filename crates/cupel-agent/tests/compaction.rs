@@ -199,6 +199,7 @@ async fn run_with(
         temperature: None,
         max_tokens: None,
         tool_execution: ToolExecutionMode::Parallel,
+        tool_gate: None,
         retry: RetryConfig {
             max_retries: 0, // isolate compaction from transient retry
             base_delay_ms: 1,

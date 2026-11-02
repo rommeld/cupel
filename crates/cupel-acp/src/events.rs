@@ -88,7 +88,7 @@ pub fn replay(message: &AgentMessage) -> Vec<acp::SessionUpdate> {
                 })
                 .content(output(&result.content)),
         )],
-        AgentMessage::Custom { .. } => Vec::new(),
+        AgentMessage::Custom { .. } | AgentMessage::Metadata { .. } => Vec::new(),
     }
 }
 
