@@ -48,12 +48,12 @@ pub struct AgentSpec {
     pub model: Model,
 }
 
-/// Resolve model definitions and report missing credentials without refreshing them.
+/// Resolve helper metadata without touching credentials, auth files or the network.
 #[must_use]
 pub fn resolve(
     settings: &Settings,
     models: &[Model],
-    home: Option<&Path>,
+    _home: Option<&Path>,
 ) -> (Vec<AgentSpec>, Vec<String>) {
     let mut specs = Vec::new();
     let mut warnings = Vec::new();
@@ -65,19 +65,6 @@ pub fn resolve(
             ));
             continue;
         };
-        let provider = model.provider.as_str();
-        let problem = match provider {
-            "openai-codex" => (!crate::auth::has_credential(home, provider))
-                .then(|| "not logged in to openai-codex (/login openai-codex)".to_string()),
-            "amazon-bedrock" => (!crate::providers::has_aws_credentials())
-                .then(|| "no AWS credentials for amazon-bedrock".to_string()),
-            _ => (crate::providers::takes_api_key(models, provider)
-                && crate::providers::resolve_api_key(provider, settings).is_none())
-            .then(|| format!("no API key for {provider} (/provider {provider} <api-key>)")),
-        };
-        if let Some(problem) = problem {
-            warnings.push(format!("warning: agent {name}: {problem}"));
-        }
         if definition.description().is_none() {
             warnings.push(format!("warning: agent {name} is manual-only: add agents.{name}.description in settings.json to use it on a team; /agent {name} and agentCommands remain available"));
         }
@@ -90,9 +77,43 @@ pub fn resolve(
     (specs, warnings)
 }
 
+/// Pure configured metadata. Constructing this value starts no collaboration machinery.
+pub struct AgentCatalog {
+    specs: BTreeMap<String, AgentSpec>,
+    roles: RoleIndex,
+}
+
+impl AgentCatalog {
+    #[must_use]
+    pub fn new(specs: Vec<AgentSpec>) -> Self {
+        let roles = RoleIndex::new(specs.iter());
+        Self {
+            specs: specs
+                .into_iter()
+                .map(|spec| (spec.name.clone(), spec))
+                .collect(),
+            roles,
+        }
+    }
+
+    #[must_use]
+    pub fn spec(&self, name: &str) -> Option<&AgentSpec> {
+        self.specs.get(name)
+    }
+
+    pub fn specs(&self) -> impl Iterator<Item = &AgentSpec> {
+        self.specs.values()
+    }
+
+    #[must_use]
+    pub fn roles(&self) -> &RoleIndex {
+        &self.roles
+    }
+}
+
 /// Eligibility does not depend on the optional fresh session preference.
 #[must_use]
-pub fn team_member_problem(crew: &Crew, name: &str) -> Option<String> {
+pub fn team_member_problem(crew: &AgentCatalog, name: &str) -> Option<String> {
     match crew.spec(name) {
         None => Some(format!("no agent named {name} (/team lists them)")),
         Some(spec) if spec.definition.description().is_none() => Some(format!(
@@ -106,7 +127,7 @@ pub fn team_member_problem(crew: &Crew, name: &str) -> Option<String> {
 #[must_use]
 pub fn routes(
     settings: &Settings,
-    crew: &Crew,
+    crew: &AgentCatalog,
     templates: &[PromptTemplate],
 ) -> (BTreeMap<String, String>, Vec<String>) {
     let mut routes = BTreeMap::new();
@@ -390,6 +411,7 @@ pub struct Crew {
     recovering: tokio::sync::Mutex<bool>,
     roles: RoleIndex,
     helpers: Mutex<BTreeMap<String, Arc<HelperSlot>>>,
+    remembered: tokio::sync::Mutex<BTreeMap<String, Vec<AgentMessage>>>,
     running: Mutex<BTreeMap<u64, (String, CancellationToken)>>,
     next_call: AtomicU64,
     spend: Mutex<BTreeMap<String, Spend>>,
@@ -427,6 +449,7 @@ impl Crew {
             recovering: tokio::sync::Mutex::new(false),
             roles,
             helpers: Mutex::new(BTreeMap::new()),
+            remembered: tokio::sync::Mutex::new(BTreeMap::new()),
             running: Mutex::new(BTreeMap::new()),
             next_call: AtomicU64::new(0),
             spend: Mutex::new(BTreeMap::new()),
@@ -519,6 +542,38 @@ impl Crew {
             .expect("crew lock poisoned")
             .get(name)
             .is_some_and(|slot| slot.built.load(Ordering::Acquire))
+    }
+
+    /// Restore inert private history before publishing the newly constructed crew.
+    pub fn import_remembered(&mut self, mut remmembered: BTreeMap<String, Vec<AgentMessage>>) {
+        remmembered.retain(|name, _| {
+            self.spec(name)
+                .is_some_and(|spec| spec.definition.remembers())
+        });
+        *self.remembered.get_mut() = remmembered;
+    }
+
+    /// Called only after all accepted calls settle. Unbuilt imported histories survive too.
+    pub async fn export_remembered(&self) -> Result<BTreeMap<String, Vec<AgentMessage>>, String> {
+        let mut remembered = self.remembered.lock().await.clone();
+        let helpers = self
+            .helpers
+            .lock()
+            .map_err(|_error| "cannot retain private helper history: crew lock poisoned")?
+            .iter()
+            .filter(|(name, _)| {
+                self.spec(name)
+                    .is_some_and(|spec| spec.definition.remembers())
+            })
+            .map(|(name, slot)| (name.clone(), Arc::clone(slot)))
+            .collect::<Vec<_>>();
+        for (name, slot) in helpers {
+            if let Some(helper) = slot.value.lock().await.as_mut() {
+                helper.agent.wait_for_idle().await;
+                remembered.insert(name, helper.agent.state().messages);
+            }
+        }
+        Ok(remembered)
     }
 
     pub fn remember_key(&self, provider: &str, key: &str) {
@@ -1163,6 +1218,7 @@ impl Crew {
                 return Err(stopped());
             }
             *value = Some(self.build(spec, history));
+            self.remembered.lock().await.remove(name);
             slot.built.store(true, Ordering::Release);
         }
         let helper = value
@@ -1418,6 +1474,12 @@ impl Crew {
     }
 
     async fn load_history(&self, spec: &AgentSpec) -> Vec<AgentMessage> {
+        if spec.definition.remembers()
+            && let Some(history) = self.remembered.lock().await.get(&spec.name).cloned()
+        {
+            // Keep the cold seed until construction succeeds, including cancellation races.
+            return history;
+        }
         let Some(path) = self
             .log_dir()
             .filter(|_| spec.definition.remembers())
