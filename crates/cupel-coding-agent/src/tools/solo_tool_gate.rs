@@ -1,4 +1,4 @@
-//! Shated checkout admission for raw single-agent leaf tools.
+//! Shared checkout admission for raw single-agent leaf tools.
 
 use std::sync::{Arc, Weak};
 
@@ -8,8 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::tools::checkout_write::WriteGate;
 
-/// One lead's simultaneous leaf tools share a permit. Other leads and helpers still
-/// acquire the actual checkout mutex independently.
+/// One lead's simultaneous leaf tools share a permit. Other leads and helpers
+/// still acquire the actual checkout mutex independently.
 pub struct SoloToolGate {
     checkout: WriteGate,
     active: tokio::sync::Mutex<Weak<OwnedMutexGuard<()>>>,

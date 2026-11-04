@@ -370,7 +370,7 @@ impl SessionRecorder {
     }
 
     /// Commit one complete lifecycle record before releasing its resources.
-    /// Deliberately unsaved session succeed in memory; failed persistence does not.
+    /// Deliberately unsaved sessions succeed in memory; failed persistence does not.
     pub fn record_checked(&mut self, message: &AgentMessage) -> Result<(), String> {
         if let Some(problem) = &self.persistence_error {
             return Err(problem.clone());
@@ -507,7 +507,7 @@ mod tests {
         let mut recorder = SessionRecorder::new(Some(home.clone()), &home, "checked", "mock");
         let transition = AgentMessage::Custom {
             kind: "cupel.team-transition".into(),
-            payload: serde_json::json!({"members":[],"archive":{"entries":[]}, "checkpoint":{}}),
+            payload: serde_json::json!({"members":[],"archive":{"entries":[]},"checkpoint":{}}),
             timestamp: 1,
         };
         recorder.record_checked(&transition).unwrap();
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn checked_lifecycle_record_distinguishes_unsaved_and_failed_persistence() {
-        let home = temp_root("checked_disabled");
+        let home = temp_root("checked-disabled");
         let mut unsaved = SessionRecorder::new(None, &home, "unsaved", "mock");
         let message = AgentMessage::user_text("transition");
         assert!(unsaved.record_checked(&message).is_ok());

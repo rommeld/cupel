@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 pub trait ToolLease: Send {}
 impl<T: Send> ToolLease for T {}
 
-/// Optional, frontend supploed coordination. It does not change tool schemas,
+/// Optional, frontend supplied coordination. It does not change tool schemas,
 /// execution modes, model hooks, or decide which tools a model may call.
 #[async_trait::async_trait]
 pub trait ToolExecutionGate: Send + Sync {

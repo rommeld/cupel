@@ -144,8 +144,7 @@ impl Agent {
         self.tool_gate = gate;
     }
 
-    /// Restore legacy application records as local-only data without changing usage
-    /// anchors.
+    /// Restore legacy application records as local-only data without changing usage anchors.
     pub fn promote_custom_metadata(&self, kinds: &[&str]) -> Result<(), String> {
         let mut state = self
             .state

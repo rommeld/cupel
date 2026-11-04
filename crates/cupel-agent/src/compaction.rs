@@ -179,6 +179,8 @@ pub(crate) fn cut_index(
 ) -> Option<usize> {
     let config = config.for_context_window(context_window);
     let cut = find_cut_index(&context.messages, config.keep_recent_tokens);
+    // Local records survive compaction unchanged and cannot justify a
+    // summarizer request by themselves, even when the fixed prompt is large.
     (cut > 0
         && context.messages[..cut]
             .iter()
@@ -303,7 +305,6 @@ fn serialize_conversation(messages: &[AgentMessage]) -> String {
                     }
                 }
             }
-            AgentMessage::Metadata { .. } => continue,
             AgentMessage::Llm(Message::Assistant(assistant)) => {
                 out.push_str("[Assistant]\n");
                 for block in &assistant.content {
@@ -333,6 +334,7 @@ fn serialize_conversation(messages: &[AgentMessage]) -> String {
                     }
                 }
             }
+            AgentMessage::Metadata { .. } => continue,
             AgentMessage::Custom { kind, payload, .. } => {
                 out.push_str(&format!("[{kind}]\n{payload}\n"));
             }
@@ -567,7 +569,7 @@ mod tests {
     fn local_metadata_never_consumes_context_or_summarizer_input() {
         let metadata = AgentMessage::metadata(
             "archive",
-            serde_json::json!({"full_answer": &"LOCAL_ARCHIVE_SENTINEL".repeat(100_000)}),
+            serde_json::json!({"full_answer": "LOCAL_ARCHIVE_SENTINEL".repeat(100_000)}),
             1,
         );
         assert_eq!(estimate_message_tokens(&metadata), 0);
@@ -596,7 +598,7 @@ mod tests {
     fn legacy_custom_records_remain_distinct_from_local_metadata() {
         let custom = AgentMessage::Custom {
             kind: "custom-application-data".into(),
-            payload: serde_json::json!({"value": "application may summarize this"}),
+            payload: serde_json::json!({"value":"application may summarize this"}),
             timestamp: 1,
         };
         let decoded: AgentMessage =

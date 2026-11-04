@@ -95,16 +95,13 @@ impl AgentCatalog {
             roles,
         }
     }
-
     #[must_use]
     pub fn spec(&self, name: &str) -> Option<&AgentSpec> {
         self.specs.get(name)
     }
-
     pub fn specs(&self) -> impl Iterator<Item = &AgentSpec> {
         self.specs.values()
     }
-
     #[must_use]
     pub fn roles(&self) -> &RoleIndex {
         &self.roles
@@ -545,12 +542,12 @@ impl Crew {
     }
 
     /// Restore inert private history before publishing the newly constructed crew.
-    pub fn import_remembered(&mut self, mut remmembered: BTreeMap<String, Vec<AgentMessage>>) {
-        remmembered.retain(|name, _| {
+    pub fn import_remembered(&mut self, mut remembered: BTreeMap<String, Vec<AgentMessage>>) {
+        remembered.retain(|name, _| {
             self.spec(name)
                 .is_some_and(|spec| spec.definition.remembers())
         });
-        *self.remembered.get_mut() = remmembered;
+        *self.remembered.get_mut() = remembered;
     }
 
     /// Called only after all accepted calls settle. Unbuilt imported histories survive too.
