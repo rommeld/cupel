@@ -4,6 +4,7 @@
 !/crates/**
 /crates/cupel-coding-agent/examples/
 /crates/cupel-acp/examples
+/crates/.DS_Store
 
 !.gitignore
 

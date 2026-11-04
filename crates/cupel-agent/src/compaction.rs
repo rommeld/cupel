@@ -62,6 +62,7 @@ const ESTIMATED_IMAGE_CHARS: u64 = 4800;
 pub(crate) fn estimate_message_tokens(message: &AgentMessage) -> u64 {
     let chars: u64 = match message {
         AgentMessage::Custom { payload, .. } => payload.to_string().len() as u64,
+        AgentMessage::Metadata { .. } => 0,
         AgentMessage::Llm(Message::User(user)) => match &user.content {
             UserContentBody::Text(text) => text.len() as u64,
             UserContentBody::Blocks(blocks) => blocks
@@ -178,7 +179,13 @@ pub(crate) fn cut_index(
 ) -> Option<usize> {
     let config = config.for_context_window(context_window);
     let cut = find_cut_index(&context.messages, config.keep_recent_tokens);
-    (cut > 0).then_some(cut)
+    // Local records survive compaction unchanged and cannot justify a
+    // summarizer request by themselves, even when the fixed prompt is large.
+    (cut > 0
+        && context.messages[..cut]
+            .iter()
+            .any(|message| !matches!(message, AgentMessage::Metadata { .. })))
+    .then_some(cut)
 }
 
 /// Index of the first message kept verbatim. Everything before it gets
@@ -327,6 +334,7 @@ fn serialize_conversation(messages: &[AgentMessage]) -> String {
                     }
                 }
             }
+            AgentMessage::Metadata { .. } => continue,
             AgentMessage::Custom { kind, payload, .. } => {
                 out.push_str(&format!("[{kind}]\n{payload}\n"));
             }
@@ -531,9 +539,14 @@ pub async fn compact_with_hooks(
 
     // Splice the transcript
     let summarized_messages = to_summarize.len();
-    let mut new_messages = vec![AgentMessage::user_text(format!(
+    let mut new_messages: Vec<_> = to_summarize
+        .iter()
+        .filter(|message| matches!(message, AgentMessage::Metadata { .. }))
+        .cloned()
+        .collect();
+    new_messages.push(AgentMessage::user_text(format!(
         "{COMPACTION_MARKER}\n\n{summary}"
-    ))];
+    )));
     new_messages.extend(kept.iter().cloned());
     context.messages = new_messages;
     invalidate_usage_anchors(&mut context.messages);
@@ -551,6 +564,49 @@ pub async fn compact_with_hooks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_metadata_never_consumes_context_or_summarizer_input() {
+        let metadata = AgentMessage::metadata(
+            "archive",
+            serde_json::json!({"full_answer": "LOCAL_ARCHIVE_SENTINEL".repeat(100_000)}),
+            1,
+        );
+        assert_eq!(estimate_message_tokens(&metadata), 0);
+        let ordinary = user("ordinary conversation");
+        assert_eq!(
+            serialize_conversation(&[metadata.clone(), ordinary.clone()]),
+            serialize_conversation(&[ordinary]),
+        );
+        let context = AgentContext {
+            system_prompt: String::new(),
+            messages: vec![metadata.clone()],
+            tools: Vec::new(),
+        };
+        assert_eq!(estimate_context_tokens(&context), 0);
+        assert_eq!(
+            cut_index(&context, 4096, &CompactionConfig::default()),
+            None
+        );
+        let decoded: AgentMessage =
+            serde_json::from_str(&serde_json::to_string(&metadata).unwrap()).unwrap();
+        assert_eq!(decoded, metadata);
+        assert!(matches!(decoded, AgentMessage::Metadata { .. }));
+    }
+
+    #[test]
+    fn legacy_custom_records_remain_distinct_from_local_metadata() {
+        let custom = AgentMessage::Custom {
+            kind: "custom-application-data".into(),
+            payload: serde_json::json!({"value":"application may summarize this"}),
+            timestamp: 1,
+        };
+        let decoded: AgentMessage =
+            serde_json::from_str(&serde_json::to_string(&custom).unwrap()).unwrap();
+        assert_eq!(decoded, custom);
+        assert!(matches!(decoded, AgentMessage::Custom { .. }));
+        assert!(estimate_message_tokens(&decoded) > 0);
+    }
 
     fn user(text: &str) -> AgentMessage {
         AgentMessage::user_text(text)

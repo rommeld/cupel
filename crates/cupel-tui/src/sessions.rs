@@ -227,7 +227,9 @@ impl Sessions {
             if session.app.is_running() {
                 session.app.abort_run();
             }
-            session.app.crew.stop_running();
+            if let Some(active) = &session.app.collaboration {
+                active.crew.stop_running();
+            }
             session.app.agent.abort();
             session.app.login = None;
             session.app.question = None;
@@ -237,7 +239,7 @@ impl Sessions {
                 let event = session.app.next_event().await;
                 session.app.on_event(event).await;
             }
-            session.app.crew.wait_for_idle().await;
+            session.app.shutdown_collaboration().await;
             session.app.recorder.end_session().await;
         }
     }

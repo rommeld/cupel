@@ -129,6 +129,7 @@ async fn run_loop_with(provider: Arc<FlakyProvider>, retry: RetryConfig) -> Vec<
         temperature: None,
         max_tokens: None,
         tool_execution: ToolExecutionMode::Parallel,
+        tool_gate: None,
         retry,
         // Zero size mock model window, compaction never interferes here.
         compaction: cupel_agent::CompactionConfig::default(),

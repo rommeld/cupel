@@ -1367,6 +1367,117 @@ pub(crate) mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn restored_legacy_shared_facts_have_a_static_solo_locator() {
+        use cupel_agent::AgentTool as _;
+        use cupel_coding_agent::team_conversation::{Participant, TeamBody, TeamEntry};
+        use cupel_coding_agent::tools::read::ReadTool;
+        use cupel_core::types::{Message, ToolResultContent, UserContentBody};
+
+        let root = std::env::temp_dir().join("cupel-ui-legacy-shared-handoff");
+        let _ = std::fs::remove_dir_all(&root);
+        let base = test_app_with_home(&root, "legacy-shared");
+        let journal = base
+            .recorder
+            .sessions_dir()
+            .unwrap()
+            .join("legacy-shared/team/conversation.jsonl");
+        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+        let entry = TeamEntry {
+            id: 1,
+            author: Participant::Helper("reader".into()),
+            timestamp: 5,
+            durable: true,
+            body: TeamBody::Post {
+                text: "legacy-fact-remains-discoverable".into(),
+                reply_to: None,
+                root: None,
+            },
+        };
+        let bytes = format!(
+            "{{\"schemaVersion\":1}}\n{}\n",
+            serde_json::to_string(&entry).unwrap()
+        );
+        std::fs::write(&journal, &bytes).unwrap();
+        // Old sessions did not persist UI TeamEntry events: an empty membership
+        // boundary plus the existing journal must still make their facts discoverable.
+        let legacy = cupel_agent::AgentMessage::Custom {
+            kind: "team".into(),
+            payload: serde_json::json!({"members":[]}),
+            timestamp: 17,
+        };
+        let mut options = AgentOptions::new(base.agent.state().model, base.agent.registry());
+        options.messages = vec![legacy];
+        let restored = App::new(Agent::new(options), base.meta, base.recorder);
+        assert!(restored.collaboration.is_none());
+        let history = restored.agent.state().messages;
+        let visible = restored.agent.hooks().convert_to_llm(&history).await;
+        let [Message::User(user)] = visible.as_slice() else {
+            panic!("expected one legacy locator");
+        };
+        let UserContentBody::Text(text) = &user.content else {
+            panic!("expected plain locator");
+        };
+        assert_eq!(user.timestamp, 17);
+        assert!(text.contains(crate::app::TEAM_HANDOFF_MARKER));
+        assert!(text.contains(journal.to_str().unwrap()));
+        assert!(
+            !text.contains("legacy-fact-remains-discoverable"),
+            "constructor must not read journal contents"
+        );
+        let result = ReadTool::new(root.join("proj"))
+            .execute(
+                "legacy-evidence",
+                serde_json::json!({"path":journal}),
+                tokio_util::sync::CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(result.content.iter().any(|content| matches!(content, ToolResultContent::Text(text) if text.text.contains("legacy-fact-remains-discoverable"))));
+        assert!(restored.collaboration.is_none());
+        assert_eq!(std::fs::read_to_string(&journal).unwrap(), bytes);
+        let mut options =
+            AgentOptions::new(restored.agent.state().model, restored.agent.registry());
+        options.messages = history.clone();
+        let again = App::new(Agent::new(options), restored.meta, restored.recorder);
+        assert_eq!(
+            again.agent.state().messages,
+            history,
+            "legacy hydration must be idempotent"
+        );
+        assert!(again.collaboration.is_none());
+        // A restored nonempty team will recover its live projection when it is
+        // explicitly run; adding a static locator here would duplicate that context.
+        let mut configured = test_app_with_home(&root, "legacy-shared");
+        let model = configured.agent.state().model;
+        configured.meta.settings.agents.insert("reader".into(), serde_json::from_value(serde_json::json!({
+            "provider": model.provider.as_str(), "model": model.id.clone(), "thinkingLevel": "off", "description": "Reads legacy evidence."
+        })).unwrap());
+        let mut options = AgentOptions::new(model, configured.agent.registry());
+        options.messages = vec![cupel_agent::AgentMessage::Custom {
+            kind: "team".into(),
+            payload: serde_json::json!({"members":["reader"]}),
+            timestamp: 18,
+        }];
+        let still_armed = App::new(Agent::new(options), configured.meta, configured.recorder);
+        assert!(still_armed.team.contains("reader"));
+        assert!(still_armed.collaboration.is_none());
+        assert!(
+            still_armed
+                .agent
+                .hooks()
+                .convert_to_llm(&still_armed.agent.state().messages)
+                .await
+                .is_empty()
+        );
+        // A historical solo transcript does not gain a handoff just because a
+        // similarly named sidecar exists; recognized team history is required.
+        let untouched = test_app_with_home(&root, "legacy-shared");
+        assert!(untouched.agent.state().messages.is_empty());
+        assert!(untouched.collaboration.is_none());
+    }
+
     #[test]
     fn hot_reload_command_sets_the_pending_target() {
         let mut app = test_app();
@@ -1458,6 +1569,21 @@ pub(crate) mod tests {
 
         run_command(&mut app, "/new");
         // Mirror the event loop's async handling of a requested rebuild.
+        if let Some(target) = app.pending_reload.take() {
+            app = app.hot_reload(target).await;
+        }
+        // Accepted work prevents a reset. The session and both queue copies survive.
+        assert_eq!(app.recorder.session_id(), "cupel-old");
+        assert_eq!(app.queued, ["old queued prompt"]);
+        assert_eq!(std::fs::read_to_string(&old_path).unwrap(), old_contents);
+        assert!(app.transcript.cells.iter().any(|cell| matches!(cell, Cell::Notice { text } if text.contains("idle work and empty prompt queues"))));
+        // Explicit cancellation restores the accepted text before a separate idle reset.
+        app.abort_run();
+        assert_eq!(app.input.text(), "old queued prompt");
+        assert!(app.queued.is_empty());
+        assert!(app.agent.take_follow_up().is_none());
+        assert_eq!(app.input.submit(), "old queued prompt");
+        run_command(&mut app, "/new");
         if let Some(target) = app.pending_reload.take() {
             app = app.hot_reload(target).await;
         }

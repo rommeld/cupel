@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -255,9 +257,285 @@ impl TeamPage {
     }
 }
 
+/// A read-only snapshot of shared evidence. It never owns a writer or enters model history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamArchive {
+    pub entries: Vec<TeamEntry>,
+    pub answers: Vec<ArchivedAnswer>,
+    pub path: Option<PathBuf>,
+    pub journal: Option<PathBuf>,
+    pub through: u64,
+}
+
+/// The complete available answer, with an explicit marker for unavailable legacy artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivedAnswer {
+    pub entry_id: u64,
+    pub artifact: Option<PathBuf>,
+    pub text: Option<String>,
+    pub missing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+impl TeamArchive {
+    /// Open archived evidence without starting a conversation worker.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let data_path = if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            path.with_extension("json")
+        } else {
+            path.to_path_buf()
+        };
+        let path = data_path.as_path();
+        let bytes = std::fs::read(path)
+            .map_err(|error| format!("cannot read team archive {}: {error}", path.display()))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|error| format!("cannot decode team archive {}: {error}", path.display()))
+    }
+
+    /// Inspect a legacy session journal without activating team mode or creating sidecars.
+    pub fn load_journal(path: &Path) -> Result<Self, String> {
+        let directory = path
+            .parent()
+            .ok_or("team journal needs a session directory")?;
+        let mut segments = std::fs::read_dir(directory)
+            .map_err(|error| format!("cannot list team journal {}: {error}", directory.display()))?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name == "conversation.jsonl"
+                            || (name.starts_with("conversation-")
+                                && candidate
+                                    .extension()
+                                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl")))
+                    })
+            })
+            .collect::<Vec<_>>();
+        segments.sort_by_key(|path| {
+            (
+                path.file_name()
+                    .is_none_or(|name| name != "conversation.jsonl"),
+                path.clone(),
+            )
+        });
+        let mut entries: Vec<TeamEntry> = Vec::new();
+        for segment in segments {
+            let text = read_answer_artifact(Some(path), &segment).map_err(|error| {
+                format!("cannot read team journal {}: {error}", segment.display())
+            })?;
+            let mut lines = text.lines();
+            if lines.next() != Some("{\"schemaVersion\":1}") {
+                return Err(format!(
+                    "unsupported team journal header in {}",
+                    segment.display()
+                ));
+            }
+            for line in lines.filter(|line| !line.is_empty()) {
+                let entry: TeamEntry = serde_json::from_str(line).map_err(|error| {
+                    format!("damaged team journal {}: {error}", segment.display())
+                })?;
+                if entry.id <= entries.last().map_or(0, |last| last.id) {
+                    return Err(format!("non-monotonic team journal {}", segment.display()));
+                }
+                entries.push(entry);
+            }
+        }
+        Ok(Self::from_entries(
+            &entries,
+            &BTreeMap::new(),
+            Some(path.to_path_buf()),
+        ))
+    }
+
+    fn from_entries(
+        source: &[TeamEntry],
+        retained_answers: &BTreeMap<u64, String>,
+        journal: Option<PathBuf>,
+    ) -> Self {
+        let entries = source.iter().filter(|entry| {
+            !matches!(&entry.body, TeamBody::Scheduled { task } if task.visibility == TaskVisibility::Private)
+        }).cloned().collect::<Vec<_>>();
+        let answers = entries
+            .iter()
+            .filter_map(|entry| {
+                let (truncated, artifact) = match &entry.body {
+                    TeamBody::Scheduled { task } => (task.truncated, &task.artifact),
+                    TeamBody::Task {
+                        truncated,
+                        artifact,
+                        ..
+                    } => (*truncated, artifact),
+                    TeamBody::Post { .. } => return None,
+                };
+                let complete = retained_answers
+                    .get(&entry.id)
+                    .cloned()
+                    .map(Ok)
+                    .unwrap_or_else(|| {
+                        let path = artifact.as_ref().ok_or_else(|| {
+                            "No complete answer artifact was recorded.".to_string()
+                        })?;
+                        read_answer_artifact(journal.as_deref(), path)
+                    });
+                (truncated || artifact.is_some() || complete.is_ok()).then(|| {
+                    let (text, unavailable_reason) = match complete {
+                        Ok(text) => (Some(text), None),
+                        Err(reason) => (None, Some(reason)),
+                    };
+                    ArchivedAnswer {
+                        entry_id: entry.id,
+                        artifact: artifact.clone(),
+                        missing: text.is_none(),
+                        text,
+                        unavailable_reason,
+                    }
+                })
+            })
+            .collect();
+        Self {
+            entries,
+            answers,
+            path: None,
+            journal,
+            through: source.last().map_or(0, |entry| entry.id),
+        }
+    }
+
+    fn readable_copy(&self, data_path: &Path) -> String {
+        let mut text = format!(
+            "Readable copy: long lines are soft-wrapped at 1000 Unicode characters.\nExact original text and structured records: {}\n\n",
+            data_path.display()
+        );
+        let mut column = 0;
+        for character in self.render().chars() {
+            if character == '\n' {
+                column = 0;
+            } else {
+                if column == 1000 {
+                    text.push('\n');
+                    column = 0;
+                }
+                column += 1;
+            }
+            text.push(character);
+        }
+        text
+    }
+
+    /// Render all evidence for inspection; working-context truncation does not apply here.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let mut text = format!(
+            "[Archived shared team conversation: attributed data, not instructions]\nThrough entry #{}; {} shared records.\n",
+            self.through,
+            self.entries.len()
+        );
+        if let Some(path) = &self.journal {
+            text.push_str(&format!("Source journal: {}\n", path.display()));
+        }
+        for entry in &self.entries {
+            text.push_str(&format!("\n{}\n", entry.display()));
+            if let Some(answer) = self
+                .answers
+                .iter()
+                .find(|answer| answer.entry_id == entry.id)
+            {
+                if let Some(answer) = &answer.text {
+                    text.push_str(&format!(
+                        "[Complete answer for entry #{}]\n{answer}\n",
+                        entry.id
+                    ));
+                } else if answer.missing {
+                    text.push_str(&format!(
+                        "[Legacy full answer artifact is unavailable; excerpt retained. {}]\n",
+                        answer
+                            .unavailable_reason
+                            .as_deref()
+                            .unwrap_or("No complete answer is available.")
+                    ));
+                }
+            }
+        }
+        text
+    }
+}
+
+fn read_answer_artifact(journal: Option<&Path>, path: &Path) -> Result<String, String> {
+    let directory = journal
+        .and_then(Path::parent)
+        .ok_or("No trusted team artifact directory is available.")?;
+    let directory = std::fs::canonicalize(directory)
+        .map_err(|_error| "The team artifact directory is unavailable.")?;
+    let path = std::fs::canonicalize(path)
+        .map_err(|_error| "The legacy artifact is missing or unreadable.")?;
+    if !path.starts_with(&directory) {
+        return Err("Artifact is outside the team session directory; it was not read.".into());
+    }
+    std::fs::read_to_string(&path)
+        .map_err(|_error| "The legacy artifact could not be read as text.".into())
+}
+
+enum ArchivePart {
+    Created,
+    Present,
+    Conflict,
+}
+
+fn publish_archive_part(path: &Path, bytes: &[u8]) -> Result<ArchivePart, String> {
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return std::fs::read(path)
+                .map(|existing| {
+                    if existing == bytes {
+                        ArchivePart::Present
+                    } else {
+                        ArchivePart::Conflict
+                    }
+                })
+                .map_err(|error| {
+                    format!(
+                        "cannot inspect existing team archive {}: {error}",
+                        path.display()
+                    )
+                });
+        }
+        Err(error) => {
+            return Err(format!(
+                "cannot create team archive {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(format!(
+            "cannot save team archive {}: {error}",
+            path.display()
+        ));
+    }
+    Ok(ArchivePart::Created)
+}
+
 pub type EntryReceipt = oneshot::Receiver<Result<TeamEntry, String>>;
 
 enum Command {
+    PrepareArchive {
+        reply: oneshot::Sender<Result<TeamArchive, String>>,
+    },
+    Stop {
+        reply: oneshot::Sender<()>,
+    },
     Append {
         author: Participant,
         body: TeamBody,
@@ -271,6 +549,35 @@ enum Command {
         view: ReadView,
         reply: oneshot::Sender<TeamPage>,
     },
+}
+
+#[derive(Clone, Copy)]
+enum StopMode {
+    CommitArchive,
+    Shutdown,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RuntimeState {
+    Open,
+    Preparing,
+    Prepared,
+    Stopping,
+    Closed,
+}
+
+struct WorkerLife {
+    state: Arc<Mutex<RuntimeState>>,
+    alive: Arc<AtomicBool>,
+}
+
+impl Drop for WorkerLife {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            *state = RuntimeState::Closed;
+        }
+        self.alive.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Clone)]
@@ -291,6 +598,9 @@ pub struct TeamRuntime {
     roster: Arc<RwLock<TeamAccess>>,
     commands: mpsc::Sender<Command>,
     updates: async_mpsc::UnboundedSender<TeamUpdate>,
+    state: Arc<Mutex<RuntimeState>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    worker_alive: Arc<AtomicBool>,
 }
 
 pub struct ActiveHelper {
@@ -327,13 +637,169 @@ impl TeamRuntime {
         let (commands, receiver) = mpsc::channel();
         let (updates, events) = async_mpsc::unbounded_channel();
         let roster = Arc::new(RwLock::new(TeamAccess::default()));
+        let runtime_roster = Arc::clone(&roster);
+        let updates_for_runtime = updates.clone();
+        let state = Arc::new(Mutex::new(RuntimeState::Open));
+        let worker_alive = Arc::new(AtomicBool::new(true));
+        let life = WorkerLife {
+            state: Arc::clone(&state),
+            alive: Arc::clone(&worker_alive),
+        };
+        let worker = std::thread::Builder::new()
+            .name("team-conversation".into())
+            .spawn(move || {
+                Writer::load(path, updates).run(receiver, &roster, &life.state);
+                drop(life);
+            });
+        // A failed spawn drops WorkerLife and closes the command receiver.
+        let worker = worker
+            .inspect_err(|error| {
+                let _ = updates_for_runtime.send(TeamUpdate::Warning(format!(
+                    "cannot start team writer: {error}"
+                )));
+            })
+            .ok();
         let runtime = Arc::new(Self {
-            roster: Arc::clone(&roster),
+            roster: runtime_roster,
             commands,
-            updates: updates.clone(),
+            updates: updates_for_runtime,
+            state,
+            worker: Mutex::new(worker),
+            worker_alive,
         });
-        std::thread::spawn(move || Writer::load(path, updates).run(receiver, &roster));
         (runtime, events)
+    }
+
+    fn send(&self, command: Command) -> Result<(), String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_error| "team lifecycle lock poisoned")?;
+        if *state != RuntimeState::Open {
+            return Err("team writer is stopping or closed".into());
+        }
+        self.commands
+            .send(command)
+            .map_err(|error| format!("team writer stopped: {error}"))
+    }
+
+    /// Freeze admissions behind accepted writes and preserve shared evidence.
+    /// The worker remains alive until the caller durably records the transition and commits.
+    pub async fn prepare_archive(&self) -> Result<TeamArchive, String> {
+        let (reply, receipt) = oneshot::channel();
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_error| "team lifecycle lock poisoned")?;
+            if *state != RuntimeState::Open {
+                return Err("team writer is preparing, stopping, or closed".into());
+            }
+            self.commands
+                .send(Command::PrepareArchive { reply })
+                .map_err(|error| format!("team writer stopped: {error}"))?;
+            *state = RuntimeState::Preparing;
+        }
+        receipt
+            .await
+            .map_err(|error| format!("team archive acknowledgement lost: {error}"))?
+    }
+
+    /// Finish a durably recorded transition by stopping and joining the frozen worker.
+    pub async fn commit_shutdown(&self) -> Result<(), String> {
+        self.stop_and_join(StopMode::CommitArchive).await
+    }
+
+    /// Reopen admissions if persisting the session transition failed.
+    pub fn abort_archive(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_error| "team lifecycle lock poisoned")?;
+        if *state != RuntimeState::Prepared {
+            return Err("no prepared team archive to abort".into());
+        }
+        *state = RuntimeState::Open;
+        Ok(())
+    }
+
+    /// Preserve evidence and join the writer when no separate session transaction is needed.
+    pub async fn archive_and_shutdown(&self) -> Result<TeamArchive, String> {
+        let archive = self.prepare_archive().await?;
+        self.commit_shutdown().await?;
+        Ok(archive)
+    }
+
+    /// Stop and join this instance even while other owners retain an Arc to it.
+    pub async fn shutdown(&self) -> Result<(), String> {
+        self.stop_and_join(StopMode::Shutdown).await
+    }
+
+    async fn stop_and_join(&self, mode: StopMode) -> Result<(), String> {
+        let stopped = if self.is_closed() && !self.is_worker_alive() {
+            Ok(())
+        } else {
+            self.stop(mode).await
+        };
+        if stopped.is_err() {
+            // A recorded transition must release the worker even after a lifecycle error.
+            // Direct Stop also handles a poisoned lifecycle lock; accepted writes stay ordered.
+            let (reply, receipt) = oneshot::channel();
+            if self.commands.send(Command::Stop { reply }).is_ok() {
+                let _ = receipt.await;
+            }
+        }
+        let joined = self.join_worker().await;
+        stopped.and(joined)
+    }
+
+    async fn stop(&self, mode: StopMode) -> Result<(), String> {
+        let (reply, receipt) = oneshot::channel();
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_error| "team lifecycle lock poisoned")?;
+            let allowed = *state == RuntimeState::Prepared
+                || (matches!(mode, StopMode::Shutdown) && *state == RuntimeState::Open);
+            if !allowed {
+                return Err("team writer is not ready to stop".into());
+            }
+            self.commands
+                .send(Command::Stop { reply })
+                .map_err(|error| format!("team writer stopped: {error}"))?;
+            *state = RuntimeState::Stopping;
+        }
+        receipt
+            .await
+            .map_err(|error| format!("team stop acknowledgement lost: {error}"))
+    }
+
+    async fn join_worker(&self) -> Result<(), String> {
+        let worker = self
+            .worker
+            .lock()
+            .map_err(|_error| "team worker lock poisoned")?
+            .take();
+        if let Some(worker) = worker {
+            tokio::task::spawn_blocking(move || worker.join())
+                .await
+                .map_err(|error| format!("cannot join team writer: {error}"))?
+                .map_err(|_error| "team writer panicked while stopping")?;
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.state
+            .lock()
+            .map_or(true, |state| *state == RuntimeState::Closed)
+    }
+
+    #[must_use]
+    pub fn is_worker_alive(&self) -> bool {
+        self.worker_alive.load(Ordering::Acquire)
     }
 
     pub fn set_members(&self, members: BTreeSet<String>) {
@@ -414,14 +880,12 @@ impl TeamRuntime {
         view: ReadView,
     ) -> Result<TeamPage, String> {
         let (reply, receipt) = oneshot::channel();
-        self.commands
-            .send(Command::Read {
-                after,
-                limit,
-                view,
-                reply,
-            })
-            .map_err(|error| format!("team writer stopped: {error}"))?;
+        self.send(Command::Read {
+            after,
+            limit,
+            view,
+            reply,
+        })?;
         tokio::time::timeout(Duration::from_secs(3), receipt)
             .await
             .map_err(|error| format!("team read timed out: {error}"))?
@@ -517,15 +981,13 @@ impl TeamRuntime {
         checked: bool,
     ) -> Result<EntryReceipt, String> {
         let (reply, receipt) = oneshot::channel();
-        self.commands
-            .send(Command::Append {
-                author,
-                body,
-                full_answer,
-                checked,
-                reply,
-            })
-            .map_err(|error| format!("team writer stopped: {error}"))?;
+        self.send(Command::Append {
+            author,
+            body,
+            full_answer,
+            checked,
+            reply,
+        })?;
         Ok(receipt)
     }
 
@@ -548,11 +1010,24 @@ impl TeamRuntime {
     }
 }
 
+impl Drop for TeamRuntime {
+    fn drop(&mut self) {
+        let (reply, _) = oneshot::channel();
+        let _ = self.commands.send(Command::Stop { reply });
+        if let Ok(worker) = self.worker.get_mut()
+            && let Some(worker) = worker.take()
+        {
+            let _ = worker.join();
+        }
+    }
+}
+
 struct Writer {
     path: Option<PathBuf>,
     segment: u64,
     file: Option<File>,
     entries: Vec<TeamEntry>,
+    retained_answers: BTreeMap<u64, String>,
     discussion: BTreeSet<usize>,
     calls: BTreeMap<CallId, usize>,
     writable: bool,
@@ -567,6 +1042,7 @@ impl Writer {
             segment: 0,
             file: None,
             entries: Vec::new(),
+            retained_answers: BTreeMap::new(),
             discussion: BTreeSet::new(),
             calls: BTreeMap::new(),
             updates,
@@ -753,9 +1229,32 @@ impl Writer {
         }
     }
 
-    fn run(mut self, commands: mpsc::Receiver<Command>, roster: &RwLock<TeamAccess>) {
+    fn run(
+        mut self,
+        commands: mpsc::Receiver<Command>,
+        roster: &RwLock<TeamAccess>,
+        state: &Mutex<RuntimeState>,
+    ) {
         for command in commands {
             match command {
+                Command::PrepareArchive { reply } => {
+                    let result = self.archive();
+                    if let Ok(mut state) = state.lock() {
+                        *state = if result.is_ok() {
+                            RuntimeState::Prepared
+                        } else {
+                            RuntimeState::Open
+                        };
+                    }
+                    let _ = reply.send(result);
+                }
+                Command::Stop { reply } => {
+                    if let Ok(mut state) = state.lock() {
+                        *state = RuntimeState::Closed;
+                    }
+                    let _ = reply.send(());
+                    break;
+                }
                 Command::Read {
                     after,
                     limit,
@@ -808,6 +1307,9 @@ impl Writer {
             .ok_or("team entry IDs exhausted")?;
         if let Some(answer) = answer {
             let path = self.keep_answer(id, &answer);
+            if path.is_none() {
+                self.retained_answers.insert(id, answer);
+            }
             match &mut body {
                 TeamBody::Task { artifact, .. } => *artifact = path,
                 TeamBody::Scheduled { task } => task.artifact = path,
@@ -832,6 +1334,47 @@ impl Writer {
         self.index(entry.clone());
         let _ = self.updates.send(TeamUpdate::Entry(entry.clone()));
         Ok(entry)
+    }
+
+    fn archive(&self) -> Result<TeamArchive, String> {
+        let mut archive =
+            TeamArchive::from_entries(&self.entries, &self.retained_answers, self.path.clone());
+        let Some(journal) = &self.path else {
+            return Ok(archive);
+        };
+        let directory = journal
+            .parent()
+            .ok_or("team archive needs a session directory")?;
+        std::fs::create_dir_all(directory).map_err(|error| {
+            format!(
+                "cannot create team archive directory {}: {error}",
+                directory.display()
+            )
+        })?;
+        for suffix in 0..100 {
+            let path = directory.join(format!("archive-{:020}-{suffix:04}.md", archive.through));
+            let data_path = path.with_extension("json");
+            archive.path = Some(path.clone());
+            let mut bytes = serde_json::to_vec_pretty(&archive)
+                .map_err(|error| format!("cannot encode team archive: {error}"))?;
+            bytes.push(b'\n');
+            let data_part = publish_archive_part(&data_path, &bytes)?;
+            if matches!(data_part, ArchivePart::Conflict) {
+                continue;
+            }
+            let readable = archive.readable_copy(&data_path);
+            match publish_archive_part(&path, readable.as_bytes()) {
+                Ok(ArchivePart::Created | ArchivePart::Present) => return Ok(archive),
+                result => {
+                    // Remove only our unreferenced partial pair; existing archives stay intact.
+                    if matches!(data_part, ArchivePart::Created) {
+                        let _ = std::fs::remove_file(&data_path);
+                    }
+                    result?;
+                }
+            }
+        }
+        Err("cannot allocate a unique team archive; active conversation retained".into())
     }
 
     fn persist(&mut self, entry: &TeamEntry) -> Result<(), String> {
@@ -894,6 +1437,379 @@ mod tests {
     use crate::team_conversation::*;
     use crate::team_scheduler::{AccessScope, TaskState, TeamLimits, TeamScheduler};
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn archive_drains_accepted_writes_and_joins_with_cached_owners() {
+        let path = path();
+        let (team, _) = TeamRuntime::new(Some(path.clone()));
+        let cached = Arc::clone(&team);
+        let answer = "complete evidence, beyond a context window\n".repeat(600);
+        let first = team
+            .task(
+                Participant::Helper("reader".into()),
+                TaskPhase::Succeeded,
+                Some(1),
+                &answer,
+                "read-only; checked src/parser.rs:42",
+            )
+            .unwrap();
+        let second = team
+            .task(
+                Participant::Lead,
+                TaskPhase::Succeeded,
+                None,
+                "last accepted write",
+                "no changes",
+            )
+            .unwrap();
+        let archive = team.archive_and_shutdown().await.unwrap();
+        let first = first.await.unwrap().unwrap();
+        let second = second.await.unwrap().unwrap();
+        assert_eq!(archive.through, second.id);
+        assert_eq!(archive.entries.len(), 2);
+        assert_eq!(archive.answers[0].entry_id, first.id);
+        assert_eq!(archive.answers[0].text.as_deref(), Some(answer.as_str()));
+        assert!(archive.render().contains(&answer));
+        assert!(archive.render().contains("@reader"));
+        assert!(team.is_closed());
+        assert!(!team.is_worker_alive());
+        assert!(
+            cached
+                .task(Participant::Lead, TaskPhase::Started, None, "late", "")
+                .is_err()
+        );
+        assert!(cached.inspect(None).await.is_err());
+        let journal = std::fs::read(&path).unwrap();
+        let artifact = match &first.body {
+            TeamBody::Task {
+                artifact: Some(path),
+                ..
+            } => path,
+            _ => panic!("expected an original answer artifact"),
+        };
+        assert_eq!(std::fs::read_to_string(artifact).unwrap(), answer);
+        let archive_path = archive.path.as_ref().unwrap();
+        assert!(
+            std::fs::read_to_string(archive_path)
+                .unwrap()
+                .contains("complete evidence")
+        );
+        let restored = TeamArchive::load(archive_path).unwrap();
+        assert_eq!(restored.entries, archive.entries);
+        assert_eq!(restored.answers[0].text, archive.answers[0].text);
+        let sidecars_before = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
+        let legacy = TeamArchive::load_journal(&path).unwrap();
+        assert_eq!(legacy.entries, archive.entries);
+        assert_eq!(legacy.answers[0].text, archive.answers[0].text);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            sidecars_before
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), journal);
+        assert!(
+            !team.is_worker_alive(),
+            "read-only archive loading must not restart a worker"
+        );
+    }
+
+    #[tokio::test]
+    async fn readable_archive_wraps_long_lines_without_losing_exact_answer_data() {
+        let path = path();
+        let (team, _) = TeamRuntime::new(Some(path));
+        let answer = format!("{}TAIL_SENTINEL", "界".repeat(25_000));
+        team.receive(
+            team.task(
+                Participant::Helper("reader".into()),
+                TaskPhase::Succeeded,
+                None,
+                &answer,
+                "",
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let archive = team.archive_and_shutdown().await.unwrap();
+        let path = archive.path.as_ref().unwrap();
+        assert_eq!(path.extension().unwrap(), "md");
+        let readable = std::fs::read_to_string(path).unwrap();
+        assert!(readable.contains("TAIL_SENTINEL"));
+        assert!(readable.contains("soft-wrapped"));
+        assert!(readable.lines().all(|line| line.chars().count() <= 1000));
+        let restored = TeamArchive::load(path).unwrap();
+        assert_eq!(restored.answers[0].text.as_deref(), Some(answer.as_str()));
+        assert!(path.with_extension("json").exists());
+    }
+
+    #[tokio::test]
+    async fn archive_keeps_shared_revisions_and_excludes_private_task_metadata() {
+        let (team, _) = TeamRuntime::new(None);
+        let scheduler = TeamScheduler::new(TeamLimits::default());
+        scheduler.attach(Arc::clone(&team));
+        for visibility in [TaskVisibility::Shared, TaskVisibility::Private] {
+            let private = visibility == TaskVisibility::Private;
+            let root = scheduler
+                .root(
+                    Participant::Helper(if private { "private-helper" } else { "reader" }.into()),
+                    AccessScope::ReadOnly,
+                    if private {
+                        "PRIVATE ASSIGNMENT"
+                    } else {
+                        "shared assignment"
+                    },
+                    CancellationToken::new(),
+                    visibility,
+                )
+                .await
+                .unwrap();
+            scheduler.publish(root.id()).await;
+            scheduler
+                .finish(
+                    &root,
+                    TaskState::Succeeded,
+                    if private {
+                        "PRIVATE ANSWER"
+                    } else {
+                        "shared result"
+                    },
+                    Changes::ReadOnly,
+                )
+                .await;
+        }
+        let shared_records = team.inspect(None).await.unwrap().entries.into_iter().filter(|entry| {
+            matches!(&entry.body, TeamBody::Scheduled { task } if task.visibility == TaskVisibility::Shared)
+        }).count();
+        let archive = team.archive_and_shutdown().await.unwrap();
+        assert_eq!(
+            archive.entries.len(),
+            shared_records,
+            "audit revisions must remain attributed"
+        );
+        let encoded = serde_json::to_string(&archive).unwrap();
+        for private in ["PRIVATE ASSIGNMENT", "PRIVATE ANSWER", "private-helper"] {
+            assert!(!encoded.contains(private), "archive leaked {private}");
+        }
+        assert!(archive.render().contains("shared result"));
+        assert!(archive.path.is_none());
+    }
+
+    #[tokio::test]
+    async fn memory_archive_keeps_complete_answers_when_artifact_storage_is_unavailable() {
+        let (team, _) = TeamRuntime::new(None);
+        let answer = "memory answer\n".repeat(1000);
+        team.receive(
+            team.task(
+                Participant::Helper("reader".into()),
+                TaskPhase::Succeeded,
+                None,
+                &answer,
+                "read-only",
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let archive = team.archive_and_shutdown().await.unwrap();
+        assert!(archive.path.is_none());
+        assert_eq!(archive.answers[0].text.as_deref(), Some(answer.as_str()));
+        assert!(!archive.answers[0].missing);
+        let restored: TeamArchive =
+            serde_json::from_slice(&serde_json::to_vec(&archive).unwrap()).unwrap();
+        assert_eq!(restored.answers[0].text.as_deref(), Some(answer.as_str()));
+        assert!(!team.is_worker_alive());
+    }
+
+    #[tokio::test]
+    async fn unavailable_legacy_artifacts_are_explicit_and_original_records_survive() {
+        let path = path();
+        let (team, _) = TeamRuntime::new(Some(path.clone()));
+        let entry = team
+            .receive(
+                team.task(
+                    Participant::Helper("reader".into()),
+                    TaskPhase::Succeeded,
+                    None,
+                    &"legacy answer\n".repeat(1000),
+                    "read-only",
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let artifact = match &entry.body {
+            TeamBody::Task {
+                artifact: Some(path),
+                ..
+            } => path,
+            _ => panic!("expected artifact"),
+        };
+        std::fs::remove_file(artifact).unwrap();
+        let journal = std::fs::read(&path).unwrap();
+        let archive = team.archive_and_shutdown().await.unwrap();
+        assert!(archive.answers[0].missing);
+        assert_eq!(archive.answers[0].artifact.as_ref(), Some(artifact));
+        assert!(archive.answers[0].text.is_none());
+        assert!(
+            archive
+                .render()
+                .contains("Legacy full answer artifact is unavailable")
+        );
+        assert_eq!(archive.entries[0], entry);
+        assert_eq!(std::fs::read(&path).unwrap(), journal);
+    }
+
+    #[tokio::test]
+    async fn archive_never_reads_artifacts_outside_its_session_sidecar() {
+        let path = path();
+        let directory = path.parent().unwrap();
+        std::fs::create_dir_all(directory).unwrap();
+        let outside = directory.parent().unwrap().join("external-marker.txt");
+        std::fs::write(&outside, "DO NOT COPY EXTERNAL CONTENT").unwrap();
+        let inside = directory.join("answer-legacy.md");
+        std::fs::write(&inside, "complete safe evidence").unwrap();
+        let mut paths = vec![inside, outside];
+        #[cfg(unix)]
+        {
+            let symlink = directory.join("answer-link.md");
+            std::os::unix::fs::symlink(&paths[1], &symlink).unwrap();
+            paths.push(symlink);
+        }
+        let entries = paths
+            .into_iter()
+            .enumerate()
+            .map(|(index, artifact)| TeamEntry {
+                id: index as u64 + 1,
+                author: Participant::Helper("reader".into()),
+                timestamp: 1,
+                body: TeamBody::Task {
+                    phase: TaskPhase::Succeeded,
+                    task_entry: None,
+                    text: "retained excerpt".into(),
+                    changes: "read-only".into(),
+                    truncated: true,
+                    artifact: Some(artifact),
+                },
+                durable: true,
+            })
+            .collect::<Vec<_>>();
+        let mut journal = "{\"schemaVersion\":1}\n".to_string();
+        for entry in &entries {
+            journal.push_str(&serde_json::to_string(entry).unwrap());
+            journal.push('\n');
+        }
+        std::fs::write(&path, &journal).unwrap();
+        let (team, _) = TeamRuntime::new(Some(path.clone()));
+        let archive = team.archive_and_shutdown().await.unwrap();
+        assert_eq!(
+            archive.answers[0].text.as_deref(),
+            Some("complete safe evidence")
+        );
+        for answer in &archive.answers[1..] {
+            assert!(answer.missing);
+            assert!(answer.text.is_none());
+            assert!(
+                answer
+                    .unavailable_reason
+                    .as_ref()
+                    .unwrap()
+                    .contains("outside")
+            );
+        }
+        assert!(
+            !serde_json::to_string(&archive)
+                .unwrap()
+                .contains("DO NOT COPY EXTERNAL CONTENT")
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), journal);
+    }
+
+    #[tokio::test]
+    async fn failed_archive_leaves_writer_active_and_all_data_available() {
+        let path = path();
+        let (team, _) = TeamRuntime::new(Some(path.clone()));
+        members(&team);
+        team.post(Participant::Lead, "keep this evidence".into(), None)
+            .await
+            .unwrap();
+        let directory = path.parent().unwrap();
+        let backup = directory.with_extension("backup");
+        std::fs::rename(directory, &backup).unwrap();
+        std::fs::write(directory, "cannot create an archive here").unwrap();
+        assert!(team.archive_and_shutdown().await.is_err());
+        assert!(!team.is_closed());
+        assert!(team.is_worker_alive());
+        assert_eq!(team.inspect(None).await.unwrap().entries.len(), 1);
+        std::fs::remove_file(directory).unwrap();
+        std::fs::rename(&backup, directory).unwrap();
+        team.post(
+            Participant::Lead,
+            "writer still accepts evidence".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        let archive = team.archive_and_shutdown().await.unwrap();
+        assert_eq!(archive.entries.len(), 2);
+        assert!(!team.is_worker_alive());
+    }
+
+    #[tokio::test]
+    async fn prepared_archive_stays_frozen_until_commit_or_abort() {
+        let (team, _) = TeamRuntime::new(None);
+        team.receive(
+            team.task(Participant::Lead, TaskPhase::Succeeded, None, "first", "")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let archive = team.prepare_archive().await.unwrap();
+        assert_eq!(archive.entries.len(), 1);
+        assert!(!team.is_closed());
+        assert!(team.is_worker_alive());
+        assert!(
+            team.task(
+                Participant::Lead,
+                TaskPhase::Started,
+                None,
+                "while frozen",
+                ""
+            )
+            .is_err()
+        );
+        team.abort_archive().unwrap();
+        team.receive(
+            team.task(
+                Participant::Lead,
+                TaskPhase::Succeeded,
+                None,
+                "after abort",
+                "",
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let archive = team.prepare_archive().await.unwrap();
+        assert_eq!(archive.entries.len(), 2);
+        team.commit_shutdown().await.unwrap();
+        assert!(team.is_closed());
+        assert!(!team.is_worker_alive());
+    }
+
+    #[tokio::test]
+    async fn explicit_shutdown_stops_a_cached_runtime_without_an_archive() {
+        let (team, _) = TeamRuntime::new(None);
+        let cached = Arc::clone(&team);
+        team.shutdown().await.unwrap();
+        assert!(cached.is_closed());
+        assert!(!cached.is_worker_alive());
+        assert!(
+            cached
+                .task(Participant::Lead, TaskPhase::Started, None, "late", "")
+                .is_err()
+        );
+        cached.shutdown().await.unwrap();
+    }
 
     #[tokio::test]
     async fn tool_start_is_transient_not_discussion() {

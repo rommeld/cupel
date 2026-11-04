@@ -270,6 +270,7 @@ pub struct SessionRecorder {
     header: TranscriptHeader,
     path: Option<PathBuf>,
     file: Option<std::fs::File>,
+    persistence_error: Option<String>,
     hooks: HookRunner,
     started: bool,
 }
@@ -301,6 +302,7 @@ impl SessionRecorder {
             },
             path,
             file: None,
+            persistence_error: None,
             hooks: HookRunner::new(hook_roots, session_id, &session_ref, cwd),
             started: false,
         }
@@ -367,6 +369,48 @@ impl SessionRecorder {
         }
     }
 
+    /// Commit one complete lifecycle record before releasing its resources.
+    /// Deliberately unsaved sessions succeed in memory; failed persistence does not.
+    pub fn record_checked(&mut self, message: &AgentMessage) -> Result<(), String> {
+        if let Some(problem) = &self.persistence_error {
+            return Err(problem.clone());
+        }
+        let persistent = self.path.is_some();
+        self.ensure_file();
+        if let Some(problem) = &self.persistence_error {
+            return Err(problem.clone());
+        }
+        if !persistent {
+            return Ok(());
+        }
+        let file = self
+            .file
+            .as_mut()
+            .ok_or("transcript persistence is unavailable")?;
+        let previous_len = file
+            .metadata()
+            .map_err(|error| format!("cannot inspect transcript before commit: {error}"))?
+            .len();
+        let mut line = serde_json::to_vec(message)
+            .map_err(|error| format!("cannot encode lifecycle record: {error}"))?;
+        line.push(b'\n');
+        if let Err(error) = file
+            .write_all(&line)
+            .and_then(|()| file.flush())
+            .and_then(|()| file.sync_data())
+        {
+            let original = format!("cannot commit transcript lifecycle record: {error}");
+            if let Err(rollback) = file.set_len(previous_len).and_then(|()| file.sync_data()) {
+                let problem = format!("{original}; cannot restore transcript prefix: {rollback}");
+                self.persistence_error = Some(problem.clone());
+                self.file = None;
+                return Err(problem);
+            }
+            return Err(original);
+        }
+        Ok(())
+    }
+
     /// The agent run finished, fire `stop` without blocking the frontend.
     pub fn on_agent_end(&mut self) {
         self.hooks.fire_background(HookEvent::Stop);
@@ -418,6 +462,8 @@ impl SessionRecorder {
                     path = %path.display(),
                     "cannot open transcript (persistence disabled for this session): {e}"
                 );
+                self.persistence_error =
+                    Some(format!("cannot open transcript {}: {e}", path.display()));
                 // Drop the path so we warn once, not per message.
                 self.path = None;
             }
@@ -453,6 +499,59 @@ mod tests {
             error_kind: None,
             timestamp: now_ms(),
         }))
+    }
+
+    #[test]
+    fn checked_lifecycle_record_is_one_durable_replayable_message() {
+        let home = temp_root("checked-lifecycle");
+        let mut recorder = SessionRecorder::new(Some(home.clone()), &home, "checked", "mock");
+        let transition = AgentMessage::Custom {
+            kind: "cupel.team-transition".into(),
+            payload: serde_json::json!({"members":[],"archive":{"entries":[]},"checkpoint":{}}),
+            timestamp: 1,
+        };
+        recorder.record_checked(&transition).unwrap();
+        let (_, messages) = load_transcript(recorder.transcript().unwrap()).unwrap();
+        assert_eq!(messages, vec![transition]);
+    }
+
+    #[test]
+    fn checked_lifecycle_record_distinguishes_unsaved_and_failed_persistence() {
+        let home = temp_root("checked-disabled");
+        let mut unsaved = SessionRecorder::new(None, &home, "unsaved", "mock");
+        let message = AgentMessage::user_text("transition");
+        assert!(unsaved.record_checked(&message).is_ok());
+        let mut failed = SessionRecorder::new(Some(home.clone()), &home, "failed", "mock");
+        std::fs::create_dir_all(failed.transcript().unwrap()).unwrap();
+        assert!(failed.record_checked(&message).is_err());
+        assert!(failed.transcript().is_none());
+        assert!(
+            failed.record_checked(&message).is_err(),
+            "a failed save must not become an intentional unsaved session"
+        );
+    }
+
+    #[test]
+    fn checked_append_failure_keeps_the_valid_prefix_and_blocks_later_commits() {
+        let home = temp_root("checked-prefix");
+        let mut recorder = SessionRecorder::new(Some(home.clone()), &home, "prefix", "mock");
+        recorder
+            .record_checked(&AgentMessage::user_text("kept"))
+            .unwrap();
+        let path = recorder.transcript().unwrap().to_path_buf();
+        let prefix = std::fs::read(&path).unwrap();
+        recorder.file = Some(std::fs::File::open(&path).unwrap());
+        assert!(
+            recorder
+                .record_checked(&AgentMessage::user_text("rejected"))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), prefix);
+        assert!(
+            recorder
+                .record_checked(&AgentMessage::user_text("still rejected"))
+                .is_err()
+        );
     }
 
     fn recorder(home: &Path, cwd: &Path) -> SessionRecorder {
