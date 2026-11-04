@@ -161,9 +161,6 @@ async fn event_loop(
     let mut app = app::App::new(agent, meta, recorder);
     app.questions = questions;
     app.initialize_team(initialization);
-    if let Err(problem) = app.crew.recover_usage().await {
-        app.notice(problem);
-    }
     if let Some(startup) = startup {
         app.apply_startup(startup);
     }
@@ -182,6 +179,8 @@ async fn event_loop(
     let result = loop {
         // Startup prompts use the same hooks as typed prompts, before blocking.
         let app = sessions.active_mut();
+        app.finish_mode_change().await;
+        app.recover_collaboration_usage().await;
         if let Some(action) = app.pending_task_action.take() {
             app.apply_task_action(action).await;
         }
@@ -189,6 +188,10 @@ async fn event_loop(
             app.read_team_conversation(after).await;
         }
         if let Some(prompt) = app.pending_prompt.take() {
+            if !app.team.is_empty() {
+                app.activate_collaboration();
+                app.recover_collaboration_usage().await;
+            }
             app.recorder.before_prompt(&prompt).await;
             app.start_run(&prompt);
         }
@@ -292,6 +295,10 @@ async fn event_loop(
         // the prompt path hooks are awaited first, so a pending `stop` hook
         // from the previous run is guaranteed to have finished.
         if let Some(prompt) = app.pending_prompt.take() {
+            if !app.team.is_empty() {
+                app.activate_collaboration();
+                app.recover_collaboration_usage().await;
+            }
             app.recorder.before_prompt(&prompt).await;
             app.start_run(&prompt);
         }

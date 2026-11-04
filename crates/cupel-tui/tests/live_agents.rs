@@ -3,6 +3,18 @@
 
 #[cfg(test)]
 mod tests {
+    fn active(app: &App) -> &cupel_tui::app::ActiveCollaboration {
+        app.collaboration
+            .as_ref()
+            .expect("test requires active collaboration")
+    }
+
+    fn is_built(app: &App, name: &str) -> bool {
+        app.collaboration
+            .as_ref()
+            .is_some_and(|active| active.crew.is_built(name))
+    }
+
     use std::io::Write as _;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -133,7 +145,7 @@ mod tests {
             finished.is_ok(),
             "live run did not finish:\n{}\n{}",
             transcript(app),
-            app.crew.scheduler().describe()
+            active(app).crew.scheduler().describe()
         );
         assert_ne!(app.last_answer, Status::Failed, "{}", transcript(app));
     }
@@ -336,8 +348,8 @@ mod tests {
         }
         assert!(app.meta.warnings.is_empty());
         submit(&mut app, "/team");
-        assert!(!app.crew.is_built("map-reader"));
-        assert!(!app.crew.is_built("diff-auditor"));
+        assert!(!is_built(&app, "map-reader"));
+        assert!(!is_built(&app, "diff-auditor"));
         println!("PASS lazy startup roster");
 
         let mut typo = settings.clone();
@@ -347,7 +359,7 @@ mod tests {
         assert!(transcript(&app).contains("ignoring agent map-reader: unknown model"));
         std::fs::write(&settings_path, settings.to_string()).unwrap();
         app = app.hot_reload(ReloadTarget::Current).await;
-        assert!(app.crew.spec("map-reader").is_some());
+        assert!(app.catalog.spec("map-reader").is_some());
         println!("PASS typo and hot reload");
 
         submit(
@@ -356,7 +368,7 @@ mod tests {
         );
         idle(&mut app).await;
         assert!(transcript(&app).contains("LEDGER42"));
-        assert_eq!(app.crew.spend_of("map-reader").calls, 1);
+        assert_eq!(active(&app).crew.spend_of("map-reader").calls, 1);
         assert_eq!(app.totals.input, 0);
         submit(
             &mut app,
@@ -383,7 +395,7 @@ mod tests {
         );
         idle(&mut app).await;
         assert!(app.armed.is_none());
-        assert_eq!(app.crew.spend_of("map-reader").calls, 2);
+        assert_eq!(active(&app).crew.spend_of("map-reader").calls, 2);
         println!("PASS one-shot arming and Esc");
 
         submit(&mut app, "/team add map-reader diff-auditor");
@@ -394,7 +406,7 @@ mod tests {
         );
         idle(&mut app).await;
         assert!(
-            app.crew.spend_of("map-reader").calls >= 3,
+            active(&app).crew.spend_of("map-reader").calls >= 3,
             "lead did not delegate: {}",
             transcript(&app)
         );
@@ -411,7 +423,7 @@ mod tests {
                 .trim(),
             "verified"
         );
-        assert!(app.crew.spend_of("diff-auditor").calls >= 1);
+        assert!(active(&app).crew.spend_of("diff-auditor").calls >= 1);
         println!("PASS model-initiated writer and observed edits");
 
         submit(
@@ -445,13 +457,13 @@ mod tests {
             "pub const TRANSCRIPT: &str = \"LEDGER43.jsonl\";\n",
         )
         .unwrap();
-        let calls = app.crew.spend_of("diff-auditor").calls;
+        let calls = active(&app).crew.spend_of("diff-auditor").calls;
         submit(&mut app, "/review --diff");
         idle(&mut app).await;
-        assert_eq!(app.crew.spend_of("diff-auditor").calls, calls + 1);
+        assert_eq!(active(&app).crew.spend_of("diff-auditor").calls, calls + 1);
         println!("PASS explicit review routing");
 
-        let spend = app.crew.total_spend();
+        let spend = app.helper_total_spend();
         let path = cupel_coding_agent::session::sessions_dir(Some(&home), &cwd)
             .unwrap()
             .join("live-m8.jsonl");
@@ -478,8 +490,8 @@ mod tests {
         );
         resumed.initialize_team(TeamInitialization::Restore);
         assert_eq!(resumed.team.len(), 2);
-        assert!(!resumed.crew.is_built("diff-auditor"));
-        assert_eq!(resumed.crew.total_spend(), spend);
+        assert!(!is_built(&resumed, "diff-auditor"));
+        assert_eq!(resumed.helper_total_spend(), spend);
         assert!(path.with_extension("").join("map-reader.jsonl").exists());
         assert!(path.with_extension("").join("diff-auditor.jsonl").exists());
         submit(
@@ -493,7 +505,7 @@ mod tests {
         println!("PASS lazy resume, helper memory, team and spend restoration");
         expanded(&mut resumed, &settings_path, &settings, &cwd).await;
         let total = resumed.session_totals();
-        let helpers = resumed.crew.total_spend();
+        let helpers = resumed.helper_total_spend();
         println!(
             "Fireworks helpers: {} calls, {} input, {} output, {} cached, ${:.6}",
             helpers.calls, helpers.input, helpers.output, helpers.cache_read, helpers.cost
@@ -504,8 +516,8 @@ mod tests {
         );
         let fresh = resumed.hot_reload(ReloadTarget::New).await;
         assert!(
-            fresh
-                .team_runtime
+            active(&fresh)
+                .runtime
                 .inspect(None)
                 .await
                 .unwrap()
@@ -529,14 +541,14 @@ mod tests {
         use cupel_core::types::{Message, ToolResultContent};
         let original = std::fs::read(cwd.join("src/lib.rs")).unwrap();
         submit(app, "/team add map-reader diff-auditor change-lens");
-        app.team_runtime.post(Participant::Lead,
+        active(app).runtime.post(Participant::Lead,
             "User constraint for this task: preserve src/lib.rs byte-for-byte. The required result marker is SHARED_19; carry it through the final answer and result.json.".into(), None).await.unwrap();
         submit(
             app,
             "/agent diff-auditor Use ask to assign change-lens this review: read src/lib.rs and return a JSON object with status REVIEW_OK and transcript equal to the TRANSCRIPT string literal's contents (exclude the Rust declaration and quotation marks); do not change files. After that child succeeds, create result.json with exactly two fields: transcript (copy the child's transcript field) and marker (the required marker from shared discussion). Preserve src/lib.rs byte-for-byte. Finish with a brief answer containing the value and marker. Do not substitute your own review for the child.",
         );
         idle(app).await;
-        let nodes = app.crew.scheduler().snapshots();
+        let nodes = active(app).crew.scheduler().snapshots();
         assert!(
             nodes.iter().any(|task| task.parent.is_some()
                 && task.actor == Participant::Helper("change-lens".into())
@@ -636,20 +648,20 @@ mod tests {
         settings["agents"]["diff-auditor"]["remember"] = false.into();
         reload(app, settings_path, &settings).await;
         submit(app, "/team roles");
-        assert!(!app.crew.is_built("diff-auditor"));
-        assert!(!app.crew.is_built("map-reader"));
+        assert!(!is_built(app, "diff-auditor"));
+        assert!(!is_built(app, "map-reader"));
         assert!(transcript(app).contains("review: diff-auditor"));
         submit(app, "/review src/lib.rs");
         idle(app).await;
-        assert!(app.crew.scheduler().snapshots().iter().any(|task| {
+        assert!(active(app).crew.scheduler().snapshots().iter().any(|task| {
             task.selection.as_ref().is_some_and(|selection| {
                 selection.role == Role::Review && selection.agent == "diff-auditor"
             })
         }));
-        let calls = app.crew.spend_of("diff-auditor").calls;
+        let calls = active(app).crew.spend_of("diff-auditor").calls;
         app.apply_startup(cupel_tui::startup::StartupCommand::Review);
         idle(app).await;
-        assert_eq!(app.crew.spend_of("diff-auditor").calls, calls + 1);
+        assert_eq!(active(app).crew.spend_of("diff-auditor").calls, calls + 1);
         println!("PASS discovered /review and typed startup --review with no explicit mapping");
 
         settings["agents"]["change-lens"] = serde_json::json!({"provider":"fireworks","model":"accounts/fireworks/models/minimax-m3p1-flash","thinkingLevel":"off","description":"Reviews source changes and reports correctness findings.","prompt":"Live verification fixture: after reading the requested source file, always publish exactly one team_post with text REVIEW_OK before returning your answer. Never edit files.","maxTurns":4,"remember":false});
@@ -661,7 +673,7 @@ mod tests {
             "/agent diff-auditor This is an end-to-end teamwork test. First use team_post to post the question 'Please review src/lib.rs'. Then use ask with role=review to assign this exact task to another teammate: 'Read src/lib.rs. Use team_post to post REVIEW_OK with a concise finding, then return REVIEW_OK. Do not edit files.' Finally integrate the child's answer and post your conclusion using team_post. Do not substitute your own review for the child call.",
         );
         idle(app).await;
-        let nodes = app.crew.scheduler().snapshots();
+        let nodes = active(app).crew.scheduler().snapshots();
         assert!(
             nodes.iter().any(|task| task.parent.is_some()
                 && task.actor == Participant::Helper("change-lens".into())
@@ -678,7 +690,7 @@ mod tests {
                 && task.summary.contains("REVIEW_OK")),
             "the actual child reviewer must succeed and return REVIEW_OK, not merely mention it in an error"
         );
-        let page = app.team_runtime.inspect(None).await.unwrap();
+        let page = active(app).runtime.inspect(None).await.unwrap();
         for name in ["diff-auditor", "change-lens"] {
             assert!(
                 page.entries
@@ -687,7 +699,7 @@ mod tests {
                         && matches!(&entry.body, TeamBody::Post { .. })),
                 "missing attributed post for {name}: {}\n{}",
                 transcript(app),
-                app.crew.scheduler().describe()
+                active(app).crew.scheduler().describe()
             );
         }
         assert!(transcript(app).contains("REVIEW_OK"));
@@ -711,7 +723,7 @@ mod tests {
 
         // Force same specialist concurrency directly through the real task tools,
         // rather than depending on a model deciding to emit parallel tool calls.
-        app.crew.lead_context().set(RunContext::root(
+        active(app).crew.lead_context().set(RunContext::root(
             Participant::Lead,
             AccessScope::CanWrite,
             "parallel specialist verification".into(),
@@ -731,7 +743,7 @@ mod tests {
         }
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let tasks = app.crew.scheduler().snapshots();
+                let tasks = active(app).crew.scheduler().snapshots();
                 let same = tasks
                     .iter()
                     .filter(|task| task.actor == Participant::Helper("change-lens".into()))
@@ -749,9 +761,10 @@ mod tests {
         while let Some(result) = jobs.join_next().await {
             result.unwrap();
         }
-        let run = app.crew.lead_context().current().unwrap();
-        let root = run.scope(&app.crew.scheduler()).await.unwrap();
-        app.crew
+        let run = active(app).crew.lead_context().current().unwrap();
+        let root = run.scope(&active(app).crew.scheduler()).await.unwrap();
+        active(app)
+            .crew
             .scheduler()
             .finish(
                 &root,
@@ -760,7 +773,7 @@ mod tests {
                 cupel_coding_agent::crew::Changes::ReadOnly,
             )
             .await;
-        app.crew.lead_context().clear();
+        active(app).crew.lead_context().clear();
         println!("PASS concurrent real-provider branches queue for one busy specialist");
 
         submit(
@@ -773,7 +786,7 @@ mod tests {
                     app.is_running(),
                     "nested fixture ended without starting its writer:\n{}\n{}",
                     transcript(app),
-                    app.crew.scheduler().describe()
+                    active(app).crew.scheduler().describe()
                 );
                 tokio::select! {
                     event=app.next_event()=>app.on_event(event).await,
@@ -783,7 +796,7 @@ mod tests {
         })
         .await
         .expect("nested writer did not start");
-        let tasks = app.crew.scheduler().snapshots();
+        let tasks = active(app).crew.scheduler().snapshots();
         let child = tasks
             .iter()
             .find(|task| {
@@ -823,7 +836,8 @@ mod tests {
             "nested shell process group survived cancellation"
         );
         assert!(
-            app.crew
+            active(app)
+                .crew
                 .scheduler()
                 .snapshots()
                 .iter()
@@ -848,18 +862,19 @@ mod tests {
         assert!(app.helper.is_none());
         assert!(app.pending_prompt.take().is_some());
         assert!(transcript(app).contains("invalid explicit"));
-        let spent = app.crew.total_spend();
-        let entries = app.team_runtime.inspect(None).await.unwrap().latest;
+        let spent = app.helper_total_spend();
+        let entries = active(app).runtime.inspect(None).await.unwrap().latest;
         reload(app, settings_path, &settings).await;
-        app.crew.recover_usage().await.unwrap();
-        assert_eq!(app.crew.total_spend(), spent);
+        active(app).crew.recover_usage().await.unwrap();
+        assert_eq!(app.helper_total_spend(), spent);
         assert_eq!(
-            app.team_runtime.inspect(None).await.unwrap().latest,
+            active(app).runtime.inspect(None).await.unwrap().latest,
             entries
         );
         assert!(!app.team.contains("diff-auditor"));
         assert!(
-            app.crew
+            active(app)
+                .crew
                 .scheduler()
                 .snapshots()
                 .iter()

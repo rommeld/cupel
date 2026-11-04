@@ -2,6 +2,18 @@
 
 #[cfg(test)]
 mod tests {
+    fn active(app: &App) -> &cupel_tui::app::ActiveCollaboration {
+        app.collaboration
+            .as_ref()
+            .expect("test requires active collaboration")
+    }
+
+    fn is_built(app: &App, name: &str) -> bool {
+        app.collaboration
+            .as_ref()
+            .is_some_and(|active| active.crew.is_built(name))
+    }
+
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -106,7 +118,11 @@ mod tests {
         }
 
         fn app(&self, registry: Arc<Registry>, mock: bool) -> App {
-            let settings: Settings = serde_json::from_str(CONFIG).unwrap();
+            let mut settings: Settings = serde_json::from_str(CONFIG).unwrap();
+            // This workflow explicitly requires both roles, regardless of local defaults.
+            for name in ["developer", "reviewer"] {
+                settings.agents.get_mut(name).unwrap().team = Some(true);
+            }
             let mut models = cupel_core::catalog::builtin_models();
             if mock {
                 for model in &mut models {
@@ -278,6 +294,7 @@ mod tests {
     }
 
     async fn delegate(app: &mut App, role: Role, task: &str, context: &str) -> String {
+        app.activate_collaboration();
         let tool = Arc::clone(
             app.agent
                 .tools()
@@ -285,7 +302,7 @@ mod tests {
                 .find(|tool| tool.name() == "delegate")
                 .unwrap(),
         );
-        app.crew.lead_context().set(RunContext::root(
+        active(app).crew.lead_context().set(RunContext::root(
             Participant::Lead,
             AccessScope::CanWrite,
             task.into(),
@@ -300,9 +317,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let run = app.crew.lead_context().current().unwrap();
-        let root = run.scope(&app.crew.scheduler()).await.unwrap();
-        app.crew
+        let run = active(app).crew.lead_context().current().unwrap();
+        let root = run.scope(&active(app).crew.scheduler()).await.unwrap();
+        active(app)
+            .crew
             .scheduler()
             .finish(
                 &root,
@@ -311,7 +329,7 @@ mod tests {
                 Changes::ReadOnly,
             )
             .await;
-        app.crew.lead_context().clear();
+        active(app).crew.lead_context().clear();
         result
             .content
             .iter()
@@ -407,13 +425,19 @@ mod tests {
         let mut registry = Registry::new();
         registry.register(Arc::clone(&script) as Arc<dyn Provider>);
         let mut app = fixture.app(Arc::new(registry), true);
-        assert_eq!(app.crew.members().len(), 2);
-        assert!(!app.crew.is_built("developer") && !app.crew.is_built("reviewer"));
+        assert!(
+            app.collaboration.is_none(),
+            "configured metadata stays lazy"
+        );
+        assert_eq!(app.team.len(), 2);
+        app.activate_collaboration();
+        assert!(!is_built(&app, "developer") && !is_built(&app, "reviewer"));
         for (role, name) in [(Role::Implement, "developer"), (Role::Review, "reviewer")] {
             assert_eq!(
-                app.crew
+                active(&app)
+                    .crew
                     .roles()
-                    .resolve(role, &app.crew.members(), AccessFilter::Writer)
+                    .resolve(role, &active(&app).crew.members(), AccessFilter::Writer)
                     .selection(role)
                     .unwrap()
                     .agent,
@@ -549,7 +573,8 @@ mod tests {
                     .contains("PRIVATE_DEVELOPER_MARKER"))
         );
         assert!(
-            app.crew
+            active(&app)
+                .crew
                 .scheduler()
                 .snapshots()
                 .iter()
@@ -752,7 +777,7 @@ mod tests {
         "Read the final independent approval and return the final task status and evidence. No further code edits are needed.",
         &format!("Report: {report}; required fixes and independent re-review are complete; Cargo checks passed.")).await;
         assert!(result.contains("COMPLETE"), "{result}");
-        let usage = app.crew.total_spend();
+        let usage = app.helper_total_spend();
         println!(
             "PASS live correction, independent re-review and final completion: {} helper calls, {} input, {} output, {} cached, ${:.6}",
             usage.calls, usage.input, usage.output, usage.cache_read, usage.cost
