@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.9] - 2026-11-04
+
+- feat(catalog): add Particle-1 and GLM 5.3 FlashX Legal for OpenRouter
+- fix(catalog): refresh model pricing, token limits, and reasoning metadata; remove Laguna S 2.1
+- test(catalog): verify new reasoning scales and provider-specific token limits
+
 ## [v0.34.8] - 2026-11-04
 
 - feat(agent): keep solo workflows free of team services and activate collaboration only when used
