@@ -274,7 +274,7 @@ mod tests {
                 "accounts/fireworks/models/qwen3p8-2p4t-a95b",
                 "qwen/qwen3.8-2.4t-a95b",
                 (262_144, 131_072),
-                (1_048_576, 909_000),
+                (1_048_576, 131_072),
                 vec![InputModality::Text],
                 [
                     serde_json::json!({"high": null, "max": null, "minimal": null, "off": "none"}),
@@ -355,6 +355,46 @@ mod tests {
             .expect("Qwen3 Coder Next");
         assert!(!model.reasoning);
         assert!(model.thinking_level_map.is_none());
+    }
+
+    #[test]
+    fn latest_openrouter_models_keep_their_native_reasoning_scales() {
+        use crate::types::InputModality;
+
+        let models = builtin_models();
+        for (id, map) in [
+            ("particle-ai/particle-1", serde_json::json!({"off": "none"})),
+            (
+                "z-ai/glm-5.3-flashx-legal",
+                serde_json::json!({
+                    "off": null, "minimal": null, "medium": null, "xhigh": null,
+                }),
+            ),
+        ] {
+            let model = models.iter().find(|model| model.id == id).expect(id);
+            assert_eq!(model.provider.as_str(), Provider::OPENROUTER, "{id}");
+            assert!(model.reasoning, "{id}");
+            assert_eq!(
+                model.input,
+                vec![InputModality::Text, InputModality::Image],
+                "{id}"
+            );
+            assert_eq!(
+                (model.context_window, model.max_tokens),
+                (1_048_576, 131_072),
+                "{id}"
+            );
+            assert_eq!(
+                serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+                map,
+                "{id}"
+            );
+        }
+        assert!(
+            !models
+                .iter()
+                .any(|model| model.id == "poolside/laguna-s-2.1")
+        );
     }
 
     #[test]

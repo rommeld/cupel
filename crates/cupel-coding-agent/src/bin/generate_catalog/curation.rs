@@ -371,6 +371,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("z-ai/glm-5.3-prime", Thinking::FromEffort),
             openrouter("z-ai/glm-5.3-flash", Thinking::FromEffort),
             openrouter("z-ai/glm-5.3-flashx", Thinking::FromEffort),
+            openrouter("z-ai/glm-5.3-flashx-legal", Thinking::FromEffort),
             openrouter("z-ai/glm-5v-turbo", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-pro", Thinking::FromEffort),
             openrouter("deepseek/deepseek-v4-pro-0813", Thinking::FromEffort),
@@ -416,7 +417,6 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("thinkingmachines/inkling:free", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling-small", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling-small:free", Thinking::FromEffort),
-            openrouter("poolside/laguna-s-2.1", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-pro", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-pro-ultraspeed", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-flash", Thinking::FromEffort),
@@ -473,6 +473,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter_tiered("bytedance-seed/seed-2.0-lite"),
             openrouter_tiered("bytedance-seed/seed-2.0-mini"),
             openrouter("perceptron/perceptron-mk1.5", Thinking::FromEffort),
+            openrouter("particle-ai/particle-1", Thinking::FromEffort),
         ],
     },
 ];
