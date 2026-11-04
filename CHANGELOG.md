@@ -3,6 +3,13 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.8] - 2026-11-04
+
+- feat(agent): keep solo workflows free of team services and activate collaboration only when used
+- fix(team): archive shared evidence and preserve helper memory and usage when returning to solo mode
+- test(agent): cover solo/team lifecycle and matched tool-parallelism benchmarks
+- chore(deps): update ACP, AWS Smithy types, ignore, Tokio Util, and unicode-width
+
 ## [v0.34.7] - 2026-11-01
 
 - fix(tui): use Ctrl+Enter for prompt newlines and Alt+Enter for agent steering
