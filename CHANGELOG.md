@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.9] - 2026-11-04
+
+- chore: bump the patch version; application code and CI workflows are unchanged
+
 ## [v0.34.8] - 2026-11-04
 
 - feat(agent): keep solo workflows free of team services and activate collaboration only when used
