@@ -1,6 +1,91 @@
 {
   "amazon-bedrock": {
     "models": {
+      "global.anthropic.claude-haiku-5-5": {
+        "cost": {
+          "cache_read": 0.01,
+          "cache_write": 0.125,
+          "input": 0.1,
+          "output": 0.5,
+          "tiers": [
+            {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "input": 0.5,
+              "output": 2.5,
+              "tier": {
+                "size": 100000
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "Claude Haiku 5.5 (Global)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "global.anthropic.claude-opus-5-5": {
+        "cost": {
+          "cache_read": 0.2,
+          "cache_write": 5.0,
+          "input": 4.0,
+          "output": 20.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "Claude Opus 5.5 (Global)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
       "global.anthropic.claude-sonnet-5-5": {
         "cost": {
           "cache_read": 0.1,
@@ -109,6 +194,45 @@
         ],
         "temperature": false
       },
+      "us.anthropic.claude-opus-5": {
+        "cost": {
+          "cache_read": 0.55,
+          "cache_write": 6.875,
+          "input": 5.5,
+          "output": 27.5,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "Claude Opus 5 (US)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
       "us.anthropic.claude-sonnet-5": {
         "cost": {
           "cache_read": 0.22,
@@ -135,6 +259,42 @@
           {
             "type": "toggle"
           },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "us.anthropic.claude-sonnet-5-5": {
+        "cost": {
+          "cache_read": 0.11,
+          "cache_write": 2.75,
+          "input": 2.2,
+          "output": 11.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "Claude Sonnet 5.5 (US)",
+        "reasoning": true,
+        "reasoning_options": [
           {
             "type": "effort",
             "values": [
@@ -869,6 +1029,78 @@
         ],
         "temperature": true
       },
+      "accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot": {
+        "cost": {
+          "cache_read": 0.0042,
+          "cache_write": 0.0,
+          "input": 0.21,
+          "output": 0.84,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 384000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "DeepSeek V4.1 Flash 1017 Spot",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "accounts/fireworks/routers/deepseek-v4p1-flash-spot": {
+        "cost": {
+          "cache_read": 0.0042,
+          "cache_write": 0.0,
+          "input": 0.21,
+          "output": 0.84,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 384000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "DeepSeek V4.1 Flash Spot",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "accounts/fireworks/routers/glm-5p3-fast": {
         "cost": {
           "cache_read": 0.39,
@@ -888,6 +1120,38 @@
           ]
         },
         "name": "GLM 5.3 Fast",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "accounts/fireworks/routers/glm-5p3-spot": {
+        "cost": {
+          "cache_read": 0.182,
+          "cache_write": 0.0,
+          "input": 0.98,
+          "output": 3.08,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048573,
+          "input": null,
+          "output": 262144
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "GLM 5.3 Spot",
         "reasoning": true,
         "reasoning_options": [
           {
@@ -921,6 +1185,46 @@
           ]
         },
         "name": "Kimi K3 Fast",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
+          {
+            "type": "budget_tokens"
+          }
+        ],
+        "temperature": false
+      },
+      "accounts/fireworks/routers/kimi-k3-spot": {
+        "cost": {
+          "cache_read": 0.21,
+          "cache_write": 0.0,
+          "input": 2.1,
+          "output": 10.5,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Kimi K3 Spot",
         "reasoning": true,
         "reasoning_options": [
           {
@@ -1691,7 +1995,7 @@
         "cost": {
           "cache_read": 0.035,
           "cache_write": 0.0,
-          "input": 0.059,
+          "input": 0.0553,
           "output": 0.3,
           "tiers": []
         },
@@ -1722,16 +2026,16 @@
       },
       "deepseek/deepseek-v4-pro": {
         "cost": {
-          "cache_read": 0.135,
+          "cache_read": 0.073501,
           "cache_write": 0.0,
-          "input": 1.6,
-          "output": 3.2,
+          "input": 0.882006,
+          "output": 1.764012,
           "tiers": []
         },
         "limit": {
           "context": 1048576,
           "input": null,
-          "output": 393216
+          "output": 384000
         },
         "modalities": {
           "input": [
@@ -1754,10 +2058,10 @@
       },
       "deepseek/deepseek-v4-pro-0813": {
         "cost": {
-          "cache_read": 0.11,
+          "cache_read": 0.111,
           "cache_write": 0.0,
-          "input": 0.115,
-          "output": 4.0,
+          "input": 0.1165,
+          "output": 4.66,
           "tiers": []
         },
         "limit": {
@@ -2029,16 +2333,16 @@
       },
       "google/gemma-4-26b-a4b-it": {
         "cost": {
-          "cache_read": 0.038,
+          "cache_read": 0.05,
           "cache_write": 0.0,
-          "input": 0.077,
-          "output": 0.23,
+          "input": 0.09,
+          "output": 0.3,
           "tiers": []
         },
         "limit": {
           "context": 262144,
           "input": null,
-          "output": 32768
+          "output": 235929
         },
         "modalities": {
           "input": [
@@ -2148,7 +2452,7 @@
           "cache_read": 0.015,
           "cache_write": 0.0,
           "input": 0.06,
-          "output": 0.15,
+          "output": 0.25,
           "tiers": []
         },
         "limit": {
@@ -2580,10 +2884,10 @@
       },
       "minimax/minimax-m3.1-flash": {
         "cost": {
-          "cache_read": 0.0075,
+          "cache_read": 0.015,
           "cache_write": 0.0,
-          "input": 0.075,
-          "output": 0.3,
+          "input": 0.15,
+          "output": 0.6,
           "tiers": []
         },
         "limit": {
@@ -2714,7 +3018,7 @@
       },
       "moonshotai/kimi-k2.7-code": {
         "cost": {
-          "cache_read": 0.15,
+          "cache_read": 0.16,
           "cache_write": 0.0,
           "input": 0.6,
           "output": 3.5,
@@ -2738,10 +3042,10 @@
       },
       "moonshotai/kimi-k3": {
         "cost": {
-          "cache_read": 0.19,
+          "cache_read": 0.182,
           "cache_write": 0.0,
-          "input": 0.2,
-          "output": 15.0,
+          "input": 0.192,
+          "output": 16.0,
           "tiers": []
         },
         "limit": {
@@ -2804,7 +3108,7 @@
             ]
           }
         ],
-        "temperature": false
+        "temperature": true
       },
       "nex-agi/nex-n2.5-pro": {
         "cost": {
@@ -3007,7 +3311,7 @@
         "limit": {
           "context": 1048576,
           "input": null,
-          "output": 235929
+          "output": 943718
         },
         "modalities": {
           "input": [
@@ -3944,16 +4248,16 @@
       },
       "reflection/beam-1.0-501b-a23b": {
         "cost": {
-          "cache_read": 0.05,
+          "cache_read": 0.04,
           "cache_write": 0.0,
-          "input": 0.25,
+          "input": 0.3,
           "output": 1.0,
           "tiers": []
         },
         "limit": {
           "context": 1048576,
           "input": null,
-          "output": 131072
+          "output": 943718
         },
         "modalities": {
           "input": [
@@ -3974,6 +4278,29 @@
             ]
           }
         ],
+        "temperature": true
+      },
+      "ricursiveai/ripple-65b-preview": {
+        "cost": {
+          "cache_read": 0.05,
+          "cache_write": 0.0,
+          "input": 0.2,
+          "output": 0.6,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "ricursiveAI/Ripple-65B-Preview",
+        "reasoning": false,
+        "reasoning_options": [],
         "temperature": true
       },
       "sakana/fugu-max": {
@@ -4087,6 +4414,45 @@
         ],
         "temperature": false
       },
+      "stealth/crouton-alpha": {
+        "cost": {
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "input": 0.0,
+          "output": 0.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "pdf",
+            "audio"
+          ]
+        },
+        "name": "Crouton Alpha",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "stepfun/step-3.7-flash": {
         "cost": {
           "cache_read": 0.04,
@@ -4155,12 +4521,45 @@
         ],
         "temperature": true
       },
+      "tencent/hy4": {
+        "cost": {
+          "cache_read": 0.021,
+          "cache_write": 0.0,
+          "input": 0.417,
+          "output": 1.2505,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": 983010,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Hy4",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "tencent/hy4-preview": {
         "cost": {
-          "cache_read": 0.0378,
+          "cache_read": 0.042,
           "cache_write": 0.0,
-          "input": 0.7506,
-          "output": 2.2509,
+          "input": 0.834,
+          "output": 2.501,
           "tiers": []
         },
         "limit": {
@@ -4245,80 +4644,6 @@
           ]
         },
         "name": "Inkling Small",
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "none",
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "max"
-            ]
-          }
-        ],
-        "temperature": true
-      },
-      "thinkingmachines/inkling-small:free": {
-        "cost": {
-          "cache_read": 0.0,
-          "cache_write": 0.0,
-          "input": 0.0,
-          "output": 0.0,
-          "tiers": []
-        },
-        "limit": {
-          "context": 1048576,
-          "input": null,
-          "output": 262144
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "audio"
-          ]
-        },
-        "name": "Inkling Small (free)",
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "none",
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "max"
-            ]
-          }
-        ],
-        "temperature": true
-      },
-      "thinkingmachines/inkling:free": {
-        "cost": {
-          "cache_read": 0.0,
-          "cache_write": 0.0,
-          "input": 0.0,
-          "output": 0.0,
-          "tiers": []
-        },
-        "limit": {
-          "context": 1048576,
-          "input": null,
-          "output": 262144
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "audio"
-          ]
-        },
-        "name": "Inkling (free)",
         "reasoning": true,
         "reasoning_options": [
           {
@@ -4699,10 +5024,10 @@
       },
       "z-ai/glm-5.3": {
         "cost": {
-          "cache_read": 0.076,
+          "cache_read": 0.0689,
           "cache_write": 0.0,
-          "input": 0.08,
-          "output": 3.6,
+          "input": 0.0699,
+          "output": 1.4,
           "tiers": []
         },
         "limit": {
@@ -4733,14 +5058,14 @@
         "cost": {
           "cache_read": 0.03,
           "cache_write": 0.0,
-          "input": 0.0313,
-          "output": 0.0846,
+          "input": 0.15,
+          "output": 0.5,
           "tiers": []
         },
         "limit": {
           "context": 1048576,
           "input": null,
-          "output": 131072
+          "output": 943717
         },
         "modalities": {
           "input": [
