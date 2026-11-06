@@ -651,7 +651,7 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     });
     let totals = app.session_totals();
     let left = format!(
-        " {} in / {} out / {} cached | ctx {}/{}{window_label} ({percent}%){maximum_segment} | ${:.4}",
+        " {} in · {} out · {} cached | ctx {}/{}{window_label} ({percent}%){maximum_segment} | ${:.4}",
         crate::token_count::format(totals.input),
         crate::token_count::format(totals.output),
         crate::token_count::format(totals.cache_read),
@@ -665,11 +665,11 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     // the wheel currently does. It shares the status row's left margin because
     // a right aligned hint row would sit staggered against it.
     let hints = if app.question.is_some() {
-        " ↑↓ choose · enter answer (typed text wins) · ctrl+enter newline · @ file · esc abort"
+        " ↑↓ choose · enter answer (typed text wins) · ctrl+enter newline · @ file esc abort"
     } else if app.mouse_captured {
-        " enter send · alt+enter steer · ctrl+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+b team · ctrl+t tools · ctrl+y select"
+        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · ctrl+o copy · ctrl+b team · ctrl+t tools · ctrl+y select"
     } else {
-        " enter send · alt+enter steer · ctrl+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+b team · ctrl+t tools · ctrl+y scroll"
+        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · SELECTION MODE · ctrl+b team · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =
@@ -1189,7 +1189,7 @@ pub(crate) mod tests {
                 let screen = draw(&mut app, width, 20);
                 let status_row = screen.lines().nth(18).expect("footer status row");
                 assert!(
-                    status_row.starts_with(" 0 in / 0 out / 0 cached | ctx "),
+                    status_row.starts_with(" 0 in · 0 out · 0 cached | ctx "),
                     "footer must show usage without session key or run status:\n{screen}"
                 );
             }
@@ -1217,6 +1217,26 @@ pub(crate) mod tests {
                     };
                     assert!(hints_row.contains(mouse_hint), "{screen}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn footer_omits_the_separator_after_the_file_hint() {
+        for mouse_captured in [true, false] {
+            for question_open in [false, true] {
+                let mut app = test_app();
+                app.mouse_captured = mouse_captured;
+                let _answer = question_open.then(|| open_question(&mut app));
+                let screen = draw(&mut app, 240, 20);
+                let hints_row = screen.lines().last().expect("hints row");
+                let expected = if question_open {
+                    "@ file esc abort"
+                } else {
+                    "@ file / cmds"
+                };
+                assert!(hints_row.contains(expected), "{screen}");
+                assert!(!hints_row.contains("@ file ·"), "{screen}");
             }
         }
     }
@@ -1945,7 +1965,7 @@ pub(crate) mod tests {
             "model status missing:\n{screen}"
         );
         assert!(
-            screen.contains("0 in / 0 out / 0 cached"),
+            screen.contains("0 in · 0 out · 0 cached"),
             "footer missing:\n{screen}"
         );
     }
@@ -2475,7 +2495,7 @@ pub(crate) mod tests {
         );
         assert!(
             screen.contains(&format!(
-                "12.3k in / 2.8k out / 32.1k cached | ctx 48.2k/{} ({}%) | $0.0000",
+                "12.3k in · 2.8k out · 32.1k cached | ctx 48.2k/{} ({}%) | $0.0000",
                 crate::token_count::format(app.agent.context_window()),
                 48_234 * 100 / app.agent.context_window(),
             )),
@@ -3827,7 +3847,7 @@ pub(crate) mod tests {
                 "─".repeat(usize::from(width)),
                 "model status has its own row above the prompt border"
             );
-            assert!(rows[18].starts_with(" 0 in /"), "{screen}");
+            assert!(rows[18].starts_with(" 0 in ·"), "{screen}");
             assert!(
                 !rows[18].contains("Test Model") && !rows[18].contains("thinking"),
                 "{screen}"
