@@ -3,6 +3,14 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.12] - 2026-11-06
+
+- feat(tui): add compact reasoning disclosures, expanded by default; click headers to toggle individual blocks or use `Ctrl+R` to toggle all
+- fix(tui): preserve reasoning disclosure state while streaming, raw-text copying, and scroll position; resume reasoning expanded
+- style(tui): use upright prose, readable secondary reasoning, and small accented answer labels without changing tool formatting or `Ctrl+T`
+- fix(tui): simplify footer shortcut hints
+- test(tui): cover reasoning disclosures across themes, terminal sizes, streaming, replay, copying, and scrolling
+
 ## [v0.34.11] - 2026-11-06
 
 - refactor(agent): remove helper agents, teams, delegation, and their configuration and UI; retain single-agent parallel tool execution
