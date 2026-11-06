@@ -1,4 +1,5 @@
 use cupel_agent::{Agent, AgentEvent, AgentMessage, AgentOptions};
+use cupel_coding_agent::usage::HistoryUsage;
 use cupel_core::types::{Api, AssistantMessage, Message, Provider, StopReason, Usage};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -116,6 +117,33 @@ async fn usage_opens_a_bordered_table_without_a_conversation_notice() {
         screen.contains("Partial history"),
         "no home is visible, not silently zero: {screen}"
     );
+}
+
+#[tokio::test]
+async fn usage_formats_tokens_like_the_footer_and_costs_to_three_decimals() {
+    let mut app = test_app();
+    record(&mut app, "model", 1_234, StopReason::Stop).await;
+    for totals in app.usage_by_model.models.values_mut() {
+        totals.output = 1_299;
+        totals.cache_read = 999;
+        totals.cost = 1.23456;
+    }
+    open(&mut app);
+    finish_loading(&mut app).await;
+    app.usage_popup.as_mut().unwrap().history = HistoryState::Ready(HistoryUsage::default());
+    let screen = draw(&mut app, 120, 30);
+    let rows: Vec<_> = screen
+        .lines()
+        .filter(|line| line.contains("test/model") || line.contains("TOTAL"))
+        .collect();
+    assert_eq!(rows.len(), 4, "model and total in both sections: {screen}");
+    for row in rows {
+        let columns: Vec<_> = row
+            .trim_matches(|ch: char| ch.is_whitespace() || ch == '│')
+            .split_whitespace()
+            .collect();
+        assert_eq!(&columns[1..], &["1.2k", "1.3k", "999", "$1.235"]);
+    }
 }
 
 #[tokio::test]

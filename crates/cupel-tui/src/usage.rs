@@ -238,10 +238,10 @@ fn append_section(
 
 fn usage_row(label: String, totals: UsageTotals, widths: &mut [u16; 4]) -> Row<'static> {
     let numbers = [
-        totals.input.to_string(),
-        totals.output.to_string(),
-        totals.cache_read.to_string(),
-        format!("${:.4}", totals.cost),
+        crate::token_count::format(totals.input),
+        crate::token_count::format(totals.output),
+        crate::token_count::format(totals.cache_read),
+        format!("${:.3}", totals.cost),
     ];
     for (width, text) in widths.iter_mut().zip(&numbers) {
         *width = (*width).max(u16::try_from(text.len()).unwrap_or(u16::MAX));
