@@ -854,8 +854,8 @@ pub(crate) mod tests {
         });
 
         let task = style_of(&mut app, "the task");
-        assert_eq!(task.fg, Some(Color::White));
-        assert_eq!(task.bg, Some(Color::Indexed(240)));
+        assert_eq!(task.fg, Some(Color::Reset));
+        assert_eq!(task.bg, Some(Color::Reset));
 
         assert_eq!(style_of(&mut app, "pondering").fg, CUPEL.reasoning.fg);
 
@@ -865,7 +865,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn user_markdown_uses_a_gray_surface_without_changing_the_prompt() {
+    fn user_markdown_matches_the_prompt_colors_without_changing_its_source() {
         let mut app = test_app();
         app.transcript.cells.push(Cell::User {
             text:
@@ -890,8 +890,8 @@ pub(crate) mod tests {
             ("italic", Modifier::ITALIC),
         ] {
             let style = style_of(&mut app, text);
-            assert_eq!(style.fg, Some(Color::White));
-            assert_eq!(style.bg, Some(Color::Indexed(240)));
+            assert_eq!(style.fg, Some(Color::Reset));
+            assert_eq!(style.bg, Some(Color::Reset));
             assert!(style.add_modifier.contains(modifier));
         }
         assert!(
@@ -902,10 +902,52 @@ pub(crate) mod tests {
         assert_eq!(prompt.fg, Some(Color::Reset));
         assert_eq!(prompt.bg, Some(Color::Reset));
         assert!(!prompt.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(style_of(&mut app, "fn main").fg, Some(Color::White));
+        assert_eq!(style_of(&mut app, "fn main").fg, Some(Color::Reset));
         app.selected_cell = Some(0);
         assert_eq!(style_of(&mut app, "bold").bg, CUPEL.selected.bg);
         assert_eq!(style_of(&mut app, "fn main").bg, CUPEL.selected.bg);
+    }
+
+    #[tokio::test]
+    async fn chat_prompts_match_the_editor_colors_while_idle_and_working_in_every_theme() {
+        use crate::sessions::Sessions;
+
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::User {
+            text: "submitted prompt".into(),
+        });
+        app.input.insert_str("draft input");
+        let mut sessions = Sessions::new(app);
+        for working in [false, true] {
+            if working {
+                sessions.active_mut().start_run("working prompt");
+            }
+            for theme in crate::theme::example_themes() {
+                sessions.theme = Arc::clone(&theme);
+                let editor = sessions_style_of(&mut sessions, "draft input");
+                let submitted = sessions_style_of(&mut sessions, "submitted prompt");
+                assert_eq!(
+                    (submitted.fg, submitted.bg),
+                    (editor.fg, editor.bg),
+                    "{}: submitted prompt matches the editor, working={working}",
+                    theme.id,
+                );
+                if working {
+                    let current = sessions_style_of(&mut sessions, "working prompt");
+                    assert_eq!(
+                        (current.fg, current.bg),
+                        (editor.fg, editor.bg),
+                        "{}: current prompt matches the working editor",
+                        theme.id,
+                    );
+                }
+            }
+        }
+        let app = sessions.active_mut();
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
     }
 
     #[test]
@@ -5078,7 +5120,7 @@ pub(crate) mod tests {
         });
         assert_eq!(
             sessions_style_of(&mut sessions, "the task").bg,
-            CUPEL.task.bg
+            CUPEL.task.bg.or(Some(Color::Reset))
         );
 
         sessions.on_theme_request(ThemeRequest::Apply(Arc::clone(&nightfox)));
@@ -5126,7 +5168,7 @@ pub(crate) mod tests {
         sessions.on_theme_request(ThemeRequest::Apply(Arc::new(CUPEL)));
         assert_eq!(
             sessions_style_of(&mut sessions, "the task").bg,
-            CUPEL.task.bg
+            CUPEL.task.bg.or(Some(Color::Reset))
         );
         assert_eq!(
             sessions_style_of(&mut sessions, "version:").bg,

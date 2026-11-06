@@ -247,14 +247,19 @@ impl Transcript {
                 } else {
                     theme.task
                 };
-                // Half blocks simulate half-row padding; their unpainted half
-                // keeps the surrounding background, including when selected.
+                // Colored surfaces use half-row padding. With an inherited
+                // background, blank padding avoids visible foreground-colored bars.
+                let (top, bottom) = if surface.bg.is_some() {
+                    ("▄", "▀")
+                } else {
+                    (" ", " ")
+                };
                 let edge_style = Style {
                     fg: surface.bg,
                     ..theme.base
                 };
-                lines.insert(0, Line::from("▄".repeat(width)).style(edge_style));
-                lines.push(Line::from("▀".repeat(width)).style(edge_style));
+                lines.insert(0, Line::from(top.repeat(width)).style(edge_style));
+                lines.push(Line::from(bottom.repeat(width)).style(edge_style));
             }
             rendered
                 .cell_at
@@ -672,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn user_messages_render_markdown_with_half_height_vertical_padding() {
+    fn user_messages_render_markdown_with_vertical_padding() {
         use ratatui::style::{Color, Modifier};
 
         let source = "plain **bold** and *italic* with `code`\n```rust\nfn main() {}\n```";
@@ -686,21 +691,21 @@ mod tests {
         assert_eq!(
             rendered.lines.len(),
             4,
-            "two content rows and two half-height padding strips"
+            "two content rows and two padding strips"
         );
         assert_eq!(rendered.cell_at, vec![Some(0); 4]);
         for line in &rendered.lines {
             assert_eq!(line.width(), 48, "the surface fills the column");
         }
-        for (index, symbol) in [(0, "▄"), (3, "▀")] {
+        for index in [0, 3] {
             let line = &rendered.lines[index];
-            assert_eq!(line_text(line), symbol.repeat(48));
+            assert_eq!(line_text(line), " ".repeat(48));
             assert_eq!(line.style.fg, CUPEL.task.bg);
             assert_eq!(line.style.bg, CUPEL.base.bg);
         }
         for line in &rendered.lines[1..3] {
-            assert_eq!(line.style.fg, Some(Color::White));
-            assert_eq!(line.style.bg, Some(Color::Indexed(240)));
+            assert_eq!(line.style.fg, CUPEL.base.fg);
+            assert_eq!(line.style.bg, CUPEL.base.bg);
         }
         let prose = &rendered.lines[1];
         assert_eq!(
@@ -717,7 +722,7 @@ mod tests {
                 .iter()
                 .find(|span| span.content == word)
                 .unwrap();
-            assert_eq!(span.style.fg, Some(Color::White));
+            assert_eq!(span.style.fg, CUPEL.base.fg);
             assert!(span.style.add_modifier.contains(modifier));
         }
         let code = prose
@@ -737,7 +742,7 @@ mod tests {
             .iter()
             .find(|span| span.content.contains("fn main"))
             .unwrap();
-        assert_eq!(fenced.style.patch(code.style).fg, Some(Color::White));
+        assert_eq!(fenced.style.patch(code.style).fg, CUPEL.base.fg);
         assert_eq!(code.style.bg, CUPEL.md_code_block.bg);
         assert_eq!(
             transcript.copy_text(0),
@@ -844,6 +849,7 @@ mod tests {
                 };
                 for (index, symbol) in [(0, "▄"), (2, "▀")] {
                     let line = &rendered.lines[index];
+                    let symbol = if surface.bg.is_some() { symbol } else { " " };
                     assert_eq!(line_text(line), symbol.repeat(16));
                     assert_eq!(line.style.fg, surface.bg, "{}", theme.id);
                     assert_eq!(line.style.bg, theme.base.bg, "{}", theme.id);

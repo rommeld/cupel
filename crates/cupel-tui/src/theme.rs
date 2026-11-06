@@ -93,7 +93,7 @@ impl core::fmt::Display for Appearance {
     }
 }
 
-/// cupel's own look, the terminal's 16 named colors plus three gray surfaces from the
+/// cupel's own look, the terminal's 16 named colors plus two gray surfaces from the
 /// xtrem 256 palette.
 pub const CUPEL: Theme = Theme {
     id: Cow::Borrowed("cupel"),
@@ -101,8 +101,7 @@ pub const CUPEL: Theme = Theme {
     appearance: Appearance::Terminal,
     file: None,
     base: Style::new(),
-    // White on gray surface (xtrem 256 index 240, #585858).
-    task: Style::new().fg(Color::White).bg(Color::Indexed(240)),
+    task: Style::new(),
     question: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     assistant: Style::new(),
     answer: Style::new().fg(Color::Magenta),
@@ -186,7 +185,6 @@ impl Theme {
             bg,
             fg,
             surface,
-            raised,
             selection,
             border,
             muted,
@@ -198,6 +196,7 @@ impl Theme {
             heading,
             emphasis,
             link,
+            ..
         } = palette;
         Self {
             id: Cow::Borrowed(id),
@@ -205,7 +204,7 @@ impl Theme {
             appearance,
             file: None,
             base: Style::new().fg(fg).bg(bg),
-            task: Style::new().fg(fg).bg(raised),
+            task: Style::new().fg(fg).bg(bg),
             question: Style::new().fg(yellow).add_modifier(Modifier::BOLD),
             assistant: Style::new().fg(fg),
             answer: Style::new().fg(magenta),
