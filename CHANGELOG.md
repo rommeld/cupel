@@ -3,6 +3,16 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.13] - 2026-11-06
+
+- feat(tui): support clicking and dragging the transcript scrollbar with mouse capture enabled
+- fix(tui): let the transcript scrollbar reach both ends and size its thumb to the content viewport
+- feat(tui): abbreviate large token counts with M, B, and T suffixes
+- fix(tui): use Shift+Enter for newlines and Ctrl+Enter for steering
+- style(tui): simplify footer hints, group selection with copying, and match answer prose to its label color
+- style(tui): add half-height vertical padding to chat user prompts
+- refactor(cli): remove the built-in review command and the README command listing
+
 ## [v0.34.12] - 2026-11-06
 
 - feat(tui): add compact reasoning disclosures, expanded by default; click headers to toggle individual blocks or use `Ctrl+R` to toggle all
