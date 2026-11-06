@@ -190,6 +190,10 @@ pub struct AgentLoopConfig {
 /// so implementors override only what they need.
 #[async_trait::async_trait]
 pub trait AgentHooks: Send + Sync {
+    /// User input has been consumed, before its first model request or tool call.
+    /// Unlike frontend events, this boundary cannot lag behind tool execution.
+    async fn on_user_messages(&self, _messages: &[AgentMessage]) {}
+
     async fn model_request_problem(&self) -> Option<String> {
         None
     }

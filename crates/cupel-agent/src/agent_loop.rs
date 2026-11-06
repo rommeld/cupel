@@ -78,6 +78,7 @@ pub async fn agent_loop(
     }));
     let mut new_messages: Vec<AgentMessage> = prompts.clone();
     context.messages.extend(prompts.iter().cloned());
+    hooks.on_user_messages(&prompts).await;
 
     for prompt in &prompts {
         sink.emit(AgentEvent::MessageEnd {
@@ -152,6 +153,9 @@ async fn run_loop(
 
             // TODO, Cost reducition due to `.clone()`
             // Inject queued messages before the next assistant response.
+            if !pending_messages.is_empty() {
+                hooks.on_user_messages(&pending_messages).await;
+            }
             for message in pending_messages.drain(..) {
                 context.messages.push(message.clone());
                 new_messages.push(message.clone());

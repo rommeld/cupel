@@ -3,6 +3,15 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.35.0] - 2026-11-06
+
+- feat(prompt): acknowledge mistakes directly and explain only non-obvious decisions and risks, skipping routine status updates
+- style(tui): add one column of left and right padding to chat user prompts, preserving wrapping and Markdown
+- style(tui): match chat user prompts to the prompt pane's theme background and foreground, preserving Markdown and selection highlighting
+- feat(undo): add `/changes` and snapshot-based per-turn `/undo` in TUI and plain mode, preserving dirty work and refusing newer file changes
+- feat(session): persist private undo snapshots across resume and hot reload, including creations, deletions, renames, and overwritten destinations
+- test(undo): cover turn boundaries, lagging frontends, conflicts, permissions, partial patches, interrupted restoration, and session isolation
+
 ## [v0.34.13] - 2026-11-06
 
 - feat(tui): support clicking and dragging the transcript scrollbar with mouse capture enabled

@@ -72,6 +72,35 @@ their separate `Ctrl+T` control. Click reasoning body text to select it for
   use the full opening prompt, and must match exactly one session. Never open
   the same session in two processes at once.
 
+### Inspecting and undoing edits
+
+Use `/changes` to inspect the latest edited turn and `/undo` to restore its
+`apply_patch` edits. Both commands work in the TUI and plain mode while idle;
+press `Esc` to stop a running agent first. A turn groups patch calls until the next
+user prompt, queued follow-up, or consumed steering message. Repeated `/undo`
+walks backward through edited turns. The conversation is not rewound, and the
+agent is told to reread restored files.
+
+Undo preserves pre-existing uncommitted work, including overwritten files and
+rename destinations. It checks every affected path and snapshot before restoring
+anything, refusing newer content or permission changes rather than overwriting
+them. An I/O failure during restoration can leave some paths restored; keep the
+snapshots, fix the error, and retry `/undo` to finish. Shell commands, migrations,
+external side effects, and newly created empty
+directories are **not undone**. Avoid concurrent external writers during undo;
+these checks are not a filesystem sandbox.
+
+Original bytes and after-hashes are saved privately beside each transcript under
+`~/.cupel/sessions/<project-slug>/<session-id>/undo/` (`CUPEL_HOME` overrides the
+home). History survives resume and hot reload; `/new` starts separate history.
+Snapshots may contain sensitive code and are retained until explicitly removed.
+Deleting that session's `undo/` directory discards its undo history.
+
+Tracked patches refuse leaf symlinks, hard-linked files, and aliased renames
+(including case-only renames on case-insensitive filesystems). If snapshot storage
+fails, the patch is refused before writing. Without a resolvable Cupel home,
+editing still works but undo is unavailable.
+
 ### Providers
 
 | Provider | Authentication |

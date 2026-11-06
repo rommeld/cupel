@@ -84,6 +84,7 @@ pub struct App {
     pub questions: Option<QuestionReceiver>,
     pub question: Option<OpenQuestion>,
     pub write_gate: WriteGate,
+    pub pending_undo: Option<cupel_coding_agent::undo::UndoCommand>,
 }
 
 /// A content position held in place while reasoning visibility changes.
@@ -315,6 +316,7 @@ impl App {
             transcript_anchor: None,
             should_quit: false,
             recorder,
+            pending_undo: None,
             pending_prompt: None,
             queued: Vec::new(),
             steering: Vec::new(),
@@ -846,13 +848,14 @@ impl App {
     async fn reload_in_place(self, cwd: &std::path::Path) -> Self {
         let state = self.agent.state();
         let registry = self.agent.registry();
-        let ingredients = cupel_coding_agent::bootstrap::load(
+        let mut ingredients = cupel_coding_agent::bootstrap::load(
             cwd,
             self.meta.home.clone(),
             &registry,
             Frontend::Tui,
         )
         .await;
+        ingredients.bind_session(&self.recorder, cwd);
         let warning_suffix = if ingredients.warnings.is_empty() {
             ""
         } else {
@@ -1007,8 +1010,15 @@ impl App {
         session_id: String,
         seeded: Vec<AgentMessage>,
     ) -> Self {
-        let ingredients =
+        let mut ingredients =
             cupel_coding_agent::bootstrap::load(cwd, home.clone(), &registry, Frontend::Tui).await;
+        let recorder = cupel_coding_agent::session::SessionRecorder::new(
+            home.clone(),
+            cwd,
+            &session_id,
+            &carry.model.id,
+        );
+        ingredients.bind_session(&recorder, cwd);
 
         let mut options = cupel_agent::AgentOptions::new(carry.model.clone(), registry);
         options.system_prompt = format!("{}{}", ingredients.system_prompt, carry.preset_prompt);
@@ -1025,12 +1035,6 @@ impl App {
         options.session_id = Some(session_id.clone());
         options.messages = seeded;
 
-        let recorder = cupel_coding_agent::session::SessionRecorder::new(
-            home.clone(),
-            cwd,
-            &session_id,
-            &carry.model.id,
-        );
         let meta = cupel_coding_agent::modes::SessionMeta {
             model_name: carry.model.name.clone(),
             provider: provider.to_string(),
@@ -1674,6 +1678,19 @@ impl App {
                 ]);
                 self.notice(lines.join("\n"));
             }
+            "undo" | "changes" => {
+                if !args.is_empty() {
+                    self.notice(format!("usage: /{name} (no arguments)"));
+                } else if self.mode_change_busy() {
+                    self.notice("cannot inspect or undo edits while the agent is working (esc to abort first)");
+                } else {
+                    self.pending_undo = Some(if name == "undo" {
+                        cupel_coding_agent::undo::UndoCommand::Undo
+                    } else {
+                        cupel_coding_agent::undo::UndoCommand::Changes
+                    });
+                }
+            }
             "sessions" => {
                 let mut lines = vec![
                     "saved sessions (resume with /hot-reload <prompt search> or cupel --resume \"prompt search\"):".to_string()
@@ -1799,6 +1816,24 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    pub async fn run_undo_command(&mut self, command: cupel_coding_agent::undo::UndoCommand) {
+        if self.mode_change_busy() {
+            self.notice(
+                "cannot inspect or undo edits while the agent is working (esc to abort first)",
+            );
+            return;
+        }
+        let gate = Arc::clone(&self.write_gate);
+        let Ok(_guard) = gate.try_lock() else {
+            self.notice("cannot inspect or undo edits while this checkout is being modified");
+            return;
+        };
+        let result =
+            cupel_coding_agent::undo::execute_command(command, &mut self.agent, &mut self.recorder)
+                .await;
+        self.notice(result.unwrap_or_else(|error| error));
     }
 
     /// `/login` start a subscription login, or feed a pasted redirect

@@ -16,6 +16,7 @@
 //! Every file the patch touches is locked for the whole verify and apply cycle.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -74,12 +75,22 @@ struct ApplyPatchArgs {
 
 pub struct ApplyPatchTool {
     cwd: PathBuf,
+    undo: Option<Arc<crate::undo::UndoJournal>>,
 }
 
 impl ApplyPatchTool {
     #[must_use]
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
-        Self { cwd: cwd.into() }
+        Self {
+            cwd: cwd.into(),
+            undo: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_undo(mut self, undo: Arc<crate::undo::UndoJournal>) -> Self {
+        self.undo = undo.enabled().then_some(undo);
+        self
     }
 
     /// Every absolute path the patch writes or removes, deduplicated the
@@ -257,6 +268,10 @@ impl AgentTool for ApplyPatchTool {
         // reading anything, the verify step must see the same bytes the
         // apply step overwrites, and two patches on overlapping files must
         // not deadlock (sorted acquisition means no cycles).
+        let mut recording = match &self.undo {
+            Some(undo) => Some(undo.lock().await),
+            None => None,
+        };
         let _guards = lock_all(&self.lock_keys(&hunks)?).await;
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
@@ -269,11 +284,52 @@ impl AgentTool for ApplyPatchTool {
                 return Err("Operation aborted".into());
             }
         }
+        if let Some(recording) = &mut recording {
+            let mut edits = Vec::new();
+            for change in &changes {
+                match change {
+                    Change::Add { path, content, .. }
+                    | Change::Update {
+                        path,
+                        move_to: None,
+                        content,
+                        ..
+                    } => {
+                        edits.push((path.clone(), Some(content.as_bytes())));
+                    }
+                    Change::Delete { path, .. } => edits.push((path.clone(), None)),
+                    Change::Update {
+                        path,
+                        move_to: Some((destination, _)),
+                        content,
+                        ..
+                    } => {
+                        if queue_key(path) == queue_key(destination) {
+                            if path != destination {
+                                return Err("tracked patches do not support aliased renames".into());
+                            }
+                            edits.push((path.clone(), Some(content.as_bytes())));
+                        } else {
+                            edits.push((path.clone(), None));
+                            edits.push((destination.clone(), Some(content.as_bytes())));
+                        }
+                    }
+                }
+            }
+            recording.prepare(&edits)?;
+        }
 
         let mut diff = String::new();
         let (mut added, mut modified, mut deleted) = (Vec::new(), Vec::new(), Vec::new());
         for change in &changes {
-            apply(change).await?;
+            if let Err(error) = apply(change).await {
+                if let Some(recording) = &mut recording
+                    && let Err(journal_error) = recording.finish()
+                {
+                    return Err(format!("{error}; undo journal: {journal_error}").into());
+                }
+                return Err(error);
+            }
             match change {
                 Change::Add {
                     display, content, ..
@@ -306,6 +362,9 @@ impl AgentTool for ApplyPatchTool {
                     modified.push(target);
                 }
             }
+        }
+        if let Some(recording) = &mut recording {
+            recording.finish()?;
         }
 
         // Codex's summary, verbatim, the models know it.

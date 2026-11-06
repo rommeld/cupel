@@ -246,6 +246,14 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Clear the conversation and start fresh",
     },
     BuiltinCommand {
+        name: "changes",
+        description: "Show the latest edited turn's patch changes (not shell side effects)",
+    },
+    BuiltinCommand {
+        name: "undo",
+        description: "Undo the latest edited turn's patch edits, refusing newer file changes",
+    },
+    BuiltinCommand {
         name: "model",
         description: "Switch model: /model <id> (no argument lists them)",
     },

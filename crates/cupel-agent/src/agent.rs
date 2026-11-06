@@ -603,6 +603,10 @@ struct RunHooks {
 
 #[async_trait::async_trait]
 impl AgentHooks for RunHooks {
+    async fn on_user_messages(&self, messages: &[AgentMessage]) {
+        self.inner.on_user_messages(messages).await;
+    }
+
     async fn model_request_problem(&self) -> Option<String> {
         self.inner.model_request_problem().await
     }
