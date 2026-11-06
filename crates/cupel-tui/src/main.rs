@@ -23,7 +23,6 @@ use cupel_coding_agent::modes::{self, SessionMeta};
 use cupel_coding_agent::settings::{DEFAULT_PRESET, Preset, Settings};
 use cupel_coding_agent::startup::ThinkingChoice;
 use cupel_core::types::{Model, ThinkingLevel};
-use cupel_tui::startup::StartupCommand;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -88,7 +87,6 @@ struct CliArgs {
     thinking: ThinkingChoice,
     plain: bool,
     resume: Option<ResumeTarget>,
-    startup: Option<StartupCommand>,
 }
 
 /// Parameterized on the iterator (instead of reading `args`
@@ -99,7 +97,6 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
         thinking: ThinkingChoice::Default,
         plain: false,
         resume: None,
-        startup: None,
     };
     let mut iter = args.peekable();
     while let Some(arg) = iter.next() {
@@ -112,12 +109,6 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                 parsed.thinking = value.parse()?;
             }
             "--plain" => parsed.plain = true,
-            "--review" => {
-                if parsed.startup.is_some() {
-                    return Err("--review may only be specified once".into());
-                }
-                parsed.startup = Some(StartupCommand::Review);
-            }
             // The search is optional, a bare resume option (next arg missing or
             // another flag) means "the newest session of this project".
             "--resume" | "-r" => {
@@ -130,7 +121,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [\"prompt search\"]] [--plain]\ninteractive startup: --review\n\navailable models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [\"prompt search\"]] [--plain]\n\navailable models:\n",
                 );
                 // Built ins + models.json layers, deliberately not the
                 // ollama probe because help must be instant and never touch the
@@ -155,9 +146,6 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             other => return Err(format!("unknown argument: {other}")),
         }
-    }
-    if parsed.plain && parsed.startup.is_some() {
-        return Err("--review requires the interactive TUI".into());
     }
     Ok(parsed)
 }
@@ -227,11 +215,6 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
         std::io::stdin().is_terminal(),
         std::io::stdout().is_terminal(),
     );
-    if use_plain && args.startup.is_some() {
-        return Err(AppError::Arguments(
-            "--review requires terminal stdin and stdout".into(),
-        ));
-    }
     if let Some(log_path) = init_tracing(!use_plain) {
         // Announced before the TUI takes the screen, visible in scrollback.
         eprintln!("logging to {}", log_path.display());
@@ -388,7 +371,7 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
             .map_err(AppError::PlainMode)?;
         return Ok(None);
     }
-    let exit = cupel_tui::run(agent, meta, recorder, ingredients.questions, args.startup)
+    let exit = cupel_tui::run(agent, meta, recorder, ingredients.questions)
         .await
         .map_err(AppError::InteractiveMode)?;
     Ok(match exit {
@@ -538,14 +521,10 @@ mod tests {
     }
 
     #[test]
-    fn review_startup_preserves_globals_and_rejects_removed_team_flags() {
-        let parsed = parse(&["--review", "--model", "fixture", "--thinking", "off"]).unwrap();
-        assert_eq!(parsed.startup, Some(StartupCommand::Review));
-        assert_eq!(parsed.model.as_deref(), Some("fixture"));
-        assert!(matches!(parsed.thinking, ThinkingChoice::Explicit(None)));
+    fn removed_startup_flags_are_unknown_arguments() {
         assert!(parse(&["--plain", "--review"]).is_err());
         assert!(parse(&["--review", "--review"]).is_err());
-        for flag in ["--team", "--add", "--agent"] {
+        for flag in ["--review", "--team", "--add", "--agent"] {
             assert_eq!(
                 parse(&[flag]).err().as_deref(),
                 Some(format!("unknown argument: {flag}").as_str())

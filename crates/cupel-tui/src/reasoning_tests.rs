@@ -187,7 +187,7 @@ async fn ctrl_r_toggles_all_reasoning_without_touching_tools_or_commentary() {
     assert_eq!(collapsed.matches("▸ Reasoning").count(), 2, "{collapsed}");
     assert!(!collapsed.contains("first thought") && !collapsed.contains("second thought"));
     assert!(collapsed.contains("visible commentary") && collapsed.contains("$ true"));
-    assert!(collapsed.contains("ctrl+r reasoning"));
+    assert!(collapsed.contains("ctrl+r exp. reasoning"));
     app.on_agent_event(Some(AgentEvent::MessageUpdate {
         event: AssistantMessageEvent::ThinkingDelta {
             content_index: 2,

@@ -52,33 +52,12 @@ In the prompt pane, `Enter` sends a prompt (or queues it while the agent is
 running), `Shift+Enter` inserts a newline, and `Ctrl+Enter` steers the running
 agent (or sends when idle). `Ctrl+J` is an alternative steering binding.
 Modified Enter keys require a terminal with keyboard enhancement support;
-`Alt+Enter` is unbound. `/help` also lists these keys.
+`Alt+Enter` is unbound.
 
 Reasoning starts expanded in the TUI. Click its `▾ Reasoning` header to collapse
 one block, or use `Ctrl+R` to collapse/expand all reasoning. Tool previews retain
 their separate `Ctrl+T` control. Click reasoning body text to select it for
 `Ctrl+O` copying; copying preserves the original Markdown without UI labels.
-
-### Slash commands
-
-| Command | Description |
-| ------- | ----------- |
-| `/help` | List all commands and prompt templates |
-| `/new` | Clear the conversation and start a fresh session |
-| `/model <id>` | Switch model (no argument lists them) |
-| `/provider <name> [api-key]` | Switch provider, optionally supplying a key (no argument lists them) |
-| `/login openai-codex [device]` | Log in with a ChatGPT Plus/Pro subscription |
-| `/thinking <level>` | Set thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `/preset <name>` | Switch model, thinking level, and prompt to a preset (no argument lists them) |
-| `/themes [id]` | Switch the color theme (no argument lists them) |
-| `/review [path...]` | Bundle the project, specific paths, or a `--diff` into a code-review prompt |
-| `/usage` | Show token usage and estimated costs |
-| `/sessions [search]` | List or search saved sessions by their opening prompt |
-| `/hot-reload [prompt search]` | Reload `.cupel` config into the running or a matching saved session |
-| `/quit`, `/exit` | Quit cupel |
-
-Most commands are TUI-only; plain mode supports `/help`, `/review`, `/quit`, `/exit`,
-and prompt templates.
 
 ### Configuration and sessions
 

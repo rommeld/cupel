@@ -34,7 +34,6 @@ use ratatui::layout::{Position, Rect};
 use crate::autocomplete::{Autocomplete, Candidate};
 use crate::input::InputState;
 use crate::login;
-use crate::startup::StartupCommand;
 use crate::theme::Theme;
 use crate::transcript::{Cell, ToolOutcome, Transcript};
 
@@ -359,14 +358,6 @@ impl App {
         }
         app.note_thinking_level();
         app
-    }
-
-    pub fn apply_startup(&mut self, startup: StartupCommand) {
-        match startup {
-            StartupCommand::Review => {
-                self.handle_builtin("review");
-            }
-        }
     }
 
     /// Say so when the model cannot do the thinking level that was asked for.
@@ -1277,7 +1268,7 @@ impl App {
     /// Start the agent run for a prompt (the async half of `send`).
     pub fn start_run(&mut self, text: &str) {
         // The task leads the turn. `start_run`is the single funnel every
-        // prompt goes through (typed prompts, expanded templates, /review bundles).
+        // prompt goes through (typed prompts and expanded templates).
         self.transcript.cells.push(Cell::User {
             text: text.to_string(),
         });
@@ -1665,19 +1656,6 @@ impl App {
                     }
                 }
                 self.notice(lines.join("\n"));
-            }
-            "review" => {
-                // Builds the (truncated) code bundle synchronously cheap
-                // local fs/git work then sends it like any prompt, so the
-                // model call rides the normal async run path.
-                let review_args = commands::parse_command_args(args);
-                match cupel_coding_agent::review::build_review_prompt(
-                    std::path::Path::new(&self.meta.cwd),
-                    &review_args,
-                ) {
-                    Ok(prompt) => self.send(&prompt, Delivery::Queue),
-                    Err(e) => self.notice(e),
-                }
             }
             "usage" => {
                 // Derive the identiy even if a recorder write failure cleared its path.

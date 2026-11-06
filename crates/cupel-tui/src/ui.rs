@@ -670,11 +670,11 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     // the wheel currently does. It shares the status row's left margin because
     // a right aligned hint row would sit staggered against it.
     let hints = if app.question.is_some() {
-        " ↑↓ choose · enter answer (typed text wins) · shift+enter newline · @ file esc abort"
+        " ↑↓ choose · enter answer (typed text wins) · @ file"
     } else if app.mouse_captured {
-        " ctrl+enter steer · shift+enter newline · @ file / cmds · esc abort · ctrl+r reasoning · ctrl+o copy · ctrl+t tools · ctrl+y select"
+        " ctrl+enter steer · @ file / cmds · ctrl+o copy · ctrl+y select · ctrl+t exp. tools · ctrl+r exp. reasoning"
     } else {
-        " ctrl+enter steer · shift+enter newline · @ file / cmds · esc abort · ctrl+r reasoning · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
+        " ctrl+enter steer · @ file / cmds · SELECTION MODE · ctrl+y scroll · ctrl+t exp. tools · ctrl+r exp. reasoning"
     };
 
     let [status_row, hints_row] =
@@ -1007,7 +1007,7 @@ pub(crate) mod tests {
         }
         assert!(!screen.contains(['│', '┌', '┐', '└', '┘']), "{screen}");
         assert!(
-            screen.lines().nth(1).unwrap().starts_with(" >> task"),
+            screen.lines().nth(2).unwrap().starts_with(" >> task"),
             "{screen}"
         );
         assert!(screen.lines().next().unwrap().trim().is_empty(), "{screen}");
@@ -1144,40 +1144,22 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn review_command_queues_a_bundled_prompt_or_notices_errors() {
-        let root = std::env::temp_dir().join("cupel-ui-review");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("code.rs"), "fn main() {}").unwrap();
-        let mut app = test_app_in(root.to_str().unwrap());
-        app.meta.settings.extra.insert(
-            "agentCommands".into(),
-            serde_json::json!({"review":"removed-helper"}),
+    fn removed_review_command_is_literal_text() {
+        let mut app = test_app();
+        assert!(
+            !cupel_coding_agent::commands::BUILTIN_COMMANDS
+                .iter()
+                .any(|command| command.name == "review")
         );
-
-        // The bundle always goes to this agent, ignoring old helper routing.
-        type_text(&mut app, "/review code.rs");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-        let prompt = app.pending_prompt.take().expect("review prompt queued");
-        assert!(prompt.contains("=== file: code.rs ==="));
-        assert!(prompt.contains("fn main() {}"));
-
-        // A bad path, error notice, nothing queued or sent.
-        type_text(&mut app, "/review missing.rs");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-        assert!(app.pending_prompt.is_none());
-        assert!(app.transcript.cells.iter().any(|c| matches!(
-            c,
-            Cell::Notice { text } if text.contains("path not found: missing.rs")
-        )));
+        for text in ["/review", "/review missing.rs", "/review --diff"] {
+            type_text(&mut app, text);
+            app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )));
+            assert_eq!(app.pending_prompt.take().as_deref(), Some(text));
+        }
     }
 
     #[test]
@@ -1219,7 +1201,7 @@ pub(crate) mod tests {
                 let screen = draw(&mut app, width, 20);
                 let hints_row = screen.lines().last().expect("hints row");
                 assert!(hints_row.starts_with(" ctrl+enter steer"), "{screen}");
-                assert!(hints_row.contains("shift+enter newline"), "{screen}");
+                assert!(!hints_row.contains("shift+enter"), "{screen}");
                 assert!(hints_row.ends_with(&version_suffix), "{screen}");
                 if width == 200 {
                     let mouse_hint = if mouse_captured {
@@ -1234,7 +1216,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn footer_shows_newline_and_omits_obsolete_hints() {
+    fn footer_groups_expansion_hints_and_omits_obsolete_hints() {
         for mouse_captured in [true, false] {
             for question_open in [false, true] {
                 let mut app = test_app();
@@ -1242,8 +1224,26 @@ pub(crate) mod tests {
                 let _answer = question_open.then(|| open_question(&mut app));
                 let screen = draw(&mut app, 240, 20);
                 let hints_row = screen.lines().last().expect("hints row");
-                assert!(hints_row.contains("shift+enter newline"), "{screen}");
-                for hint in ["enter send", "ctrl+enter newline", "alt+enter", "ctrl+b"] {
+                if !question_open {
+                    assert!(
+                        hints_row.contains("ctrl+t exp. tools · ctrl+r exp. reasoning"),
+                        "{screen}"
+                    );
+                    let selection_hints = if mouse_captured {
+                        "ctrl+o copy · ctrl+y select"
+                    } else {
+                        "SELECTION MODE · ctrl+y scroll"
+                    };
+                    assert!(hints_row.contains(selection_hints), "{screen}");
+                }
+                for hint in [
+                    "esc abort",
+                    "shift+enter",
+                    "enter send",
+                    "ctrl+enter newline",
+                    "alt+enter",
+                    "ctrl+b",
+                ] {
                     assert!(!hints_row.contains(hint), "unexpected {hint}:\n{screen}");
                 }
             }
@@ -1260,7 +1260,7 @@ pub(crate) mod tests {
                 let screen = draw(&mut app, 240, 20);
                 let hints_row = screen.lines().last().expect("hints row");
                 let expected = if question_open {
-                    "@ file esc abort"
+                    "@ file"
                 } else {
                     "@ file / cmds"
                 };

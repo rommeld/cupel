@@ -301,10 +301,6 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         name: "exit",
         description: "Quit cupel (alias for /quit)",
     },
-    BuiltinCommand {
-        name: "review",
-        description: "Code review: /review [path ...] for explicit file, [diff ...], or whole project",
-    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -65,7 +65,6 @@ fn output(args: std::fmt::Arguments<'_>) -> Result<(), PlainError> {
 enum PlainCommand {
     Quit,
     Help,
-    Review,
     TuiOnly,
     Prompt,
 }
@@ -74,7 +73,6 @@ fn plain_command(name: &str) -> PlainCommand {
     match name {
         "quit" | "exit" => PlainCommand::Quit,
         "help" => PlainCommand::Help,
-        "review" => PlainCommand::Review,
         _ if crate::commands::BUILTIN_COMMANDS
             .iter()
             .any(|command| command.name == name) =>
@@ -265,24 +263,6 @@ async fn run_session(
                     }
                     output(format_args!("\n"))?;
                     continue;
-                }
-                // Same builder as the TUI, here the whole path is
-                // synchronous. Gather, then fall through to the ordinary
-                // (blocking) prompt round trip below.
-                PlainCommand::Review => {
-                    let review_args = crate::commands::parse_command_args(
-                        rest.split_once(char::is_whitespace).map_or("", |(_, a)| a),
-                    );
-                    match crate::review::build_review_prompt(
-                        std::path::Path::new(&meta.cwd),
-                        &review_args,
-                    ) {
-                        Ok(built) => prompt = built,
-                        Err(e) => {
-                            output(format_args!("{e}\n"))?;
-                            continue;
-                        }
-                    }
                 }
                 PlainCommand::TuiOnly => {
                     if matches!(name, "model" | "provider") {
@@ -604,7 +584,7 @@ mod tests {
             .filter(|command| plain_command(command.name) != PlainCommand::TuiOnly)
             .map(|command| command.name)
             .collect();
-        assert_eq!(supported, ["help", "quit", "exit", "review"]);
+        assert_eq!(supported, ["help", "quit", "exit"]);
         for name in [
             "new",
             "model",
@@ -621,6 +601,7 @@ mod tests {
             assert_eq!(plain_command(name), PlainCommand::TuiOnly, "{name}");
         }
         assert_eq!(plain_command("unknown"), PlainCommand::Prompt);
+        assert_eq!(plain_command("review"), PlainCommand::Prompt);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 /// together, creates a spinoff's worktree, and tells whether two checkout's changes
 /// would conflict.
 ///
-/// Every git call is a plain `Command`, as in `reviews.rs`. Only
+/// Every git call is a plain `Command`. Only
 /// machine readable output (`porcelain` and plumbing) is parsed, because git
 /// translates its message for people.
 use std::path::{Path, PathBuf};

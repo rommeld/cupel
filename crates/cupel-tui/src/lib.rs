@@ -29,7 +29,6 @@ pub mod login;
 pub mod markdown;
 pub mod project_trust;
 pub mod sessions;
-pub mod startup;
 mod terminal_text;
 pub mod theme;
 mod token_count;
@@ -69,7 +68,6 @@ pub async fn run(
     meta: SessionMeta,
     recorder: cupel_coding_agent::session::SessionRecorder,
     questions: Option<QuestionReceiver>,
-    startup: Option<startup::StartupCommand>,
 ) -> std::io::Result<Exit> {
     // Register before entering raw mode so termination always takes the restore path.
     let signals = TerminationSignals::new()?;
@@ -106,16 +104,7 @@ pub async fn run(
         );
         ratatui_hook(info);
     }));
-    let result = event_loop(
-        &mut terminal,
-        agent,
-        meta,
-        recorder,
-        questions,
-        signals,
-        startup,
-    )
-    .await;
+    let result = event_loop(&mut terminal, agent, meta, recorder, questions, signals).await;
     // Pop what was pushed, before `restore` leaves the alternate screen it was
     // pushed on.
     let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
@@ -156,13 +145,9 @@ async fn event_loop(
     recorder: cupel_coding_agent::session::SessionRecorder,
     questions: Option<QuestionReceiver>,
     mut signals: TerminationSignals,
-    startup: Option<startup::StartupCommand>,
 ) -> std::io::Result<Exit> {
     let mut app = app::App::new(agent, meta, recorder);
     app.questions = questions;
-    if let Some(startup) = startup {
-        app.apply_startup(startup);
-    }
     let mut sessions = sessions::Sessions::new(app);
     sessions.restore().await;
     let mut updates = updates::Updates::default();
