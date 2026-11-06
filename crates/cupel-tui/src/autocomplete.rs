@@ -94,7 +94,8 @@ pub fn command_token_at_cursor(text: &str, cursor: usize) -> Option<String> {
 /// it, `/model son|` yields `("model", "son", 7)`. Picks up exactly where
 /// [`command_token_at_cursor`] stops (a space settles the name), and stops
 /// itself once the first argument is settled the same way `/model x y`
-/// completes nothing. Returns `(command name, argument query, character index
+/// completes nothing. `/hot-reload` accepts a multiword prompt search until a
+/// trailing space settles it. Returns `(command name, argument query, character index
 /// where the argument starts)`.
 #[must_use]
 pub fn command_arg_token_at_cursor(text: &str, cursor: usize) -> Option<(String, String, usize)> {
@@ -118,7 +119,11 @@ pub fn command_arg_token_at_cursor(text: &str, cursor: usize) -> Option<(String,
         .unwrap_or(chars.len())
         .min(cursor);
     let segment = &chars[arg_start..cursor];
-    if segment.iter().any(|c| c.is_whitespace()) {
+    if name == "hot-reload" {
+        if segment.last().is_some_and(|c| c.is_whitespace()) {
+            return None; // a completion's trailing space closes the popup
+        }
+    } else if segment.iter().any(|c| c.is_whitespace()) {
         return None; // the first argument is settled, no completion beyond it
     }
     Some((name, segment.iter().collect(), arg_start))
@@ -665,6 +670,28 @@ mod tests {
         // Not a command at all.
         assert_eq!(command_arg_token_at_cursor("model son", 9), None);
         assert_eq!(command_arg_token_at_cursor("/ x", 3), None);
+    }
+
+    #[test]
+    fn session_search_completes_multiple_words_and_settles_after_acceptance() {
+        let root = temp_tree("session-search");
+        let mut ac = Autocomplete::new(&root).with_command_args(
+            "hot-reload",
+            vec![Candidate {
+                display: "1970-01-01  fix the login bug".into(),
+                value: "fix the login bug".into(),
+                is_dir: false,
+            }],
+        );
+        let text = "/hot-reload fix the login";
+        ac.refresh(text, text.chars().count());
+        assert!(ac.is_open());
+        let completion = ac.accept(text.chars().count()).unwrap();
+        assert_eq!(completion.start, 12);
+        assert_eq!(completion.insert, "fix the login bug ");
+        let accepted = format!("/hot-reload {}", completion.insert);
+        ac.refresh(&accepted, accepted.chars().count());
+        assert!(!ac.is_open(), "Enter can submit after accepting a prompt");
     }
 
     #[test]

@@ -274,12 +274,12 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "Parallel sessions in git worktrees: /spinoff <name> [preset] starts one, /spinoff merge <name> [message] or /spinoff drop <name> ends one, no argument lists them",
     },
     BuiltinCommand {
-        name: "session-id",
-        description: "Show the current session id and list this project's sessions",
+        name: "sessions",
+        description: "List or search saved sessions by their opening prompt: /sessions [search]",
     },
     BuiltinCommand {
         name: "hot-reload",
-        description: "Reload .cupel config into a fresh session, or resume one: /hot-reload [session-id]",
+        description: "Reload .cupel config, or resume by opening prompt: /hot-reload [prompt search]",
     },
     BuiltinCommand {
         name: "usage",

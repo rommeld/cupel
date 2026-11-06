@@ -44,6 +44,7 @@ Run `cupel` in your project directory. Set a provider key (see below), or use
 ```sh
 cupel                                     # interactive TUI
 cupel --resume                            # resume the latest session
+cupel --resume "fix the login bug"         # find a session by its opening prompt
 printf 'Explain this project\n' | cupel --plain
 ```
 
@@ -63,7 +64,8 @@ printf 'Explain this project\n' | cupel --plain
 | `/agent <name> [task]` | Call a configured helper directly; without a task, send it your next prompt |
 | `/team` | Manage helpers, inspect tasks and discussion, or cancel a subtree |
 | `/usage` | Show token usage and estimated costs |
-| `/hot-reload [session-id]` | Reload `.cupel` config into the running or another session |
+| `/sessions [search]` | List or search saved sessions by their opening prompt |
+| `/hot-reload [prompt search]` | Reload `.cupel` config into the running or a matching saved session |
 | `/quit` | Quit cupel |
 
 Most commands are TUI-only; plain mode supports `/help`, `/review`, `/quit`,
@@ -76,9 +78,11 @@ and prompt templates.
   Precedence: working directory > project `.cupel/` > `~/.cupel/`.
 - Store settings in `~/.cupel/settings.json` or `<project>/.cupel/settings.json`.
   `CUPEL_HOME` overrides the home directory. `/hot-reload` applies config changes.
-- Sessions are JSONL transcripts under `~/.cupel/sessions/`. Use `/session-id`
-  to list them and `cupel --resume <session-id>` to resume one. Never open the
-  same session in two processes at once.
+- Sessions are JSONL transcripts under `~/.cupel/sessions/`. Use `/sessions [search]`
+  to find them by their opening prompt, then `/hot-reload <prompt search>` or
+  `cupel --resume "prompt search"` to resume one. Searches are case-insensitive,
+  use the full opening prompt, and must match exactly one session. Never open
+  the same session in two processes at once.
 
 ### Providers
 

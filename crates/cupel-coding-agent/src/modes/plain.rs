@@ -203,10 +203,7 @@ async fn run_session(
     // AgentOptions.messages in main).
     let restored = agent.state().messages.len();
     if restored > 0 {
-        output(format_args!(
-            "resumed session {} ({restored} messages)\n\n",
-            recorder.session_id()
-        ))?;
+        output(format_args!("resumed session ({restored} messages)\n\n"))?;
     }
 
     #[cfg(unix)]
@@ -616,7 +613,7 @@ mod tests {
             "thinking",
             "themes",
             "preset",
-            "session-id",
+            "sessions",
             "hot-reload",
             "usage",
         ] {

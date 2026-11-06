@@ -3,6 +3,12 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.34.10] - 2026-11-05
+
+- refactor(session): find and resume saved sessions by their opening prompt with `/sessions`, `/hot-reload`, and `--resume`
+- fix(tui): remove internal session IDs from the footer and session listings
+- test(session): cover prompt searches, ambiguous matches, and continued transcript recording
+
 ## [v0.34.9] - 2026-11-04
 
 - feat(catalog): add Particle-1 and GLM 5.3 FlashX Legal for OpenRouter

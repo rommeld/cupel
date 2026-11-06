@@ -143,13 +143,15 @@ fn free_name(dir: &Path, stem: &str) -> PathBuf {
     target
 }
 
-/// One row of the session id listing. There is no stored summary in a
+/// One row of the session listing. There is no stored summary in a
 /// transcript (compaction summaries live only inside a run's context
 /// snapshot and are never persisted), so the closest human readable label
 /// is the session's first user prompt, plus countable facts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSummary {
     pub id: String,
+    pub path: PathBuf,
+    pub prompt: String,
     pub started_at: u64,
     pub model: String,
     pub message_count: usize,
@@ -172,7 +174,7 @@ pub fn list_sessions_in(dir: &Path) -> Vec<SessionSummary> {
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
         .filter_map(|path| match load_transcript(&path) {
-            Ok((header, messages)) => Some(summarize(&header, &messages)),
+            Ok((header, messages)) => Some(summarize(path, &header, &messages)),
             Err(e) => {
                 tracing::warn!(path = %path.display(), "skipping unreadable transcript: {e}");
                 None
@@ -184,28 +186,85 @@ pub fn list_sessions_in(dir: &Path) -> Vec<SessionSummary> {
 }
 
 /// Derive a listing row from a parsed transcript.
-fn summarize(header: &TranscriptHeader, messages: &[AgentMessage]) -> SessionSummary {
+fn summarize(
+    path: PathBuf,
+    header: &TranscriptHeader,
+    messages: &[AgentMessage],
+) -> SessionSummary {
     // The first LLM user message is the session's opening prompt.
-    let label = messages
+    let prompt = messages
         .iter()
         .find_map(|m| match m {
             AgentMessage::Llm(cupel_core::types::Message::User(user)) => match &user.content {
-                cupel_core::types::UserContentBody::Text(text) => Some(text.as_str()),
-                cupel_core::types::UserContentBody::Blocks(_) => None,
+                cupel_core::types::UserContentBody::Text(text) => Some(text.clone()),
+                cupel_core::types::UserContentBody::Blocks(blocks) => Some(
+                    blocks
+                        .iter()
+                        .filter_map(|block| match block {
+                            cupel_core::types::UserContent::Text(text) => Some(text.text.as_str()),
+                            cupel_core::types::UserContent::Image(_) => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
             },
             _ => None,
         })
-        .unwrap_or("");
+        .unwrap_or_default();
+    let prompt = normalize_prompt(&prompt);
     // Truncate on character boundaries (a byte slice could split a multi byte
-    // character and panic) and flatten newlines for a one line listing.
-    let mut label: String = label.chars().take(LABEL_MAX_CHARS).collect();
-    label = label.replace('\n', " ");
+    // character and panic). Searching always uses the full opening prompt.
+    let label: String = prompt.chars().take(LABEL_MAX_CHARS).collect();
     SessionSummary {
         id: header.session_id.clone(),
+        path,
+        prompt,
         started_at: header.started_at,
         model: header.model.clone(),
         message_count: messages.len(),
         label,
+    }
+}
+
+fn normalize_prompt(prompt: &str) -> String {
+    prompt.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Find sessions by a case-insensitive substring of their full opening prompt.
+/// Empty searches list every readable transcript, newest first.
+#[must_use]
+pub fn search_sessions_in(dir: &Path, query: &str) -> Vec<SessionSummary> {
+    let query = normalize_prompt(query).to_lowercase();
+    list_sessions_in(dir)
+        .into_iter()
+        .filter(|session| session.prompt.to_lowercase().contains(&query))
+        .collect()
+}
+
+/// Resolve a unique opening-prompt search. Exact internal keys remain accepted
+/// for existing restart commands and scripts, but are not exposed in listings.
+pub fn find_session_in(dir: &Path, query: &str) -> Result<PathBuf, String> {
+    let sessions = list_sessions_in(dir);
+    if let Some(session) = sessions.iter().find(|session| session.id == query) {
+        return Ok(session.path.clone());
+    }
+    let query = normalize_prompt(query).to_lowercase();
+    if query.is_empty() {
+        return Err("provide an opening-prompt search (/sessions lists saved sessions)".into());
+    }
+    let matches: Vec<_> = sessions
+        .into_iter()
+        .filter(|session| session.prompt.to_lowercase().contains(&query))
+        .collect();
+    match matches.as_slice() {
+        [session] => Ok(session.path.clone()),
+        [] => Err(format!(
+            "no session matches {query:?} for this project (/sessions lists them)"
+        )),
+        _ => Err(format!(
+            "{} sessions match {query:?}; use a more specific opening-prompt search (/sessions {query})",
+            matches.len()
+        )),
     }
 }
 
@@ -608,6 +667,104 @@ mod tests {
         assert_eq!(sessions[1].model, "mock-model");
         // No sessions dir at all, empty, not an error.
         assert!(list_sessions_in(&root.join("missing")).is_empty());
+    }
+
+    #[test]
+    fn opening_prompt_search_uses_full_text_and_preserves_old_transcripts() {
+        let root = temp_root("search");
+        let mut first = SessionRecorder::new(Some(root.clone()), &root, "legacy-key", "mock");
+        let prompt = format!("{}\nFind\t the 登录 bug", "é".repeat(65));
+        first.record(&AgentMessage::user_text(prompt));
+        first.record(&AgentMessage::user_text("later prompt must not match"));
+        let path = first.transcript().unwrap().to_path_buf();
+        let original = std::fs::read(&path).unwrap();
+        let dir = first.sessions_dir().unwrap();
+        std::fs::write(dir.join("broken.jsonl"), "not json").unwrap();
+
+        let matches = search_sessions_in(dir, "  FIND\n the   登录  ");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].label.chars().count(), LABEL_MAX_CHARS);
+        assert!(
+            !matches[0].label.contains("Find"),
+            "search extends beyond the label"
+        );
+        assert_eq!(find_session_in(dir, "登录 BUG").unwrap(), path);
+        assert_eq!(
+            find_session_in(dir, "legacy-key").unwrap(),
+            path,
+            "old restart commands still work"
+        );
+        assert!(search_sessions_in(dir, "later prompt").is_empty());
+        assert!(
+            find_session_in(dir, "absent")
+                .unwrap_err()
+                .contains("no session matches")
+        );
+        assert!(
+            find_session_in(dir, "../legacy-key").is_err(),
+            "search is never a filesystem path"
+        );
+        assert!(
+            find_session_in(dir, " \n ").is_err(),
+            "an empty search cannot resume arbitrarily"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "discovery never rewrites legacy transcripts"
+        );
+    }
+
+    #[test]
+    fn ambiguous_opening_prompts_never_resume_an_arbitrary_session() {
+        let root = temp_root("ambiguous-search");
+        for (key, prompt) in [
+            ("one", "fix login bug"),
+            ("two", "fix logout bug"),
+            ("three", "fix login bug"),
+        ] {
+            let mut recorder = SessionRecorder::new(Some(root.clone()), &root, key, "mock");
+            recorder.record(&AgentMessage::user_text(prompt));
+        }
+        let dir = sessions_dir(Some(&root), &root).unwrap();
+        assert_eq!(search_sessions_in(&dir, "bug").len(), 3);
+        assert!(
+            find_session_in(&dir, "bug")
+                .unwrap_err()
+                .contains("3 sessions match")
+        );
+        assert!(
+            find_session_in(&dir, "fix login bug")
+                .unwrap_err()
+                .contains("2 sessions match")
+        );
+        assert_eq!(
+            find_session_in(&dir, "logout").unwrap(),
+            dir.join("two.jsonl")
+        );
+        assert!(search_sessions_in(&root.join("missing"), "bug").is_empty());
+    }
+
+    #[test]
+    fn opening_prompt_search_includes_text_blocks_without_using_later_messages() {
+        use cupel_core::types::{UserContent, UserContentBody, UserMessage};
+
+        let root = temp_root("block-search");
+        let mut recorder = recorder(&root, &root);
+        recorder.record(&AgentMessage::Llm(Message::User(UserMessage {
+            content: UserContentBody::Blocks(vec![
+                UserContent::Text(TextContent::plain("Explain this")),
+                UserContent::Text(TextContent::plain("screenshot")),
+            ]),
+            timestamp: 1,
+        })));
+        recorder.record(&AgentMessage::user_text("later request"));
+        let dir = recorder.sessions_dir().unwrap();
+        assert_eq!(
+            search_sessions_in(dir, "THIS screenshot")[0].prompt,
+            "Explain this screenshot"
+        );
+        assert!(search_sessions_in(dir, "later request").is_empty());
     }
 
     #[test]

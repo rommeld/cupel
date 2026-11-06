@@ -187,7 +187,7 @@ impl Updates {
                 let resume = if origin.agent.state().messages.is_empty() {
                     String::new()
                 } else {
-                    format!(" --resume {}", origin.recorder.session_id())
+                    " --resume \"prompt search\"".to_string()
                 };
                 sessions.active_mut().notice(format!(
                     "installed cupel {version}, but {reason} - run /update again when that \
@@ -376,7 +376,7 @@ mod tests {
         );
         assert!(has_notice(
             sessions.active(),
-            "quit and start cupel --resume cupel-resume"
+            "quit and start cupel --resume \"prompt search\""
         ));
         sessions.active_mut().input.submit();
         let restart = updates.request(&mut sessions).expect("no second download");
