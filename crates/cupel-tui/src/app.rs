@@ -2932,7 +2932,7 @@ impl App {
                 Some(theme) => self.pending_theme = Some(ThemeRequest::Apply(theme)),
                 None => self.notice(format!("unknown theme: {args} (/themes lists them)")),
             },
-            "quit" => self.should_quit = true,
+            "quit" | "exit" => self.should_quit = true,
             "update" => self.update_requested = true,
             _ => return false,
         }

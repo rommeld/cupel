@@ -72,7 +72,7 @@ enum PlainCommand {
 
 fn plain_command(name: &str) -> PlainCommand {
     match name {
-        "quit" => PlainCommand::Quit,
+        "quit" | "exit" => PlainCommand::Quit,
         "help" => PlainCommand::Help,
         "review" => PlainCommand::Review,
         _ if crate::commands::BUILTIN_COMMANDS
@@ -603,7 +603,7 @@ mod tests {
             .filter(|command| plain_command(command.name) != PlainCommand::TuiOnly)
             .map(|command| command.name)
             .collect();
-        assert_eq!(supported, ["help", "quit", "review"]);
+        assert_eq!(supported, ["help", "quit", "exit", "review"]);
         for name in [
             "new",
             "model",
@@ -620,6 +620,16 @@ mod tests {
             assert_eq!(plain_command(name), PlainCommand::TuiOnly, "{name}");
         }
         assert_eq!(plain_command("unknown"), PlainCommand::Prompt);
+    }
+
+    #[test]
+    fn quit_and_exit_are_local_quit_commands() {
+        for name in ["quit", "exit"] {
+            assert_eq!(plain_command(name), PlainCommand::Quit, "{name}");
+        }
+        for name in ["ex", "exiting", "quitting"] {
+            assert_eq!(plain_command(name), PlainCommand::Prompt, "{name}");
+        }
     }
 
     #[test]
