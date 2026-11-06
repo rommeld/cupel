@@ -848,7 +848,7 @@ pub(crate) mod tests {
         assert_eq!(style_of(&mut app, "pondering").fg, CUPEL.reasoning.fg);
 
         let answer = style_of(&mut app, "the answer");
-        assert_eq!(answer.fg, Some(Color::Reset));
+        assert_eq!(answer.fg, CUPEL.answer_label.fg);
         assert_eq!(style_of(&mut app, "Answer").fg, CUPEL.answer_label.fg);
     }
 
@@ -3973,7 +3973,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn markdown_reaches_the_screen_and_only_the_answer_label_is_accented() {
+    fn markdown_reaches_the_screen_and_answer_prose_matches_the_label() {
         let mut app = test_app();
         app.transcript.cells.push(Cell::Answer {
             text: "# Fazit\nplain text with **weight**".into(),
@@ -3983,11 +3983,13 @@ pub(crate) mod tests {
         assert!(!screen.contains("# Fazit"), "hashes are chrome: {screen}");
         assert!(!screen.contains("**"), "delimiters are consumed: {screen}");
         // The invariant, unmarked text keeps the cell identity...
-        assert_eq!(style_of(&mut app, "plain text").fg, Some(Color::Reset));
+        let prose = style_of(&mut app, "plain text");
+        assert_eq!(prose.fg, CUPEL.answer_label.fg);
+        assert!(!prose.add_modifier.contains(Modifier::BOLD));
         assert_eq!(style_of(&mut app, "Answer").fg, CUPEL.answer_label.fg);
         // ...and accents combine with it instead of replacing it.
         let weight = style_of(&mut app, "weight");
-        assert_eq!(weight.fg, Some(Color::Reset));
+        assert_eq!(weight.fg, CUPEL.answer_label.fg);
         assert!(weight.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -4709,6 +4711,56 @@ pub(crate) mod tests {
             }
         }
         panic!("needle {needle:?} not on screen");
+    }
+
+    #[test]
+    fn answer_prose_matches_the_label_and_preserves_markdown_colors_in_every_theme() {
+        use crate::app::ThemeRequest;
+        use crate::sessions::Sessions;
+
+        for theme in crate::theme::example_themes() {
+            let mut app = test_app();
+            app.transcript.cells.push(Cell::Assistant {
+                text: "intermediate prose".into(),
+            });
+            app.transcript.cells.push(Cell::Answer {
+                text: "# Heading\nplain prose with **bold** and *italic* and `code` and [link](https://example.com)\n```\ncode panel\n```".into(),
+            });
+            let mut sessions = Sessions::new(app);
+            sessions.on_theme_request(ThemeRequest::Apply(Arc::clone(&theme)));
+            let prose = sessions_style_of(&mut sessions, "plain prose");
+            let label = sessions_style_of(&mut sessions, "Answer");
+            assert_eq!(prose.fg, label.fg, "{}", theme.id);
+            assert_eq!(prose.fg, theme.answer_label.fg, "{}", theme.id);
+            assert!(!prose.add_modifier.contains(Modifier::BOLD), "{}", theme.id);
+            assert!(label.add_modifier.contains(Modifier::BOLD), "{}", theme.id);
+            for (text, accent) in [
+                ("Heading", theme.md_heading),
+                ("bold", theme.md_bold),
+                ("italic", theme.md_italic),
+                ("code and", theme.md_code),
+                ("link", theme.md_link),
+            ] {
+                assert_eq!(
+                    sessions_style_of(&mut sessions, text).fg,
+                    theme.answer.patch(accent).fg,
+                    "{}: {text}",
+                    theme.id,
+                );
+            }
+            assert_eq!(
+                sessions_style_of(&mut sessions, "code panel").fg,
+                theme.base.fg.or(Some(Color::Reset)),
+                "{}: fenced code keeps its foreground",
+                theme.id,
+            );
+            assert_eq!(
+                sessions_style_of(&mut sessions, "intermediate prose").fg,
+                theme.assistant.fg.or(Some(Color::Reset)),
+                "{}: intermediate prose is unchanged",
+                theme.id,
+            );
+        }
     }
 
     #[test]

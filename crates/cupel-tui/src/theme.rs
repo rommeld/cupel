@@ -105,7 +105,7 @@ pub const CUPEL: Theme = Theme {
     task: Style::new().fg(Color::White).bg(Color::Indexed(240)),
     question: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     assistant: Style::new(),
-    answer: Style::new(),
+    answer: Style::new().fg(Color::Magenta),
     answer_label: Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     // #767676 stays readable against both black and white terminal backgrounds.
     reasoning: Style::new().fg(Color::Indexed(243)),
@@ -208,7 +208,7 @@ impl Theme {
             task: Style::new().fg(fg).bg(raised),
             question: Style::new().fg(yellow).add_modifier(Modifier::BOLD),
             assistant: Style::new().fg(fg),
-            answer: Style::new().fg(fg),
+            answer: Style::new().fg(magenta),
             answer_label: Style::new().fg(magenta).add_modifier(Modifier::BOLD),
             reasoning: Style::new().fg(reasoning_color(fg, muted)),
             tool_header: Style::new().fg(cyan),
