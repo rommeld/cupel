@@ -670,11 +670,11 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     // the wheel currently does. It shares the status row's left margin because
     // a right aligned hint row would sit staggered against it.
     let hints = if app.question.is_some() {
-        " ↑↓ choose · enter answer (typed text wins) · @ file esc abort"
+        " ↑↓ choose · enter answer (typed text wins) · shift+enter newline · @ file esc abort"
     } else if app.mouse_captured {
-        " alt+enter steer · @ file / cmds · esc abort · ctrl+r reasoning · ctrl+o copy · ctrl+t tools · ctrl+y select"
+        " ctrl+enter steer · shift+enter newline · @ file / cmds · esc abort · ctrl+r reasoning · ctrl+o copy · ctrl+t tools · ctrl+y select"
     } else {
-        " alt+enter steer · @ file / cmds · esc abort · ctrl+r reasoning · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
+        " ctrl+enter steer · shift+enter newline · @ file / cmds · esc abort · ctrl+r reasoning · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =
@@ -1218,7 +1218,8 @@ pub(crate) mod tests {
             for width in [80, 140, 200] {
                 let screen = draw(&mut app, width, 20);
                 let hints_row = screen.lines().last().expect("hints row");
-                assert!(hints_row.starts_with(" alt+enter steer"), "{screen}");
+                assert!(hints_row.starts_with(" ctrl+enter steer"), "{screen}");
+                assert!(hints_row.contains("shift+enter newline"), "{screen}");
                 assert!(hints_row.ends_with(&version_suffix), "{screen}");
                 if width == 200 {
                     let mouse_hint = if mouse_captured {
@@ -1233,7 +1234,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn footer_omits_send_newline_and_ctrl_b_hints() {
+    fn footer_shows_newline_and_omits_obsolete_hints() {
         for mouse_captured in [true, false] {
             for question_open in [false, true] {
                 let mut app = test_app();
@@ -1241,7 +1242,8 @@ pub(crate) mod tests {
                 let _answer = question_open.then(|| open_question(&mut app));
                 let screen = draw(&mut app, 240, 20);
                 let hints_row = screen.lines().last().expect("hints row");
-                for hint in ["enter send", "ctrl+enter newline", "ctrl+b"] {
+                assert!(hints_row.contains("shift+enter newline"), "{screen}");
+                for hint in ["enter send", "ctrl+enter newline", "alt+enter", "ctrl+b"] {
                     assert!(!hints_row.contains(hint), "unexpected {hint}:\n{screen}");
                 }
             }
@@ -1897,10 +1899,10 @@ pub(crate) mod tests {
         }
         assert_eq!(app.input.text(), "hi");
 
-        // Ctrl+Enter inserts a newline instead of submitting.
+        // Shift+Enter inserts a newline instead of submitting.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
-            KeyModifiers::CONTROL,
+            KeyModifiers::SHIFT,
         )));
         assert_eq!(app.input.text(), "hi\n");
         assert!(app.pending_prompt.is_none());
@@ -2061,6 +2063,18 @@ pub(crate) mod tests {
             matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage") && text.contains("/quit, /exit  - Quit cupel"))
         });
         assert!(notice, "expected /help notice");
+        let keys = app
+            .transcript
+            .cells
+            .iter()
+            .find_map(|cell| match cell {
+                Cell::Notice { text } if text.contains("prompt keys:") => Some(text),
+                _ => None,
+            })
+            .expect("expected prompt key help");
+        assert!(keys.contains("Shift+Enter  - insert a newline"));
+        assert!(keys.contains("Ctrl+Enter   - steer"));
+        assert!(!keys.contains("Alt+Enter"));
     }
 
     #[test]
@@ -2089,6 +2103,20 @@ pub(crate) mod tests {
         assert_eq!(app.input.text(), "/exit ");
         assert!(!app.should_quit);
         assert!(app.pending_prompt.is_none());
+    }
+
+    #[test]
+    fn shift_enter_with_autocomplete_open_inserts_a_newline() {
+        let mut app = test_app();
+        type_text(&mut app, "/he");
+        assert!(app.autocomplete.visible().is_some());
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(app.input.text(), "/he\n");
+        assert!(app.pending_prompt.is_none());
+        assert!(!app.is_running());
     }
 
     #[test]
@@ -2760,22 +2788,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn alt_enter_while_idle_submits_the_prompt() {
+    fn ctrl_enter_while_idle_submits_the_prompt() {
         let mut app = test_app();
         type_text(&mut app, "build it");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::CONTROL,
+        )));
         assert!(app.input.is_empty());
         assert_eq!(app.pending_prompt.as_deref(), Some("build it"));
     }
 
     #[tokio::test]
-    async fn ctrl_enter_while_running_only_inserts_a_newline() {
+    async fn shift_enter_while_running_only_inserts_a_newline() {
         let mut app = test_app();
         app.start_run("build it");
         type_text(&mut app, "first line");
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
-            KeyModifiers::CONTROL,
+            KeyModifiers::SHIFT,
         )));
         type_text(&mut app, "second line");
         assert_eq!(app.input.text(), "first line\nsecond line");
@@ -2787,11 +2818,31 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn alt_enter_while_running_steers_the_prompt() {
+    async fn alt_enter_is_unbound() {
+        for running in [false, true] {
+            let mut app = test_app();
+            if running {
+                app.start_run("build it");
+            }
+            type_text(&mut app, "keep this draft");
+            app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)));
+            assert_eq!(app.input.text(), "keep this draft");
+            assert!(app.pending_prompt.is_none());
+            assert!(app.steering.is_empty());
+            assert!(app.queued.is_empty());
+            assert!(app.agent.take_steering().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn ctrl_enter_while_running_steers_the_prompt() {
         let mut app = test_app();
         app.start_run("build it");
         type_text(&mut app, "use the other file");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::CONTROL,
+        )));
         assert!(app.input.is_empty(), "the prompt left the input box");
         assert_eq!(app.steering, ["use the other file"]);
         assert!(app.queued.is_empty(), "steered, not queued");
@@ -2836,7 +2887,10 @@ pub(crate) mod tests {
                 )
             {
                 type_text(&mut app, "late");
-                app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)));
+                app.on_terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::Enter,
+                    KeyModifiers::CONTROL,
+                )));
                 steered = true;
             }
             app.on_event(event).await;
@@ -2884,7 +2938,10 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.start_run("build it");
         type_text(&mut app, "steered");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT)));
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::CONTROL,
+        )));
         submit_paste(&mut app, "queued");
         type_text(&mut app, "draft");
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
@@ -5673,7 +5730,7 @@ pub(crate) mod tests {
     #[test]
     fn modified_enter_answers_a_question_without_steering() {
         for (code, modifiers) in [
-            (KeyCode::Enter, KeyModifiers::ALT),
+            (KeyCode::Enter, KeyModifiers::CONTROL),
             (KeyCode::Char('j'), KeyModifiers::CONTROL),
         ] {
             let mut app = test_app();
@@ -5681,9 +5738,9 @@ pub(crate) mod tests {
             type_text(&mut app, "neither");
             app.on_terminal_event(Event::Key(KeyEvent::new(
                 KeyCode::Enter,
-                KeyModifiers::CONTROL,
+                KeyModifiers::SHIFT,
             )));
-            assert!(app.question.is_some(), "Ctrl+Enter adds a line");
+            assert!(app.question.is_some(), "Shift+Enter adds a line");
             type_text(&mut app, "use env vars");
             app.on_terminal_event(Event::Key(KeyEvent::new(code, modifiers)));
             assert_eq!(

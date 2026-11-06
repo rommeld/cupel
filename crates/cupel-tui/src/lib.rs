@@ -88,9 +88,9 @@ pub async fn run(
     // pasted text would hit the Enter handler and submit a partial prompt.
     let _ = execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     // Keyboard enhancement (the kitty keyboard protocol) makes the terminal report
-    // modified keys as unambiguous escape codes, so Ctrl+Enter arrives as Ctrl+Enter
-    // instead of plain Enter. Terminals without the protocol ignore the request. It
-    // gets its own `execute!` because it fails on Windows, and a failed command would
+    // modified keys as unambiguous escape codes, so Shift+Enter and Ctrl+Enter arrive
+    // with their modifiers instead of plain Enter. Unsupported terminals ignore the
+    // request. It gets its own `execute!` because it fails on Windows, which would
     // skip the ones after it.
     let _ = execute!(
         std::io::stdout(),
