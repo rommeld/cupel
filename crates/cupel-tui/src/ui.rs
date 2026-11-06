@@ -294,7 +294,11 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
             .track_symbol(Some("│"))
             .track_style(theme.pane_border)
             .thumb_style(theme.scrollbar_thumb);
-        let mut state = ScrollbarState::new(total).position(start);
+        // Ratatui's last position is content_length - 1, not total - height.
+        // Use the number of viewport positions and the content viewport height.
+        let mut state = ScrollbarState::new(max_scroll + 1)
+            .position(start)
+            .viewport_content_length(height);
         frame.render_stateful_widget(scrollbar, area, &mut state);
     }
 
@@ -3887,6 +3891,51 @@ pub(crate) mod tests {
             screen.contains('█'),
             "overflowing content must show the thumb:\n{screen}"
         );
+    }
+
+    #[test]
+    fn scrollbar_reaches_both_ends_after_scrolling_and_resizing() {
+        let mut app = test_app();
+        for i in 0..20 {
+            app.transcript.cells.push(Cell::Assistant {
+                text: format!("line {i}"),
+            });
+        }
+
+        for (width, height) in [(40, 24), (60, 30), (30, 16)] {
+            let _ = draw(&mut app, width, height);
+            for _ in 0..100 {
+                app.on_terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::PageUp,
+                    KeyModifiers::NONE,
+                )));
+            }
+            let screen = draw(&mut app, width, height);
+            assert_eq!(app.last_top_line, 0);
+            let top = usize::from(app.last_transcript_inner.y - 1);
+            assert!(
+                screen.lines().nth(top).unwrap().ends_with('█'),
+                "thumb must reach the top at {width}x{height}:\n{screen}"
+            );
+
+            for _ in 0..100 {
+                app.on_terminal_event(Event::Key(KeyEvent::new(
+                    KeyCode::PageDown,
+                    KeyModifiers::NONE,
+                )));
+            }
+            let screen = draw(&mut app, width, height);
+            assert_eq!(app.scroll_from_bottom, 0);
+            assert!(
+                screen.contains("line 19"),
+                "tail must be visible:\n{screen}"
+            );
+            let bottom = usize::from(app.last_transcript_inner.bottom());
+            assert!(
+                screen.lines().nth(bottom).unwrap().ends_with('█'),
+                "thumb must reach the bottom at {width}x{height}:\n{screen}"
+            );
+        }
     }
 
     #[test]
