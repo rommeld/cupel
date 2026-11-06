@@ -60,13 +60,6 @@ pub enum Cell {
     Summary {
         text: String,
     },
-    Agent {
-        name: String,
-        text: String,
-    },
-    Team {
-        text: String,
-    },
 }
 
 pub struct ToolOutcome {
@@ -85,18 +78,13 @@ pub struct Rendered {
 #[derive(Default)]
 pub struct Transcript {
     pub cells: Vec<Cell>,
-    pub hide_team: bool,
 }
 
 impl Transcript {
     /// Append a delta to the last assistant cell, creating one if the last
     /// cell is something else (e.g. the first delta after a tool result).
     pub fn append_assistant(&mut self, delta: &str) {
-        let tail = self
-            .cells
-            .iter_mut()
-            .rev()
-            .find(|cell| !matches!(cell, Cell::Team { .. }));
+        let tail = self.cells.last_mut();
         if let Some(Cell::Assistant { text }) = tail {
             text.push_str(delta);
         } else {
@@ -108,11 +96,7 @@ impl Transcript {
 
     /// Same, for thinking deltas.
     pub fn append_thinking(&mut self, delta: &str) {
-        let tail = self
-            .cells
-            .iter_mut()
-            .rev()
-            .find(|cell| !matches!(cell, Cell::Team { .. }));
+        let tail = self.cells.last_mut();
         if let Some(Cell::Thinking { text }) = tail {
             text.push_str(delta);
         } else {
@@ -190,7 +174,7 @@ impl Transcript {
     pub fn promote_final_answer(&mut self) {
         for cell in self.cells.iter_mut().rev() {
             match cell {
-                Cell::Usage { .. } | Cell::Notice { .. } | Cell::Team { .. } => {}
+                Cell::Usage { .. } | Cell::Notice { .. } => {}
                 Cell::Assistant { text } => {
                     // take() moves the String out (leaving an empty one
                     // behind) so the cell can be replaced without cloning
@@ -202,37 +186,6 @@ impl Transcript {
                 _ => return,
             }
         }
-    }
-
-    /// Show trailing team activity above the completed answer, including updates
-    /// received after completion. Keep source indices stable for selection/copy,
-    /// keep usage below the answer, and never cross a new user turn.
-    fn display_order(&self) -> Vec<usize> {
-        let mut order = Vec::with_capacity(self.cells.len());
-        let mut index = 0;
-        while index < self.cells.len() {
-            if matches!(self.cells[index], Cell::Answer { .. } | Cell::Agent { .. }) {
-                let mut end = index + 1;
-                while matches!(
-                    self.cells.get(end),
-                    Some(Cell::Team { .. } | Cell::Usage { .. } | Cell::Notice { .. })
-                ) {
-                    end += 1;
-                }
-                order.extend(
-                    (index + 1..end).filter(|&i| matches!(self.cells[i], Cell::Team { .. })),
-                );
-                order.push(index);
-                order.extend(
-                    (index + 1..end).filter(|&i| !matches!(self.cells[i], Cell::Team { .. })),
-                );
-                index = end;
-            } else {
-                order.push(index);
-                index += 1;
-            }
-        }
-        order
     }
 
     /// Flatten every cell into styled, wrapped lines for the given inner
@@ -248,11 +201,7 @@ impl Transcript {
             lines: Vec::new(),
             cell_at: Vec::new(),
         };
-        for index in self.display_order() {
-            let cell = &self.cells[index];
-            if self.hide_team && matches!(cell, Cell::Team { .. }) {
-                continue;
-            }
+        for (index, cell) in self.cells.iter().enumerate() {
             // A blank spacer between cells, but not at the very top.
             if !rendered.lines.is_empty() {
                 rendered.lines.push(Line::default());
@@ -292,9 +241,7 @@ impl Transcript {
             | Cell::Error { text }
             | Cell::Notice { text }
             | Cell::Usage { text }
-            | Cell::Summary { text }
-            | Cell::Agent { text, .. }
-            | Cell::Team { text } => Some(text),
+            | Cell::Summary { text } => Some(text),
             Cell::Tool { .. } => None,
         }
     }
@@ -334,13 +281,6 @@ fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         Cell::Summary { text } => {
             push_wrapped(&mut out, "[context summary]", width, theme.notice);
             out.extend(crate::markdown::render(text, width, theme.reasoning, theme));
-        }
-        Cell::Agent { name, text } => {
-            push_wrapped(&mut out, &format!("{name}:"), width, theme.tool_header);
-            out.extend(crate::markdown::render(text, width, theme.answer, theme));
-        }
-        Cell::Team { text } => {
-            out.extend(crate::markdown::render(text, width, theme.notice, theme));
         }
         Cell::Tool { .. } => out.extend(tool_lines(cell, width, theme)),
     }
@@ -644,7 +584,6 @@ mod tests {
             cells: vec![Cell::User {
                 text: source.into(),
             }],
-            ..Default::default()
         };
         let rendered = transcript.to_lines(48, None, &CUPEL);
         assert_eq!(
@@ -710,7 +649,6 @@ mod tests {
             cells: vec![Cell::User {
                 text: "**日本語日本語**".into(),
             }],
-            ..Default::default()
         };
         let rendered = transcript.to_lines(10, None, &CUPEL);
         assert_eq!(rendered.lines.len(), 2);
@@ -728,7 +666,6 @@ mod tests {
             cells: vec![Cell::User {
                 text: "abcdefghijklm".into(),
             }],
-            ..Default::default()
         };
         let rendered = transcript.to_lines(16, None, &CUPEL);
         assert_eq!(rendered.lines.len(), 1);
@@ -743,7 +680,6 @@ mod tests {
             cells: vec![Cell::User {
                 text: source.into(),
             }],
-            ..Default::default()
         };
         let rendered = transcript.to_lines(16, None, &CUPEL);
         let lines: Vec<String> = rendered
@@ -766,7 +702,6 @@ mod tests {
             cells: vec![Cell::User {
                 text: "**bold**\n```rust\nlet x = 1;\n```".into(),
             }],
-            ..Default::default()
         };
         let rendered = transcript.to_lines(40, Some(0), &CUPEL);
         for line in &rendered.lines {
@@ -1000,131 +935,6 @@ mod tests {
     }
 
     #[test]
-    fn discussion_updates_do_not_split_streaming_or_hide_the_final_answer() {
-        let mut transcript = Transcript::default();
-        transcript.append_thinking("first ");
-        transcript.cells.push(Cell::Team {
-            text: "discussion while thinking".into(),
-        });
-        transcript.append_thinking("thought");
-        transcript.append_assistant("first ");
-        transcript.cells.push(Cell::Team {
-            text: "discussion while answering".into(),
-        });
-        transcript.append_assistant("answer");
-        transcript.promote_final_answer();
-        assert!(matches!(&transcript.cells[0],Cell::Thinking{text}if text=="first thought"));
-        assert!(matches!(&transcript.cells[2],Cell::Answer{text}if text=="first answer"));
-        assert_eq!(transcript.cells.len(), 4);
-        let rendered = transcript.to_lines(80, None, &CUPEL);
-        assert_eq!(rendered.cell_at.last(), Some(&Some(2)));
-        assert_eq!(
-            rendered.lines.last().map(line_text).as_deref(),
-            Some("first answer")
-        );
-    }
-
-    #[test]
-    fn late_team_updates_stay_above_answer_and_usage_without_crossing_user_turns() {
-        let mut transcript = Transcript::default();
-        transcript.cells.push(Cell::User {
-            text: "task".into(),
-        });
-        transcript.append_assistant("answer");
-        transcript.promote_final_answer();
-        transcript.cells.push(Cell::Usage {
-            text: "worked".into(),
-        });
-        transcript.cells.push(Cell::Team {
-            text: "late update".into(),
-        });
-        let rendered = transcript.to_lines(80, Some(1), &CUPEL);
-        let text: Vec<_> = rendered
-            .lines
-            .iter()
-            .map(|line| line_text(line).trim_end().to_string())
-            .collect();
-        assert_eq!(
-            text,
-            [">> task", "", "late update", "", "answer", "", "worked"]
-        );
-        assert_eq!(
-            rendered.cell_at[4],
-            Some(1),
-            "answer keeps its source index"
-        );
-        assert_eq!(transcript.copy_text(1), Some("answer"));
-        transcript.cells.push(Cell::User {
-            text: "next task".into(),
-        });
-        transcript.cells.push(Cell::Team {
-            text: "next update".into(),
-        });
-        assert_eq!(transcript.display_order(), [0, 3, 1, 2, 4, 5]);
-    }
-
-    #[test]
-    fn hidden_team_updates_keep_history_and_visible_hit_indices() {
-        let mut transcript = Transcript::default();
-        transcript.cells.push(Cell::User { text: "hi".into() });
-        transcript.cells.push(Cell::Team { text: "one".into() });
-        transcript.hide_team = true;
-        transcript.cells.push(Cell::Team { text: "two".into() });
-        transcript.append_assistant("answer");
-        let hidden = transcript.to_lines(80, None, &CUPEL);
-        assert_eq!(hidden.cell_at, vec![Some(0), None, Some(3)]);
-        assert_eq!(transcript.copy_text(3), Some("answer"));
-        transcript.hide_team = false;
-        let visible = transcript.to_lines(80, None, &CUPEL);
-        assert!(visible.cell_at.contains(&Some(1)));
-        assert!(visible.cell_at.contains(&Some(2)));
-        assert_eq!(transcript.copy_text(2), Some("two"));
-    }
-
-    #[test]
-    fn helper_and_team_outputs_render_markdown_and_preserve_copy_source() {
-        use ratatui::style::Modifier;
-        let source = "## Findings\n\n**Fixed** the `parser`.\n\n- first\n- second\n\n```rust\nlet answer = 42;\n```";
-        for cell in [
-            Cell::Agent {
-                name: "developer".into(),
-                text: source.into(),
-            },
-            Cell::Team {
-                text: format!("[team #3 @developer]\n{source}"),
-            },
-        ] {
-            let transcript = Transcript {
-                cells: vec![cell],
-                ..Default::default()
-            };
-            let rendered = transcript.to_lines(80, None, &CUPEL);
-            let text = rendered
-                .lines
-                .iter()
-                .map(line_text)
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(
-                text.contains("Findings") && text.contains("let answer = 42;"),
-                "{text}"
-            );
-            assert!(
-                !text.contains("## ") && !text.contains("**") && !text.contains("```"),
-                "{text}"
-            );
-            assert!(
-                rendered
-                    .lines
-                    .iter()
-                    .flat_map(|line| &line.spans)
-                    .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
-            );
-            assert!(transcript.copy_text(0).unwrap().contains(source));
-        }
-    }
-
-    #[test]
     fn promote_final_answer_skips_error_runs() {
         let mut t = Transcript::default();
         t.append_assistant("half an answer");
@@ -1280,7 +1090,6 @@ mod tests {
                 Cell::Usage { text: raw.into() },
                 Cell::Summary { text: raw.into() },
             ],
-            ..Default::default()
         };
         for width in [10, 80] {
             let rendered = t.to_lines(width, Some(0), &CUPEL);

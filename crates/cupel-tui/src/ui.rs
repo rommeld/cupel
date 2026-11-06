@@ -114,7 +114,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         .map(|line| transcript::wrap_line(line, inner_width).len())
         .sum::<usize>()
         .clamp(1, 5) as u16;
-    let waiting = app.steering.len() + app.queued.len() + usize::from(app.waiting_helper.is_some());
+    let waiting = app.steering.len() + app.queued.len();
     let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
     // Reserve the editor, model status, footer, queues and one transcript row first.
     // The pane itself uses at most half the screen, its outside gaps are separate rows.
@@ -473,19 +473,14 @@ fn question_lines(app: &App, width: usize, theme: &Theme) -> QuestionLines {
 /// then "Follow up" rows, oldest first. The first line of each prompt, then the key
 /// that takes them back.
 fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
-    if app.steering.is_empty() && app.queued.is_empty() && app.waiting_helper.is_none() {
+    if app.steering.is_empty() && app.queued.is_empty() {
         return;
     }
     let first_line = |text: &String| text.lines().next().unwrap_or_default().to_string();
     let lines: Vec<Line<'_>> = app
-        .waiting_helper
+        .steering
         .iter()
-        .map(|call| format!(" Agent: @{} {}", call.name, first_line(&call.task)))
-        .chain(
-            app.steering
-                .iter()
-                .map(|text| format!(" Steer: {}", first_line(text))),
-        )
+        .map(|text| format!(" Steer: {}", first_line(text)))
         .chain(
             app.queued
                 .iter()
@@ -567,11 +562,6 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
         .padding(Padding::horizontal(INPUT_PADDING));
     if app.question.is_some() {
         block = block.title(Span::styled(" Your answer ", theme.chrome));
-    } else if let Some(name) = &app.armed {
-        block = block.title(Span::styled(
-            format!(" next prompt → {name} (esc cancels) "),
-            theme.chrome,
-        ));
     } else if app.is_running() {
         let elapsed = app
             .run_started
@@ -667,9 +657,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let hints = if app.question.is_some() {
         " ↑↓ choose · enter answer (typed text wins) · ctrl+enter newline · @ file esc abort"
     } else if app.mouse_captured {
-        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · ctrl+o copy · ctrl+b team · ctrl+t tools · ctrl+y select"
+        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
     } else {
-        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · SELECTION MODE · ctrl+b team · ctrl+t tools · ctrl+y scroll"
+        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =
@@ -1143,8 +1133,12 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("code.rs"), "fn main() {}").unwrap();
         let mut app = test_app_in(root.to_str().unwrap());
+        app.meta.settings.extra.insert(
+            "agentCommands".into(),
+            serde_json::json!({"review":"removed-helper"}),
+        );
 
-        // A reviewable path, the built bundle is queued as the prompt.
+        // The bundle always goes to this agent, ignoring old helper routing.
         type_text(&mut app, "/review code.rs");
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         app.on_terminal_event(Event::Key(KeyEvent::new(
@@ -1382,117 +1376,6 @@ pub(crate) mod tests {
             },
             recorder,
         )
-    }
-
-    #[tokio::test]
-    async fn restored_legacy_shared_facts_have_a_static_solo_locator() {
-        use cupel_agent::AgentTool as _;
-        use cupel_coding_agent::team_conversation::{Participant, TeamBody, TeamEntry};
-        use cupel_coding_agent::tools::read::ReadTool;
-        use cupel_core::types::{Message, ToolResultContent, UserContentBody};
-
-        let root = std::env::temp_dir().join("cupel-ui-legacy-shared-handoff");
-        let _ = std::fs::remove_dir_all(&root);
-        let base = test_app_with_home(&root, "legacy-shared");
-        let journal = base
-            .recorder
-            .sessions_dir()
-            .unwrap()
-            .join("legacy-shared/team/conversation.jsonl");
-        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
-        let entry = TeamEntry {
-            id: 1,
-            author: Participant::Helper("reader".into()),
-            timestamp: 5,
-            durable: true,
-            body: TeamBody::Post {
-                text: "legacy-fact-remains-discoverable".into(),
-                reply_to: None,
-                root: None,
-            },
-        };
-        let bytes = format!(
-            "{{\"schemaVersion\":1}}\n{}\n",
-            serde_json::to_string(&entry).unwrap()
-        );
-        std::fs::write(&journal, &bytes).unwrap();
-        // Old sessions did not persist UI TeamEntry events: an empty membership
-        // boundary plus the existing journal must still make their facts discoverable.
-        let legacy = cupel_agent::AgentMessage::Custom {
-            kind: "team".into(),
-            payload: serde_json::json!({"members":[]}),
-            timestamp: 17,
-        };
-        let mut options = AgentOptions::new(base.agent.state().model, base.agent.registry());
-        options.messages = vec![legacy];
-        let restored = App::new(Agent::new(options), base.meta, base.recorder);
-        assert!(restored.collaboration.is_none());
-        let history = restored.agent.state().messages;
-        let visible = restored.agent.hooks().convert_to_llm(&history).await;
-        let [Message::User(user)] = visible.as_slice() else {
-            panic!("expected one legacy locator");
-        };
-        let UserContentBody::Text(text) = &user.content else {
-            panic!("expected plain locator");
-        };
-        assert_eq!(user.timestamp, 17);
-        assert!(text.contains(crate::app::TEAM_HANDOFF_MARKER));
-        assert!(text.contains(journal.to_str().unwrap()));
-        assert!(
-            !text.contains("legacy-fact-remains-discoverable"),
-            "constructor must not read journal contents"
-        );
-        let result = ReadTool::new(root.join("proj"))
-            .execute(
-                "legacy-evidence",
-                serde_json::json!({"path":journal}),
-                tokio_util::sync::CancellationToken::new(),
-                None,
-            )
-            .await
-            .unwrap();
-        assert!(result.content.iter().any(|content| matches!(content, ToolResultContent::Text(text) if text.text.contains("legacy-fact-remains-discoverable"))));
-        assert!(restored.collaboration.is_none());
-        assert_eq!(std::fs::read_to_string(&journal).unwrap(), bytes);
-        let mut options =
-            AgentOptions::new(restored.agent.state().model, restored.agent.registry());
-        options.messages = history.clone();
-        let again = App::new(Agent::new(options), restored.meta, restored.recorder);
-        assert_eq!(
-            again.agent.state().messages,
-            history,
-            "legacy hydration must be idempotent"
-        );
-        assert!(again.collaboration.is_none());
-        // A restored nonempty team will recover its live projection when it is
-        // explicitly run; adding a static locator here would duplicate that context.
-        let mut configured = test_app_with_home(&root, "legacy-shared");
-        let model = configured.agent.state().model;
-        configured.meta.settings.agents.insert("reader".into(), serde_json::from_value(serde_json::json!({
-            "provider": model.provider.as_str(), "model": model.id.clone(), "thinkingLevel": "off", "description": "Reads legacy evidence."
-        })).unwrap());
-        let mut options = AgentOptions::new(model, configured.agent.registry());
-        options.messages = vec![cupel_agent::AgentMessage::Custom {
-            kind: "team".into(),
-            payload: serde_json::json!({"members":["reader"]}),
-            timestamp: 18,
-        }];
-        let still_armed = App::new(Agent::new(options), configured.meta, configured.recorder);
-        assert!(still_armed.team.contains("reader"));
-        assert!(still_armed.collaboration.is_none());
-        assert!(
-            still_armed
-                .agent
-                .hooks()
-                .convert_to_llm(&still_armed.agent.state().messages)
-                .await
-                .is_empty()
-        );
-        // A historical solo transcript does not gain a handoff just because a
-        // similarly named sidecar exists; recognized team history is required.
-        let untouched = test_app_with_home(&root, "legacy-shared");
-        assert!(untouched.agent.state().messages.is_empty());
-        assert!(untouched.collaboration.is_none());
     }
 
     #[test]

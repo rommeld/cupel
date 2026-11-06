@@ -1,4 +1,4 @@
-//! Optional local execution coordination, independent of model tools and teams.
+//! Optional local execution coordination, independent of model tools.
 
 use crate::ToolError;
 use tokio_util::sync::CancellationToken;

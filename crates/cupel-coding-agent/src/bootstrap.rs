@@ -81,19 +81,8 @@ pub async fn load(
     let context_files = crate::resources::load_context_files(&roots);
     let templates = crate::commands::load_prompt_templates(&roots);
     let (home_settings, mut warnings) = crate::settings::load_home_settings(home.as_deref());
-    let (mut project_settings, project_warnings) = crate::settings::load_project_settings(cwd);
+    let (project_settings, project_warnings) = crate::settings::load_project_settings(cwd);
     warnings.extend(project_warnings);
-    // Definitions grant tools and routes can target privileged home helpers.
-    if !crate::project_trust::is_trusted(home.as_deref(), cwd) {
-        for name in core::mem::take(&mut project_settings.agents).into_keys() {
-            warnings.push(format!(
-                "warning: ignoring project agent {name}: explicit project trust required"
-            ));
-        }
-        for command in core::mem::take(&mut project_settings.agent_commands).into_keys() {
-            warnings.push(format!("warning: ignoring project agentCommands entry {command}: explicit project trust required"));
-        }
-    }
     warnings.extend(crate::settings::project_settings_warning(cwd));
     let (models, model_warnings) =
         crate::models::build_catalog(registry, home.as_deref(), cwd, &home_settings).await;
@@ -136,7 +125,7 @@ pub async fn load(
     }
 }
 
-/// The coding tools available to a session or a configured helper.
+/// The coding tools available to a session.
 #[must_use]
 pub fn coding_tools(cwd: &Path) -> Vec<Arc<dyn AgentTool>> {
     let backend = Arc::new(GrepSearch::new(cwd));
@@ -328,54 +317,6 @@ mod tests {
                 .iter()
                 .all(|warning| !warning.contains("do-not-display-this-key"))
         );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn project_agents_and_command_routes_require_trust() {
-        let root = std::env::temp_dir().join("cupel-bootstrap-agents-m1");
-        let _ = std::fs::remove_dir_all(&root);
-        let (home, cwd) = (root.join("home"), root.join("proj"));
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::create_dir_all(cwd.join(".cupel")).unwrap();
-        let agent = r#"{"provider":"mock","model":"m","thinkingLevel":"off"}"#;
-        std::fs::write(
-            home.join("settings.json"),
-            format!(r#"{{"agents":{{"home":{agent}}}}}"#),
-        )
-        .unwrap();
-        std::fs::write(
-            cwd.join(".cupel/settings.json"),
-            format!(r#"{{"agents":{{"project":{agent}}},"agentCommands":{{"review":"home"}}}}"#),
-        )
-        .unwrap();
-        let registry = cupel_core::default_registry();
-        let restricted = load(&cwd, Some(home.clone()), &registry, Frontend::Tui).await;
-        assert_eq!(
-            restricted.settings.agents.keys().collect::<Vec<_>>(),
-            ["home"]
-        );
-        assert!(restricted.settings.agent_commands.is_empty());
-        assert!(
-            restricted
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("project agent project"))
-        );
-        assert!(
-            restricted
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("project agentCommands entry review"))
-        );
-        crate::project_trust::save(&home, &cwd, crate::project_trust::ProjectTrust::Trusted)
-            .unwrap();
-        let trusted = load(&cwd, Some(home), &registry, Frontend::Tui).await;
-        assert_eq!(
-            trusted.settings.agents.keys().collect::<Vec<_>>(),
-            ["home", "project"]
-        );
-        assert_eq!(trusted.settings.agent_commands["review"], "home");
         std::fs::remove_dir_all(root).unwrap();
     }
 

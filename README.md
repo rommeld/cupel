@@ -6,7 +6,7 @@
 
 `cupel` is a lean Rust coding agent with a terminal UI, plain-text mode, and ACP
 support. It combines provider-neutral inference with file reading, ranked grep,
-patching, and shell tools.
+patching, and shell tools. A single agent runs independent tool calls in parallel.
 
 ## Install
 
@@ -61,8 +61,6 @@ printf 'Explain this project\n' | cupel --plain
 | `/preset <name>` | Switch model, thinking level, and prompt to a preset (no argument lists them) |
 | `/themes [id]` | Switch the color theme (no argument lists them) |
 | `/review [path...]` | Bundle the project, specific paths, or a `--diff` into a code-review prompt |
-| `/agent <name> [task]` | Call a configured helper directly; without a task, send it your next prompt |
-| `/team` | Manage helpers, inspect tasks and discussion, or cancel a subtree |
 | `/usage` | Show token usage and estimated costs |
 | `/sessions [search]` | List or search saved sessions by their opening prompt |
 | `/hot-reload [prompt search]` | Reload `.cupel` config into the running or a matching saved session |
@@ -119,42 +117,6 @@ Define it in `settings.json`; `default` also applies at startup:
 ```
 
 Use IDs from `/model` and switch named presets with `/preset <name>`.
-
-### Helper agents
-
-Define helpers in home settings or a trusted project's `.cupel/settings.json`;
-none are built in. For example:
-
-```json
-{
-  "agents": {
-    "scout": {
-      "provider": "openai-codex",
-      "model": "codex/gpt-6.1-sol",
-      "thinkingLevel": "low",
-      "description": "Finds relevant files and functions."
-    }
-  }
-}
-```
-
-- `/agent scout <task>` calls a helper directly. `/team add scout` lets the lead
-  call it; `/team remove scout` or `/team clear` removes that access.
-- Teams start empty unless a helper sets `"team": true`. A `description` is
-  required for team membership. Delegation remains the model's choice.
-- Helpers default to `read` and `grep`. Explicit `tools` can also grant `bash`
-  and `apply_patch`; both count as write access and are **not sandboxed**.
-- Team members share task results and discussion, not private prompts or raw
-  histories. Use `/team tasks`, `/team conversation`, and `/team cancel <id>`
-  to inspect or stop work. Cancellation does not undo edits or incurred costs.
-  In the TUI, Ctrl+B shows or hides live team updates. Headers identify each
-  helper by name and the lead by its known model; the final answer stays below
-  the updates. Task progress updates in place instead of repeating handoffs,
-  helper tool starts show the caller and tool name, and results render Markdown.
-- Optional `agentCommands` mappings route `/review` or prompt templates to a
-  named helper. `/team roles` explains automatic role matching.
-
-Helpers are TUI-only. Untrusted project helper definitions and mappings are ignored.
 
 ### Themes
 

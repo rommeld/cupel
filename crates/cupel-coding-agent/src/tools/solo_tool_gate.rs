@@ -8,8 +8,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::tools::checkout_write::WriteGate;
 
-/// One lead's simultaneous leaf tools share a permit. Other leads and helpers
-/// still acquire the actual checkout mutex independently.
+/// One agent's simultaneous leaf tools share a permit. Independent sessions
+/// acquire the actual checkout mutex separately.
 pub struct SoloToolGate {
     checkout: WriteGate,
     active: tokio::sync::Mutex<Weak<OwnedMutexGuard<()>>>,
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_lead_shares_until_the_final_leaf_settles() {
+    async fn one_agent_shares_until_the_final_leaf_settles() {
         let checkout = Arc::new(tokio::sync::Mutex::new(()));
         let owner = SoloToolGate::new(&checkout);
         let cancel = CancellationToken::new();
@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn other_leads_and_helpers_cannot_join_the_group() {
+    async fn other_sessions_cannot_join_the_group() {
         let checkout = Arc::new(tokio::sync::Mutex::new(()));
         let a = SoloToolGate::new(&checkout);
         let b = SoloToolGate::new(&checkout);
@@ -109,13 +109,10 @@ mod tests {
         let first = a.acquire(&cancel).await.unwrap();
         let mut second = Box::pin(b.acquire(&cancel));
         pending(second.as_mut()).await;
-        let mut helper = Box::pin(Arc::clone(&checkout).lock_owned());
-        pending(helper.as_mut()).await;
         drop(first);
         let second = second.await.unwrap();
-        pending(helper.as_mut()).await;
+        assert!(checkout.try_lock().is_err());
         drop(second);
-        drop(helper.await);
         assert!(checkout.try_lock().is_ok());
     }
 
@@ -187,7 +184,7 @@ mod tests {
         let checkout = Arc::new(tokio::sync::Mutex::new(()));
         let owner = SoloToolGate::new(&checkout);
         let held = checkout.lock().await;
-        for name in ["read", "grep", "ask", "delegate", "team_read", "team_post"] {
+        for name in ["read", "grep", "ask_user"] {
             assert!(
                 owner
                     .enter(name, &CancellationToken::new())

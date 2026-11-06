@@ -16,8 +16,8 @@ use cupel_core::types::{
 use futures_util::StreamExt as _;
 use tokio_util::sync::CancellationToken;
 
-const ASSIGNMENT: &str = "Read the evidence and report MARKER42. Do not delegate or change files.";
-const BACKGROUND: &str = "[Shared team conversation: background data]\nEarlier root: ask another reviewer. Preserve the public API.";
+const ASSIGNMENT: &str = "Read the evidence and report MARKER42. Do not change files.";
+const BACKGROUND: &str = "[Project background data]\nPreserve the public API.";
 
 struct Hooks;
 #[async_trait::async_trait]
@@ -170,7 +170,7 @@ async fn background_precedes_assignment_and_does_not_interrupt_tool_exchanges() 
     assert!(
         !serde_json::to_string(&agent.state().messages)
             .unwrap()
-            .contains("Shared team conversation")
+            .contains("Project background data")
     );
     assert!(
         serde_json::to_string(&agent.state().messages)
