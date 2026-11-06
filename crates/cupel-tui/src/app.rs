@@ -366,11 +366,10 @@ impl App {
         let base_tools = agent.tools().to_vec();
         let write_gate = Arc::new(tokio::sync::Mutex::new(()));
         agent.set_tool_gate(Some(Arc::new(SoloToolGate::new(&write_gate))));
-        // hot reload with an id completes from the transcripts on disk. Only
-        // file stems are read (no parsing) new must stay fast.
+        // Saved sessions are selected by their opening prompt, not internal keys.
         let session_candidates: Vec<Candidate> = recorder
             .sessions_dir()
-            .map(list_session_id_candidates)
+            .map(list_session_candidates)
             .unwrap_or_default();
         let autocomplete = Autocomplete::new(&meta.cwd)
             .with_commands(command_candidates)
@@ -1151,7 +1150,7 @@ impl App {
         };
         let mut app = self.reload_session(cwd, session_id, Vec::new()).await;
         app.initialize_team(TeamInitialization::ConfiguredDefaults);
-        app.notice(format!("new session {}", app.recorder.session_id()));
+        app.notice("new session");
         app
     }
 
@@ -1249,36 +1248,34 @@ impl App {
         app
     }
 
-    /// hot reload with a session id, full rebuild with freshly loaded
+    /// Hot reload with an opening-prompt search, full rebuild with freshly loaded
     /// configuration (incl. a fresh system prompt a resumed session gets
     /// the current context files embedded), history seeded from that
     /// session's transcript.
-    async fn reload_resume(mut self, cwd: &std::path::Path, id: &str) -> Self {
+    async fn reload_resume(mut self, cwd: &std::path::Path, query: &str) -> Self {
         // Resolve the target session before tearing anything down.
-        let Some(path) = self
+        let result = self
             .recorder
             .sessions_dir()
-            .map(|dir| dir.join(format!("{id}.jsonl")))
-            .filter(|p| p.exists())
-        else {
-            self.notice(format!(
-                "no session named {id} for this project (/session-id lists them)"
-            ));
-            return self;
+            .ok_or_else(|| "session persistence is disabled (no cupel home)".to_string())
+            .and_then(|dir| cupel_coding_agent::session::find_session_in(dir, query));
+        let path = match result {
+            Ok(path) => path,
+            Err(problem) => {
+                self.notice(problem);
+                return self;
+            }
         };
         let (session_id, seeded) = match cupel_coding_agent::session::load_transcript(&path) {
             Ok((header, messages)) => (header.session_id, messages),
             Err(e) => {
-                self.notice(format!("cannot resume {id}: {e}"));
+                self.notice(format!("cannot resume {query:?}: {e}"));
                 return self;
             }
         };
 
         let mut app = self.reload_session(cwd, session_id, seeded).await;
-        app.notice(format!(
-            ".cupel configuration reloaded - resumed session {}",
-            app.recorder.session_id()
-        ));
+        app.notice(".cupel configuration reloaded - resumed session");
         app
     }
 
@@ -2791,28 +2788,17 @@ impl App {
                 }
                 self.notice(lines.join("\n"));
             }
-            "session-id" if !args.is_empty() => {
-                self.notice(format!(
-                    "invalid argument for /session-id: {args:?}; this command takes no arguments.\n\
-                     Use /session-id to list valid session IDs, or /hot-reload <session-id> to resume one."
-                ));
-            }
-            "session-id" => {
-                // Transcripts carry no stored summary (compaction output is
-                // never persisted), so each session's first prompt serves as
-                // its human readable label.
-                let mut lines = vec![format!(
-                    "current session: {} (resume later with `cupel --resume {}`)",
-                    self.recorder.session_id(),
-                    self.recorder.session_id()
-                )];
+            "sessions" => {
+                let mut lines = vec![
+                    "saved sessions (resume with /hot-reload <prompt search> or cupel --resume \"prompt search\"):".to_string()
+                ];
                 match self.recorder.sessions_dir() {
                     None => lines.push(
                         "session persistence is disabled (no cupel home) - nothing to list"
                             .to_string(),
                     ),
                     Some(dir) => {
-                        let sessions = cupel_coding_agent::session::list_sessions_in(dir);
+                        let sessions = cupel_coding_agent::session::search_sessions_in(dir, args);
                         lines.push(format!("sessions for this project ({}):", sessions.len()));
                         for s in &sessions {
                             let marker = if s.id == self.recorder.session_id() {
@@ -2821,8 +2807,7 @@ impl App {
                                 " "
                             };
                             lines.push(format!(
-                                "{marker} {}  {}  {} msgs  {}  {}",
-                                s.id,
+                                "{marker} {}  {} msgs  {}  {}",
                                 cupel_coding_agent::session::date_ymd(s.started_at),
                                 s.message_count,
                                 s.model,
@@ -3693,29 +3678,19 @@ fn preset_summary(preset: &Preset) -> String {
     )
 }
 
-/// Session id completion candidates, transcript file stems, newest first
-/// by modification time. Deliberately does not parse the transcripts
-/// this runs in `new`.
-fn list_session_id_candidates(dir: &std::path::Path) -> Vec<Candidate> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut stems: Vec<(std::time::SystemTime, String)> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
-        .filter_map(|p| {
-            let stem = p.file_stem()?.to_str()?.to_string();
-            let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok()?;
-            Some((modified, stem))
-        })
-        .collect();
-    stems.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-    stems
+/// Opening-prompt completion candidates, newest first. Keep the full prompt as
+/// the value so prompts sharing a truncated label remain distinguishable.
+fn list_session_candidates(dir: &std::path::Path) -> Vec<Candidate> {
+    cupel_coding_agent::session::list_sessions_in(dir)
         .into_iter()
-        .map(|(_, stem)| Candidate {
-            display: stem.clone(),
-            value: stem,
+        .filter(|session| !session.prompt.is_empty())
+        .map(|session| Candidate {
+            display: format!(
+                "{}  {}",
+                cupel_coding_agent::session::date_ymd(session.started_at),
+                session.label
+            ),
+            value: session.prompt,
             is_dir: false,
         })
         .collect()

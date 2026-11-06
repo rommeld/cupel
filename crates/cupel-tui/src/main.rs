@@ -77,10 +77,10 @@ fn restart_into(restart: &cupel_tui::sessions::Restart) -> std::process::ExitCod
 }
 
 /// What the resume option asked for, the newest session of this project, or one
-/// named by id.
+/// found by its opening prompt.
 enum ResumeTarget {
     Latest,
-    Id(String),
+    Search(String),
 }
 
 struct CliArgs {
@@ -115,19 +115,19 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             "--team" | "--add" | "--agent" | "--review" => {
                 StartupCommand::parse(&arg, &mut iter, &mut parsed.startup)?;
             }
-            // The id is optional, a bare the resume option (next arg missing or
+            // The search is optional, a bare resume option (next arg missing or
             // another flag) means "the newest session of this project".
             "--resume" | "-r" => {
                 parsed.resume = match iter.peek() {
                     Some(next) if !next.starts_with('-') => {
-                        Some(ResumeTarget::Id(iter.next().expect("peeked")))
+                        Some(ResumeTarget::Search(iter.next().expect("peeked")))
                     }
                     _ => Some(ResumeTarget::Latest),
                 };
             }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [id]] [--plain]\ninteractive startup: --team [--add <name>...] | --agent <name> [task] | --review\n\navailable models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [\"prompt search\"]] [--plain]\ninteractive startup: --team [--add <name>...] | --agent <name> [task] | --review\n\navailable models:\n",
                 );
                 // Built ins + models.json layers, deliberately not the
                 // ollama probe because help must be instant and never touch the
@@ -321,11 +321,12 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
         None => (format!("cupel-{}", cupel_core::types::now_ms()), Vec::new()),
         Some(target) => {
             let path = match target {
-                ResumeTarget::Id(id) => {
+                ResumeTarget::Search(query) => {
                     cupel_coding_agent::session::sessions_dir(home.as_deref(), &cwd)
-                        .map(|dir| dir.join(format!("{id}.jsonl")))
-                        .filter(|p| p.exists())
-                        .ok_or_else(|| format!("no session named {id} for this project"))
+                        .ok_or_else(|| {
+                            "session persistence is disabled (no cupel home)".to_string()
+                        })
+                        .and_then(|dir| cupel_coding_agent::session::find_session_in(&dir, query))
                         .map_err(AppError::Session)?
                 }
                 ResumeTarget::Latest => {
@@ -521,19 +522,19 @@ mod tests {
     }
 
     #[test]
-    fn resume_flag_with_and_without_an_id() {
+    fn resume_flag_with_and_without_a_prompt_search() {
         assert!(parse(&[]).unwrap().resume.is_none());
         // Bare resume = newest session of this project.
         assert!(matches!(
             parse(&["--resume"]).unwrap().resume,
             Some(ResumeTarget::Latest)
         ));
-        // With an id.
-        match parse(&["--resume", "cupel-123"]).unwrap().resume {
-            Some(ResumeTarget::Id(id)) => assert_eq!(id, "cupel-123"),
-            other => panic!("expected Id, got {:?}", other.is_some()),
+        // Shell quoting keeps a multiword search in one argument.
+        match parse(&["--resume", "fix the login bug"]).unwrap().resume {
+            Some(ResumeTarget::Search(query)) => assert_eq!(query, "fix the login bug"),
+            other => panic!("expected Search, got {:?}", other.is_some()),
         }
-        // Followed by another flag, the flag is not eaten as an id.
+        // Followed by another flag, the flag is not eaten as a search.
         let args = parse(&["--resume", "--plain"]).unwrap();
         assert!(matches!(args.resume, Some(ResumeTarget::Latest)));
         assert!(args.plain);

@@ -289,7 +289,7 @@ impl Sessions {
         } else {
             let id = origin.recorder.session_id();
             args.extend(["--resume".to_string(), id.to_string()]);
-            format!("cupel {version} is installed - restarting and resuming session {id}")
+            format!("cupel {version} is installed - restarting and resuming session")
         };
         Ok(Restart {
             binary: binary.to_path_buf(),
@@ -1020,7 +1020,7 @@ mod tests {
             "cupel-7",
         ];
         assert_eq!(restart.args, args);
-        let note = "cupel 99.0.0 is installed - restarting and resuming session cupel-7";
+        let note = "cupel 99.0.0 is installed - restarting and resuming session";
         assert_eq!(restart.note, note);
     }
 

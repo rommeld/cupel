@@ -647,12 +647,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
         ""
     };
     let maximum_segment = maximum.map_or_else(String::new, |max| format!(" · max {}k", max / 1000));
-    // The session id sits in the always visible left half so ` resume
-    // <id>` (or /hot reload <id>) can be typed from what's on screen.
     let totals = app.session_totals();
     let left = format!(
-        " {} | {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k{window_label} ({percent}%){maximum_segment}",
-        app.recorder.session_id(),
+        " {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k{window_label} ({percent}%){maximum_segment}",
         totals.input,
         totals.output,
         totals.cache_read,
@@ -1171,12 +1168,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn footer_shows_the_current_session_id() {
+    fn footer_omits_the_internal_session_key() {
         let mut app = test_app();
         let screen = draw(&mut app, 100, 20);
         assert!(
-            screen.contains("cupel-test"),
-            "session id missing from footer:\n{screen}"
+            !screen.contains("cupel-test"),
+            "internal session key leaked into footer:\n{screen}"
         );
     }
 
@@ -1190,9 +1187,8 @@ pub(crate) mod tests {
                 let screen = draw(&mut app, width, 20);
                 let status_row = screen.lines().nth(18).expect("footer status row");
                 assert!(
-                    status_row
-                        .starts_with(" cupel-test | 0 in / 0 out / 0 cached | $0.0000 | ctx "),
-                    "footer must show session and usage without run status:\n{screen}"
+                    status_row.starts_with(" 0 in / 0 out / 0 cached | $0.0000 | ctx "),
+                    "footer must show usage without session key or run status:\n{screen}"
                 );
             }
         }
@@ -1224,7 +1220,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn session_id_command_lists_this_projects_sessions() {
+    fn sessions_command_lists_this_projects_opening_prompts_without_keys() {
         // A home backed recorder (unlike test_app's disabled one) so the
         // listing has a real sessions dir to read.
         let root = std::env::temp_dir().join("cupel-ui-session-list");
@@ -1270,7 +1266,7 @@ pub(crate) mod tests {
             recorder,
         );
 
-        type_text(&mut app, "/session-id");
+        type_text(&mut app, "/sessions");
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
@@ -1286,51 +1282,50 @@ pub(crate) mod tests {
                 _ => None,
             })
             .expect("listing notice");
-        assert!(
-            notice.contains("current session: cupel-current"),
-            "{notice}"
-        );
-        assert!(notice.contains("cupel-old"), "{notice}");
+        assert!(!notice.contains("cupel-current"), "{notice}");
+        assert!(!notice.contains("cupel-old"), "{notice}");
         assert!(notice.contains("find the bug"), "label = first prompt");
         assert!(notice.contains("1970-01-01"), "startedAt 1000ms date");
     }
 
     #[test]
-    fn session_id_command_rejects_arguments() {
-        for args in [
-            "random-string",
-            "cupel-9999999999999",
-            "cupel-test",
-            "random string",
-            "  random-string  ",
-        ] {
-            let mut app = test_app();
-            submit_command(&mut app, &format!("/session-id {args}"));
-
-            let [Cell::Notice { text }] = app.transcript.cells.as_slice() else {
-                panic!("expected only an invalid-argument notice for {args:?}");
-            };
-            assert!(text.contains("invalid argument for /session-id"), "{text}");
-            assert!(text.contains(&format!("{:?}", args.trim())), "{text}");
-            assert!(text.contains("takes no arguments"), "{text}");
-            assert!(text.contains("/hot-reload <session-id>"), "{text}");
-            assert!(!text.contains("current session:"), "{text}");
-            assert!(app.pending_prompt.is_none());
-            assert!(app.pending_reload.is_none());
-            assert!(!app.is_running());
+    fn sessions_command_filters_opening_prompts() {
+        let root = std::env::temp_dir().join("cupel-ui-session-search");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-current");
+        let home = root.join("home");
+        let cwd = root.join("proj");
+        for (key, prompt) in [("old", "Find the login bug"), ("other", "update docs")] {
+            let mut recorder = cupel_coding_agent::session::SessionRecorder::new(
+                Some(home.clone()),
+                &cwd,
+                key,
+                "test-model",
+            );
+            recorder.record(&cupel_agent::AgentMessage::user_text(prompt));
         }
+        submit_command(&mut app, "/sessions LOGIN bug");
+        let [Cell::Notice { text }] = app.transcript.cells.as_slice() else {
+            panic!("expected session search results");
+        };
+        assert!(text.contains("sessions for this project (1)"), "{text}");
+        assert!(text.contains("Find the login bug"), "{text}");
+        assert!(!text.contains("update docs"), "{text}");
+        assert!(app.pending_prompt.is_none());
+        assert!(app.pending_reload.is_none());
     }
 
     #[test]
-    fn session_id_command_accepts_trailing_whitespace() {
-        for command in ["/session-id", "/session-id   ", "/session-id\t"] {
+    fn sessions_command_accepts_trailing_whitespace() {
+        for command in ["/sessions", "/sessions   ", "/sessions\t"] {
             let mut app = test_app();
             submit_command(&mut app, command);
 
             let [Cell::Notice { text }] = app.transcript.cells.as_slice() else {
                 panic!("expected only a session-listing notice for {command:?}");
             };
-            assert!(text.contains("current session: cupel-test"), "{text}");
+            assert!(text.contains("/hot-reload <prompt search>"), "{text}");
+            assert!(!text.contains("cupel-test"), "{text}");
             assert!(text.contains("session persistence is disabled"), "{text}");
         }
     }
@@ -1857,7 +1852,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn hot_reload_resumes_a_session_by_id_and_rejects_unknown_ids() {
+    async fn hot_reload_resumes_by_opening_prompt_and_rejects_unknown_searches() {
         use crate::app::ReloadTarget;
 
         let root = std::env::temp_dir().join("cupel-ui-hotreload-resume");
@@ -1876,19 +1871,19 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        // Unknown id, old app comes back intact, with an error notice.
+        // Unknown search, old app comes back intact, with an error notice.
         let app = app
-            .hot_reload(ReloadTarget::Resume("cupel-nope".into()))
+            .hot_reload(ReloadTarget::Resume("missing prompt".into()))
             .await;
         assert_eq!(app.recorder.session_id(), "cupel-current");
         assert!(app.transcript.cells.iter().any(|c| matches!(
             c,
-            Cell::Notice { text } if text.contains("no session named cupel-nope")
+            Cell::Notice { text } if text.contains("no session matches")
         )));
 
-        // Known id, history seeded, cells replayed, same id continued.
-        let app = app
-            .hot_reload(ReloadTarget::Resume("cupel-old".into()))
+        // Prompt match, history seeded, cells replayed, same transcript continued.
+        let mut app = app
+            .hot_reload(ReloadTarget::Resume("OLD prompt".into()))
             .await;
         assert_eq!(app.recorder.session_id(), "cupel-old");
         assert_eq!(app.agent.state().messages.len(), 1);
@@ -1896,6 +1891,15 @@ pub(crate) mod tests {
             c,
             Cell::User { text } if text == "old prompt"
         )));
+        app.recorder
+            .record(&cupel_agent::AgentMessage::user_text("continued"));
+        let (_, messages) =
+            cupel_coding_agent::session::load_transcript(&dir.join("cupel-old.jsonl")).unwrap();
+        assert_eq!(
+            messages.len(),
+            2,
+            "resume appends to the original transcript"
+        );
     }
 
     #[test]
@@ -1939,7 +1943,7 @@ pub(crate) mod tests {
             "model status missing:\n{screen}"
         );
         assert!(
-            screen.contains("cupel-test | 0 in"),
+            screen.contains("0 in / 0 out / 0 cached"),
             "footer missing:\n{screen}"
         );
     }
@@ -3782,7 +3786,7 @@ pub(crate) mod tests {
                 "─".repeat(usize::from(width)),
                 "model status has its own row above the prompt border"
             );
-            assert!(rows[18].starts_with(" cupel-test | 0 in /"), "{screen}");
+            assert!(rows[18].starts_with(" 0 in /"), "{screen}");
             assert!(
                 !rows[18].contains("Test Model") && !rows[18].contains("thinking"),
                 "{screen}"
