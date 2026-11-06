@@ -380,12 +380,13 @@ fn reasoning_title(line: &str) -> Option<&str> {
     (!title.is_empty()).then_some(title)
 }
 
-/// A full width user surface with a `>>` marker on the first content row.
+/// A full width user surface with one column of padding on each side and a `>>`
+/// marker on the first content row.
 /// Render Markdown before adding the marker so
 /// headings and code fences are recognized at the start of source lines.
 fn user_lines(text: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
-    let prefix = ">> ";
-    let content_width = width.saturating_sub(prefix.len()).max(1);
+    let prefix = " >> ";
+    let content_width = width.saturating_sub(prefix.len() + 1).max(1);
     crate::markdown::render(text, content_width, theme.task, theme)
         .into_iter()
         .enumerate()
@@ -710,11 +711,11 @@ mod tests {
         let prose = &rendered.lines[1];
         assert_eq!(
             line_text(prose).trim_end(),
-            ">> plain bold and italic with code"
+            " >> plain bold and italic with code"
         );
         assert_eq!(
-            prose.spans[0].content, ">> ",
-            "the marker has no left padding"
+            prose.spans[0].content, " >> ",
+            "the marker has one column of left padding"
         );
         for (word, modifier) in [("bold", Modifier::BOLD), ("italic", Modifier::ITALIC)] {
             let span = prose
@@ -752,7 +753,7 @@ mod tests {
     }
 
     #[test]
-    fn user_messages_wrap_wide_characters_without_horizontal_padding() {
+    fn user_messages_wrap_wide_characters_with_horizontal_padding() {
         use ratatui::style::Modifier;
 
         let transcript = Transcript {
@@ -761,18 +762,18 @@ mod tests {
             }],
             ..Transcript::default()
         };
-        let rendered = transcript.to_lines(10, None, &CUPEL);
+        let rendered = transcript.to_lines(11, None, &CUPEL);
         assert_eq!(rendered.lines.len(), 4);
-        assert_eq!(line_text(&rendered.lines[1]), ">> 日本語 ");
-        assert_eq!(line_text(&rendered.lines[2]), "   日本語 ");
-        assert!(rendered.lines.iter().all(|line| line.width() == 10));
+        assert_eq!(line_text(&rendered.lines[1]), " >> 日本語 ");
+        assert_eq!(line_text(&rendered.lines[2]), "    日本語 ");
+        assert!(rendered.lines.iter().all(|line| line.width() == 11));
         for line in &rendered.lines[1..3] {
             assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
         }
     }
 
     #[test]
-    fn user_messages_use_the_full_width_after_the_marker() {
+    fn user_messages_reserve_padding_on_both_sides_when_wrapping() {
         let transcript = Transcript {
             cells: vec![Cell::User {
                 text: "abcdefghijklm".into(),
@@ -780,9 +781,10 @@ mod tests {
             ..Transcript::default()
         };
         let rendered = transcript.to_lines(16, None, &CUPEL);
-        assert_eq!(rendered.lines.len(), 3);
-        assert_eq!(line_text(&rendered.lines[1]), ">> abcdefghijklm");
-        assert_eq!(rendered.cell_at, vec![Some(0); 3]);
+        assert_eq!(rendered.lines.len(), 4);
+        assert_eq!(line_text(&rendered.lines[1]), " >> abcdefghijk ");
+        assert_eq!(line_text(&rendered.lines[2]), "    lm          ");
+        assert_eq!(rendered.cell_at, vec![Some(0); 4]);
     }
 
     #[test]
@@ -801,10 +803,43 @@ mod tests {
             .collect();
         assert_eq!(
             lines,
-            vec![">> hello brave", "   new world", "   next line"]
+            vec![" >> hello", "    brave new", "    world", "    next line"]
         );
         assert!(rendered.lines.iter().all(|line| line.width() == 16));
-        assert_eq!(rendered.cell_at, vec![Some(0); 5]);
+        assert_eq!(rendered.cell_at, vec![Some(0); 6]);
+        assert_eq!(transcript.copy_text(0), Some(source));
+    }
+
+    #[test]
+    fn user_horizontal_padding_survives_markdown_themes_selection_and_narrow_columns() {
+        let source = "# Task\n日本語日本語 **bold**\n- list item\n```rust\nlet value = 42;\n```";
+        let transcript = Transcript {
+            cells: vec![Cell::User {
+                text: source.into(),
+            }],
+            ..Transcript::default()
+        };
+        for theme in crate::theme::example_themes() {
+            for width in [10, 16, 80] {
+                for selected in [None, Some(0)] {
+                    let rendered = transcript.to_lines(width, selected, &theme);
+                    for line in &rendered.lines[1..rendered.lines.len() - 1] {
+                        let text = line_text(line);
+                        assert!(
+                            text.starts_with(' ') && text.ends_with(' '),
+                            "{} at {width}: {text:?}",
+                            theme.id
+                        );
+                        assert_eq!(
+                            line.width(),
+                            usize::from(width),
+                            "{}: padding stays inside the column",
+                            theme.id
+                        );
+                    }
+                }
+            }
+        }
         assert_eq!(transcript.copy_text(0), Some(source));
     }
 

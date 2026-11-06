@@ -5,6 +5,7 @@ from v0.2.0-beta, minor = features, patch = fixes.
 
 ## Unreleased
 
+- style(tui): add one column of left and right padding to chat user prompts, preserving wrapping and Markdown
 - style(tui): match chat user prompts to the prompt pane's theme background and foreground, preserving Markdown and selection highlighting
 - feat(undo): add `/changes` and snapshot-based per-turn `/undo` in TUI and plain mode, preserving dirty work and refusing newer file changes
 - feat(session): persist private undo snapshots across resume and hot reload, including creations, deletions, renames, and overwritten destinations

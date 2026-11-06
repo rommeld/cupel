@@ -1061,7 +1061,7 @@ pub(crate) mod tests {
         }
         assert!(!screen.contains(['│', '┌', '┐', '└', '┘']), "{screen}");
         assert!(
-            screen.lines().nth(2).unwrap().starts_with(" >> task"),
+            screen.lines().nth(2).unwrap().starts_with("  >> task"),
             "{screen}"
         );
         assert!(screen.lines().next().unwrap().trim().is_empty(), "{screen}");
@@ -3918,9 +3918,9 @@ pub(crate) mod tests {
         assert!(row_of("task") < row_of("let me look"));
         assert!(row_of("let me look") < row_of("read src/main.rs"));
         assert!(row_of("read src/main.rs") < row_of("found it"));
-        // Only the pane margin remains before the user message marker.
+        // The pane margin and user padding precede the message marker.
         let row = screen.lines().nth(row_of("task")).unwrap();
-        assert!(row.starts_with(" >> task"), "{row:?}");
+        assert!(row.starts_with("  >> task"), "{row:?}");
     }
 
     #[test]
