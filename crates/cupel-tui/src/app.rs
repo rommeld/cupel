@@ -70,6 +70,8 @@ pub struct App {
     pub pending_copy: Option<String>,
     pub last_line_cells: Vec<Option<usize>>,
     pub last_transcript_inner: Rect,
+    pub last_scrollbar_area: Rect,
+    pub scrollbar_dragging: bool,
     pub last_top_line: usize,
     pub last_answer: Status,
     pub pending_spinoff: Option<cupel_coding_agent::commands::SpinoffCommand>,
@@ -328,6 +330,8 @@ impl App {
             pending_copy: None,
             last_line_cells: Vec::new(),
             last_transcript_inner: Rect::ZERO,
+            last_scrollbar_area: Rect::ZERO,
+            scrollbar_dragging: false,
             last_top_line: 0,
             last_answer: Status::New,
             pending_spinoff: None,
@@ -536,6 +540,7 @@ impl App {
 
     pub fn on_terminal_event(&mut self, event: Event) {
         if let Some(popup) = &mut self.usage_popup {
+            self.scrollbar_dragging = false;
             // Preserve process control and the existing mouse capture toggle.
             let global = matches!(
                 &event,
@@ -561,15 +566,30 @@ impl App {
             // The wheel scrolls the transcript wherever the pointer is the
             // same clamped movement as PgUp/PgDn, at the conventional
             // 3 lines per notch step. A left click selects the block under
-            // the pointer. (Mouse events only arrive because mod.rs
-            // enables mouse capture.)
-            Event::Mouse(mouse) => match mouse.kind {
+            // the pointer, or starts a drag on the scrollbar.
+            Event::Mouse(mouse) if self.mouse_captured => match mouse.kind {
                 MouseEventKind::ScrollUp => self.scroll_by(3),
                 MouseEventKind::ScrollDown => self.scroll_by(-3),
-                MouseEventKind::Down(MouseButton::Left) => self.click(mouse.column, mouse.row),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.scrollbar_dragging = self
+                        .last_scrollbar_area
+                        .contains(Position::new(mouse.column, mouse.row));
+                    if self.scrollbar_dragging {
+                        self.scroll_to_scrollbar_row(mouse.row);
+                    } else {
+                        self.click(mouse.column, mouse.row);
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) if self.scrollbar_dragging => {
+                    self.scroll_to_scrollbar_row(mouse.row);
+                }
+                MouseEventKind::Up(_) | MouseEventKind::Down(_) => {
+                    self.scrollbar_dragging = false;
+                }
                 _ => {}
             },
-            // Resize is handled implicitly, the next draw uses the new size.
+            // The next draw uses the new size; don't retain a drag on old geometry.
+            Event::Resize(_, _) | Event::FocusLost => self.cancel_scrollbar_drag(),
             _ => {}
         }
     }
@@ -1041,12 +1061,39 @@ impl App {
     pub fn apply_mouse_toggle(&mut self) -> bool {
         self.mouse_toggle_requested = false;
         self.mouse_captured = !self.mouse_captured;
+        self.cancel_scrollbar_drag();
         self.notice(if self.mouse_captured {
             "mouse capture on - wheel scrolls; ctrl+y to select/copy text"
         } else {
             "selection mode - select and copy with the mouse; ctrl+y to re-enable wheel scrolling"
         });
         self.mouse_captured
+    }
+
+    pub(crate) fn cancel_scrollbar_drag(&mut self) {
+        self.scrollbar_dragging = false;
+    }
+
+    /// The render pass owns hit-test geometry; layout changes invalidate a drag.
+    pub(crate) fn set_scrollbar_area(&mut self, area: Rect) {
+        if self.last_scrollbar_area != area {
+            self.cancel_scrollbar_drag();
+        }
+        self.last_scrollbar_area = area;
+    }
+
+    fn scroll_to_scrollbar_row(&mut self, row: u16) {
+        let area = self.last_scrollbar_area;
+        if area.is_empty() {
+            return;
+        }
+        let span = usize::from(area.height.saturating_sub(1).max(1));
+        let position = usize::from(row.saturating_sub(area.y)).min(span);
+        let max = self
+            .last_total_lines
+            .saturating_sub(usize::from(self.last_transcript_height));
+        self.transcript_anchor = None;
+        self.scroll_from_bottom = max - max.saturating_mul(position) / span;
     }
 
     /// A left click selects the block under the pointer (the Ctrl+O copy

@@ -287,7 +287,13 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     // The scrollbar rides the frame's right edge. Rendered only when there is
     // something to scroll a permanently full bar would read as
     // decoration.
-    if total > height {
+    let scrollbar_area = if total > height && height > 0 && !area.is_empty() {
+        Rect::new(area.right() - 1, area.y, 1, area.height)
+    } else {
+        Rect::ZERO
+    };
+    app.set_scrollbar_area(scrollbar_area);
+    if !scrollbar_area.is_empty() {
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None)
@@ -729,7 +735,9 @@ pub(crate) mod tests {
     use cupel_coding_agent::tools::ask_user::{Answer, AskUserTool, PendingQuestion};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::style::Color;
     use ratatui::style::Modifier;
     use std::sync::Arc;
@@ -3936,6 +3944,249 @@ pub(crate) mod tests {
                 "thumb must reach the bottom at {width}x{height}:\n{screen}"
             );
         }
+    }
+
+    fn scrollbar_test_app() -> App {
+        let mut app = test_app();
+        for i in 0..30 {
+            app.transcript.cells.push(Cell::Assistant {
+                text: format!("line {i}"),
+            });
+        }
+        let _ = draw(&mut app, 80, 24);
+        app
+    }
+
+    fn scrollbar_mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn scrollbar_mouse_clicks_jump_and_drags_reach_both_ends() {
+        let mut app = scrollbar_test_app();
+        let area = app.last_scrollbar_area;
+        let max = app.last_total_lines - usize::from(app.last_transcript_height);
+        app.selected_cell = Some(0);
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_top_line, 0);
+        assert_eq!(app.scroll_from_bottom, max);
+        assert_eq!(
+            app.selected_cell,
+            Some(0),
+            "scrolling must not select a cell"
+        );
+
+        let middle = area.y + area.height / 2;
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            middle,
+        ));
+        let expected = max - max * usize::from(middle - area.y) / usize::from(area.height - 1);
+        assert_eq!(
+            app.scroll_from_bottom, expected,
+            "track click must jump proportionally"
+        );
+
+        // Keep dragging even when the pointer leaves the scrollbar's column.
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            0,
+            u16::MAX,
+        ));
+        assert_eq!(app.scroll_from_bottom, 0, "drag must clamp at the bottom");
+        let screen = draw(&mut app, 80, 24);
+        assert!(
+            screen.contains("line 29"),
+            "dragging to the bottom resumes follow mode"
+        );
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            0,
+            u16::MAX,
+        ));
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert_eq!(app.scroll_from_bottom, 0, "release must end the drag");
+
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.bottom() - 1,
+        ));
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            0,
+        ));
+        assert_eq!(app.scroll_from_bottom, max, "drag must clamp at the top");
+    }
+
+    #[test]
+    fn scrollbar_mouse_ignores_content_drags_and_selection_mode() {
+        let mut app = scrollbar_test_app();
+        let area = app.last_scrollbar_area;
+        let inner = app.last_transcript_inner;
+        let row = app.last_line_cells[app.last_top_line..]
+            .iter()
+            .position(Option::is_some)
+            .unwrap() as u16;
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x,
+            inner.y + row,
+        ));
+        assert!(
+            app.selected_cell.is_some(),
+            "content clicks must still select cells"
+        );
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert_eq!(
+            app.scroll_from_bottom, 0,
+            "content drag must not move the scrollbar"
+        );
+
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.bottom() - 1,
+        ));
+        assert!(!app.apply_mouse_toggle());
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert_eq!(
+            app.scroll_from_bottom, 0,
+            "selection mode must ignore scrollbar clicks"
+        );
+        assert!(app.apply_mouse_toggle());
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert_eq!(
+            app.scroll_from_bottom, 0,
+            "toggling capture must cancel a drag"
+        );
+    }
+
+    #[test]
+    fn scrollbar_mouse_drag_cancels_on_focus_resize_and_hidden_bar() {
+        for event in [Event::FocusLost, Event::Resize(60, 20)] {
+            let mut app = scrollbar_test_app();
+            let area = app.last_scrollbar_area;
+            app.on_terminal_event(scrollbar_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x,
+                area.y,
+            ));
+            let before = app.scroll_from_bottom;
+            app.on_terminal_event(event);
+            app.on_terminal_event(scrollbar_mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                area.x,
+                area.bottom() - 1,
+            ));
+            assert_eq!(app.scroll_from_bottom, before);
+        }
+
+        let mut app = scrollbar_test_app();
+        let area = app.last_scrollbar_area;
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        let _ = draw(&mut app, 60, 20);
+        let before = app.scroll_from_bottom;
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            59,
+            u16::MAX,
+        ));
+        assert_eq!(
+            app.scroll_from_bottom, before,
+            "layout changes must cancel dragging"
+        );
+
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            59,
+            0,
+        ));
+        app.transcript.cells.clear();
+        let _ = draw(&mut app, 60, 20);
+        assert!(
+            app.last_scrollbar_area.is_empty(),
+            "hidden scrollbar must not be clickable"
+        );
+        app.transcript.append_assistant(&"line\n".repeat(40));
+        let _ = draw(&mut app, 60, 20);
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            59,
+            0,
+        ));
+        assert_eq!(
+            app.scroll_from_bottom, 0,
+            "hidden scrollbar must cancel the drag"
+        );
+    }
+
+    #[test]
+    fn scrollbar_mouse_drag_does_not_survive_session_switches() {
+        use crate::sessions::Session;
+
+        let mut sessions = Sessions::new(scrollbar_test_app());
+        sessions.list.push(Session {
+            label: "second".into(),
+            app: test_app(),
+        });
+        let _ = draw_sessions(&mut sessions, 100, 24);
+        let area = sessions.active().last_scrollbar_area;
+        assert_eq!(
+            area.x, 99,
+            "scrollbar hit test must include the sidebar offset"
+        );
+        sessions.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        let before = sessions.active().scroll_from_bottom;
+        assert!(before > 0);
+        for key in ['n', 'p'] {
+            sessions.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Char(key),
+                KeyModifiers::CONTROL,
+            )));
+        }
+        sessions.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            area.bottom() - 1,
+        ));
+        assert_eq!(sessions.active().scroll_from_bottom, before);
     }
 
     #[test]
