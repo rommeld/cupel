@@ -1813,13 +1813,18 @@ impl App {
         // Reasoning tokens are part of `out`. Only some providers report them
         // separately, so the note appears only when there is a count.
         let reasoning = match usage.reasoning {
-            Some(tokens) if tokens > 0 => format!(" ({tokens} reasoning)"),
+            Some(tokens) if tokens > 0 => {
+                format!(" ({} reasoning)", crate::token_count::format(tokens))
+            }
             _ => String::new(),
         };
         self.transcript.cells.push(Cell::Usage {
             text: format!(
                 "[{} in / {} out{reasoning} / {} cached, ${:.4}]",
-                usage.input, usage.output, usage.cache_read, usage.cost.total
+                crate::token_count::format(usage.input),
+                crate::token_count::format(usage.output),
+                crate::token_count::format(usage.cache_read),
+                usage.cost.total
             ),
         });
     }

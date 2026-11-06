@@ -32,6 +32,7 @@ pub mod sessions;
 pub mod startup;
 mod terminal_text;
 pub mod theme;
+mod token_count;
 pub mod transcript;
 pub mod ui;
 pub mod updates;
