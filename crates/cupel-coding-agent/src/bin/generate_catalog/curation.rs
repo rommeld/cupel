@@ -287,13 +287,37 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 Some("Claude Sonnet 5 (Bedrock)"),
                 Thinking::FromEffort,
             ),
-            // models.dev lists Sonnet 5.5 only as the global cross region
-            // profile so far, its off switch is the same as on the API.
+            // Sonnet 5.5's off switch is the same as on the Anthropic API.
             bedrock_adaptive(
                 "global.anthropic.claude-sonnet-5-5",
                 Some("Claude Sonnet 5.5 (Bedrock)"),
                 Thinking::Explicit(SONNET55_THINKING),
             ),
+            bedrock_adaptive(
+                "us.anthropic.claude-sonnet-5-5",
+                Some("Claude Sonnet 5.5 (Bedrock US)"),
+                Thinking::Explicit(SONNET55_THINKING),
+            ),
+            bedrock_adaptive(
+                "global.anthropic.claude-opus-5-5",
+                Some("Claude Opus 5.5 (Bedrock)"),
+                Thinking::FromEffort,
+            ),
+            bedrock_adaptive(
+                "us.anthropic.claude-opus-5",
+                Some("Claude Opus 5 (Bedrock)"),
+                Thinking::FromEffort,
+            ),
+            // Match the direct Haiku row's 100k planning window; the full
+            // 1M window remains opt in at the higher price tier.
+            Curated {
+                window: Window::PriceTier,
+                ..bedrock_adaptive(
+                    "global.anthropic.claude-haiku-5-5",
+                    Some("Claude Haiku 5.5 (Bedrock)"),
+                    Thinking::FromEffort,
+                )
+            },
             bedrock_adaptive(
                 "us.anthropic.claude-fable-5",
                 Some("Claude Fable 5 (Bedrock)"),
@@ -345,6 +369,25 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             ),
             fireworks_completions(
                 "accounts/fireworks/models/muse-spark-open",
+                Thinking::FromEffort,
+            ),
+            // Spot is best-effort capacity, selected by model id (not
+            // service_tier). Keep it opt in, after the standard rows.
+            // https://docs.fireworks.ai/guides/spot-serverless
+            fireworks_completions(
+                "accounts/fireworks/routers/deepseek-v4p1-flash-spot",
+                Thinking::FromEffort,
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot",
+                Thinking::FromEffort,
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/glm-5p3-spot",
+                Thinking::FromEffort,
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/kimi-k3-spot",
                 Thinking::FromEffort,
             ),
         ],
@@ -414,9 +457,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("meta/muse-spark-open", Thinking::FromEffort),
             openrouter("meta/muse-glimmer-30b", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling", Thinking::FromEffort),
-            openrouter("thinkingmachines/inkling:free", Thinking::FromEffort),
             openrouter("thinkingmachines/inkling-small", Thinking::FromEffort),
-            openrouter("thinkingmachines/inkling-small:free", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-pro", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-pro-ultraspeed", Thinking::FromEffort),
             openrouter("xiaomi/mimo-v2.6-flash", Thinking::FromEffort),
@@ -465,6 +506,9 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("sakana/sakana-namazu", Thinking::FromEffort),
             openrouter("nex-agi/nex-n2.5-pro", Thinking::FromEffort),
             openrouter("tencent/hy4-preview", Thinking::FromEffort),
+            openrouter("tencent/hy4", Thinking::FromEffort),
+            openrouter("ricursiveai/ripple-65b-preview", Thinking::FromEffort),
+            openrouter("stealth/crouton-alpha", Thinking::FromEffort),
             openrouter("ibm-granite/granite-4.2-8b", Thinking::FromEffort),
             openrouter("meituan/longcat-2.0", Thinking::FromEffort),
             openrouter("cohere/command-a-plus", Thinking::FromEffort),
