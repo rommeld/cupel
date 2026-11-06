@@ -3,9 +3,13 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
-## [Unreleased]
+## [v0.34.11] - 2026-11-06
 
-- Remove helper agents, teams, delegation, and their configuration and UI; retain single-agent parallel tool execution.
+- refactor(agent): remove helper agents, teams, delegation, and their configuration and UI; retain single-agent parallel tool execution
+- feat(catalog): refresh model metadata and expand provider coverage
+- fix(tui): show compact decimal token counts in the footer, chat, and usage popup; display popup costs to three decimal places
+- fix(tui): improve footer token, context, spend, and file-hint layout
+- feat(cli): add `/exit` as an alias for `/quit` and group both commands in help
 
 ## [v0.34.10] - 2026-11-05
 
