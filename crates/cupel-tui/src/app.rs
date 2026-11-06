@@ -70,6 +70,8 @@ pub struct App {
     pub pending_copy: Option<String>,
     pub last_line_cells: Vec<Option<usize>>,
     pub last_transcript_inner: Rect,
+    pub last_input_inner: Rect,
+    pub last_input_scroll: usize,
     pub last_scrollbar_area: Rect,
     pub scrollbar_dragging: bool,
     pub last_top_line: usize,
@@ -332,6 +334,8 @@ impl App {
             pending_copy: None,
             last_line_cells: Vec::new(),
             last_transcript_inner: Rect::ZERO,
+            last_input_inner: Rect::ZERO,
+            last_input_scroll: 0,
             last_scrollbar_area: Rect::ZERO,
             scrollbar_dragging: false,
             last_top_line: 0,
@@ -613,6 +617,20 @@ impl App {
             }
         }
 
+        // History is separate from cursor motion and popup/question selection.
+        // Close completion rather than opening it for a recalled prompt.
+        if key.modifiers == KeyModifiers::SHIFT {
+            match key.code {
+                KeyCode::Up => self.input.history_prev(),
+                KeyCode::Down => self.input.history_next(),
+                _ => {}
+            }
+            if matches!(key.code, KeyCode::Up | KeyCode::Down) {
+                self.autocomplete.close();
+                return;
+            }
+        }
+
         // It consumes only the keys it needs, everything else (Ctrl C
         // included) falls through so session control never changes meaning.
         // Visible but  not merely open, a session with zero matches renders
@@ -740,6 +758,14 @@ impl App {
                 self.input.delete_forward();
                 self.refresh_autocomplete();
             }
+            (KeyCode::Left, true, _) | (KeyCode::Left, _, true) => {
+                self.input.move_word_left();
+                self.refresh_autocomplete_if_open();
+            }
+            (KeyCode::Right, true, _) | (KeyCode::Right, _, true) => {
+                self.input.move_word_right();
+                self.refresh_autocomplete_if_open();
+            }
             (KeyCode::Left, ..) => {
                 self.input.move_left();
                 self.refresh_autocomplete_if_open();
@@ -761,16 +787,15 @@ impl App {
                     self.notice("no queued messages to restore");
                 }
             }
-            // History recall closes the popup instead of refreshing, a
-            // recalled prompt containing `@src/x` must not surprise open the
-            // menu. Completion triggers on typing.
             (KeyCode::Up, ..) => {
-                self.input.history_prev();
-                self.autocomplete.close();
+                self.input
+                    .move_vertical(-1, usize::from(self.last_input_inner.width.max(1)));
+                self.refresh_autocomplete_if_open();
             }
             (KeyCode::Down, ..) => {
-                self.input.history_next();
-                self.autocomplete.close();
+                self.input
+                    .move_vertical(1, usize::from(self.last_input_inner.width.max(1)));
+                self.refresh_autocomplete_if_open();
             }
             (KeyCode::Char(c), false, false) => {
                 self.input.insert(c);
@@ -1107,6 +1132,16 @@ impl App {
     /// window top line + row offset = visual line, and the line→cell map
     /// says which block that is.
     fn click(&mut self, column: u16, row: u16) {
+        let input = self.last_input_inner;
+        if input.contains(Position { x: column, y: row }) {
+            self.input.move_to_position(
+                self.last_input_scroll + usize::from(row - input.y),
+                usize::from(column - input.x),
+                usize::from(input.width),
+            );
+            self.refresh_autocomplete_if_open();
+            return;
+        }
         let inner = self.last_transcript_inner;
         if !inner.contains(Position { x: column, y: row }) {
             return;
@@ -1673,6 +1708,11 @@ impl App {
                     "  Shift+Enter  - insert a newline".to_string(),
                     "  Ctrl+Enter   - steer the running agent (or send when idle)".to_string(),
                     "  Ctrl+J       - alternative steering binding".to_string(),
+                    "  Ctrl/Alt+Left/Right - jump by word".to_string(),
+                    "  Up/Down      - move between wrapped input rows (select in popups/questions)"
+                        .to_string(),
+                    "  Shift+Up/Down - browse prompt history".to_string(),
+                    "  Click input  - place the cursor (outside selection mode)".to_string(),
                     "  Modified Enter keys require a terminal with keyboard enhancement support."
                         .to_string(),
                 ]);

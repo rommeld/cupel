@@ -3,6 +3,13 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.35.1] - 2026-11-06
+
+- fix(tui): add Ctrl/Alt+Left/Right word jumps, vertical movement through wrapped prompt lines, and mouse cursor positioning
+- fix(tui): move prompt history recall to Shift+Up/Down, preserving drafts and autocomplete/question navigation
+- style(tui): give chat user prompts a distinct theme-aware background while preserving Markdown and selection highlighting
+- test(tui): cover prompt navigation, display-width mapping, scrolling, resizing, and mouse selection mode
+
 ## [v0.35.0] - 2026-11-06
 
 - feat(prompt): acknowledge mistakes directly and explain only non-obvious decisions and risks, skipping routine status updates
