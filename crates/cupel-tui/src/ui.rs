@@ -114,7 +114,7 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
         .map(|line| transcript::wrap_line(line, inner_width).len())
         .sum::<usize>()
         .clamp(1, 5) as u16;
-    let waiting = app.steering.len() + app.queued.len() + usize::from(app.waiting_helper.is_some());
+    let waiting = app.steering.len() + app.queued.len();
     let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
     // Reserve the editor, model status, footer, queues and one transcript row first.
     // The pane itself uses at most half the screen, its outside gaps are separate rows.
@@ -473,19 +473,14 @@ fn question_lines(app: &App, width: usize, theme: &Theme) -> QuestionLines {
 /// then "Follow up" rows, oldest first. The first line of each prompt, then the key
 /// that takes them back.
 fn render_queued(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
-    if app.steering.is_empty() && app.queued.is_empty() && app.waiting_helper.is_none() {
+    if app.steering.is_empty() && app.queued.is_empty() {
         return;
     }
     let first_line = |text: &String| text.lines().next().unwrap_or_default().to_string();
     let lines: Vec<Line<'_>> = app
-        .waiting_helper
+        .steering
         .iter()
-        .map(|call| format!(" Agent: @{} {}", call.name, first_line(&call.task)))
-        .chain(
-            app.steering
-                .iter()
-                .map(|text| format!(" Steer: {}", first_line(text))),
-        )
+        .map(|text| format!(" Steer: {}", first_line(text)))
         .chain(
             app.queued
                 .iter()
@@ -567,11 +562,6 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
         .padding(Padding::horizontal(INPUT_PADDING));
     if app.question.is_some() {
         block = block.title(Span::styled(" Your answer ", theme.chrome));
-    } else if let Some(name) = &app.armed {
-        block = block.title(Span::styled(
-            format!(" next prompt → {name} (esc cancels) "),
-            theme.chrome,
-        ));
     } else if app.is_running() {
         let elapsed = app
             .run_started
@@ -651,13 +641,13 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     });
     let totals = app.session_totals();
     let left = format!(
-        " {} in / {} out / {} cached | ${:.4} | ctx {}/{}{window_label} ({percent}%){maximum_segment}",
+        " {} in · {} out · {} cached | ctx {}/{}{window_label} ({percent}%){maximum_segment} | ${:.4}",
         crate::token_count::format(totals.input),
         crate::token_count::format(totals.output),
         crate::token_count::format(totals.cache_read),
-        totals.cost,
         crate::token_count::format(app.context_tokens),
         crate::token_count::format(window),
+        totals.cost,
     );
     // Add current `cupel` version to footer.
     let version_label = format!("version: {}", env!("CARGO_PKG_VERSION"));
@@ -665,11 +655,11 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     // the wheel currently does. It shares the status row's left margin because
     // a right aligned hint row would sit staggered against it.
     let hints = if app.question.is_some() {
-        " ↑↓ choose · enter answer (typed text wins) · ctrl+enter newline · @ file · esc abort"
+        " ↑↓ choose · enter answer (typed text wins) · ctrl+enter newline · @ file esc abort"
     } else if app.mouse_captured {
-        " enter send · alt+enter steer · ctrl+enter newline · @ file · / cmds · esc abort · ctrl+o copy · ctrl+b team · ctrl+t tools · ctrl+y select"
+        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
     } else {
-        " enter send · alt+enter steer · ctrl+enter newline · @ file · / cmds · esc abort · SELECTION MODE · ctrl+b team · ctrl+t tools · ctrl+y scroll"
+        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =
@@ -1143,8 +1133,12 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("code.rs"), "fn main() {}").unwrap();
         let mut app = test_app_in(root.to_str().unwrap());
+        app.meta.settings.extra.insert(
+            "agentCommands".into(),
+            serde_json::json!({"review":"removed-helper"}),
+        );
 
-        // A reviewable path, the built bundle is queued as the prompt.
+        // The bundle always goes to this agent, ignoring old helper routing.
         type_text(&mut app, "/review code.rs");
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         app.on_terminal_event(Event::Key(KeyEvent::new(
@@ -1189,7 +1183,7 @@ pub(crate) mod tests {
                 let screen = draw(&mut app, width, 20);
                 let status_row = screen.lines().nth(18).expect("footer status row");
                 assert!(
-                    status_row.starts_with(" 0 in / 0 out / 0 cached | $0.0000 | ctx "),
+                    status_row.starts_with(" 0 in · 0 out · 0 cached | ctx "),
                     "footer must show usage without session key or run status:\n{screen}"
                 );
             }
@@ -1217,6 +1211,26 @@ pub(crate) mod tests {
                     };
                     assert!(hints_row.contains(mouse_hint), "{screen}");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn footer_omits_the_separator_after_the_file_hint() {
+        for mouse_captured in [true, false] {
+            for question_open in [false, true] {
+                let mut app = test_app();
+                app.mouse_captured = mouse_captured;
+                let _answer = question_open.then(|| open_question(&mut app));
+                let screen = draw(&mut app, 240, 20);
+                let hints_row = screen.lines().last().expect("hints row");
+                let expected = if question_open {
+                    "@ file esc abort"
+                } else {
+                    "@ file / cmds"
+                };
+                assert!(hints_row.contains(expected), "{screen}");
+                assert!(!hints_row.contains("@ file ·"), "{screen}");
             }
         }
     }
@@ -1362,117 +1376,6 @@ pub(crate) mod tests {
             },
             recorder,
         )
-    }
-
-    #[tokio::test]
-    async fn restored_legacy_shared_facts_have_a_static_solo_locator() {
-        use cupel_agent::AgentTool as _;
-        use cupel_coding_agent::team_conversation::{Participant, TeamBody, TeamEntry};
-        use cupel_coding_agent::tools::read::ReadTool;
-        use cupel_core::types::{Message, ToolResultContent, UserContentBody};
-
-        let root = std::env::temp_dir().join("cupel-ui-legacy-shared-handoff");
-        let _ = std::fs::remove_dir_all(&root);
-        let base = test_app_with_home(&root, "legacy-shared");
-        let journal = base
-            .recorder
-            .sessions_dir()
-            .unwrap()
-            .join("legacy-shared/team/conversation.jsonl");
-        std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
-        let entry = TeamEntry {
-            id: 1,
-            author: Participant::Helper("reader".into()),
-            timestamp: 5,
-            durable: true,
-            body: TeamBody::Post {
-                text: "legacy-fact-remains-discoverable".into(),
-                reply_to: None,
-                root: None,
-            },
-        };
-        let bytes = format!(
-            "{{\"schemaVersion\":1}}\n{}\n",
-            serde_json::to_string(&entry).unwrap()
-        );
-        std::fs::write(&journal, &bytes).unwrap();
-        // Old sessions did not persist UI TeamEntry events: an empty membership
-        // boundary plus the existing journal must still make their facts discoverable.
-        let legacy = cupel_agent::AgentMessage::Custom {
-            kind: "team".into(),
-            payload: serde_json::json!({"members":[]}),
-            timestamp: 17,
-        };
-        let mut options = AgentOptions::new(base.agent.state().model, base.agent.registry());
-        options.messages = vec![legacy];
-        let restored = App::new(Agent::new(options), base.meta, base.recorder);
-        assert!(restored.collaboration.is_none());
-        let history = restored.agent.state().messages;
-        let visible = restored.agent.hooks().convert_to_llm(&history).await;
-        let [Message::User(user)] = visible.as_slice() else {
-            panic!("expected one legacy locator");
-        };
-        let UserContentBody::Text(text) = &user.content else {
-            panic!("expected plain locator");
-        };
-        assert_eq!(user.timestamp, 17);
-        assert!(text.contains(crate::app::TEAM_HANDOFF_MARKER));
-        assert!(text.contains(journal.to_str().unwrap()));
-        assert!(
-            !text.contains("legacy-fact-remains-discoverable"),
-            "constructor must not read journal contents"
-        );
-        let result = ReadTool::new(root.join("proj"))
-            .execute(
-                "legacy-evidence",
-                serde_json::json!({"path":journal}),
-                tokio_util::sync::CancellationToken::new(),
-                None,
-            )
-            .await
-            .unwrap();
-        assert!(result.content.iter().any(|content| matches!(content, ToolResultContent::Text(text) if text.text.contains("legacy-fact-remains-discoverable"))));
-        assert!(restored.collaboration.is_none());
-        assert_eq!(std::fs::read_to_string(&journal).unwrap(), bytes);
-        let mut options =
-            AgentOptions::new(restored.agent.state().model, restored.agent.registry());
-        options.messages = history.clone();
-        let again = App::new(Agent::new(options), restored.meta, restored.recorder);
-        assert_eq!(
-            again.agent.state().messages,
-            history,
-            "legacy hydration must be idempotent"
-        );
-        assert!(again.collaboration.is_none());
-        // A restored nonempty team will recover its live projection when it is
-        // explicitly run; adding a static locator here would duplicate that context.
-        let mut configured = test_app_with_home(&root, "legacy-shared");
-        let model = configured.agent.state().model;
-        configured.meta.settings.agents.insert("reader".into(), serde_json::from_value(serde_json::json!({
-            "provider": model.provider.as_str(), "model": model.id.clone(), "thinkingLevel": "off", "description": "Reads legacy evidence."
-        })).unwrap());
-        let mut options = AgentOptions::new(model, configured.agent.registry());
-        options.messages = vec![cupel_agent::AgentMessage::Custom {
-            kind: "team".into(),
-            payload: serde_json::json!({"members":["reader"]}),
-            timestamp: 18,
-        }];
-        let still_armed = App::new(Agent::new(options), configured.meta, configured.recorder);
-        assert!(still_armed.team.contains("reader"));
-        assert!(still_armed.collaboration.is_none());
-        assert!(
-            still_armed
-                .agent
-                .hooks()
-                .convert_to_llm(&still_armed.agent.state().messages)
-                .await
-                .is_empty()
-        );
-        // A historical solo transcript does not gain a handoff just because a
-        // similarly named sidecar exists; recognized team history is required.
-        let untouched = test_app_with_home(&root, "legacy-shared");
-        assert!(untouched.agent.state().messages.is_empty());
-        assert!(untouched.collaboration.is_none());
     }
 
     #[test]
@@ -1945,7 +1848,7 @@ pub(crate) mod tests {
             "model status missing:\n{screen}"
         );
         assert!(
-            screen.contains("0 in / 0 out / 0 cached"),
+            screen.contains("0 in · 0 out · 0 cached"),
             "footer missing:\n{screen}"
         );
     }
@@ -2122,7 +2025,7 @@ pub(crate) mod tests {
         // Handled locally, no run started, a Notice cell lists the commands.
         assert!(!app.is_running());
         let notice = app.transcript.cells.iter().any(|c| {
-            matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage") && text.contains("/quit") && text.contains("/exit"))
+            matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage") && text.contains("/quit, /exit  - Quit cupel"))
         });
         assert!(notice, "expected /help notice");
     }
@@ -2474,7 +2377,11 @@ pub(crate) mod tests {
             "{screen}"
         );
         assert!(
-            screen.contains("12.3k in / 2.8k out / 32.1k cached | $0.0000 | ctx 48.2k/"),
+            screen.contains(&format!(
+                "12.3k in · 2.8k out · 32.1k cached | ctx 48.2k/{} ({}%) | $0.0000",
+                crate::token_count::format(app.agent.context_window()),
+                48_234 * 100 / app.agent.context_window(),
+            )),
             "{screen}"
         );
         assert_eq!(app.context_tokens, 48_234);
@@ -2568,7 +2475,7 @@ pub(crate) mod tests {
             run_command(&mut app, &format!("/model {id}"));
             let screen = draw(&mut app, 240, 20);
             let expected = format!(
-                "ctx 48.0k/{:.1}k plan ({}%) · max {:.1}k",
+                "ctx 48.0k/{:.1}k plan ({}%) · max {:.1}k | $0.0000",
                 model.context_window as f64 / 1000.0,
                 48_000 * 100 / model.context_window,
                 max as f64 / 1000.0
@@ -3823,7 +3730,7 @@ pub(crate) mod tests {
                 "─".repeat(usize::from(width)),
                 "model status has its own row above the prompt border"
             );
-            assert!(rows[18].starts_with(" 0 in /"), "{screen}");
+            assert!(rows[18].starts_with(" 0 in ·"), "{screen}");
             assert!(
                 !rows[18].contains("Test Model") && !rows[18].contains("thinking"),
                 "{screen}"

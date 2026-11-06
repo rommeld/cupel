@@ -1,4 +1,4 @@
-//! Compact token counts shared by the footer and transcript.
+//! Compact token counts shared by the footer, transcript, and usage popup.
 
 pub(crate) fn format(tokens: u64) -> String {
     if tokens < 1_000 {

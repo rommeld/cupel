@@ -249,11 +249,12 @@ async fn run_session(
             match plain_command(name) {
                 PlainCommand::Quit => break,
                 PlainCommand::Help => {
-                    for c in crate::commands::BUILTIN_COMMANDS
+                    for line in crate::commands::BUILTIN_COMMANDS
                         .iter()
                         .filter(|c| plain_command(c.name) != PlainCommand::TuiOnly)
+                        .filter_map(crate::commands::BuiltinCommand::help_line)
                     {
-                        output(format_args!("  /{}  - {}\n", c.name, c.description))?;
+                        output(format_args!("{line}\n"))?;
                     }
                     for t in meta
                         .templates

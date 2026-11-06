@@ -114,15 +114,15 @@ pub fn archive_sessions(
     for transcript in &transcripts {
         let stem = transcript.file_stem().unwrap_or_default().to_string_lossy();
         let target = free_name(&archive, &stem);
-        let helpers = transcript.with_extension("");
-        let archived_helpers = target.with_extension("");
-        let moved_helpers = helpers.is_dir();
-        if moved_helpers {
-            std::fs::rename(&helpers, &archived_helpers)?;
+        let artifacts = transcript.with_extension("");
+        let archived_artifacts = target.with_extension("");
+        let moved_artifacts = artifacts.is_dir();
+        if moved_artifacts {
+            std::fs::rename(&artifacts, &archived_artifacts)?;
         }
         if let Err(error) = std::fs::rename(transcript, &target) {
-            if moved_helpers {
-                let _ = std::fs::rename(&archived_helpers, &helpers);
+            if moved_artifacts {
+                let _ = std::fs::rename(&archived_artifacts, &artifacts);
             }
             return Err(error);
         }
@@ -565,8 +565,8 @@ mod tests {
         let home = temp_root("checked-lifecycle");
         let mut recorder = SessionRecorder::new(Some(home.clone()), &home, "checked", "mock");
         let transition = AgentMessage::Custom {
-            kind: "cupel.team-transition".into(),
-            payload: serde_json::json!({"members":[],"archive":{"entries":[]},"checkpoint":{}}),
+            kind: "fixture.lifecycle".into(),
+            payload: serde_json::json!({"state":"complete"}),
             timestamp: 1,
         };
         recorder.record_checked(&transition).unwrap();

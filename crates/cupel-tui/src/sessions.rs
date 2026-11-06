@@ -227,19 +227,10 @@ impl Sessions {
             if session.app.is_running() {
                 session.app.abort_run();
             }
-            if let Some(active) = &session.app.collaboration {
-                active.crew.stop_running();
-            }
             session.app.agent.abort();
             session.app.login = None;
             session.app.question = None;
             session.app.agent.wait_for_idle().await;
-            // Drain a direct helper too, including one not yet polled at shutdown.
-            while session.app.helper.is_some() {
-                let event = session.app.next_event().await;
-                session.app.on_event(event).await;
-            }
-            session.app.shutdown_collaboration().await;
             session.app.recorder.end_session().await;
         }
     }
@@ -431,7 +422,6 @@ impl Sessions {
                 .expect("checkout gates poisoned")
                 .gate(&spinoff.path),
         );
-        app.initialize_team(crate::startup::TeamInitialization::ConfiguredDefaults);
 
         // `create` refuses a detached HEAD, so the origin has a branch.
         let base = group.origin.branch.unwrap_or_default();
@@ -507,12 +497,8 @@ impl Sessions {
         let mut notes = Vec::new();
         let fresh = || (format!("cupel-{}", cupel_core::types::now_ms()), Vec::new());
         let latest = session::find_latest(home.as_deref(), &spinoff.path);
-        let mut initialization = crate::startup::TeamInitialization::ConfiguredDefaults;
         let (session_id, history) = match latest.map(|path| session::load_transcript(&path)) {
-            Some(Ok((header, messages))) => {
-                initialization = crate::startup::TeamInitialization::Restore;
-                (header.session_id, messages)
-            }
+            Some(Ok((header, messages))) => (header.session_id, messages),
             Some(Err(error)) => {
                 notes.push(format!("{error} - the session starts empty"));
                 fresh()
@@ -544,7 +530,6 @@ impl Sessions {
                 .expect("checkout gates poisoned")
                 .gate(&spinoff.path),
         );
-        app.initialize_team(initialization);
         for note in notes {
             app.notice(note);
         }

@@ -601,6 +601,127 @@ mod tests {
     }
 
     #[test]
+    fn new_openrouter_rows_keep_their_modalities_and_effort_scales() {
+        let (models, _) = generate(include_str!("models_dev.json")).expect("catalog generates");
+        let hy4 = models.iter().find(|m| m.id == "tencent/hy4").expect("Hy4");
+        assert_eq!(hy4.provider.as_str(), Provider::OPENROUTER);
+        assert_eq!(hy4.input, [InputModality::Text, InputModality::Image]);
+        let map = hy4.thinking_level_map.as_ref().expect("Hy4 effort map");
+        assert_eq!(map.get("off"), Some(&Some("none".to_string())));
+        assert_eq!(map.get("medium"), Some(&None));
+        assert!(!map.contains_key("low") && !map.contains_key("high"));
+
+        let ripple = models
+            .iter()
+            .find(|m| m.id == "ricursiveai/ripple-65b-preview")
+            .expect("Ripple preview");
+        assert!(!ripple.reasoning);
+        assert!(ripple.thinking_level_map.is_none());
+        assert_eq!(ripple.input, [InputModality::Text]);
+
+        let crouton = models
+            .iter()
+            .find(|m| m.id == "stealth/crouton-alpha")
+            .expect("Crouton Alpha");
+        assert!(crouton.reasoning);
+        let map = crouton
+            .thinking_level_map
+            .as_ref()
+            .expect("Crouton effort map");
+        assert_eq!(map.get("off"), Some(&None));
+        assert!(!map.contains_key("xhigh") && !map.contains_key("max"));
+        assert_close(crouton.cost.input, 0.0);
+        assert_close(crouton.cost.output, 0.0);
+
+        for id in [
+            "thinkingmachines/inkling:free",
+            "thinkingmachines/inkling-small:free",
+            "google/gemini-omni-1.2-flash",
+        ] {
+            assert!(!models.iter().any(|m| m.id == id), "do not curate {id}");
+        }
+    }
+
+    #[test]
+    fn new_bedrock_claude_rows_use_adaptive_thinking_and_haiku_price_tiers() {
+        let (models, _) = generate(include_str!("models_dev.json")).expect("catalog generates");
+        for id in [
+            "us.anthropic.claude-sonnet-5-5",
+            "global.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-opus-5",
+            "global.anthropic.claude-haiku-5-5",
+        ] {
+            let model = models.iter().find(|m| m.id == id).expect(id);
+            assert_eq!(model.api.as_str(), Api::BEDROCK_CONVERSE_STREAM, "{id}");
+            assert_eq!(model.provider.as_str(), Provider::AMAZON_BEDROCK, "{id}");
+            assert!(model.base_url.is_empty(), "SDK derives the endpoint: {id}");
+            assert_eq!(
+                model.compat.as_ref().expect("adaptive compat")["forceAdaptiveThinking"],
+                serde_json::json!(true),
+                "{id}"
+            );
+        }
+        let sonnet = models
+            .iter()
+            .find(|m| m.id == "us.anthropic.claude-sonnet-5-5")
+            .expect("US Sonnet 5.5");
+        assert_eq!(
+            sonnet
+                .thinking_level_map
+                .as_ref()
+                .expect("Sonnet effort map")
+                .get("off"),
+            Some(&Some("between_tools".to_string()))
+        );
+        let haiku = models
+            .iter()
+            .find(|m| m.id == "global.anthropic.claude-haiku-5-5")
+            .expect("Haiku 5.5");
+        assert_eq!(haiku.context_window, 100_000);
+        assert_eq!(haiku.max_context_window, Some(1_000_000));
+        let tier = &haiku.cost.tiers.as_ref().expect("Haiku long-context tier")[0];
+        assert_eq!(tier.context_over, 100_000);
+        assert_close(haiku.cost.input, 0.1);
+        assert_close(tier.input, 0.5);
+    }
+
+    #[test]
+    fn fireworks_spot_rows_keep_distinct_ids_prices_and_native_efforts() {
+        let (models, _) = generate(include_str!("models_dev.json")).expect("catalog generates");
+        for (suffix, input, output) in [
+            ("deepseek-v4p1-flash-spot", 0.21, 0.84),
+            ("deepseek-v4p1-flash-1017-spot", 0.21, 0.84),
+            ("glm-5p3-spot", 0.98, 3.08),
+            ("kimi-k3-spot", 2.1, 10.5),
+        ] {
+            let id = format!("accounts/fireworks/routers/{suffix}");
+            let model = models.iter().find(|m| m.id == id).expect(&id);
+            assert_eq!(model.api.as_str(), Api::OPENAI_COMPLETIONS, "{id}");
+            assert_eq!(model.provider.as_str(), Provider::FIREWORKS, "{id}");
+            assert_eq!(model.base_url, curation::FIREWORKS_COMPLETIONS_BASE_URL);
+            let compat = model.compat.as_ref().expect("Fireworks compat");
+            assert_eq!(compat["supportsStore"], serde_json::json!(false), "{id}");
+            assert_eq!(
+                compat["supportsDeveloperRole"],
+                serde_json::json!(false),
+                "{id}"
+            );
+            assert!(
+                compat.get("serviceTier").is_none(),
+                "Spot is selected by id: {id}"
+            );
+            assert_close(model.cost.input, input);
+            assert_close(model.cost.output, output);
+            let map = model
+                .thinking_level_map
+                .as_ref()
+                .expect("native effort map");
+            assert!(!map.contains_key("max"), "max effort supported: {id}");
+            assert_eq!(map.get("xhigh"), Some(&None), "{id}");
+        }
+    }
+
+    #[test]
     fn fetch_is_explicit_and_unknown_arguments_are_rejected() {
         assert_eq!(parse_command(&[]).unwrap(), Command::Generate);
         assert_eq!(

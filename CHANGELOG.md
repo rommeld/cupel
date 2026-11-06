@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [Unreleased]
+
+- Remove helper agents, teams, delegation, and their configuration and UI; retain single-agent parallel tool execution.
+
 ## [v0.34.10] - 2026-11-05
 
 - refactor(session): find and resume saved sessions by their opening prompt with `/sessions`, `/hot-reload`, and `--resume`

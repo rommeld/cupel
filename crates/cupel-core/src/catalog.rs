@@ -423,7 +423,8 @@ mod tests {
                 .compat
                 .as_ref()
                 .and_then(|c| c.get("supportsTemperature")),
-            Some(&serde_json::json!(false))
+            None,
+            "models.dev now lists temperature support; no override is needed"
         );
     }
 

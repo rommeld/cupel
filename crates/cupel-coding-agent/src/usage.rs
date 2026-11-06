@@ -163,6 +163,7 @@ fn scan_dir(dir: &Path, exclude: Option<&Path>, history: &mut HistoryUsage) {
     }
 }
 
+// Historical collaboration journals are not usage transcripts.
 fn is_team_journal(path: &Path) -> bool {
     path.parent()
         .and_then(Path::file_name)

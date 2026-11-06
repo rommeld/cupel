@@ -23,7 +23,7 @@ use cupel_coding_agent::modes::{self, SessionMeta};
 use cupel_coding_agent::settings::{DEFAULT_PRESET, Preset, Settings};
 use cupel_coding_agent::startup::ThinkingChoice;
 use cupel_core::types::{Model, ThinkingLevel};
-use cupel_tui::startup::{StartupCommand, TeamInitialization};
+use cupel_tui::startup::StartupCommand;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -112,8 +112,11 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                 parsed.thinking = value.parse()?;
             }
             "--plain" => parsed.plain = true,
-            "--team" | "--add" | "--agent" | "--review" => {
-                StartupCommand::parse(&arg, &mut iter, &mut parsed.startup)?;
+            "--review" => {
+                if parsed.startup.is_some() {
+                    return Err("--review may only be specified once".into());
+                }
+                parsed.startup = Some(StartupCommand::Review);
             }
             // The search is optional, a bare resume option (next arg missing or
             // another flag) means "the newest session of this project".
@@ -127,7 +130,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
             }
             "--help" | "-h" => {
                 let mut help = String::from(
-                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [\"prompt search\"]] [--plain]\ninteractive startup: --team [--add <name>...] | --agent <name> [task] | --review\n\navailable models:\n",
+                    "usage: cupel [--model <id>] [--thinking off|minimal|low|medium|high|xhigh|max (default: medium; high for codex/gpt-6-sol)] [--resume [\"prompt search\"]] [--plain]\ninteractive startup: --review\n\navailable models:\n",
                 );
                 // Built ins + models.json layers, deliberately not the
                 // ollama probe because help must be instant and never touch the
@@ -154,7 +157,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
         }
     }
     if parsed.plain && parsed.startup.is_some() {
-        return Err("--team, --agent and --review require the interactive TUI".into());
+        return Err("--review requires the interactive TUI".into());
     }
     Ok(parsed)
 }
@@ -226,7 +229,7 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
     );
     if use_plain && args.startup.is_some() {
         return Err(AppError::Arguments(
-            "startup agent commands require terminal stdin and stdout".into(),
+            "--review requires terminal stdin and stdout".into(),
         ));
     }
     if let Some(log_path) = init_tracing(!use_plain) {
@@ -385,21 +388,9 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
             .map_err(AppError::PlainMode)?;
         return Ok(None);
     }
-    let initialization = if args.resume.is_some() {
-        TeamInitialization::Restore
-    } else {
-        TeamInitialization::ConfiguredDefaults
-    };
-    let exit = cupel_tui::run(
-        agent,
-        meta,
-        recorder,
-        ingredients.questions,
-        initialization,
-        args.startup,
-    )
-    .await
-    .map_err(AppError::InteractiveMode)?;
+    let exit = cupel_tui::run(agent, meta, recorder, ingredients.questions, args.startup)
+        .await
+        .map_err(AppError::InteractiveMode)?;
     Ok(match exit {
         cupel_tui::Exit::Quit => None,
         cupel_tui::Exit::Restart(restart) => Some(restart),
@@ -547,30 +538,18 @@ mod tests {
     }
 
     #[test]
-    fn startup_flags_preserve_globals_and_reject_plain_mode() {
-        let parsed = parse(&[
-            "--team",
-            "--add",
-            "custom_42",
-            "--model",
-            "model",
-            "--resume",
-        ])
-        .unwrap();
-        assert_eq!(
-            parsed.startup,
-            Some(StartupCommand::Team(
-                cupel_coding_agent::commands::TeamCommand::Add(vec!["custom_42".into()])
-            ))
-        );
-        assert_eq!(parsed.model.as_deref(), Some("model"));
-        assert!(matches!(parsed.resume, Some(ResumeTarget::Latest)));
-        for invalid in [
-            &["--plain", "--review"][..],
-            &["--agent", "custom_42", "--team"],
-            &["--add", "custom_42"],
-        ] {
-            assert!(parse(invalid).is_err());
+    fn review_startup_preserves_globals_and_rejects_removed_team_flags() {
+        let parsed = parse(&["--review", "--model", "fixture", "--thinking", "off"]).unwrap();
+        assert_eq!(parsed.startup, Some(StartupCommand::Review));
+        assert_eq!(parsed.model.as_deref(), Some("fixture"));
+        assert!(matches!(parsed.thinking, ThinkingChoice::Explicit(None)));
+        assert!(parse(&["--plain", "--review"]).is_err());
+        assert!(parse(&["--review", "--review"]).is_err());
+        for flag in ["--team", "--add", "--agent"] {
+            assert_eq!(
+                parse(&[flag]).err().as_deref(),
+                Some(format!("unknown argument: {flag}").as_str())
+            );
         }
     }
 
