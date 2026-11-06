@@ -670,11 +670,11 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     // the wheel currently does. It shares the status row's left margin because
     // a right aligned hint row would sit staggered against it.
     let hints = if app.question.is_some() {
-        " ↑↓ choose · enter answer (typed text wins) · @ file esc abort"
+        " ↑↓ choose · enter answer (typed text wins) · @ file"
     } else if app.mouse_captured {
-        " ctrl+enter steer · @ file / cmds · esc abort · ctrl+o copy · ctrl+t exp. tools · ctrl+r exp. reasoning · ctrl+y select"
+        " ctrl+enter steer · @ file / cmds · ctrl+o copy · ctrl+y select · ctrl+t exp. tools · ctrl+r exp. reasoning"
     } else {
-        " ctrl+enter steer · @ file / cmds · esc abort · SELECTION MODE · ctrl+t exp. tools · ctrl+r exp. reasoning · ctrl+y scroll"
+        " ctrl+enter steer · @ file / cmds · SELECTION MODE · ctrl+y scroll · ctrl+t exp. tools · ctrl+r exp. reasoning"
     };
 
     let [status_row, hints_row] =
@@ -1229,8 +1229,15 @@ pub(crate) mod tests {
                         hints_row.contains("ctrl+t exp. tools · ctrl+r exp. reasoning"),
                         "{screen}"
                     );
+                    let selection_hints = if mouse_captured {
+                        "ctrl+o copy · ctrl+y select"
+                    } else {
+                        "SELECTION MODE · ctrl+y scroll"
+                    };
+                    assert!(hints_row.contains(selection_hints), "{screen}");
                 }
                 for hint in [
+                    "esc abort",
                     "shift+enter",
                     "enter send",
                     "ctrl+enter newline",
@@ -1253,7 +1260,7 @@ pub(crate) mod tests {
                 let screen = draw(&mut app, 240, 20);
                 let hints_row = screen.lines().last().expect("hints row");
                 let expected = if question_open {
-                    "@ file esc abort"
+                    "@ file"
                 } else {
                     "@ file / cmds"
                 };
