@@ -46,6 +46,7 @@ pub fn build_system_prompt(
         );
     }
     guidelines.push("Be concise in your responses");
+    guidelines.push("Explain non-obvious decisions and risks; skip routine status updates.");
     guidelines.push("Never apologize; acknowledge mistakes directly.");
     guidelines.push("Show file paths clearly when working with files");
     let guidelines = guidelines
@@ -138,6 +139,11 @@ mod tests {
         );
         assert!(prompt.contains("- grep: Search file contents for patterns"));
         assert!(prompt.contains("Current working directory: /tmp/project"));
+        assert!(
+            prompt.contains(
+                "- Explain non-obvious decisions and risks; skip routine status updates."
+            )
+        );
         assert!(prompt.contains("- Never apologize; acknowledge mistakes directly."));
         // Empty inputs add no empty sections.
         assert!(!prompt.contains("<project_context>"));
