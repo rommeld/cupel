@@ -651,13 +651,13 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     });
     let totals = app.session_totals();
     let left = format!(
-        " {} in / {} out / {} cached | ${:.4} | ctx {}/{}{window_label} ({percent}%){maximum_segment}",
+        " {} in / {} out / {} cached | ctx {}/{}{window_label} ({percent}%){maximum_segment} | ${:.4}",
         crate::token_count::format(totals.input),
         crate::token_count::format(totals.output),
         crate::token_count::format(totals.cache_read),
-        totals.cost,
         crate::token_count::format(app.context_tokens),
         crate::token_count::format(window),
+        totals.cost,
     );
     // Add current `cupel` version to footer.
     let version_label = format!("version: {}", env!("CARGO_PKG_VERSION"));
@@ -1189,7 +1189,7 @@ pub(crate) mod tests {
                 let screen = draw(&mut app, width, 20);
                 let status_row = screen.lines().nth(18).expect("footer status row");
                 assert!(
-                    status_row.starts_with(" 0 in / 0 out / 0 cached | $0.0000 | ctx "),
+                    status_row.starts_with(" 0 in / 0 out / 0 cached | ctx "),
                     "footer must show usage without session key or run status:\n{screen}"
                 );
             }
@@ -2474,7 +2474,11 @@ pub(crate) mod tests {
             "{screen}"
         );
         assert!(
-            screen.contains("12.3k in / 2.8k out / 32.1k cached | $0.0000 | ctx 48.2k/"),
+            screen.contains(&format!(
+                "12.3k in / 2.8k out / 32.1k cached | ctx 48.2k/{} ({}%) | $0.0000",
+                crate::token_count::format(app.agent.context_window()),
+                48_234 * 100 / app.agent.context_window(),
+            )),
             "{screen}"
         );
         assert_eq!(app.context_tokens, 48_234);
@@ -2568,7 +2572,7 @@ pub(crate) mod tests {
             run_command(&mut app, &format!("/model {id}"));
             let screen = draw(&mut app, 240, 20);
             let expected = format!(
-                "ctx 48.0k/{:.1}k plan ({}%) · max {:.1}k",
+                "ctx 48.0k/{:.1}k plan ({}%) · max {:.1}k | $0.0000",
                 model.context_window as f64 / 1000.0,
                 48_000 * 100 / model.context_window,
                 max as f64 / 1000.0
