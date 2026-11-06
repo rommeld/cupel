@@ -250,7 +250,22 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     // new output moves the bottom a fixed offset would slide the view.
     // Growing it by exactly the growth pins the visible lines, at 0
     // (follow mode) the view sticks to the tail on purpose.
-    if app.scroll_from_bottom > 0 {
+    if let Some(anchor) = app.transcript_anchor.take()
+        && let Some(first) = rendered
+            .cell_at
+            .iter()
+            .position(|cell| *cell == Some(anchor.cell))
+    {
+        let count = rendered.cell_at[first..]
+            .iter()
+            .take_while(|cell| **cell == Some(anchor.cell))
+            .count();
+        let line = first + anchor.offset.min(count.saturating_sub(1));
+        let start = line
+            .saturating_sub(anchor.row)
+            .min(total.saturating_sub(height));
+        app.scroll_from_bottom = total.saturating_sub(height).saturating_sub(start);
+    } else if app.scroll_from_bottom > 0 {
         app.scroll_from_bottom += total.saturating_sub(app.last_total_lines);
     }
 
@@ -657,9 +672,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let hints = if app.question.is_some() {
         " ↑↓ choose · enter answer (typed text wins) · @ file esc abort"
     } else if app.mouse_captured {
-        " alt+enter steer · @ file / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
+        " alt+enter steer · @ file / cmds · esc abort · ctrl+r reasoning · ctrl+o copy · ctrl+t tools · ctrl+y select"
     } else {
-        " alt+enter steer · @ file / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
+        " alt+enter steer · @ file / cmds · esc abort · ctrl+r reasoning · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =
@@ -820,6 +835,7 @@ pub(crate) mod tests {
         });
         app.transcript.cells.push(Cell::Thinking {
             text: "pondering".into(),
+            collapsed: false,
         });
         app.transcript.cells.push(Cell::Answer {
             text: "the answer".into(),
@@ -829,10 +845,11 @@ pub(crate) mod tests {
         assert_eq!(task.fg, Some(Color::White));
         assert_eq!(task.bg, Some(Color::Indexed(240)));
 
-        assert_eq!(style_of(&mut app, "pondering").fg, Some(Color::White));
+        assert_eq!(style_of(&mut app, "pondering").fg, CUPEL.reasoning.fg);
 
         let answer = style_of(&mut app, "the answer");
-        assert_eq!(answer.fg, Some(Color::Magenta));
+        assert_eq!(answer.fg, Some(Color::Reset));
+        assert_eq!(style_of(&mut app, "Answer").fg, CUPEL.answer_label.fg);
     }
 
     #[test]
@@ -2608,7 +2625,7 @@ pub(crate) mod tests {
         assert!(screen.contains("fix the retry backoff"), "{screen}");
         assert_eq!(
             style_of(&mut app, "fix the retry backoff").fg,
-            Some(Color::White)
+            CUPEL.reasoning.fg
         );
     }
 
@@ -2920,7 +2937,8 @@ pub(crate) mod tests {
             thinking("\n\n**Reading the parser**\n\nIt is long."),
         )
         .await;
-        assert!(screen.contains("◓ Reading the parser · 0s"), "{screen}");
+        assert!(screen.contains("◓ thinking · 0s"), "{screen}");
+        assert_eq!(screen.matches("Reading the parser").count(), 1, "{screen}");
         let text = AgentEvent::MessageUpdate {
             event: AssistantMessageEvent::TextDelta {
                 content_index: 1,
@@ -2958,15 +2976,6 @@ pub(crate) mod tests {
             Some(Cell::Usage { text }) if text == "worked for 0s"
         ));
         assert!(app.run_started.is_none(), "the clock stops with the run");
-    }
-
-    #[test]
-    fn the_reasoning_headline_is_the_last_bold_line() {
-        use crate::app::reasoning_headline;
-        let summary = "**Reading the parser**\n\nIt is long.\n\n**Fixing the bug**\n\nNow.";
-        assert_eq!(reasoning_headline(summary), Some("Fixing the bug"));
-        assert_eq!(reasoning_headline("plain thinking, **bold** inside"), None);
-        assert_eq!(reasoning_headline("****"), None);
     }
 
     #[test]
@@ -3842,7 +3851,8 @@ pub(crate) mod tests {
             .last_line_cells
             .iter()
             .position(|cell| *cell == Some(1))
-            .expect("thinking line mapped");
+            .expect("thinking line mapped")
+            + 1;
         let row = app.last_transcript_inner.y + (line - app.last_top_line) as u16;
         app.on_terminal_event(Event::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -3906,20 +3916,21 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn markdown_reaches_the_screen_and_plain_answers_stay_magenta() {
+    fn markdown_reaches_the_screen_and_only_the_answer_label_is_accented() {
         let mut app = test_app();
         app.transcript.cells.push(Cell::Answer {
-            text: "# Fazit\nplain magenta with **weight**".into(),
+            text: "# Fazit\nplain text with **weight**".into(),
         });
         let screen = draw(&mut app, 80, 24);
         assert!(screen.contains("Fazit"), "{screen}");
         assert!(!screen.contains("# Fazit"), "hashes are chrome: {screen}");
         assert!(!screen.contains("**"), "delimiters are consumed: {screen}");
         // The invariant, unmarked text keeps the cell identity...
-        assert_eq!(style_of(&mut app, "plain magenta").fg, Some(Color::Magenta));
+        assert_eq!(style_of(&mut app, "plain text").fg, Some(Color::Reset));
+        assert_eq!(style_of(&mut app, "Answer").fg, CUPEL.answer_label.fg);
         // ...and accents combine with it instead of replacing it.
         let weight = style_of(&mut app, "weight");
-        assert_eq!(weight.fg, Some(Color::Magenta));
+        assert_eq!(weight.fg, Some(Color::Reset));
         assert!(weight.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -4399,7 +4410,7 @@ pub(crate) mod tests {
         for (session, text) in sessions.list.iter().zip(&expected) {
             assert!(matches!(
                 session.app.transcript.cells.as_slice(),
-                [Cell::Thinking { text: thinking }, Cell::Answer { text: answer }]
+                [Cell::Thinking { text: thinking, collapsed: false }, Cell::Answer { text: answer }]
                     if thinking == "planning" && answer == text
             ));
             assert!(session.app.run_finished);

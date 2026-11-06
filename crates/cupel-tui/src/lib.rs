@@ -39,6 +39,8 @@ pub mod updates;
 pub mod usage;
 
 #[cfg(test)]
+mod reasoning_tests;
+#[cfg(test)]
 mod usage_tests;
 
 use cupel_agent::Agent;

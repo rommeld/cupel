@@ -53,6 +53,7 @@ pub struct App {
     pub scroll_from_bottom: usize,
     pub last_transcript_height: u16,
     pub last_total_lines: usize,
+    pub transcript_anchor: Option<TranscriptAnchor>,
     pub should_quit: bool,
     pub recorder: SessionRecorder,
     pub pending_prompt: Option<String>,
@@ -82,6 +83,13 @@ pub struct App {
     pub questions: Option<QuestionReceiver>,
     pub question: Option<OpenQuestion>,
     pub write_gate: WriteGate,
+}
+
+/// A content position held in place while reasoning visibility changes.
+pub struct TranscriptAnchor {
+    pub cell: usize,
+    pub offset: usize,
+    pub row: usize,
 }
 
 /// A question from the `ask_user` tool, on screen until it is answered.
@@ -303,6 +311,7 @@ impl App {
             scroll_from_bottom: 0,
             last_transcript_height: 0,
             last_total_lines: 0,
+            transcript_anchor: None,
             should_quit: false,
             recorder,
             pending_prompt: None,
@@ -411,6 +420,7 @@ impl App {
                         let cell = match content {
                             AssistantContent::Thinking(t) => Cell::Thinking {
                                 text: t.thinking.clone(),
+                                collapsed: false,
                             },
                             AssistantContent::Text(t) => Cell::Assistant {
                                 text: t.text.clone(),
@@ -675,6 +685,10 @@ impl App {
             // * the latest answer, so the everyday "grab the result"
             // gesture needs no mouse at all.
             (KeyCode::Char('o'), true, _) => self.copy_selected(),
+            (KeyCode::Char('r'), true, _) => {
+                self.anchor_transcript(self.last_top_line);
+                self.transcript.toggle_all_reasoning();
+            }
             // Ctrl+T shows every tool result in full (and hides them again).
             (KeyCode::Char('t'), true, _) => {
                 self.tools_expanded = !self.tools_expanded;
@@ -1039,7 +1053,7 @@ impl App {
 
     /// A left click selects the block under the pointer (the Ctrl+O copy
     /// target), clicking it again or clicking chrome deselects. A
-    /// click on a tool cell toggles its preview instead. Terminal
+    /// click on a tool cell or reasoning header toggles its disclosure. Terminal
     /// coordinates resolve through the geometry the render pass saved,
     /// window top line + row offset = visual line, and the line→cell map
     /// says which block that is.
@@ -1056,7 +1070,40 @@ impl App {
             self.transcript.toggle_tool(index);
             return;
         }
+        if let Some(index) = hit
+            && matches!(
+                self.transcript.cells.get(index),
+                Some(Cell::Thinking { .. })
+            )
+            && (line == 0 || self.last_line_cells[line - 1] != hit)
+        {
+            self.anchor_transcript(line);
+            self.transcript.toggle_reasoning(index);
+            return;
+        }
         self.selected_cell = if hit == self.selected_cell { None } else { hit };
+    }
+
+    fn anchor_transcript(&mut self, line: usize) {
+        let Some((line, cell)) = self
+            .last_line_cells
+            .iter()
+            .enumerate()
+            .skip(line)
+            .find_map(|(line, cell)| cell.map(|cell| (line, cell)))
+        else {
+            return;
+        };
+        let first = self
+            .last_line_cells
+            .iter()
+            .position(|entry| *entry == Some(cell))
+            .unwrap_or(line);
+        self.transcript_anchor = Some(TranscriptAnchor {
+            cell,
+            offset: line - first,
+            row: line.saturating_sub(self.last_top_line),
+        });
     }
 
     /// Ctrl+O, queue a block's raw text for the clipboard. The selected
@@ -1258,12 +1305,6 @@ impl App {
     pub fn activity_label(&self) -> String {
         if self.question.is_some() {
             return "waiting for your answer".to_string();
-        }
-        if self.activity == Activity::Thinking
-            && let Some(Cell::Thinking { text }) = self.transcript.cells.last()
-            && let Some(headline) = reasoning_headline(text)
-        {
-            return headline.to_string();
         }
         self.activity.to_string()
     }
@@ -2123,18 +2164,6 @@ impl App {
             }
         }
     }
-}
-
-/// The last headline in a reasoning text, a line that is bold as a whole,
-/// `**Like this**`. Reasoning summaries open each section with one, raw
-/// thinking has none.
-#[must_use]
-pub fn reasoning_headline(text: &str) -> Option<&str> {
-    text.lines()
-        .rev()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix("**")?.strip_suffix("**"))
-        .filter(|headline| !headline.is_empty())
 }
 
 /// A duration the way a clock reads it, `42s`, `1m 05s`.

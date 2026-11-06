@@ -42,6 +42,7 @@ pub struct Theme {
     pub question: Style,
     pub assistant: Style,
     pub answer: Style,
+    pub answer_label: Style,
     pub reasoning: Style,
     pub tool_header: Style,
     pub detail: Style,
@@ -103,11 +104,11 @@ pub const CUPEL: Theme = Theme {
     // White on gray surface (xtrem 256 index 240, #585858).
     task: Style::new().fg(Color::White).bg(Color::Indexed(240)),
     question: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-    assistant: Style::new().fg(Color::White).add_modifier(Modifier::ITALIC),
-    // Magenta because cyan (tools), red (errors), and yellow (notice) are taken and
-    // bold alone is too subtle next to plain prose.
-    answer: Style::new().fg(Color::Magenta),
-    reasoning: Style::new().fg(Color::White).add_modifier(Modifier::ITALIC),
+    assistant: Style::new(),
+    answer: Style::new(),
+    answer_label: Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+    // #767676 stays readable against both black and white terminal backgrounds.
+    reasoning: Style::new().fg(Color::Indexed(243)),
     tool_header: Style::new().fg(Color::Cyan),
     detail: Style::new(),
     error: Style::new().fg(Color::Red),
@@ -206,9 +207,10 @@ impl Theme {
             base: Style::new().fg(fg).bg(bg),
             task: Style::new().fg(fg).bg(raised),
             question: Style::new().fg(yellow).add_modifier(Modifier::BOLD),
-            assistant: Style::new().fg(fg).add_modifier(Modifier::ITALIC),
-            answer: Style::new().fg(magenta),
-            reasoning: Style::new().fg(fg).add_modifier(Modifier::ITALIC),
+            assistant: Style::new().fg(fg),
+            answer: Style::new().fg(fg),
+            answer_label: Style::new().fg(magenta).add_modifier(Modifier::BOLD),
+            reasoning: Style::new().fg(reasoning_color(fg, muted)),
             tool_header: Style::new().fg(cyan),
             detail: Style::new(),
             error: Style::new().fg(red),
@@ -278,6 +280,19 @@ impl Theme {
             file: Some(file.path.clone()),
             ..Self::from_palette("", "", appearance, palette)
         }
+    }
+}
+
+/// Keep body text closer to the foreground than the palette's chrome color.
+const fn reasoning_color(foreground: Color, muted: Color) -> Color {
+    const fn blend(foreground: u8, muted: u8) -> u8 {
+        ((foreground as u16 * 3 + muted as u16) / 4) as u8
+    }
+    match (foreground, muted) {
+        (Color::Rgb(r, g, b), Color::Rgb(mr, mg, mb)) => {
+            Color::Rgb(blend(r, mr), blend(g, mg), blend(b, mb))
+        }
+        _ => foreground,
     }
 }
 
@@ -501,6 +516,7 @@ mod tests {
         {
             for (surface, ratio) in [
                 ("background", contrast(theme.base.fg, theme.base.bg)),
+                ("reasoning", contrast(theme.reasoning.fg, theme.base.bg)),
                 ("user message", contrast(theme.task.fg, theme.task.bg)),
                 (
                     "code block",
