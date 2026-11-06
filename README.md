@@ -66,9 +66,9 @@ printf 'Explain this project\n' | cupel --plain
 | `/usage` | Show token usage and estimated costs |
 | `/sessions [search]` | List or search saved sessions by their opening prompt |
 | `/hot-reload [prompt search]` | Reload `.cupel` config into the running or a matching saved session |
-| `/quit` | Quit cupel |
+| `/quit`, `/exit` | Quit cupel |
 
-Most commands are TUI-only; plain mode supports `/help`, `/review`, `/quit`,
+Most commands are TUI-only; plain mode supports `/help`, `/review`, `/quit`, `/exit`,
 and prompt templates.
 
 ### Configuration and sessions

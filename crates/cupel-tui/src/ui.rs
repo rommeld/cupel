@@ -2122,13 +2122,13 @@ pub(crate) mod tests {
         // Handled locally, no run started, a Notice cell lists the commands.
         assert!(!app.is_running());
         let notice = app.transcript.cells.iter().any(|c| {
-            matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage"))
+            matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage") && text.contains("/quit") && text.contains("/exit"))
         });
         assert!(notice, "expected /help notice");
     }
 
     #[test]
-    fn slash_quit_quits_and_slash_typing_opens_command_popup() {
+    fn slash_typing_opens_command_popup() {
         let mut app = test_app();
         type_text(&mut app, "/he");
         assert!(app.autocomplete.is_open(), "command popup should open");
@@ -2141,28 +2141,35 @@ pub(crate) mod tests {
         )));
         assert_eq!(app.input.text(), "/help ");
 
-        // Now /quit end to end.
-        let mut app = test_app();
-        type_text(&mut app, "/quit");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-        assert!(app.should_quit);
-
-        // /exit is not a command, it is neither offered nor handled locally.
         let mut app = test_app();
         type_text(&mut app, "/ex");
-        assert!(app.autocomplete.visible().is_none());
-        type_text(&mut app, "it");
-        assert!(app.autocomplete.visible().is_none());
+        assert!(app.autocomplete.is_open());
+        let screen = draw(&mut app, 80, 20);
+        assert!(screen.contains("exit"), "popup missing:\n{screen}");
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
+        assert_eq!(app.input.text(), "/exit ");
         assert!(!app.should_quit);
-        assert_eq!(app.pending_prompt.as_deref(), Some("/exit"));
+        assert!(app.pending_prompt.is_none());
+    }
+
+    #[test]
+    fn slash_quit_and_exit_quit_without_prompting() {
+        for command in ["/quit", "/exit"] {
+            let mut app = test_app();
+            type_text(&mut app, command);
+            app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )));
+            assert!(app.should_quit, "{command} should quit");
+            assert!(!app.is_running());
+            assert!(app.pending_prompt.is_none());
+            assert!(app.transcript.cells.is_empty());
+        }
     }
 
     #[test]
