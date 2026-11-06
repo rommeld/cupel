@@ -147,6 +147,40 @@ async fn usage_formats_tokens_like_the_footer_and_costs_to_three_decimals() {
 }
 
 #[tokio::test]
+async fn footer_and_usage_abbreviate_millions_billions_and_trillions() {
+    let mut app = test_app();
+    record(&mut app, "model", 1_200_000, StopReason::Stop).await;
+    for totals in app.usage_by_model.models.values_mut() {
+        totals.output = 3_400_000_000;
+        totals.cache_read = 5_600_000_000_000;
+        app.totals = *totals;
+    }
+    app.context_tokens = 1_200_000;
+    let screen = draw(&mut app, 160, 30);
+    assert!(
+        screen.contains("1.2M in · 3.4B out · 5.6T cached | ctx 1.2M/"),
+        "{screen}"
+    );
+
+    open(&mut app);
+    finish_loading(&mut app).await;
+    app.usage_popup.as_mut().unwrap().history = HistoryState::Ready(HistoryUsage::default());
+    let screen = draw(&mut app, 120, 30);
+    let rows: Vec<_> = screen
+        .lines()
+        .filter(|line| line.contains("test/model") || line.contains("TOTAL"))
+        .collect();
+    assert_eq!(rows.len(), 4, "model and total in both sections: {screen}");
+    for row in rows {
+        let columns: Vec<_> = row
+            .trim_matches(|ch: char| ch.is_whitespace() || ch == '│')
+            .split_whitespace()
+            .collect();
+        assert_eq!(&columns[1..], &["1.2M", "3.4B", "5.6T", "$0.000"]);
+    }
+}
+
+#[tokio::test]
 async fn usage_is_modal_and_escape_does_not_abort_the_running_agent() {
     let mut app = test_app();
     let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
