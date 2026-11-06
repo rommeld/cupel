@@ -38,6 +38,7 @@ pub enum Cell {
     },
     Thinking {
         text: String,
+        collapsed: bool,
     },
     Tool {
         id: String,
@@ -78,6 +79,7 @@ pub struct Rendered {
 #[derive(Default)]
 pub struct Transcript {
     pub cells: Vec<Cell>,
+    pub reasoning_collapsed: bool,
 }
 
 impl Transcript {
@@ -97,12 +99,30 @@ impl Transcript {
     /// Same, for thinking deltas.
     pub fn append_thinking(&mut self, delta: &str) {
         let tail = self.cells.last_mut();
-        if let Some(Cell::Thinking { text }) = tail {
+        if let Some(Cell::Thinking { text, .. }) = tail {
             text.push_str(delta);
         } else {
             self.cells.push(Cell::Thinking {
                 text: delta.to_string(),
+                collapsed: self.reasoning_collapsed,
             });
+        }
+    }
+
+    /// Toggle one reasoning disclosure without affecting tool previews.
+    pub fn toggle_reasoning(&mut self, index: usize) {
+        if let Some(Cell::Thinking { collapsed, .. }) = self.cells.get_mut(index) {
+            *collapsed = !*collapsed;
+        }
+    }
+
+    /// Ctrl+R also sets the visibility of reasoning blocks streamed next.
+    pub fn toggle_all_reasoning(&mut self) {
+        self.reasoning_collapsed = !self.reasoning_collapsed;
+        for cell in &mut self.cells {
+            if let Cell::Thinking { collapsed, .. } = cell {
+                *collapsed = self.reasoning_collapsed;
+            }
         }
     }
 
@@ -202,12 +222,15 @@ impl Transcript {
             cell_at: Vec::new(),
         };
         for (index, cell) in self.cells.iter().enumerate() {
+            let mut lines = cell_lines(cell, width, theme);
+            if lines.is_empty() {
+                continue;
+            }
             // A blank spacer between cells, but not at the very top.
             if !rendered.lines.is_empty() {
                 rendered.lines.push(Line::default());
                 rendered.cell_at.push(None);
             }
-            let mut lines = cell_lines(cell, width, theme);
             if selected == Some(index) {
                 // Spans can carry their own panel background. Tint both
                 // layers without changing foregrounds or Markdown modifiers.
@@ -237,7 +260,7 @@ impl Transcript {
             Cell::User { text }
             | Cell::Assistant { text }
             | Cell::Answer { text }
-            | Cell::Thinking { text }
+            | Cell::Thinking { text, .. }
             | Cell::Error { text }
             | Cell::Notice { text }
             | Cell::Usage { text }
@@ -261,13 +284,11 @@ fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             out.extend(crate::markdown::render(text, width, theme.assistant, theme));
         }
         Cell::Answer { text } => {
+            out.push(Line::from(Span::styled("Answer", theme.answer_label)));
             out.extend(crate::markdown::render(text, width, theme.answer, theme));
         }
-        Cell::Thinking { text } => {
-            // Thinking is markdown too. Reasoning summaries (Codex, GPT) open
-            // every section with a `**Title**` line that would otherwise show
-            // its asterisks.
-            out.extend(crate::markdown::render(text, width, theme.reasoning, theme));
+        Cell::Thinking { text, collapsed } => {
+            out.extend(reasoning_lines(text, *collapsed, width, theme));
         }
         Cell::Error { text } => {
             push_wrapped(&mut out, &format!("error: {text}"), width, theme.error);
@@ -285,6 +306,58 @@ fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         Cell::Tool { .. } => out.extend(tool_lines(cell, width, theme)),
     }
     out
+}
+
+fn reasoning_lines(text: &str, collapsed: bool, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let text = sanitize(text);
+    let text = text.trim();
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
+    let title = reasoning_title(first.trim());
+    let marker = if collapsed { '▸' } else { '▾' };
+    let label = title.map_or_else(
+        || format!("{marker} Reasoning"),
+        |title| format!("{marker} Reasoning · {title}"),
+    );
+    // Keep the disclosure row a single physical line, even for long headings.
+    let header = crate::markdown::render(&label, width, theme.reasoning, theme)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let mut lines = vec![header];
+    if !collapsed {
+        let body = if title.is_some() {
+            rest.trim_start()
+        } else {
+            text
+        };
+        if !body.is_empty() {
+            for mut line in
+                crate::markdown::render(body, width.saturating_sub(2), theme.reasoning, theme)
+            {
+                line.spans.insert(0, Span::raw("  "));
+                lines.push(line);
+            }
+        }
+    }
+    lines
+}
+
+/// Only promote a leading, complete provider heading; never summarize the body.
+fn reasoning_title(line: &str) -> Option<&str> {
+    let title = line
+        .strip_prefix("**")
+        .and_then(|text| text.strip_suffix("**"))
+        .filter(|text| !text.contains("**"))
+        .or_else(|| {
+            let text = line.trim_start_matches('#');
+            let hashes = line.len() - text.len();
+            (1..=6).contains(&hashes).then_some(text)?.strip_prefix(' ')
+        })?
+        .trim();
+    (!title.is_empty()).then_some(title)
 }
 
 /// A full width user surface with a `>>` marker on the first content row.
@@ -560,19 +633,27 @@ mod tests {
     }
 
     #[test]
-    fn assistant_prose_is_white_and_italic() {
+    fn assistant_prose_is_upright_with_markdown_emphasis() {
         let mut transcript = Transcript::default();
         transcript.append_assistant("Checking **the code** now.");
         let rendered = transcript.to_lines(80, None, &CUPEL);
         assert_eq!(line_text(&rendered.lines[0]), "Checking the code now.");
         for span in &rendered.lines[0].spans {
-            assert_eq!(span.style.fg, Some(ratatui::style::Color::White));
+            assert_eq!(span.style.fg, CUPEL.assistant.fg);
             assert!(
-                span.style
+                !span
+                    .style
                     .add_modifier
                     .contains(ratatui::style::Modifier::ITALIC)
             );
         }
+        assert!(rendered.lines[0].spans.iter().any(|span| {
+            span.content == "the code"
+                && span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+        }));
     }
 
     #[test]
@@ -584,6 +665,7 @@ mod tests {
             cells: vec![Cell::User {
                 text: source.into(),
             }],
+            ..Transcript::default()
         };
         let rendered = transcript.to_lines(48, None, &CUPEL);
         assert_eq!(
@@ -649,6 +731,7 @@ mod tests {
             cells: vec![Cell::User {
                 text: "**日本語日本語**".into(),
             }],
+            ..Transcript::default()
         };
         let rendered = transcript.to_lines(10, None, &CUPEL);
         assert_eq!(rendered.lines.len(), 2);
@@ -666,6 +749,7 @@ mod tests {
             cells: vec![Cell::User {
                 text: "abcdefghijklm".into(),
             }],
+            ..Transcript::default()
         };
         let rendered = transcript.to_lines(16, None, &CUPEL);
         assert_eq!(rendered.lines.len(), 1);
@@ -680,6 +764,7 @@ mod tests {
             cells: vec![Cell::User {
                 text: source.into(),
             }],
+            ..Transcript::default()
         };
         let rendered = transcript.to_lines(16, None, &CUPEL);
         let lines: Vec<String> = rendered
@@ -702,6 +787,7 @@ mod tests {
             cells: vec![Cell::User {
                 text: "**bold**\n```rust\nlet x = 1;\n```".into(),
             }],
+            ..Transcript::default()
         };
         let rendered = transcript.to_lines(40, Some(0), &CUPEL);
         for line in &rendered.lines {
@@ -966,12 +1052,14 @@ mod tests {
         let texts: Vec<String> = rendered.lines.iter().map(line_text).collect();
         assert_eq!(
             texts,
-            vec!["Reading the parser", "", "The parse function is long."]
+            vec![
+                "▾ Reasoning · Reading the parser",
+                "  The parse function is long."
+            ]
         );
-        // The title is bold on top of the cell's italic reasoning style.
         let title = &rendered.lines[0].spans[0];
-        assert!(title.style.add_modifier.contains(Modifier::BOLD));
-        assert!(title.style.add_modifier.contains(Modifier::ITALIC));
+        assert!(!title.style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(title.style.fg, CUPEL.reasoning.fg);
     }
 
     #[test]
@@ -989,7 +1077,15 @@ mod tests {
         // One column, a blank spacer between cells, no band rule anywhere.
         assert_eq!(
             texts,
-            vec!["let me look", "", "{}", "  ...", "", "found it"]
+            vec![
+                "▾ Reasoning",
+                "  let me look",
+                "",
+                "{}",
+                "  ...",
+                "",
+                "found it"
+            ]
         );
     }
 
@@ -1002,8 +1098,9 @@ mod tests {
         let rendered = t.to_lines(40, None, &CUPEL);
         assert_eq!(rendered.cell_at.len(), rendered.lines.len());
         assert_eq!(rendered.cell_at[0], Some(0), "the thinking line");
-        assert_eq!(rendered.cell_at[1], None, "the spacer is chrome");
-        assert_eq!(rendered.cell_at[2], Some(1), "the tool's header line");
+        assert_eq!(rendered.cell_at[1], Some(0), "the thinking body");
+        assert_eq!(rendered.cell_at[2], None, "the spacer is chrome");
+        assert_eq!(rendered.cell_at[3], Some(1), "the tool's header line");
         assert_eq!(
             *rendered.cell_at.last().unwrap(),
             Some(2),
@@ -1084,12 +1181,16 @@ mod tests {
                 Cell::User { text: raw.into() },
                 Cell::Assistant { text: raw.into() },
                 Cell::Answer { text: raw.into() },
-                Cell::Thinking { text: raw.into() },
+                Cell::Thinking {
+                    text: raw.into(),
+                    collapsed: false,
+                },
                 Cell::Error { text: raw.into() },
                 Cell::Notice { text: raw.into() },
                 Cell::Usage { text: raw.into() },
                 Cell::Summary { text: raw.into() },
             ],
+            ..Transcript::default()
         };
         for width in [10, 80] {
             let rendered = t.to_lines(width, Some(0), &CUPEL);
@@ -1193,7 +1294,7 @@ mod tests {
         t.append_thinking("1mvisible\u{009b}0m");
         let rendered = t.to_lines(80, None, &CUPEL);
         assert_safe(&rendered.lines);
-        assert_eq!(line_text(rendered.lines.last().unwrap()), "visible");
+        assert_eq!(line_text(rendered.lines.last().unwrap()), "  visible");
     }
 
     #[test]

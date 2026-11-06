@@ -48,6 +48,11 @@ cupel --resume "fix the login bug"         # find a session by its opening promp
 printf 'Explain this project\n' | cupel --plain
 ```
 
+Reasoning starts expanded in the TUI. Click its `▾ Reasoning` header to collapse
+one block, or use `Ctrl+R` to collapse/expand all reasoning. Tool previews retain
+their separate `Ctrl+T` control. Click reasoning body text to select it for
+`Ctrl+O` copying; copying preserves the original Markdown without UI labels.
+
 ### Slash commands
 
 | Command | Description |
