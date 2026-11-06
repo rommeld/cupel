@@ -2498,8 +2498,8 @@ pub(crate) mod tests {
         let window = app.agent.context_window();
         assert!(
             screen.contains(&format!(
-                "ctx 48.0k/{:.1}k ({}%)",
-                window as f64 / 1000.0,
+                "ctx 48.0k/{} ({}%)",
+                crate::token_count::format(window),
                 48_000 * 100 / window
             )),
             "{screen}"
@@ -2536,10 +2536,10 @@ pub(crate) mod tests {
             run_command(&mut app, &format!("/model {id}"));
             let screen = draw(&mut app, 240, 20);
             let expected = format!(
-                "ctx 48.0k/{:.1}k plan ({}%) · max {:.1}k | $0.0000",
-                model.context_window as f64 / 1000.0,
+                "ctx 48.0k/{} plan ({}%) · max {} | $0.0000",
+                crate::token_count::format(model.context_window),
                 48_000 * 100 / model.context_window,
-                max as f64 / 1000.0
+                crate::token_count::format(max)
             );
             assert!(screen.contains(&expected), "{id}: {screen}");
         }
@@ -2549,8 +2549,8 @@ pub(crate) mod tests {
         run_command(&mut app, "/model claude-sonnet-5");
         let screen = draw(&mut app, 240, 20);
         let expected = format!(
-            "ctx 48.0k/{:.1}k ({}%)",
-            sonnet.context_window as f64 / 1000.0,
+            "ctx 48.0k/{} ({}%)",
+            crate::token_count::format(sonnet.context_window),
             48_000 * 100 / sonnet.context_window
         );
         assert!(screen.contains(&expected), "{screen}");
