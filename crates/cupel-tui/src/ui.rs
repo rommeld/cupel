@@ -1144,40 +1144,22 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn review_command_queues_a_bundled_prompt_or_notices_errors() {
-        let root = std::env::temp_dir().join("cupel-ui-review");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("code.rs"), "fn main() {}").unwrap();
-        let mut app = test_app_in(root.to_str().unwrap());
-        app.meta.settings.extra.insert(
-            "agentCommands".into(),
-            serde_json::json!({"review":"removed-helper"}),
+    fn removed_review_command_is_literal_text() {
+        let mut app = test_app();
+        assert!(
+            !cupel_coding_agent::commands::BUILTIN_COMMANDS
+                .iter()
+                .any(|command| command.name == "review")
         );
-
-        // The bundle always goes to this agent, ignoring old helper routing.
-        type_text(&mut app, "/review code.rs");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-        let prompt = app.pending_prompt.take().expect("review prompt queued");
-        assert!(prompt.contains("=== file: code.rs ==="));
-        assert!(prompt.contains("fn main() {}"));
-
-        // A bad path, error notice, nothing queued or sent.
-        type_text(&mut app, "/review missing.rs");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-        assert!(app.pending_prompt.is_none());
-        assert!(app.transcript.cells.iter().any(|c| matches!(
-            c,
-            Cell::Notice { text } if text.contains("path not found: missing.rs")
-        )));
+        for text in ["/review", "/review missing.rs", "/review --diff"] {
+            type_text(&mut app, text);
+            app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )));
+            assert_eq!(app.pending_prompt.take().as_deref(), Some(text));
+        }
     }
 
     #[test]

@@ -137,7 +137,7 @@ mod tests {
                 .await
                 .map_err(std::io::Error::other);
         }
-        cupel_tui::run(Agent::new(options), meta, recorder, Some(questions), None).await?;
+        cupel_tui::run(Agent::new(options), meta, recorder, Some(questions)).await?;
         Ok(())
     }
 
