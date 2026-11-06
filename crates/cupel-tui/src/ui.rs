@@ -14,6 +14,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{App, Status, format_elapsed};
+use crate::input::InputLayout;
 use crate::sessions::Sessions;
 use crate::terminal_text::sanitize;
 use crate::{theme::Theme, transcript};
@@ -107,12 +108,9 @@ pub fn render(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     // visible lines, + 2 border rows. Account for the same horizontal padding used by
     // the editor so wrapping and height agree.
     let inner_width = area.width.saturating_sub(2 * INPUT_PADDING).max(1) as usize;
-    let input_lines = app
-        .input
-        .text()
-        .split('\n')
-        .map(|line| transcript::wrap_line(line, inner_width).len())
-        .sum::<usize>()
+    let input_lines = InputLayout::new(app.input.text(), inner_width)
+        .lines()
+        .len()
         .clamp(1, 5) as u16;
     let waiting = app.steering.len() + app.queued.len();
     let queued_lines = if waiting == 0 { 0 } else { waiting as u16 + 1 };
@@ -531,51 +529,7 @@ fn pane_block(title: Option<&str>, theme: &Theme) -> Block<'static> {
     }
 }
 
-/// Cursor position as (visual line, visual column) in the wrapped input
-/// text. Derived from the same `wrap_line` output that renders the text, a
-/// second, parallel wrapping computation would inevitably disagree with it
-/// (word wrap vs. plain column wrap) and paint the cursor away from where
-/// the next keystroke actually lands.
-///
-/// `cursor` is a character index (see `InputState`). `wrap_line` preserves every
-/// character of its input across the chunks it returns, so char offsets map
-/// 11 onto the wrapped output and locating the cursor is just counting.
-fn visual_cursor(text: &str, cursor: usize, width: usize) -> (usize, usize) {
-    use unicode_width::UnicodeWidthChar;
-
-    let mut remaining = cursor; // chars between the start of `text` and the cursor
-    let mut visual_line = 0;
-    for logical in text.split('\n') {
-        let chunks = transcript::wrap_line(logical, width);
-        let line_chars = logical.chars().count();
-        if remaining <= line_chars {
-            // The cursor sits on this logical line, walk its wrapped chunks
-            // until the offset falls inside one.
-            for (i, chunk) in chunks.iter().enumerate() {
-                let chunk_chars = chunk.chars().count();
-                // Landing exactly on a chunk boundary means "before the
-                // first char of the next chunk" inserting there joins the
-                // next chunk's word, so that is where the char will appear.
-                // Only at the very end of the line does the cursor trail
-                // the last chunk instead.
-                if remaining < chunk_chars || i + 1 == chunks.len() {
-                    let col = chunk
-                        .chars()
-                        .take(remaining)
-                        .map(|c| c.width().unwrap_or(0))
-                        .sum();
-                    return (visual_line + i, col);
-                }
-                remaining -= chunk_chars;
-            }
-        }
-        remaining -= line_chars + 1; // +1 consumes the '\n'
-        visual_line += chunks.len();
-    }
-    (visual_line, 0) // unreachable, the last logical line always contains the cursor
-}
-
-fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
+fn render_input(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
     let border_style = if app.is_running() {
         theme.input_border_busy
     } else {
@@ -603,25 +557,26 @@ fn render_input(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     frame.render_widget(block, area);
 
     let inner_width = inner.width.max(1) as usize;
-    let text: Vec<Line<'_>> = app
-        .input
-        .text()
-        .split('\n')
-        .flat_map(|line| transcript::wrap_line(line, inner_width))
-        .map(Line::from)
-        .collect();
+    let layout = InputLayout::new(app.input.text(), inner_width);
 
     // Scroll the viewport so the cursor's line stays visible once the text
     // outgrows the height capped box.
-    let (cursor_line, cursor_col) =
-        visual_cursor(app.input.text(), app.input.cursor(), inner_width);
+    let (cursor_line, cursor_col) = layout.cursor_position(app.input.cursor());
     let visible = inner.height.max(1) as usize;
     let scroll = cursor_line.saturating_sub(visible - 1);
-    frame.render_widget(Paragraph::new(text).scroll((scroll as u16, 0)), inner);
+    app.last_input_inner = inner;
+    app.last_input_scroll = scroll;
+    let text: Vec<Line<'_>> = layout
+        .lines()
+        .iter()
+        .skip(scroll)
+        .map(|line| Line::from(line.as_str()))
+        .collect();
+    frame.render_widget(Paragraph::new(text), inner);
 
     // Place the real terminal cursor at the editing position. (ratatui hides
     // it unless the app explicitly positions it each frame.)
-    if app.usage_popup.is_none() {
+    if app.usage_popup.is_none() && !inner.is_empty() {
         frame.set_cursor_position(Position {
             x: inner.x + (cursor_col as u16).min(inner.width.saturating_sub(1)),
             y: inner.y + ((cursor_line - scroll) as u16).min(inner.height.saturating_sub(1)),
@@ -962,7 +917,7 @@ pub(crate) mod tests {
         app.input.insert_str("**draft**");
         let mut terminal = Terminal::new(TestBackend::new(20, 3)).unwrap();
         terminal
-            .draw(|frame| render_input(frame, &app, frame.area(), &CUPEL))
+            .draw(|frame| render_input(frame, &mut app, frame.area(), &CUPEL))
             .unwrap();
         assert_eq!(
             terminal.get_cursor_position().unwrap(),
@@ -2134,6 +2089,8 @@ pub(crate) mod tests {
             .expect("expected prompt key help");
         assert!(keys.contains("Shift+Enter  - insert a newline"));
         assert!(keys.contains("Ctrl+Enter   - steer"));
+        assert!(keys.contains("Shift+Up/Down - browse prompt history"));
+        assert!(keys.contains("Ctrl/Alt+Left/Right - jump by word"));
         assert!(!keys.contains("Alt+Enter"));
     }
 
@@ -2197,34 +2154,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn visual_cursor_matches_word_wrapping() {
-        // width 10 word wraps "hello world" as ["hello ", "world"]. A plain
-        // column wrap computation would report (1, 1) here the regression
-        // this test pins down.
-        assert_eq!(visual_cursor("hello world", 11, 10), (1, 5));
-        // On the chunk boundary (after "hello "), inserting there joins the
-        // word "world", so the cursor belongs at the start of line 1.
-        assert_eq!(visual_cursor("hello world", 6, 10), (1, 0));
-        // Mid first chunk stays on line 0.
-        assert_eq!(visual_cursor("hello world", 3, 10), (0, 3));
-    }
-
-    #[test]
-    fn visual_cursor_handles_hard_splits_newlines_and_wide_chars() {
-        // A single long word hard splits by columns, "abcd" / "efgh" / "ij".
-        assert_eq!(visual_cursor("abcdefghij", 10, 4), (2, 2));
-        // Explicit newlines start fresh visual lines.
-        assert_eq!(visual_cursor("ab\nxyz", 6, 4), (1, 3));
-        assert_eq!(visual_cursor("ab\n", 3, 4), (1, 0));
-        // CJK chars are 2 columns wide, width 4 fits two, the third wraps.
-        assert_eq!(visual_cursor("日本語", 3, 4), (1, 2));
-        // After the second char = boundary = start of the wrapped chunk.
-        assert_eq!(visual_cursor("日本語", 2, 4), (1, 0));
-        // Empty buffer.
-        assert_eq!(visual_cursor("", 0, 4), (0, 0));
-    }
-
-    #[test]
     fn input_viewport_follows_the_cursor_past_the_height_cap() {
         let mut app = test_app();
         // 8 explicit lines, the input box caps at 5 visible rows, so the
@@ -2241,6 +2170,137 @@ pub(crate) mod tests {
             !screen.contains("line0"),
             "scrolled-out line must be hidden:\n{screen}"
         );
+    }
+
+    #[test]
+    fn modified_arrows_jump_words_and_plain_arrows_still_move_one_char() {
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            let mut app = test_app();
+            app.input.insert_str("héllo world");
+            app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Left, modifiers)));
+            assert_eq!(app.input.cursor(), 6);
+            press(&mut app, KeyCode::Left);
+            assert_eq!(app.input.cursor(), 5);
+            press(&mut app, KeyCode::Right);
+            assert_eq!(app.input.cursor(), 6);
+            app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Right, modifiers)));
+            assert_eq!(app.input.cursor(), 11);
+        }
+    }
+
+    #[test]
+    fn up_down_move_visually_and_shift_arrows_recall_history_and_restore_draft() {
+        let mut app = test_app();
+        app.input.insert_str("old prompt");
+        let _ = app.input.submit();
+        app.input.insert_str("hello world");
+        let _ = draw(&mut app, 12, 20); // ten display columns in the editor
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.input.text(), "hello world");
+        assert_eq!(app.input.cursor(), 5);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.input.cursor(), 11);
+
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)));
+        assert_eq!(app.input.text(), "old prompt");
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(app.input.text(), "hello world");
+        assert!(!app.autocomplete.is_open());
+        assert!(app.pending_prompt.is_none());
+    }
+
+    #[test]
+    fn clicking_wrapped_input_positions_the_terminal_cursor_and_inserts_there() {
+        let mut app = test_app();
+        app.input.insert_str("hello world");
+        let mut terminal = Terminal::new(TestBackend::new(12, 20)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
+            .unwrap();
+        let inner = app.last_input_inner;
+        let position = Position::new(inner.x + 2, inner.y + 1);
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            position.x,
+            position.y,
+        ));
+        assert_eq!(app.input.cursor(), 8);
+        terminal
+            .draw(|frame| render(frame, &mut app, frame.area(), &CUPEL))
+            .unwrap();
+        assert_eq!(terminal.get_cursor_position().unwrap(), position);
+        type_text(&mut app, "X");
+        assert_eq!(app.input.text(), "hello woXrld");
+    }
+
+    #[test]
+    fn input_clicks_respect_scroll_wide_characters_and_selection_mode() {
+        let mut app = test_app();
+        app.input
+            .insert_str("zero\none\ntwo\n日本語\nfour\nfive\nsix\nseven");
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, 3);
+        let inner = app.last_input_inner;
+        let click = scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 2,
+            inner.y,
+        );
+        app.mouse_captured = false;
+        let original = app.input.cursor();
+        app.on_terminal_event(click.clone());
+        assert_eq!(
+            app.input.cursor(),
+            original,
+            "selection mode owns the mouse"
+        );
+        app.mouse_captured = true;
+        app.on_terminal_event(click);
+        assert_eq!(app.input.cursor(), 14); // after 日, before 本
+        type_text(&mut app, "X");
+        assert!(app.input.text().contains("日X本語"));
+
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Up);
+            let _ = draw(&mut app, 80, 24);
+        }
+        assert_eq!(app.last_input_scroll, 0);
+        assert!(draw(&mut app, 80, 24).contains("zero"));
+    }
+
+    #[test]
+    fn input_clicks_ignore_borders_and_track_resizes_and_pane_offsets() {
+        let mut app = test_app();
+        app.input.insert_str("hello world");
+        let mut terminal = Terminal::new(TestBackend::new(40, 24)).unwrap();
+        let render_offset = |frame: &mut Frame<'_>, app: &mut App, width| {
+            render(frame, app, Rect::new(5, 0, width, 24), &CUPEL);
+        };
+        terminal
+            .draw(|frame| render_offset(frame, &mut app, 12))
+            .unwrap();
+        let inner = app.last_input_inner;
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x,
+            inner.y - 1,
+        ));
+        assert_eq!(app.input.cursor(), 11, "border is not editable text");
+        terminal
+            .draw(|frame| render_offset(frame, &mut app, 30))
+            .unwrap();
+        let inner = app.last_input_inner;
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 8,
+            inner.y,
+        ));
+        assert_eq!(app.input.cursor(), 8);
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.input.cursor(), 8, "resized input has only one row");
     }
 
     #[test]
@@ -3473,6 +3533,24 @@ pub(crate) mod tests {
         app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
         assert_eq!(app.input.text(), buffer_before, "history must not fire");
         assert!(app.autocomplete.is_open());
+    }
+
+    #[test]
+    fn shift_up_down_bypass_completion_and_restore_the_draft_without_reopening() {
+        let mut app = test_app_in(&autocomplete_cwd("shift-nav"));
+        app.input.insert_str("old prompt");
+        let _ = app.input.submit();
+        type_text(&mut app, "@");
+        assert!(app.autocomplete.visible().is_some());
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)));
+        assert_eq!(app.input.text(), "old prompt");
+        assert!(!app.autocomplete.is_open());
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(app.input.text(), "@");
+        assert!(!app.autocomplete.is_open());
     }
 
     #[test]
@@ -6114,6 +6192,25 @@ pub(crate) mod tests {
         }
         press(&mut app, KeyCode::Enter);
         assert_eq!(answer.try_recv(), Ok(Answer::Picked(0)));
+    }
+
+    #[test]
+    fn shift_arrows_recall_history_without_changing_the_question_selection() {
+        let mut app = test_app();
+        app.input.insert_str("old prompt");
+        let _ = app.input.submit();
+        let _answer = open_question(&mut app);
+        type_text(&mut app, "my answer");
+        let selected = app.question.as_ref().unwrap().selected;
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)));
+        assert_eq!(app.input.text(), "old prompt");
+        assert_eq!(app.question.as_ref().unwrap().selected, selected);
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::SHIFT,
+        )));
+        assert_eq!(app.input.text(), "my answer");
+        assert_eq!(app.question.as_ref().unwrap().selected, selected);
     }
 
     #[test]
