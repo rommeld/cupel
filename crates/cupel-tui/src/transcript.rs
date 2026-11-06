@@ -698,15 +698,15 @@ mod tests {
         for line in &rendered.lines {
             assert_eq!(line.width(), 48, "the surface fills the column");
         }
-        for index in [0, 3] {
+        for (index, symbol) in [(0, "▄"), (3, "▀")] {
             let line = &rendered.lines[index];
-            assert_eq!(line_text(line), " ".repeat(48));
+            assert_eq!(line_text(line), symbol.repeat(48));
             assert_eq!(line.style.fg, CUPEL.task.bg);
             assert_eq!(line.style.bg, CUPEL.base.bg);
         }
         for line in &rendered.lines[1..3] {
-            assert_eq!(line.style.fg, CUPEL.base.fg);
-            assert_eq!(line.style.bg, CUPEL.base.bg);
+            assert_eq!(line.style.fg, CUPEL.task.fg);
+            assert_eq!(line.style.bg, CUPEL.task.bg);
         }
         let prose = &rendered.lines[1];
         assert_eq!(
@@ -723,7 +723,7 @@ mod tests {
                 .iter()
                 .find(|span| span.content == word)
                 .unwrap();
-            assert_eq!(span.style.fg, CUPEL.base.fg);
+            assert_eq!(span.style.fg, CUPEL.task.fg);
             assert!(span.style.add_modifier.contains(modifier));
         }
         let code = prose
@@ -743,7 +743,7 @@ mod tests {
             .iter()
             .find(|span| span.content.contains("fn main"))
             .unwrap();
-        assert_eq!(fenced.style.patch(code.style).fg, CUPEL.base.fg);
+        assert_eq!(fenced.style.patch(code.style).fg, CUPEL.task.fg);
         assert_eq!(code.style.bg, CUPEL.md_code_block.bg);
         assert_eq!(
             transcript.copy_text(0),
@@ -882,6 +882,14 @@ mod tests {
                 } else {
                     theme.task
                 };
+                let content = &rendered.lines[1];
+                assert_eq!(content.style.bg, surface.bg, "{}", theme.id);
+                assert!(
+                    content
+                        .spans
+                        .iter()
+                        .all(|span| content.style.patch(span.style).bg == surface.bg)
+                );
                 for (index, symbol) in [(0, "▄"), (2, "▀")] {
                     let line = &rendered.lines[index];
                     let symbol = if surface.bg.is_some() { symbol } else { " " };

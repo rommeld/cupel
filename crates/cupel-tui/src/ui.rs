@@ -854,8 +854,8 @@ pub(crate) mod tests {
         });
 
         let task = style_of(&mut app, "the task");
-        assert_eq!(task.fg, Some(Color::Reset));
-        assert_eq!(task.bg, Some(Color::Reset));
+        assert_eq!(task.fg, CUPEL.task.fg);
+        assert_eq!(task.bg, CUPEL.task.bg);
 
         assert_eq!(style_of(&mut app, "pondering").fg, CUPEL.reasoning.fg);
 
@@ -865,7 +865,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn user_markdown_matches_the_prompt_colors_without_changing_its_source() {
+    fn user_markdown_has_a_background_without_changing_the_editor_or_source() {
         let mut app = test_app();
         app.transcript.cells.push(Cell::User {
             text:
@@ -890,8 +890,8 @@ pub(crate) mod tests {
             ("italic", Modifier::ITALIC),
         ] {
             let style = style_of(&mut app, text);
-            assert_eq!(style.fg, Some(Color::Reset));
-            assert_eq!(style.bg, Some(Color::Reset));
+            assert_eq!(style.fg, CUPEL.task.fg);
+            assert_eq!(style.bg, CUPEL.task.bg);
             assert!(style.add_modifier.contains(modifier));
         }
         assert!(
@@ -902,14 +902,15 @@ pub(crate) mod tests {
         assert_eq!(prompt.fg, Some(Color::Reset));
         assert_eq!(prompt.bg, Some(Color::Reset));
         assert!(!prompt.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(style_of(&mut app, "fn main").fg, Some(Color::Reset));
+        assert_eq!(style_of(&mut app, "fn main").fg, CUPEL.task.fg);
+        assert_eq!(style_of(&mut app, "fn main").bg, CUPEL.task.bg);
         app.selected_cell = Some(0);
         assert_eq!(style_of(&mut app, "bold").bg, CUPEL.selected.bg);
         assert_eq!(style_of(&mut app, "fn main").bg, CUPEL.selected.bg);
     }
 
     #[tokio::test]
-    async fn chat_prompts_match_the_editor_colors_while_idle_and_working_in_every_theme() {
+    async fn chat_prompts_have_a_distinct_background_while_idle_and_working_in_every_theme() {
         use crate::sessions::Sessions;
 
         let mut app = test_app();
@@ -927,17 +928,22 @@ pub(crate) mod tests {
                 let editor = sessions_style_of(&mut sessions, "draft input");
                 let submitted = sessions_style_of(&mut sessions, "submitted prompt");
                 assert_eq!(
-                    (submitted.fg, submitted.bg),
-                    (editor.fg, editor.bg),
-                    "{}: submitted prompt matches the editor, working={working}",
+                    submitted.bg, theme.task.bg,
+                    "{}: submitted prompt uses the task surface, working={working}",
+                    theme.id,
+                );
+                assert_eq!(editor.bg, theme.base.bg.or(Some(Color::Reset)));
+                assert_ne!(
+                    submitted.bg, editor.bg,
+                    "{}: submitted prompt stands out from the editor, working={working}",
                     theme.id,
                 );
                 if working {
                     let current = sessions_style_of(&mut sessions, "working prompt");
                     assert_eq!(
                         (current.fg, current.bg),
-                        (editor.fg, editor.bg),
-                        "{}: current prompt matches the working editor",
+                        (submitted.fg, submitted.bg),
+                        "{}: current prompt uses the same chat surface",
                         theme.id,
                     );
                 }
