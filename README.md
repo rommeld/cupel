@@ -48,6 +48,12 @@ cupel --resume "fix the login bug"         # find a session by its opening promp
 printf 'Explain this project\n' | cupel --plain
 ```
 
+In the prompt pane, `Enter` sends a prompt (or queues it while the agent is
+running), `Shift+Enter` inserts a newline, and `Ctrl+Enter` steers the running
+agent (or sends when idle). `Ctrl+J` is an alternative steering binding.
+Modified Enter keys require a terminal with keyboard enhancement support;
+`Alt+Enter` is unbound. `/help` also lists these keys.
+
 Reasoning starts expanded in the TUI. Click its `▾ Reasoning` header to collapse
 one block, or use `Ctrl+R` to collapse/expand all reasoning. Tool previews retain
 their separate `Ctrl+T` control. Click reasoning body text to select it for

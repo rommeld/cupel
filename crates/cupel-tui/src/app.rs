@@ -587,6 +587,19 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
+        if key.code == KeyCode::Enter {
+            // Alt+Enter is unbound. Handle prompt newlines before completion or
+            // questions can consume Enter as acceptance or submission.
+            if alt {
+                return;
+            }
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                self.input.insert('\n');
+                self.refresh_autocomplete();
+                return;
+            }
+        }
+
         // It consumes only the keys it needs, everything else (Ctrl C
         // included) falls through so session control never changes meaning.
         // Visible but  not merely open, a session with zero matches renders
@@ -630,7 +643,7 @@ impl App {
         }
 
         // An open question takes the keys that answer it. Everything else works as
-        // usual, typing writes an answer of one's own, Ctrl+Enter adds a line to it,
+        // usual, typing writes an answer of one's own, Shift+Enter adds a line to it,
         // and Esc aborts the run.
         if let Some(open) = &mut self.question {
             let last = open.pending.question().options.len().saturating_sub(1);
@@ -643,9 +656,9 @@ impl App {
                     open.selected = (open.selected + 1).min(last);
                     return;
                 }
-                // Alt+Enter answers too, a steered prompt would wait behind the very
+                // Ctrl+Enter answers too, a steered prompt would wait behind the very
                 // question it should answer.
-                (KeyCode::Enter, false, _) | (KeyCode::Char('j'), true, _) => {
+                (KeyCode::Enter, ..) | (KeyCode::Char('j'), true, _) => {
                     self.answer_question();
                     return;
                 }
@@ -701,14 +714,8 @@ impl App {
                 self.scroll_by(-i64::from(self.last_transcript_height / 2).max(1));
             }
 
-            // Ctrl+Enter inserts a newline. A terminal reports it only with the keyboard
-            // enhancement lib.rs switches on. Without it, most send a plain Enter.
-            (KeyCode::Enter, true, _) => {
-                self.input.insert('\n');
-                self.refresh_autocomplete();
-            }
-            // Alt+Enter steers; keep Ctrl+J as an alternative binding.
-            (KeyCode::Enter, _, true) | (KeyCode::Char('j'), true, _) => {
+            // Ctrl+Enter steers; keep Ctrl+J as an alternative binding.
+            (KeyCode::Enter | KeyCode::Char('j'), true, _) => {
                 self.submit(Delivery::Steer);
             }
             (KeyCode::Enter, ..) => self.submit(Delivery::Queue),
@@ -1141,7 +1148,7 @@ impl App {
         self.scroll_from_bottom = usize::try_from(next.max(0)).unwrap_or(0).min(max);
     }
 
-    /// Enter or Alt+Enter, dispatch commands locally, expand templates, or
+    /// Enter or Ctrl+Enter, dispatch commands locally, expand templates, or
     /// send the text as a prompt (queued or steered when a run is active).
     fn submit(&mut self, delivery: Delivery) {
         // Enter is consumed by the popup while open, so this is normally a
@@ -1618,6 +1625,15 @@ impl App {
                         lines.push(format!("  /{}  - {}", t.name, t.description));
                     }
                 }
+                lines.extend([
+                    "prompt keys:".to_string(),
+                    "  Enter        - send (queue while the agent is running)".to_string(),
+                    "  Shift+Enter  - insert a newline".to_string(),
+                    "  Ctrl+Enter   - steer the running agent (or send when idle)".to_string(),
+                    "  Ctrl+J       - alternative steering binding".to_string(),
+                    "  Modified Enter keys require a terminal with keyboard enhancement support."
+                        .to_string(),
+                ]);
                 self.notice(lines.join("\n"));
             }
             "sessions" => {
