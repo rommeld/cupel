@@ -646,16 +646,18 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     } else {
         ""
     };
-    let maximum_segment = maximum.map_or_else(String::new, |max| format!(" · max {}k", max / 1000));
+    let maximum_segment = maximum.map_or_else(String::new, |max| {
+        format!(" · max {}", crate::token_count::format(max))
+    });
     let totals = app.session_totals();
     let left = format!(
-        " {} in / {} out / {} cached | ${:.4} | ctx {}k/{}k{window_label} ({percent}%){maximum_segment}",
-        totals.input,
-        totals.output,
-        totals.cache_read,
+        " {} in / {} out / {} cached | ${:.4} | ctx {}/{}{window_label} ({percent}%){maximum_segment}",
+        crate::token_count::format(totals.input),
+        crate::token_count::format(totals.output),
+        crate::token_count::format(totals.cache_read),
         totals.cost,
-        app.context_tokens / 1000,
-        window / 1000,
+        crate::token_count::format(app.context_tokens),
+        crate::token_count::format(window),
     );
     // Add current `cupel` version to footer.
     let version_label = format!("version: {}", env!("CARGO_PKG_VERSION"));
@@ -2445,6 +2447,34 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn footer_and_chat_show_decimal_token_counts() {
+        let mut app = test_app();
+        let mut message = assistant_message("ok", cupel_core::types::StopReason::Stop, 48_234);
+        if let cupel_agent::AgentMessage::Llm(cupel_core::types::Message::Assistant(assistant)) =
+            &mut message
+        {
+            assistant.usage.input = 12_345;
+            assistant.usage.output = 2_789;
+            assistant.usage.reasoning = Some(1_234);
+            assistant.usage.cache_read = 32_100;
+        }
+        app.on_agent_event(Some(AgentEvent::MessageEnd { message }))
+            .await;
+
+        let screen = draw(&mut app, 240, 20);
+        assert!(
+            screen.contains("[12.3k in / 2.8k out (1.2k reasoning) / 32.1k cached, $0.0000]"),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("12.3k in / 2.8k out / 32.1k cached | $0.0000 | ctx 48.2k/"),
+            "{screen}"
+        );
+        assert_eq!(app.context_tokens, 48_234);
+        assert_eq!(app.session_totals().input, 12_345);
+    }
+
+    #[tokio::test]
     async fn thinking_off_says_when_the_model_cannot_turn_it_off() {
         // How many times the clamp was announced so far.
         fn clamp_notices(app: &App) -> usize {
@@ -2482,7 +2512,7 @@ pub(crate) mod tests {
     async fn footer_shows_context_usage_after_a_turn() {
         let mut app = test_app();
         assert!(
-            draw(&mut app, 200, 20).contains("ctx 0k/"),
+            draw(&mut app, 200, 20).contains("ctx 0/"),
             "meter starts empty"
         );
         app.on_agent_event(Some(AgentEvent::MessageEnd {
@@ -2493,8 +2523,8 @@ pub(crate) mod tests {
         let window = app.agent.context_window();
         assert!(
             screen.contains(&format!(
-                "ctx 48k/{}k ({}%)",
-                window / 1000,
+                "ctx 48.0k/{:.1}k ({}%)",
+                window as f64 / 1000.0,
                 48_000 * 100 / window
             )),
             "{screen}"
@@ -2509,7 +2539,7 @@ pub(crate) mod tests {
             messages: Vec::new(),
         }))
         .await;
-        assert!(draw(&mut app, 200, 20).contains("ctx 12k/"));
+        assert!(draw(&mut app, 200, 20).contains("ctx 12.0k/"));
     }
 
     #[test]
@@ -2531,10 +2561,10 @@ pub(crate) mod tests {
             run_command(&mut app, &format!("/model {id}"));
             let screen = draw(&mut app, 240, 20);
             let expected = format!(
-                "ctx 48k/{}k plan ({}%) · max {}k",
-                model.context_window / 1000,
+                "ctx 48.0k/{:.1}k plan ({}%) · max {:.1}k",
+                model.context_window as f64 / 1000.0,
                 48_000 * 100 / model.context_window,
-                max / 1000
+                max as f64 / 1000.0
             );
             assert!(screen.contains(&expected), "{id}: {screen}");
         }
@@ -2544,8 +2574,8 @@ pub(crate) mod tests {
         run_command(&mut app, "/model claude-sonnet-5");
         let screen = draw(&mut app, 240, 20);
         let expected = format!(
-            "ctx 48k/{}k ({}%)",
-            sonnet.context_window / 1000,
+            "ctx 48.0k/{:.1}k ({}%)",
+            sonnet.context_window as f64 / 1000.0,
             48_000 * 100 / sonnet.context_window
         );
         assert!(screen.contains(&expected), "{screen}");
@@ -2563,7 +2593,7 @@ pub(crate) mod tests {
             model.max_context_window = maximum;
             app.agent.set_model(model.clone());
             let screen = draw(&mut app, 240, 20);
-            assert!(screen.contains("ctx 48k/272k (17%)"), "{screen}");
+            assert!(screen.contains("ctx 48.0k/272.0k (17%)"), "{screen}");
             assert!(!screen.contains(" · max "), "{screen}");
         }
     }
@@ -2581,7 +2611,7 @@ pub(crate) mod tests {
 
         run_command(&mut app, "/model qwen3:8b");
         let screen = draw(&mut app, 240, 20);
-        assert!(screen.contains("ctx 2k/4k assumed (48%)"), "{screen}");
+        assert!(screen.contains("ctx 2.0k/4.1k assumed (48%)"), "{screen}");
         assert!(!screen.contains(" · max "), "{screen}");
 
         // Explicit models.json rows carry no discovery marker, even when
@@ -2598,7 +2628,7 @@ pub(crate) mod tests {
         ]);
         run_command(&mut app, "/model qwen3:8b");
         let screen = draw(&mut app, 240, 20);
-        assert!(screen.contains("ctx 2k/4k (48%)"), "{screen}");
+        assert!(screen.contains("ctx 2.0k/4.1k (48%)"), "{screen}");
     }
 
     #[tokio::test]
@@ -4666,8 +4696,8 @@ pub(crate) mod tests {
         sessions: &mut crate::sessions::Sessions,
         needle: &str,
     ) -> ratatui::style::Style {
-        // Keep the old transcript budget after adding the model status row.
-        let mut terminal = Terminal::new(TestBackend::new(100, 31)).unwrap();
+        // Keep old messages visible after theme listings wrap long checkout paths.
+        let mut terminal = Terminal::new(TestBackend::new(100, 60)).unwrap();
         terminal
             .draw(|frame| render_sessions(frame, sessions))
             .unwrap();
