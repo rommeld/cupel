@@ -224,6 +224,18 @@ pub struct BuiltinCommand {
     pub description: &'static str,
 }
 
+impl BuiltinCommand {
+    /// Format a help entry, grouping `/exit` with `/quit` instead of repeating it.
+    #[must_use]
+    pub fn help_line(&self) -> Option<String> {
+        match self.name {
+            "exit" => None,
+            "quit" => Some(format!("  /quit, /exit  - {}", self.description)),
+            _ => Some(format!("  /{}  - {}", self.name, self.description)),
+        }
+    }
+}
+
 pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
         name: "agent",
@@ -428,6 +440,19 @@ mod tests {
         for command in BUILTIN_COMMANDS {
             assert!(!command.description.contains('\n'), "{}", command.name);
         }
+    }
+
+    #[test]
+    fn help_groups_quit_and_exit_on_one_line() {
+        let lines: Vec<String> = BUILTIN_COMMANDS
+            .iter()
+            .filter_map(BuiltinCommand::help_line)
+            .collect();
+        let quit_lines: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("/quit") || line.contains("/exit"))
+            .collect();
+        assert_eq!(quit_lines, vec!["  /quit, /exit  - Quit cupel"]);
     }
 
     #[test]

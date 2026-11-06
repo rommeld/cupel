@@ -2782,9 +2782,11 @@ impl App {
         match name {
             "help" => {
                 let mut lines = vec!["commands:".to_string()];
-                for c in commands::BUILTIN_COMMANDS {
-                    lines.push(format!("  /{}  - {}", c.name, c.description));
-                }
+                lines.extend(
+                    commands::BUILTIN_COMMANDS
+                        .iter()
+                        .filter_map(commands::BuiltinCommand::help_line),
+                );
                 if !self.meta.templates.is_empty() {
                     lines.push("prompt templates:".to_string());
                     for t in &self.meta.templates {

@@ -2142,7 +2142,7 @@ pub(crate) mod tests {
         // Handled locally, no run started, a Notice cell lists the commands.
         assert!(!app.is_running());
         let notice = app.transcript.cells.iter().any(|c| {
-            matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage") && text.contains("/quit") && text.contains("/exit"))
+            matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage") && text.contains("/quit, /exit  - Quit cupel"))
         });
         assert!(notice, "expected /help notice");
     }
