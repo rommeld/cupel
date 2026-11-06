@@ -65,6 +65,7 @@ fn output(args: std::fmt::Arguments<'_>) -> Result<(), PlainError> {
 enum PlainCommand {
     Quit,
     Help,
+    Undo(crate::undo::UndoCommand),
     TuiOnly,
     Prompt,
 }
@@ -73,6 +74,8 @@ fn plain_command(name: &str) -> PlainCommand {
     match name {
         "quit" | "exit" => PlainCommand::Quit,
         "help" => PlainCommand::Help,
+        "changes" => PlainCommand::Undo(crate::undo::UndoCommand::Changes),
+        "undo" => PlainCommand::Undo(crate::undo::UndoCommand::Undo),
         _ if crate::commands::BUILTIN_COMMANDS
             .iter()
             .any(|command| command.name == name) =>
@@ -246,6 +249,15 @@ async fn run_session(
                 .map_or(rest, |(n, _)| n);
             match plain_command(name) {
                 PlainCommand::Quit => break,
+                PlainCommand::Undo(command) => {
+                    if rest[name.len()..].trim().is_empty() {
+                        let result = crate::undo::execute_command(command, agent, recorder).await;
+                        output(format_args!("{}\n", result.unwrap_or_else(|error| error)))?;
+                    } else {
+                        output(format_args!("usage: /{name} (no arguments)\n"))?;
+                    }
+                    continue;
+                }
                 PlainCommand::Help => {
                     for line in crate::commands::BUILTIN_COMMANDS
                         .iter()
@@ -584,7 +596,7 @@ mod tests {
             .filter(|command| plain_command(command.name) != PlainCommand::TuiOnly)
             .map(|command| command.name)
             .collect();
-        assert_eq!(supported, ["help", "quit", "exit"]);
+        assert_eq!(supported, ["help", "changes", "undo", "quit", "exit"]);
         for name in [
             "new",
             "model",

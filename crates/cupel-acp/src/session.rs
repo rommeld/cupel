@@ -101,7 +101,7 @@ impl Runtime {
             tracing::warn!(cwd = %&cwd.display(), "prompt hooks and sesitive model rows disabled: project is not trusted");
         }
         // The Plain capability set deliberately omits ask_user, no blocking from UI.
-        let ingredients = bootstrap::load(
+        let mut ingredients = bootstrap::load(
             &cwd,
             config.home.clone(),
             &registry,
@@ -118,6 +118,8 @@ impl Runtime {
             config.home.as_deref(),
         )
         .map_err(invalid)?;
+        let recorder = SessionRecorder::new(config.home.clone(), &cwd, id, &model.id);
+        ingredients.bind_session(&recorder, &cwd);
         let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
         let mut options = AgentOptions::new(model.clone(), registry);
         options.system_prompt = cupel_coding_agent::system_prompt::with_preset_prompt(
@@ -139,7 +141,6 @@ impl Runtime {
             account(message, &mut used, &mut cost);
         }
         options.messages = messages;
-        let recorder = SessionRecorder::new(config.home.clone(), &cwd, id, &model.id);
         Ok(Self {
             cwd,
             agent: Agent::new(options),

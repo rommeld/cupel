@@ -254,7 +254,7 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
     } else {
         Frontend::Tui
     };
-    let ingredients =
+    let mut ingredients =
         cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry, frontend).await;
     // Surface plain mode warnings before model selection can fail. In the
     // TUI they travel with SessionMeta, never through the alternate screen.
@@ -332,6 +332,8 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
         &session_id,
         &model.id,
     );
+    ingredients.bind_session(&recorder, &cwd);
+    let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
 
     let mut options = AgentOptions::new(model.clone(), registry);
     options.system_prompt = cupel_coding_agent::system_prompt::with_preset_prompt(

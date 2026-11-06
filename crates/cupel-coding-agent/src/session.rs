@@ -332,6 +332,7 @@ pub struct SessionRecorder {
     persistence_error: Option<String>,
     hooks: HookRunner,
     started: bool,
+    undo: std::sync::Arc<crate::undo::UndoJournal>,
 }
 
 impl SessionRecorder {
@@ -359,6 +360,7 @@ impl SessionRecorder {
                 model: model_id.to_string(),
                 started_at: cupel_core::types::now_ms(),
             },
+            undo: crate::undo::shared(path.as_deref(), cwd),
             path,
             file: None,
             persistence_error: None,
@@ -385,6 +387,16 @@ impl SessionRecorder {
     #[must_use]
     pub fn transcript(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    #[must_use]
+    pub fn undo(&self) -> std::sync::Arc<crate::undo::UndoJournal> {
+        std::sync::Arc::clone(&self.undo)
+    }
+
+    /// Let stop hooks finish before inspecting or restoring the workspace.
+    pub async fn settle_hooks(&mut self) {
+        self.hooks.settle().await;
     }
 
     /// A prompt is about to start a run. Settles any pending `stop` hook

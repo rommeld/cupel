@@ -68,6 +68,20 @@ pub struct Ingredients {
     pub questions: Option<QuestionReceiver>,
 }
 
+impl Ingredients {
+    /// Startup and every reload bind both the tool and hooks to the recorder's
+    /// journal. Unbound tools remain useful for standalone callers and tests.
+    pub fn bind_session(&mut self, recorder: &crate::session::SessionRecorder, cwd: &Path) {
+        let undo = recorder.undo();
+        for tool in &mut self.tools {
+            if tool.name() == "apply_patch" {
+                *tool = Arc::new(ApplyPatchTool::new(cwd).with_undo(Arc::clone(&undo)));
+            }
+        }
+        self.hooks.undo = Some(undo);
+    }
+}
+
 /// Load every ingredient fresh from disk (and the bounded ollama probe).
 /// Parameterized on `home` instead of reading `CUPEL_HOME` so hot reload
 /// and tests share the exact code path with startup.
@@ -147,6 +161,7 @@ pub struct SessionHooks {
     loop_killer: LoopKiller,
     home: Option<PathBuf>,
     http: reqwest::Client,
+    undo: Option<Arc<crate::undo::UndoJournal>>,
 }
 
 impl SessionHooks {
@@ -157,12 +172,25 @@ impl SessionHooks {
             loop_killer,
             home,
             http: reqwest::Client::new(),
+            undo: None,
         }
     }
 }
 
 #[async_trait]
 impl AgentHooks for SessionHooks {
+    async fn on_user_messages(&self, messages: &[cupel_agent::AgentMessage]) {
+        if messages.iter().any(|message| {
+            matches!(
+                message,
+                cupel_agent::AgentMessage::Llm(cupel_core::types::Message::User(_))
+            )
+        }) && let Some(undo) = &self.undo
+        {
+            undo.begin_turn().await;
+        }
+    }
+
     /// The agent loop calls this before every provider request (types.rs,
     /// "Resolve an API key for a provider right before each call"). The
     /// designed home for expiring OAuth tokens. Key based providers

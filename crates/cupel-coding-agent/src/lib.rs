@@ -26,5 +26,6 @@ pub mod system_prompt;
 pub mod themes;
 pub mod tools;
 pub mod truncate;
+pub mod undo;
 pub mod update;
 pub mod usage;

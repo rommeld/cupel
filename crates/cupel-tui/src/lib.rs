@@ -40,6 +40,8 @@ pub mod usage;
 #[cfg(test)]
 mod reasoning_tests;
 #[cfg(test)]
+mod undo_tests;
+#[cfg(test)]
 mod usage_tests;
 
 use cupel_agent::Agent;
@@ -262,6 +264,9 @@ async fn event_loop(
             sessions.on_theme_request(request);
         }
         let app = sessions.active_mut();
+        if let Some(command) = app.pending_undo.take() {
+            app.run_undo_command(command).await;
+        }
 
         // A prompt accepted by the (synchronous) key handler starts here,
         // the prompt path hooks are awaited first, so a pending `stop` hook
