@@ -101,7 +101,8 @@ pub const CUPEL: Theme = Theme {
     appearance: Appearance::Terminal,
     file: None,
     base: Style::new(),
-    task: Style::new(),
+    // An explicit foreground stays readable on this dark surface even in light terminals.
+    task: Style::new().fg(Color::White).bg(Color::Indexed(235)),
     question: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     assistant: Style::new(),
     answer: Style::new().fg(Color::Magenta),
@@ -204,7 +205,7 @@ impl Theme {
             appearance,
             file: None,
             base: Style::new().fg(fg).bg(bg),
-            task: Style::new().fg(fg).bg(bg),
+            task: Style::new().fg(fg).bg(surface),
             question: Style::new().fg(yellow).add_modifier(Modifier::BOLD),
             assistant: Style::new().fg(fg),
             answer: Style::new().fg(magenta),
