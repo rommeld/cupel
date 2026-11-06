@@ -655,11 +655,11 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     // the wheel currently does. It shares the status row's left margin because
     // a right aligned hint row would sit staggered against it.
     let hints = if app.question.is_some() {
-        " ↑↓ choose · enter answer (typed text wins) · ctrl+enter newline · @ file esc abort"
+        " ↑↓ choose · enter answer (typed text wins) · @ file esc abort"
     } else if app.mouse_captured {
-        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
+        " alt+enter steer · @ file / cmds · esc abort · ctrl+o copy · ctrl+t tools · ctrl+y select"
     } else {
-        " enter send · alt+enter steer · ctrl+enter newline · @ file / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
+        " alt+enter steer · @ file / cmds · esc abort · SELECTION MODE · ctrl+t tools · ctrl+y scroll"
     };
 
     let [status_row, hints_row] =
@@ -1193,7 +1193,7 @@ pub(crate) mod tests {
     #[test]
     fn footer_ends_the_hints_row_with_the_version_after_a_gap() {
         let mut app = test_app();
-        // The leading space is the gap, at 80 and 140 columns the hints are cut
+        // The leading space is the gap; at 80 columns the hints are cut
         // off, and the cut must not touch the label.
         let version_suffix = format!(" version: {}", env!("CARGO_PKG_VERSION"));
         for mouse_captured in [true, false] {
@@ -1201,7 +1201,7 @@ pub(crate) mod tests {
             for width in [80, 140, 200] {
                 let screen = draw(&mut app, width, 20);
                 let hints_row = screen.lines().last().expect("hints row");
-                assert!(hints_row.starts_with(" enter send"), "{screen}");
+                assert!(hints_row.starts_with(" alt+enter steer"), "{screen}");
                 assert!(hints_row.ends_with(&version_suffix), "{screen}");
                 if width == 200 {
                     let mouse_hint = if mouse_captured {
@@ -1210,6 +1210,22 @@ pub(crate) mod tests {
                         "ctrl+y scroll"
                     };
                     assert!(hints_row.contains(mouse_hint), "{screen}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn footer_omits_send_newline_and_ctrl_b_hints() {
+        for mouse_captured in [true, false] {
+            for question_open in [false, true] {
+                let mut app = test_app();
+                app.mouse_captured = mouse_captured;
+                let _answer = question_open.then(|| open_question(&mut app));
+                let screen = draw(&mut app, 240, 20);
+                let hints_row = screen.lines().last().expect("hints row");
+                for hint in ["enter send", "ctrl+enter newline", "ctrl+b"] {
+                    assert!(!hints_row.contains(hint), "unexpected {hint}:\n{screen}");
                 }
             }
         }
