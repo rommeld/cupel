@@ -1007,7 +1007,7 @@ pub(crate) mod tests {
         }
         assert!(!screen.contains(['│', '┌', '┐', '└', '┘']), "{screen}");
         assert!(
-            screen.lines().nth(1).unwrap().starts_with(" >> task"),
+            screen.lines().nth(2).unwrap().starts_with(" >> task"),
             "{screen}"
         );
         assert!(screen.lines().next().unwrap().trim().is_empty(), "{screen}");

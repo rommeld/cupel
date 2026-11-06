@@ -241,6 +241,21 @@ impl Transcript {
                     }
                 }
             }
+            if matches!(cell, Cell::User { .. }) {
+                let surface = if selected == Some(index) {
+                    theme.task.patch(theme.selected)
+                } else {
+                    theme.task
+                };
+                // Half blocks simulate half-row padding; their unpainted half
+                // keeps the surrounding background, including when selected.
+                let edge_style = Style {
+                    fg: surface.bg,
+                    ..theme.base
+                };
+                lines.insert(0, Line::from("▄".repeat(width)).style(edge_style));
+                lines.push(Line::from("▀".repeat(width)).style(edge_style));
+            }
             rendered
                 .cell_at
                 .extend(std::iter::repeat_n(Some(index), lines.len()));
@@ -657,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn user_messages_render_markdown_without_surface_padding() {
+    fn user_messages_render_markdown_with_half_height_vertical_padding() {
         use ratatui::style::{Color, Modifier};
 
         let source = "plain **bold** and *italic* with `code`\n```rust\nfn main() {}\n```";
@@ -670,16 +685,24 @@ mod tests {
         let rendered = transcript.to_lines(48, None, &CUPEL);
         assert_eq!(
             rendered.lines.len(),
-            2,
-            "only content rows, with no padding rows"
+            4,
+            "two content rows and two half-height padding strips"
         );
-        assert_eq!(rendered.cell_at, vec![Some(0); 2]);
+        assert_eq!(rendered.cell_at, vec![Some(0); 4]);
         for line in &rendered.lines {
             assert_eq!(line.width(), 48, "the surface fills the column");
+        }
+        for (index, symbol) in [(0, "▄"), (3, "▀")] {
+            let line = &rendered.lines[index];
+            assert_eq!(line_text(line), symbol.repeat(48));
+            assert_eq!(line.style.fg, CUPEL.task.bg);
+            assert_eq!(line.style.bg, CUPEL.base.bg);
+        }
+        for line in &rendered.lines[1..3] {
             assert_eq!(line.style.fg, Some(Color::White));
             assert_eq!(line.style.bg, Some(Color::Indexed(240)));
         }
-        let prose = &rendered.lines[0];
+        let prose = &rendered.lines[1];
         assert_eq!(
             line_text(prose).trim_end(),
             ">> plain bold and italic with code"
@@ -707,7 +730,7 @@ mod tests {
             Some(Color::Cyan),
             "inline code retains its accent"
         );
-        let fenced = &rendered.lines[1];
+        let fenced = &rendered.lines[2];
         assert_eq!(line_text(fenced).trim(), "fn main() {}");
         let code = fenced
             .spans
@@ -724,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn user_messages_wrap_wide_characters_without_surface_padding() {
+    fn user_messages_wrap_wide_characters_without_horizontal_padding() {
         use ratatui::style::Modifier;
 
         let transcript = Transcript {
@@ -734,11 +757,11 @@ mod tests {
             ..Transcript::default()
         };
         let rendered = transcript.to_lines(10, None, &CUPEL);
-        assert_eq!(rendered.lines.len(), 2);
-        assert_eq!(line_text(&rendered.lines[0]), ">> 日本語 ");
-        assert_eq!(line_text(&rendered.lines[1]), "   日本語 ");
+        assert_eq!(rendered.lines.len(), 4);
+        assert_eq!(line_text(&rendered.lines[1]), ">> 日本語 ");
+        assert_eq!(line_text(&rendered.lines[2]), "   日本語 ");
         assert!(rendered.lines.iter().all(|line| line.width() == 10));
-        for line in &rendered.lines {
+        for line in &rendered.lines[1..3] {
             assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
         }
     }
@@ -752,9 +775,9 @@ mod tests {
             ..Transcript::default()
         };
         let rendered = transcript.to_lines(16, None, &CUPEL);
-        assert_eq!(rendered.lines.len(), 1);
-        assert_eq!(line_text(&rendered.lines[0]), ">> abcdefghijklm");
-        assert_eq!(rendered.cell_at, vec![Some(0)]);
+        assert_eq!(rendered.lines.len(), 3);
+        assert_eq!(line_text(&rendered.lines[1]), ">> abcdefghijklm");
+        assert_eq!(rendered.cell_at, vec![Some(0); 3]);
     }
 
     #[test]
@@ -767,8 +790,7 @@ mod tests {
             ..Transcript::default()
         };
         let rendered = transcript.to_lines(16, None, &CUPEL);
-        let lines: Vec<String> = rendered
-            .lines
+        let lines: Vec<String> = rendered.lines[1..rendered.lines.len() - 1]
             .iter()
             .map(|line| line_text(line).trim_end().to_string())
             .collect();
@@ -777,7 +799,7 @@ mod tests {
             vec![">> hello brave", "   new world", "   next line"]
         );
         assert!(rendered.lines.iter().all(|line| line.width() == 16));
-        assert_eq!(rendered.cell_at, vec![Some(0); 3]);
+        assert_eq!(rendered.cell_at, vec![Some(0); 5]);
         assert_eq!(transcript.copy_text(0), Some(source));
     }
 
@@ -790,13 +812,43 @@ mod tests {
             ..Transcript::default()
         };
         let rendered = transcript.to_lines(40, Some(0), &CUPEL);
-        for line in &rendered.lines {
+        for index in [0, rendered.lines.len() - 1] {
+            assert_eq!(rendered.lines[index].style.fg, CUPEL.selected.bg);
+            assert_eq!(rendered.lines[index].style.bg, CUPEL.base.bg);
+        }
+        for line in &rendered.lines[1..rendered.lines.len() - 1] {
             assert_eq!(line.style.bg, CUPEL.selected.bg);
             assert!(
                 line.spans
                     .iter()
                     .all(|span| span.style.bg == CUPEL.selected.bg)
             );
+        }
+    }
+
+    #[test]
+    fn user_padding_preserves_the_surrounding_background_in_every_theme() {
+        let transcript = Transcript {
+            cells: vec![Cell::User {
+                text: "task".into(),
+            }],
+            ..Transcript::default()
+        };
+        for theme in crate::theme::example_themes() {
+            for selected in [None, Some(0)] {
+                let rendered = transcript.to_lines(16, selected, &theme);
+                let surface = if selected.is_some() {
+                    theme.task.patch(theme.selected)
+                } else {
+                    theme.task
+                };
+                for (index, symbol) in [(0, "▄"), (2, "▀")] {
+                    let line = &rendered.lines[index];
+                    assert_eq!(line_text(line), symbol.repeat(16));
+                    assert_eq!(line.style.fg, surface.bg, "{}", theme.id);
+                    assert_eq!(line.style.bg, theme.base.bg, "{}", theme.id);
+                }
+            }
         }
     }
 
