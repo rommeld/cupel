@@ -487,7 +487,8 @@ impl SessionRecorder {
         self.hooks.fire_background(HookEvent::Stop);
     }
 
-    /// cupel is exiting normally, drain the hook chain, then session end.
+    /// End the session, drain its hooks, and remove its undo snapshots.
+    /// Used for session replacement as well as normal frontend shutdown.
     /// (A killed process skips this, but the transcript is still intact thanks
     /// to per message flushing.)
     pub async fn end_session(&mut self) {
@@ -495,6 +496,9 @@ impl SessionRecorder {
         // end. Launch+quit stays completely silent.
         if self.started {
             self.hooks.dispatch(HookEvent::SessionEnd).await;
+        }
+        if let Err(error) = self.undo.cleanup().await {
+            tracing::warn!(session_id = %self.header.session_id, "{error}");
         }
     }
 

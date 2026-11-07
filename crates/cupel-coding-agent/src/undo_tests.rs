@@ -558,6 +558,146 @@ async fn concurrent_patch_calls_are_one_complete_undoable_turn() {
     }
 }
 
+#[tokio::test]
+async fn cleanup_removes_all_undo_turns_but_preserves_other_session_data() {
+    let fixture = Fixture::new("cleanup");
+    fixture.write("a", "original\n");
+    fixture.update("a", "original", "first").await;
+    fixture.journal.begin_turn().await;
+    fixture.update("a", "first", "second").await;
+    let root = fixture.journal.directory.as_ref().unwrap();
+    assert_eq!(turn_directories(root).unwrap().len(), 2);
+    std::fs::write(&fixture.transcript, "transcript").unwrap();
+    let namespace = root.parent().unwrap();
+    let helper = namespace.join("helper.jsonl");
+    std::fs::write(&helper, "helper transcript").unwrap();
+    let other = fixture
+        .transcript
+        .parent()
+        .unwrap()
+        .join("other-session/undo");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("keep"), "other snapshots").unwrap();
+
+    fixture.journal.cleanup().await.unwrap();
+    assert!(!root.exists());
+    assert!(fixture.journal.state.lock().await.active.is_none());
+    assert_eq!(fixture.read("a"), b"second\n");
+    assert_eq!(std::fs::read(&fixture.transcript).unwrap(), b"transcript");
+    assert_eq!(std::fs::read(&helper).unwrap(), b"helper transcript");
+    assert_eq!(
+        std::fs::read(other.join("keep")).unwrap(),
+        b"other snapshots"
+    );
+    assert!(
+        fixture
+            .resumed()
+            .undo()
+            .await
+            .unwrap_err()
+            .contains("No recorded")
+    );
+    fixture.journal.cleanup().await.unwrap();
+    std::fs::remove_file(helper).unwrap();
+    fixture.journal.cleanup().await.unwrap();
+    assert!(
+        !namespace.exists(),
+        "empty per-session directories are removed too"
+    );
+    assert!(fixture.transcript.exists());
+    assert!(other.exists());
+}
+
+#[tokio::test]
+async fn cleanup_waits_for_inflight_patch_recording() {
+    let fixture = Fixture::new("cleanup-lock");
+    fixture.write("a", "original\n");
+    let mut recording = fixture.journal.lock().await;
+    recording
+        .prepare(&[(fixture.cwd.join("a"), Some(b"edited\n"))])
+        .unwrap();
+    let journal = Arc::clone(&fixture.journal);
+    let mut cleanup = tokio::spawn(async move { journal.cleanup().await });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), &mut cleanup)
+            .await
+            .is_err()
+    );
+    fixture.write("a", "edited\n");
+    recording.finish().unwrap();
+    drop(recording);
+    cleanup.await.unwrap().unwrap();
+    assert!(!fixture.journal.directory.as_ref().unwrap().exists());
+    assert_eq!(fixture.read("a"), b"edited\n");
+}
+
+#[tokio::test]
+async fn cleanup_failures_report_the_path_and_can_be_retried() {
+    let fixture = Fixture::new("cleanup-failure");
+    fixture.write("a", "original\n");
+    fixture.update("a", "original", "edited").await;
+    let root = fixture.journal.directory.as_ref().unwrap();
+    let saved = root.with_extension("saved");
+    std::fs::rename(root, &saved).unwrap();
+    std::fs::write(root, "not a directory").unwrap();
+    let error = fixture.journal.cleanup().await.unwrap_err();
+    assert!(error.contains(&root.display().to_string()), "{error}");
+    assert!(fixture.journal.state.lock().await.active.is_some());
+    std::fs::remove_file(root).unwrap();
+    std::fs::rename(saved, root).unwrap();
+    fixture.journal.cleanup().await.unwrap();
+    assert!(!root.exists());
+    assert_eq!(fixture.read("a"), b"edited\n");
+}
+
+#[tokio::test]
+async fn cleanup_without_persistence_never_creates_directories() {
+    let fixture = Fixture::new("cleanup-disabled");
+    let journal = shared(None, &fixture.cwd);
+    journal.cleanup().await.unwrap();
+    assert!(!fixture.root.join("home").exists());
+}
+
+#[tokio::test]
+async fn ending_a_session_cleans_undo_even_without_a_prompt_hook() {
+    let fixture = Fixture::new("cleanup-end-session");
+    for started in [false, true] {
+        let mut recorder = SessionRecorder::new(
+            Some(fixture.root.join("home")),
+            &fixture.cwd,
+            if started { "started" } else { "unstarted" },
+            "model",
+        );
+        if started {
+            recorder.before_prompt("edit a").await;
+        }
+        recorder.record(&cupel_agent::AgentMessage::user_text("edit a"));
+        let transcript = recorder.transcript().unwrap().to_path_buf();
+        let undo = transcript.with_extension("").join("undo");
+        fixture.write("a", "original\n");
+        ApplyPatchTool::new(&fixture.cwd).with_undo(recorder.undo()).execute(
+            "patch",
+            serde_json::json!({"input": "*** Begin Patch\n*** Update File: a\n@@\n-original\n+edited\n*** End Patch"}),
+            CancellationToken::new(), None,
+        ).await.unwrap();
+        assert!(undo.exists());
+        let before = std::fs::read(&transcript).unwrap();
+        recorder.end_session().await;
+        assert!(!undo.exists());
+        assert_eq!(std::fs::read(&transcript).unwrap(), before);
+        assert_eq!(fixture.read("a"), b"edited\n");
+        assert!(
+            recorder
+                .undo()
+                .undo()
+                .await
+                .unwrap_err()
+                .contains("No recorded")
+        );
+        recorder.end_session().await;
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn private_snapshots_preserve_original_permissions_and_refuse_later_chmod() {

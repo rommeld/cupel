@@ -134,6 +134,45 @@ impl UndoJournal {
         self.state.lock().await.active = None;
     }
 
+    /// Remove this session's snapshots after its tools and hooks have settled.
+    /// Transcripts, helper files, and other sessions' journals are never removed.
+    pub async fn cleanup(&self) -> Result<(), String> {
+        let mut state = self.state.lock().await;
+        let Some(root) = &self.directory else {
+            return Ok(());
+        };
+        match tokio::fs::remove_dir_all(root).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot remove undo snapshots {}: {error}",
+                    root.display()
+                ));
+            }
+        }
+        state.active = None;
+        // The session namespace may also contain helper transcripts. Only remove
+        // the now-empty directory; never recursively delete its other contents.
+        if let Some(parent) = root.parent() {
+            match tokio::fs::remove_dir(parent).await {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) => {}
+                Err(error) => {
+                    return Err(format!(
+                        "cannot remove empty undo namespace {}: {error}",
+                        parent.display()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn enabled(&self) -> bool {
         self.directory.is_some()
     }

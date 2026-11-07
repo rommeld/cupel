@@ -3,6 +3,15 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.35.2] - 2026-11-07
+
+- fix(tui): allow transcript drag selection alongside mouse-wheel scrolling, with Ctrl+O copying selected ranges without mode toggling
+- fix(tui): harden fenced code blocks in chat Markdown
+- fix(undo): let valid patches continue after formatter or external edits, disable unsafe undo history with one warning, and prevent case aliases from bypassing conflict detection
+- fix(session): remove undo snapshots when sessions end, on `/new`, and on normal shutdown while preserving transcripts and helper files; undo history expires when a session closes
+- chore(install): remove Homebrew installation support and retain the installer and `/update` workflows
+- test(undo): cover cleanup, session isolation, crash recovery, path aliases, and non-blocking journal conflicts
+
 ## [v0.35.1] - 2026-11-06
 
 - fix(tui): add Ctrl/Alt+Left/Right word jumps, vertical movement through wrapped prompt lines, and mouse cursor positioning
