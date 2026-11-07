@@ -30,6 +30,7 @@ pub mod markdown;
 pub mod project_trust;
 pub mod sessions;
 mod terminal_text;
+mod text_selection;
 pub mod theme;
 mod token_count;
 pub mod transcript;

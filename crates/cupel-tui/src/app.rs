@@ -34,6 +34,7 @@ use ratatui::layout::{Position, Rect};
 use crate::autocomplete::{Autocomplete, Candidate};
 use crate::input::InputState;
 use crate::login;
+use crate::text_selection::{Point, TextSelection};
 use crate::theme::Theme;
 use crate::transcript::{Cell, ToolOutcome, Transcript};
 
@@ -64,6 +65,8 @@ pub struct App {
     pub pending_reload: Option<ReloadTarget>,
     pub login: Option<login::LoginFlow>,
     pub selected_cell: Option<usize>,
+    pub text_selection: Option<TextSelection>,
+    pub last_transcript_lines: Vec<ratatui::text::Line<'static>>,
     pub tools_expanded: bool,
     pub frame: usize,
     pub context_tokens: u64,
@@ -328,6 +331,8 @@ impl App {
             pending_reload: None,
             login: None,
             selected_cell: None,
+            text_selection: None,
+            last_transcript_lines: Vec::new(),
             tools_expanded: false,
             frame: 0,
             context_tokens: 0,
@@ -547,6 +552,9 @@ impl App {
     pub fn on_terminal_event(&mut self, event: Event) {
         if let Some(popup) = &mut self.usage_popup {
             self.scrollbar_dragging = false;
+            if let Some(selection) = &mut self.text_selection {
+                selection.dragging = false;
+            }
             // Preserve process control and the existing mouse capture toggle.
             let global = matches!(
                 &event,
@@ -571,31 +579,53 @@ impl App {
             }
             // The wheel scrolls the transcript wherever the pointer is the
             // same clamped movement as PgUp/PgDn, at the conventional
-            // 3 lines per notch step. A left click selects the block under
-            // the pointer, or starts a drag on the scrollbar.
+            // 3 lines per notch step. Text selection and wheel scrolling share
+            // capture; Ctrl+Y remains a native terminal selection fallback.
             Event::Mouse(mouse) if self.mouse_captured => match mouse.kind {
                 MouseEventKind::ScrollUp => self.scroll_by(3),
                 MouseEventKind::ScrollDown => self.scroll_by(-3),
                 MouseEventKind::Down(MouseButton::Left) => {
+                    self.cancel_mouse_drag();
                     self.scrollbar_dragging = self
                         .last_scrollbar_area
                         .contains(Position::new(mouse.column, mouse.row));
                     if self.scrollbar_dragging {
                         self.scroll_to_scrollbar_row(mouse.row);
                     } else {
+                        self.text_selection = None;
+                        if self
+                            .last_transcript_inner
+                            .contains(Position::new(mouse.column, mouse.row))
+                        {
+                            let point = self.selection_point(mouse.column, mouse.row);
+                            self.text_selection = Some(TextSelection::new(
+                                point,
+                                usize::from(mouse.row - self.last_transcript_inner.y),
+                            ));
+                        }
                         self.click(mouse.column, mouse.row);
                     }
                 }
                 MouseEventKind::Drag(MouseButton::Left) if self.scrollbar_dragging => {
                     self.scroll_to_scrollbar_row(mouse.row);
                 }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    self.extend_text_selection(mouse.column, mouse.row);
+                }
                 MouseEventKind::Up(_) | MouseEventKind::Down(_) => {
-                    self.scrollbar_dragging = false;
+                    if mouse.kind == MouseEventKind::Up(MouseButton::Left) {
+                        self.extend_text_selection(mouse.column, mouse.row);
+                    }
+                    self.cancel_mouse_drag();
                 }
                 _ => {}
             },
             // The next draw uses the new size; don't retain a drag on old geometry.
-            Event::Resize(_, _) | Event::FocusLost => self.cancel_scrollbar_drag(),
+            Event::Resize(_, _) => {
+                self.text_selection = None;
+                self.cancel_mouse_drag();
+            }
+            Event::FocusLost => self.cancel_mouse_drag(),
             _ => {}
         }
     }
@@ -718,7 +748,10 @@ impl App {
             (KeyCode::Esc, ..) if self.is_running() => self.abort_run(),
             // Esc while idle drops the click selection (harmless no op
             // when nothing is selected).
-            (KeyCode::Esc, ..) => self.selected_cell = None,
+            (KeyCode::Esc, ..) => {
+                self.selected_cell = None;
+                self.text_selection = None;
+            }
 
             // Ctrl+Y toggles "selection mode", mouse capture off so the
             // Terminal owns the mouse again (select + copy text natively),
@@ -1090,9 +1123,10 @@ impl App {
     pub fn apply_mouse_toggle(&mut self) -> bool {
         self.mouse_toggle_requested = false;
         self.mouse_captured = !self.mouse_captured;
-        self.cancel_scrollbar_drag();
+        self.text_selection = None;
+        self.cancel_mouse_drag();
         self.notice(if self.mouse_captured {
-            "mouse capture on - wheel scrolls; ctrl+y to select/copy text"
+            "mouse capture on - wheel scrolls; drag selects text; ctrl+o copies"
         } else {
             "selection mode - select and copy with the mouse; ctrl+y to re-enable wheel scrolling"
         });
@@ -1101,6 +1135,46 @@ impl App {
 
     pub(crate) fn cancel_scrollbar_drag(&mut self) {
         self.scrollbar_dragging = false;
+    }
+
+    pub(crate) fn cancel_mouse_drag(&mut self) {
+        self.cancel_scrollbar_drag();
+        if let Some(selection) = &mut self.text_selection {
+            selection.dragging = false;
+        }
+    }
+
+    fn selection_point(&self, column: u16, row: u16) -> Point {
+        let inner = self.last_transcript_inner;
+        Point {
+            row: (self.last_top_line
+                + usize::from(
+                    row.saturating_sub(inner.y)
+                        .min(inner.height.saturating_sub(1)),
+                ))
+            .min(self.last_total_lines.saturating_sub(1)),
+            column: usize::from(
+                column
+                    .saturating_sub(inner.x)
+                    .min(inner.width.saturating_sub(1)),
+            ),
+        }
+    }
+
+    fn extend_text_selection(&mut self, column: u16, row: u16) {
+        let point = self.selection_point(column, row);
+        if let Some(selection) = &mut self.text_selection
+            && selection.dragging
+        {
+            selection.end = point;
+            selection.pointer_row = usize::from(
+                row.saturating_sub(self.last_transcript_inner.y)
+                    .min(self.last_transcript_inner.height.saturating_sub(1)),
+            );
+            if selection.is_range() {
+                self.selected_cell = None;
+            }
+        }
     }
 
     /// The render pass owns hit-test geometry; layout changes invalidate a drag.
@@ -1190,11 +1264,18 @@ impl App {
         });
     }
 
-    /// Ctrl+O, queue a block's raw text for the clipboard. The selected
-    /// block wins, without a selection the most recent Answer is the
+    /// Ctrl+O copies a dragged range as displayed text, otherwise a block's raw
+    /// text. The selected block wins, without a selection the most recent Answer is the
     /// target. Only queued here the event loop owns the terminal and
     /// emits the actual OSC 52 sequence (same split as the mouse toggle).
     fn copy_selected(&mut self) {
+        if let Some(selection) = &self.text_selection
+            && selection.is_range()
+        {
+            let text = selection.text(&self.last_transcript_lines);
+            self.queue_copy(text);
+            return;
+        }
         let index = self.selected_cell.or_else(|| {
             self.transcript
                 .cells
@@ -1210,6 +1291,10 @@ impl App {
         let Some(text) = self.transcript.copy_text(index).map(str::to_string) else {
             return;
         };
+        self.queue_copy(text);
+    }
+
+    fn queue_copy(&mut self, text: String) {
         let chars = text.chars().count();
         self.pending_copy = Some(text);
         // "sent", not "copied", OSC 52 is fire and forget the terminal
@@ -1223,6 +1308,16 @@ impl App {
             .saturating_sub(self.last_transcript_height as usize);
         let next = i64::try_from(self.scroll_from_bottom).unwrap_or(0) + delta;
         self.scroll_from_bottom = usize::try_from(next.max(0)).unwrap_or(0).min(max);
+        if let Some(selection) = &mut self.text_selection
+            && selection.dragging
+        {
+            let top = max - self.scroll_from_bottom;
+            selection.end.row =
+                (top + selection.pointer_row).min(self.last_total_lines.saturating_sub(1));
+            if selection.is_range() {
+                self.selected_cell = None;
+            }
+        }
     }
 
     /// Enter or Ctrl+Enter, dispatch commands locally, expand templates, or
