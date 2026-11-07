@@ -36,7 +36,7 @@ use crate::input::InputState;
 use crate::login;
 use crate::text_selection::{Point, TextSelection};
 use crate::theme::Theme;
-use crate::transcript::{Cell, ToolOutcome, Transcript};
+use crate::transcript::{Cell, ToolDisplay, ToolOutcome, Transcript};
 
 use crate::usage::UsagePopup;
 
@@ -67,7 +67,7 @@ pub struct App {
     pub selected_cell: Option<usize>,
     pub text_selection: Option<TextSelection>,
     pub last_transcript_lines: Vec<ratatui::text::Line<'static>>,
-    pub tools_expanded: bool,
+    pub tool_display: ToolDisplay,
     pub frame: usize,
     pub context_tokens: u64,
     pub pending_copy: Option<String>,
@@ -343,7 +343,7 @@ impl App {
             selected_cell: None,
             text_selection: None,
             last_transcript_lines: Vec::new(),
-            tools_expanded: false,
+            tool_display: ToolDisplay::default(),
             frame: 0,
             context_tokens: 0,
             pending_copy: None,
@@ -451,7 +451,7 @@ impl App {
                                 call: self
                                     .agent
                                     .describe_tool_call(&tool_call.name, &tool_call.arguments),
-                                expanded: self.tools_expanded,
+                                display: self.tool_display,
                                 started_at: None,
                                 live: None,
                                 result: None,
@@ -797,10 +797,10 @@ impl App {
                 self.anchor_transcript(self.last_top_line);
                 self.transcript.toggle_all_reasoning();
             }
-            // Ctrl+T shows every tool result in full (and hides them again).
+            // Ctrl+T cycles preview, one-line headers, and full output.
             (KeyCode::Char('t'), true, _) => {
-                self.tools_expanded = !self.tools_expanded;
-                self.transcript.set_all_tools_expanded(self.tools_expanded);
+                self.tool_display = self.tool_display.next();
+                self.transcript.set_all_tools_display(self.tool_display);
             }
             (KeyCode::PageUp, ..) => {
                 self.scroll_by(i64::from(self.last_transcript_height / 2).max(1));
@@ -2242,7 +2242,7 @@ impl App {
                         id: tool_call.id,
                         name: tool_call.name,
                         call,
-                        expanded: self.tools_expanded,
+                        display: self.tool_display,
                         started_at: None,
                         live: None,
                         result: None,

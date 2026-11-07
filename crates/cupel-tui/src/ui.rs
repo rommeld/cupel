@@ -688,9 +688,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let hints = if app.question.is_some() {
         " ↑↓ choose · enter answer (typed text wins) · @ file"
     } else if app.mouse_captured {
-        " ctrl+enter steer · @ file / cmds · ctrl+o copy · ctrl+y select · ctrl+t exp. tools · ctrl+r exp. reasoning"
+        " ctrl+enter steer · @ file / cmds · ctrl+o copy · ctrl+y select · ctrl+t cycle tools · ctrl+r exp. reasoning"
     } else {
-        " ctrl+enter steer · @ file / cmds · SELECTION MODE · ctrl+y scroll · ctrl+t exp. tools · ctrl+r exp. reasoning"
+        " ctrl+enter steer · @ file / cmds · SELECTION MODE · ctrl+y scroll · ctrl+t cycle tools · ctrl+r exp. reasoning"
     };
 
     let [status_row, hints_row] =
@@ -735,7 +735,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::theme::CUPEL;
-    use crate::transcript::{Cell, ToolOutcome};
+    use crate::transcript::{Cell, ToolDisplay, ToolOutcome};
     use cupel_agent::{Agent, AgentEvent, AgentOptions};
     use cupel_coding_agent::modes::SessionMeta;
     use cupel_coding_agent::tools::ask_user::{Answer, AskUserTool, PendingQuestion};
@@ -1293,7 +1293,7 @@ pub(crate) mod tests {
                 assert!(!hints_row.contains("drag select"), "{screen}");
                 if !question_open {
                     assert!(
-                        hints_row.contains("ctrl+t exp. tools · ctrl+r exp. reasoning"),
+                        hints_row.contains("ctrl+t cycle tools · ctrl+r exp. reasoning"),
                         "{screen}"
                     );
                     let selection_hints = if mouse_captured {
@@ -1919,7 +1919,7 @@ pub(crate) mod tests {
             id: "call_1".into(),
             name: "grep".into(),
             call: "grep /bug/ in src".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: Some(ToolOutcome {
@@ -2645,10 +2645,15 @@ pub(crate) mod tests {
         );
         assert!(screen.contains("+1 fix();"), "diff replayed:\n{screen}");
         assert!(!screen.contains("Updated the following"), "{screen}");
+        assert_eq!(app.tool_display, ToolDisplay::Preview);
+        assert!(app.transcript.cells.iter().all(|cell| !matches!(
+            cell,
+            Cell::Tool { display, .. } if *display != ToolDisplay::Preview
+        )));
     }
 
     #[test]
-    fn ctrl_t_expands_every_tool_result_and_a_click_expands_one() {
+    fn ctrl_t_cycles_tool_display_and_a_click_expands_one() {
         use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
         let mut app = test_app();
@@ -2658,7 +2663,7 @@ pub(crate) mod tests {
                 id: id.into(),
                 name: "read".into(),
                 call: format!("read file{id}.rs"),
-                expanded: false,
+                display: ToolDisplay::Preview,
                 started_at: None,
                 live: None,
                 result: Some(ToolOutcome {
@@ -2672,10 +2677,24 @@ pub(crate) mod tests {
                 }),
             });
         }
+        app.transcript.cells.push(Cell::Tool {
+            id: "patch".into(),
+            name: "apply_patch".into(),
+            call: "apply_patch src/main.rs".into(),
+            display: ToolDisplay::Preview,
+            started_at: None,
+            live: None,
+            result: Some(ToolOutcome {
+                text: "Success".into(),
+                is_error: false,
+                diff: Some("-1 old();\n+1 new();".into()),
+                took: None,
+            }),
+        });
         // Wide enough that the marker line renders unwrapped.
         let screen = draw(&mut app, 120, 40);
         assert!(
-            screen.contains("... (3 more lines, ctrl+t to expand)"),
+            screen.contains("... (3 more lines, click to expand)"),
             "{screen}"
         );
         assert!(
@@ -2698,12 +2717,15 @@ pub(crate) mod tests {
         }));
         assert!(matches!(
             app.transcript.cells[1],
-            Cell::Tool { expanded: true, .. }
+            Cell::Tool {
+                display: ToolDisplay::Full,
+                ..
+            }
         ));
         assert!(matches!(
             app.transcript.cells[2],
             Cell::Tool {
-                expanded: false,
+                display: ToolDisplay::Preview,
                 ..
             }
         ));
@@ -2714,20 +2736,84 @@ pub(crate) mod tests {
         let screen = draw(&mut app, 120, 40);
         assert_eq!(screen.matches("row 9").count(), 1, "{screen}");
 
-        // Ctrl+T, everything, then nothing.
+        // Ctrl+T overrides individual cells: preview -> collapsed -> full -> preview.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('t'),
             KeyModifiers::CONTROL,
         )));
         let screen = draw(&mut app, 120, 40);
+        assert_eq!(app.tool_display, ToolDisplay::Collapsed);
+        assert!(!screen.contains("row 1"), "{screen}");
+        assert!(!screen.contains("row 9"), "{screen}");
+        for index in [1, 2] {
+            assert_eq!(
+                app.last_line_cells
+                    .iter()
+                    .filter(|cell| **cell == Some(index))
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            screen.contains("-1 old();") && screen.contains("+1 new();"),
+            "{screen}"
+        );
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL,
+        )));
+        let screen = draw(&mut app, 120, 40);
+        assert_eq!(app.tool_display, ToolDisplay::Full);
         assert_eq!(screen.matches("row 9").count(), 2, "{screen}");
         assert!(!screen.contains("expand"), "{screen}");
+        assert!(
+            screen.contains("-1 old();") && screen.contains("+1 new();"),
+            "{screen}"
+        );
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('t'),
             KeyModifiers::CONTROL,
         )));
         let screen = draw(&mut app, 120, 40);
+        assert_eq!(app.tool_display, ToolDisplay::Preview);
+        assert_eq!(screen.matches("row 1").count(), 2, "{screen}");
         assert!(!screen.contains("row 9"), "{screen}");
+        assert!(
+            screen.contains("-1 old();") && screen.contains("+1 new();"),
+            "{screen}"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_tool_calls_inherit_each_ctrl_t_display_mode() {
+        let mut app = test_app();
+        for expected in [
+            ToolDisplay::Preview,
+            ToolDisplay::Collapsed,
+            ToolDisplay::Full,
+            ToolDisplay::Preview,
+        ] {
+            assert_eq!(app.tool_display, expected);
+            app.on_agent_event(Some(AgentEvent::MessageUpdate {
+                event: cupel_core::types::AssistantMessageEvent::ToolCallEnd {
+                    content_index: 0,
+                    tool_call: cupel_core::types::ToolCall {
+                        id: format!("call-{expected:?}"),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path": "src/main.rs"}),
+                    },
+                },
+            }))
+            .await;
+            assert!(app.transcript.cells.iter().all(|cell| matches!(
+                cell,
+                Cell::Tool { display, .. } if *display == expected
+            )));
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('t'),
+                KeyModifiers::CONTROL,
+            )));
+        }
     }
 
     /// A finished assistant message for event tests.
@@ -3467,7 +3553,7 @@ pub(crate) mod tests {
             id: "call_1".into(),
             name: "apply_patch".into(),
             call: "apply_patch M a.rs".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: None,
@@ -4219,7 +4305,7 @@ pub(crate) mod tests {
             id: "1".into(),
             name: "read".into(),
             call: "read src/main.rs".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: None,

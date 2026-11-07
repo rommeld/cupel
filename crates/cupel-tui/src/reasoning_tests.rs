@@ -12,7 +12,7 @@ use ratatui::style::Modifier;
 
 use crate::app::App;
 use crate::theme::{self, CUPEL};
-use crate::transcript::{Cell, Transcript};
+use crate::transcript::{Cell, ToolDisplay, Transcript};
 use crate::ui::tests::test_app;
 
 fn text(transcript: &Transcript) -> String {
@@ -173,7 +173,7 @@ async fn ctrl_r_toggles_all_reasoning_without_touching_tools_or_commentary() {
         id: "tool".into(),
         name: "bash".into(),
         call: "$ true".into(),
-        expanded: false,
+        display: ToolDisplay::Preview,
         started_at: None,
         live: None,
         result: None,
@@ -211,7 +211,7 @@ async fn ctrl_r_toggles_all_reasoning_without_touching_tools_or_commentary() {
     assert!(matches!(
         &app.transcript.cells[1],
         Cell::Tool {
-            expanded: false,
+            display: ToolDisplay::Preview,
             ..
         }
     ));
@@ -221,7 +221,10 @@ async fn ctrl_r_toggles_all_reasoning_without_touching_tools_or_commentary() {
     )));
     assert!(matches!(
         &app.transcript.cells[1],
-        Cell::Tool { expanded: true, .. }
+        Cell::Tool {
+            display: ToolDisplay::Collapsed,
+            ..
+        }
     ));
     assert!(app.transcript.cells.iter().all(|cell| !matches!(
         cell,
