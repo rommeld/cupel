@@ -1,6 +1,6 @@
 use super::*;
 use crate::tools::apply_patch::ApplyPatchTool;
-use cupel_agent::types::{AgentTool as _, ToolError};
+use cupel_agent::types::{AgentTool as _, AgentToolResult, ToolError};
 use tokio_util::sync::CancellationToken;
 
 struct Fixture {
@@ -37,7 +37,7 @@ impl Fixture {
         std::fs::read(self.cwd.join(path)).unwrap()
     }
 
-    async fn patch(&self, body: &str) -> Result<(), ToolError> {
+    async fn patch(&self, body: &str) -> Result<AgentToolResult, ToolError> {
         ApplyPatchTool::new(&self.cwd)
             .with_undo(Arc::clone(&self.journal))
             .execute(
@@ -46,8 +46,7 @@ impl Fixture {
                 CancellationToken::new(),
                 None,
             )
-            .await?;
-        Ok(())
+            .await
     }
 
     async fn update(&self, path: &str, before: &str, after: &str) {
@@ -186,18 +185,181 @@ async fn later_creation_and_deletion_are_conflicts_too() {
 }
 
 #[tokio::test]
-async fn a_later_edit_between_patch_calls_is_not_silently_claimed_by_the_turn() {
+async fn formatter_changes_allow_patching_but_disable_undo_with_one_warning() {
     let fixture = Fixture::new("between");
     fixture.write("a", "mine\n");
     fixture.update("a", "mine", "agent").await;
-    fixture.write("a", "user intervened\n");
+    fixture.write("a", "    agent\n");
+    let result = fixture
+        .patch("*** Update File: a\n@@\n-    agent\n+    agent again\n")
+        .await
+        .unwrap();
+    let summary = result_text(&result);
+    assert_eq!(summary.matches(UNAVAILABLE).count(), 1, "{summary}");
+    assert!(summary.starts_with("Success."), "{summary}");
+    assert!(!summary.contains("refusing undo"), "{summary}");
+    assert!(
+        result.details.unwrap()["diff"]
+            .as_str()
+            .unwrap()
+            .starts_with("Warning:")
+    );
+    assert_eq!(fixture.read("a"), b"    agent again\n");
+
+    let turn = fixture.resumed().latest().unwrap().unwrap();
+    assert_eq!(turn.manifest.status, TurnStatus::Unavailable);
+    assert_eq!(turn.original(0).unwrap().unwrap(), b"mine\n");
+    let result = fixture
+        .patch("*** Update File: a\n@@\n-    agent again\n+final\n")
+        .await
+        .unwrap();
+    assert!(!result_text(&result).contains(UNAVAILABLE));
+    assert_eq!(fixture.journal.changes().await.unwrap_err(), UNAVAILABLE);
+    assert!(
+        fixture
+            .resumed()
+            .undo()
+            .await
+            .unwrap_err()
+            .starts_with("refusing undo:")
+    );
+    assert_eq!(fixture.read("a"), b"final\n");
+}
+
+fn result_text(result: &AgentToolResult) -> String {
+    result
+        .content
+        .iter()
+        .filter_map(|content| match content {
+            cupel_core::types::ToolResultContent::Text(text) => Some(text.text.as_str()),
+            cupel_core::types::ToolResultContent::Image(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn conflicts_in_other_recorded_files_disable_the_whole_turn() {
+    let fixture = Fixture::new("other-conflict");
+    fixture.write("a", "mine\n");
+    fixture.write("b", "original\n");
+    fixture.update("a", "mine", "agent").await;
+    fixture.update("b", "original", "edited").await;
+    fixture.write("a", "formatted\n");
+    let result = fixture
+        .patch("*** Update File: b\n@@\n-edited\n+final\n")
+        .await
+        .unwrap();
+    assert!(result_text(&result).contains(UNAVAILABLE));
+    assert_eq!(fixture.read("a"), b"formatted\n");
+    assert_eq!(fixture.read("b"), b"final\n");
+    assert!(fixture.resumed().undo().await.is_err());
+    assert_eq!(fixture.read("a"), b"formatted\n");
+    assert_eq!(fixture.read("b"), b"final\n");
+}
+
+#[tokio::test]
+async fn unavailable_turns_are_persistent_barriers_not_skipped_undo_history() {
+    let fixture = Fixture::new("unavailable-barrier");
+    fixture.write("a", "original\n");
+    fixture.update("a", "original", "first").await;
+    fixture.journal.begin_turn().await;
+    fixture.update("a", "first", "first").await;
+    fixture.write("a", "formatted\n");
+    fixture.update("a", "formatted", "final").await;
+    // Even restoring the old fingerprint must not re-enable an invalidated turn.
+    fixture.write("a", "first\n");
+    assert!(
+        fixture
+            .resumed()
+            .undo()
+            .await
+            .unwrap_err()
+            .contains(UNAVAILABLE)
+    );
+    fixture.journal.begin_turn().await;
+    let result = fixture
+        .patch("*** Update File: a\n@@\n-first\n+third\n")
+        .await
+        .unwrap();
+    assert!(!result_text(&result).contains(UNAVAILABLE));
+    let resumed = fixture.resumed();
+    resumed.undo().await.unwrap();
+    assert_eq!(fixture.read("a"), b"first\n");
+    assert!(resumed.undo().await.unwrap_err().contains(UNAVAILABLE));
+    assert_eq!(fixture.read("a"), b"first\n");
+}
+
+#[tokio::test]
+async fn stale_patch_hunks_still_fail_without_modifying_the_file() {
+    let fixture = Fixture::new("stale-hunks");
+    fixture.write("a", "mine\n");
+    fixture.update("a", "mine", "agent").await;
+    fixture.write("a", "formatted\n");
     let error = fixture
-        .patch("*** Update File: a\n@@\n-user intervened\n+agent again\n")
+        .patch("*** Update File: a\n@@\n-agent\n+new\n")
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("recorded state"));
-    assert_eq!(fixture.read("a"), b"user intervened\n");
-    assert!(fixture.journal.undo().await.is_err());
+    assert!(!error.to_string().contains("refusing undo"));
+    assert_eq!(fixture.read("a"), b"formatted\n");
+    assert_eq!(
+        fixture.journal.latest().unwrap().unwrap().manifest.status,
+        TurnStatus::Recording
+    );
+}
+
+#[tokio::test]
+async fn case_aliases_share_snapshots_and_cannot_bypass_external_edit_detection() {
+    let fixture = Fixture::new("case-alias");
+    fixture.write("file", "mine\n");
+    if !fixture.cwd.join("FILE").exists() {
+        return; // This filesystem treats the names as distinct files.
+    }
+    fixture.update("file", "mine", "agent").await;
+    let result = fixture
+        .patch("*** Update File: FILE\n@@\n-agent\n+again\n")
+        .await
+        .unwrap();
+    assert!(!result_text(&result).contains(UNAVAILABLE));
+    assert_eq!(
+        fixture
+            .journal
+            .latest()
+            .unwrap()
+            .unwrap()
+            .manifest
+            .entries
+            .len(),
+        1
+    );
+    fixture.resumed().undo().await.unwrap();
+    assert_eq!(fixture.read("file"), b"mine\n");
+
+    fixture.journal.begin_turn().await;
+    fixture.update("file", "mine", "agent").await;
+    fixture.write("file", "formatted\n");
+    let result = fixture
+        .patch("*** Update File: FILE\n@@\n-formatted\n+final\n")
+        .await
+        .unwrap();
+    assert!(result_text(&result).contains(UNAVAILABLE));
+    assert!(fixture.resumed().undo().await.is_err());
+    assert_eq!(fixture.read("file"), b"final\n");
+}
+
+#[tokio::test]
+async fn case_distinct_files_remain_independently_undoable() {
+    let fixture = Fixture::new("case-distinct");
+    fixture.write("file", "lower\n");
+    if fixture.cwd.join("FILE").exists() {
+        return; // Case aliases are exercised separately on insensitive filesystems.
+    }
+    fixture.write("FILE", "upper\n");
+    fixture.update("file", "lower", "edited lower").await;
+    fixture.update("FILE", "upper", "edited upper").await;
+    assert_eq!(fixture.resumed().undo().await.unwrap().len(), 2);
+    assert_eq!(fixture.read("file"), b"lower\n");
+    assert_eq!(fixture.read("FILE"), b"upper\n");
 }
 
 #[tokio::test]
@@ -276,7 +438,8 @@ async fn unexpected_bytes_after_an_interrupted_patch_are_never_blindly_restored(
             .prepare(&[(fixture.cwd.join("a"), Some(b"after\n"))])
             .unwrap();
         fixture.write("a", "partial write or user edit");
-        assert!(recording.finish().is_err());
+        assert_eq!(recording.finish().unwrap(), Some(UNAVAILABLE));
+        assert_eq!(recording.finish().unwrap(), None);
     }
     assert!(fixture.resumed().undo().await.is_err());
     assert_eq!(fixture.read("a"), b"partial write or user edit");
@@ -312,6 +475,29 @@ async fn journal_failure_blocks_patching_before_writing_any_workspace_file() {
             .is_err()
     );
     assert_eq!(fixture.read("a"), b"before\n");
+}
+
+#[tokio::test]
+async fn invalidation_must_be_persisted_before_further_patch_writes() {
+    let fixture = Fixture::new("invalidation-failure");
+    fixture.write("a", "original\n");
+    fixture.update("a", "original", "agent").await;
+    fixture.write("a", "formatted\n");
+    let turn = fixture.journal.latest().unwrap().unwrap();
+    let manifest = turn.directory.join("manifest.json");
+    std::fs::remove_file(&manifest).unwrap();
+    std::fs::create_dir_all(&manifest).unwrap();
+    let patch = "*** Update File: a\n@@\n-formatted\n+final\n";
+    for _ in 0..2 {
+        assert!(fixture.patch(patch).await.is_err());
+        assert_eq!(fixture.read("a"), b"formatted\n");
+    }
+    std::fs::remove_dir(&manifest).unwrap();
+    turn.save().unwrap();
+    let result = fixture.patch(patch).await.unwrap();
+    assert!(result_text(&result).contains(UNAVAILABLE));
+    assert_eq!(fixture.read("a"), b"final\n");
+    assert!(fixture.resumed().undo().await.is_err());
 }
 
 #[tokio::test]
@@ -552,6 +738,26 @@ async fn patches_cannot_modify_their_own_snapshot_store() {
     assert!(error.to_string().contains("own undo journal"));
     fixture.resumed().undo().await.unwrap();
     assert!(!fixture.cwd.join("a").exists());
+}
+
+#[tokio::test]
+async fn unavailable_tracking_still_protects_its_snapshot_store() {
+    let fixture = Fixture::new("unavailable-self-journal");
+    fixture.write("a", "original\n");
+    fixture.update("a", "original", "agent").await;
+    fixture.write("a", "formatted\n");
+    fixture.update("a", "formatted", "final").await;
+    let turn = fixture.journal.latest().unwrap().unwrap();
+    let manifest = turn.directory.join("manifest.json");
+    let before = std::fs::read(&manifest).unwrap();
+    let error = fixture
+        .patch(&format!("*** Add File: {}\n+corrupt\n", manifest.display()))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("own undo journal"));
+    assert_eq!(std::fs::read(manifest).unwrap(), before);
+    assert!(fixture.resumed().undo().await.is_err());
+    assert_eq!(fixture.read("a"), b"final\n");
 }
 
 #[tokio::test]
