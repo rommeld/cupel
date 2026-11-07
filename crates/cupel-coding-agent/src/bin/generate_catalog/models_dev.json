@@ -1342,53 +1342,6 @@
         ],
         "temperature": false
       },
-      "gpt-6-sol": {
-        "cost": {
-          "cache_read": 0.2,
-          "cache_write": 2.5,
-          "input": 2.0,
-          "output": 10.0,
-          "tiers": [
-            {
-              "cache_read": 0.4,
-              "cache_write": 5.0,
-              "input": 4.0,
-              "output": 15.0,
-              "tier": {
-                "size": 272000
-              }
-            }
-          ]
-        },
-        "limit": {
-          "context": 1050000,
-          "input": 922000,
-          "output": 128000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "pdf"
-          ]
-        },
-        "name": "GPT-6 Sol",
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "temperature": false
-      },
       "gpt-6.1-sol": {
         "cost": {
           "cache_read": 0.1,

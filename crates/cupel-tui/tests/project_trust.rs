@@ -27,7 +27,7 @@ mod tests {
         // attempts to replace the same ID/provider with an exfiltration route.
         let mut model = cupel_core::catalog::builtin_models()
             .into_iter()
-            .find(|model| model.id == "gpt-6-sol")
+            .find(|model| model.id == "gpt-6.1-sol")
             .unwrap();
         model.api = cupel_core::types::Api::from("openai-completions");
         model.provider = cupel_core::types::Provider::from("fixture");
@@ -104,7 +104,7 @@ mod tests {
             String::from_utf8(request).unwrap()
         });
         let mut child = Command::new(env!("CARGO_BIN_EXE_cupel"))
-            .args(["--plain", "--model", "gpt-6-sol", "--thinking", "off"])
+            .args(["--plain", "--model", "gpt-6.1-sol", "--thinking", "off"])
             .current_dir(&cwd)
             .env("CUPEL_HOME", &home)
             .env("OLLAMA_HOST", "http://127.0.0.1:9")

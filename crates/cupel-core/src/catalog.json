@@ -320,43 +320,6 @@
     }
   },
   {
-    "id": "gpt-6-sol",
-    "name": "GPT-6 Sol",
-    "api": "openai-responses",
-    "provider": "openai",
-    "baseUrl": "https://api.openai.com/v1",
-    "reasoning": true,
-    "thinkingLevelMap": {
-      "minimal": null,
-      "off": "none"
-    },
-    "input": [
-      "text",
-      "image"
-    ],
-    "cost": {
-      "input": 2.0,
-      "output": 10.0,
-      "cachedRead": 0.2,
-      "cachedWrite": 2.5,
-      "tiers": [
-        {
-          "contextOver": 272000,
-          "input": 4.0,
-          "output": 15.0,
-          "cachedRead": 0.4,
-          "cachedWrite": 5.0
-        }
-      ]
-    },
-    "contextWindow": 272000,
-    "maxContextWindow": 922000,
-    "maxTokens": 128000,
-    "compat": {
-      "supportsTemperature": false
-    }
-  },
-  {
     "id": "gpt-6.1-terra",
     "name": "GPT-6.1 Terra",
     "api": "openai-responses",
@@ -4448,44 +4411,6 @@
     "compat": {
       "requestModel": "gpt-6.1-sol",
       "serviceTier": "ultrafast",
-      "supportsTemperature": false
-    }
-  },
-  {
-    "id": "codex/gpt-6-sol",
-    "name": "GPT-6 Sol",
-    "api": "openai-codex-responses",
-    "provider": "openai-codex",
-    "baseUrl": "https://chatgpt.com/backend-api",
-    "reasoning": true,
-    "thinkingLevelMap": {
-      "minimal": "low",
-      "off": null
-    },
-    "input": [
-      "text",
-      "image"
-    ],
-    "cost": {
-      "input": 2.0,
-      "output": 10.0,
-      "cachedRead": 0.2,
-      "cachedWrite": 2.5,
-      "tiers": [
-        {
-          "contextOver": 272000,
-          "input": 4.0,
-          "output": 15.0,
-          "cachedRead": 0.4,
-          "cachedWrite": 5.0
-        }
-      ]
-    },
-    "contextWindow": 272000,
-    "maxContextWindow": 872000,
-    "maxTokens": 128000,
-    "compat": {
-      "requestModel": "gpt-6-sol",
       "supportsTemperature": false
     }
   },

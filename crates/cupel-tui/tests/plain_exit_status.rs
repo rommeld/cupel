@@ -16,7 +16,7 @@ mod tests {
         // No configured or exported key, the provider fails before any HTTP
         // request. A real agent turn still runs, exercising plain mode's exit.
         let mut child = Command::new(env!("CARGO_BIN_EXE_cupel"))
-            .args(["--plain", "--model", "gpt-6-sol"])
+            .args(["--plain", "--model", "gpt-6.1-sol"])
             .current_dir(&project)
             .env("CUPEL_HOME", root.join("home"))
             .env_remove("OPENAI_API_KEY")
