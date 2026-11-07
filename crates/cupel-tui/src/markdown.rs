@@ -21,7 +21,6 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::terminal_text::sanitize;
 use crate::theme::Theme;
-use crate::transcript::wrap_line;
 
 /// Render markdown into wrapped, styled lines for one transcript cell. `base` is the
 /// cell's identity style (`task`, `assistant`, `answer`), and `theme` supplies the
@@ -31,19 +30,28 @@ pub fn render(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<
     let mut out = Vec::new();
     let text = sanitize(text);
     let lines: Vec<&str> = text.split('\n').collect();
-    let mut in_code = false;
+    let mut code_fence = None;
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim_start();
-        // Fences toggle code mode, the fence line itself is chrome and
-        // not shown (the panel background marks the block).
-        if trimmed.starts_with("```") {
-            in_code = !in_code;
+        if let Some(opening_length) = code_fence {
+            // A closing fence has no info string and must be at least as
+            // long as its opener. Other backtick lines remain literal code.
+            if backtick_fence(trimmed)
+                .is_some_and(|(length, rest)| length >= opening_length && rest.trim().is_empty())
+            {
+                code_fence = None;
+            } else {
+                push_code_line(&mut out, lines[i], width, theme);
+            }
             i += 1;
             continue;
         }
-        if in_code {
-            push_code_line(&mut out, lines[i], width, theme);
+        if let Some((length, info)) = backtick_fence(trimmed)
+            && !info.contains('`')
+        {
+            // The optional language tag is accepted but not highlighted.
+            code_fence = Some(length);
             i += 1;
             continue;
         }
@@ -63,6 +71,12 @@ pub fn render(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<
         out.push(Line::default());
     }
     out
+}
+
+/// Split a backtick fence into its length and optional trailing text.
+fn backtick_fence(line: &str) -> Option<(usize, &str)> {
+    let length = line.bytes().take_while(|byte| *byte == b'`').count();
+    (length >= 3).then(|| (length, &line[length..]))
 }
 
 /// The effective style for the current flag state computed at flush
@@ -431,13 +445,43 @@ fn push_code_line(out: &mut Vec<Line<'static>>, line: &str, width: usize, theme:
     // Deliberately not the cell's base style, code is code, in every
     // cell. Terminal default fg on the indexed panel tint.
     let style = theme.md_code_block;
-    for chunk in wrap_line(&format!(" {line}"), width.saturating_sub(1)) {
-        let pad = width.saturating_sub(display_width(&chunk));
+    if width == 0 {
+        out.push(Line::from(Span::styled(String::new(), style)));
+        return;
+    }
+    // Drop padding in tiny panes so a double-width character can still fit.
+    let padding = usize::from(width >= 4);
+    let budget = width - 2 * padding;
+    let emit = |out: &mut Vec<Line<'static>>, chunk: String, columns: usize| {
         out.push(Line::from(Span::styled(
-            format!("{chunk}{}", " ".repeat(pad)),
+            format!(
+                "{}{chunk}{}",
+                " ".repeat(padding),
+                " ".repeat(width - padding - columns)
+            ),
             style,
         )));
+    };
+    // Wrap by display columns, not words: every source space belongs to
+    // the code, including indentation and whitespace at wrap boundaries.
+    let mut chunk = String::new();
+    let mut columns = 0;
+    for c in line.chars() {
+        let char_width = c.width().unwrap_or(0);
+        // A two-column glyph cannot be displayed in a one-column pane.
+        let (c, char_width) = if char_width > budget {
+            ('�', 1)
+        } else {
+            (c, char_width)
+        };
+        if columns + char_width > budget {
+            emit(out, core::mem::take(&mut chunk), columns);
+            columns = 0;
+        }
+        chunk.push(c);
+        columns += char_width;
     }
+    emit(out, chunk, columns);
 }
 
 /// A separator row, pipes, dashes, colons, spaces and at least one dash.
@@ -819,6 +863,119 @@ mod tests {
         // renders as code until it does.
         let lines = render("text\n```\nstill code", 20, Style::new(), &CUPEL);
         assert_eq!(style_of(&lines, "still code").bg, Some(Color::Indexed(235)));
+    }
+
+    #[test]
+    fn closing_fences_require_a_matching_length_and_no_info_string() {
+        let source = "````rust\n```\n```rust\n`````not a closer\n  ```` \n**prose**";
+        let lines = render(source, 24, Style::new(), &CUPEL);
+        assert_eq!(
+            flat_text(&lines)
+                .iter()
+                .map(|line| line.trim())
+                .collect::<Vec<_>>(),
+            ["```", "```rust", "`````not a closer", "prose"]
+        );
+        for line in &lines[..3] {
+            assert_eq!(line.spans[0].style, CUPEL.md_code_block);
+        }
+        assert!(
+            style_of(&lines, "prose")
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn multiple_code_blocks_leave_intervening_prose_as_markdown() {
+        let lines = render(
+            "before\n```rust\nfirst\n```\n**between**\n  ```text\nsecond\n````\nafter",
+            24,
+            Style::new(),
+            &CUPEL,
+        );
+        assert_eq!(
+            flat_text(&lines)
+                .iter()
+                .map(|line| line.trim())
+                .collect::<Vec<_>>(),
+            ["before", "first", "between", "second", "after"]
+        );
+        for word in ["first", "second"] {
+            assert_eq!(style_of(&lines, word), CUPEL.md_code_block);
+        }
+        assert!(
+            style_of(&lines, "between")
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert_eq!(style_of(&lines, "after"), Style::new());
+    }
+
+    #[test]
+    fn code_keeps_blank_lines_indentation_and_literal_markdown() {
+        let lines = render(
+            "```text\n    **literal**\n\n# heading\n- item\n| a | b |\n|---|---|\n`inline` [link](url)\n```",
+            32,
+            Style::new(),
+            &CUPEL,
+        );
+        let text = flat_text(&lines);
+        assert_eq!(text[0], format!("     **literal**{}", " ".repeat(16)));
+        assert_eq!(text[1], " ".repeat(32));
+        assert_eq!(text[2].trim(), "# heading");
+        assert_eq!(text[3].trim(), "- item");
+        assert_eq!(text[4].trim(), "| a | b |");
+        assert_eq!(text[5].trim(), "|---|---|");
+        assert_eq!(text[6].trim(), "`inline` [link](url)");
+        for line in &lines {
+            assert_eq!(line.width(), 32);
+            assert_eq!(line.spans[0].style, CUPEL.md_code_block);
+        }
+    }
+
+    #[test]
+    fn code_wraps_by_columns_without_consuming_source_spaces() {
+        let lines = render("```\n    alpha  beta  \n```", 10, Style::new(), &CUPEL);
+        assert_eq!(
+            flat_text(&lines),
+            ["     alph ", " a  beta  ", "          "]
+        );
+
+        let lines = render("```\n  日本語e\u{301} \n```", 8, Style::new(), &CUPEL);
+        assert_eq!(flat_text(&lines), ["   日本 ", " 語e\u{301}    "]);
+        assert!(lines.iter().all(|line| line.width() == 8));
+    }
+
+    #[test]
+    fn code_panels_fit_even_zero_and_one_column_panes() {
+        for width in 0..=8 {
+            let lines = render("```\n日本語 abc\n\n```", width, Style::new(), &CUPEL);
+            for line in &lines {
+                assert_eq!(line.width(), width, "width {width}: {line:?}");
+                assert_eq!(line.spans[0].style, CUPEL.md_code_block);
+            }
+        }
+    }
+
+    #[test]
+    fn streamed_fences_restore_prose_when_the_closer_arrives() {
+        let source = "```rust\n**literal**\n```\n**prose**";
+        for end in 7..=source.len() {
+            let lines = render(&source[..end], 24, Style::new(), &CUPEL);
+            let text = flat_text(&lines).concat();
+            if end >= "```rust\n**literal**".len() {
+                assert!(text.contains("**literal**"));
+                assert_eq!(style_of(&lines, "**literal**"), CUPEL.md_code_block);
+            }
+        }
+        let lines = render(source, 24, Style::new(), &CUPEL);
+        assert!(
+            style_of(&lines, "prose")
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert_ne!(style_of(&lines, "prose").bg, CUPEL.md_code_block.bg);
     }
 
     #[test]
