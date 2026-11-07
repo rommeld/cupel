@@ -6,7 +6,6 @@ import io
 import os
 from pathlib import Path
 import platform
-import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -116,26 +115,6 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(os.access(install_dir / "cupel", os.X_OK))
         self.assertTrue((install_dir / ".cupel-installer").is_file())
         self.assertIn("predates cupel-acp packaging", result.stdout)
-
-    def test_formula_regeneration_keeps_both_binaries(self):
-        packaging = Path(__file__).resolve().parent
-        formula = self.root / "cupel.rb"
-        formula.write_bytes((packaging / "homebrew/cupel.rb").read_bytes())
-        self.sums.write_text("".join(
-            f"{digit * 64}  cupel-{platform}.tar.gz\n"
-            for digit, platform in zip("123", ("macos-universal", "linux-x86_64", "linux-aarch64"))
-        ))
-        result = subprocess.run(
-            ["sh", str(packaging / "update-formula.sh"), "0.99.0", str(self.sums), str(formula)],
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout)
-        contents = formula.read_text()
-        self.assertIn('version "0.99.0"', contents)
-        self.assertIn('bin.install "cupel", "cupel-acp"', contents)
-        self.assertIn('cupel-acp --help', contents)
-        for digit in "123":
-            self.assertIn(f'sha256 "{digit * 64}"', contents)
 
 
 if __name__ == "__main__":

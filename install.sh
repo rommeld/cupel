@@ -96,7 +96,7 @@ else
     echo "warning: this release predates cupel-acp packaging; rerun this installer after the next release" >&2
 fi
 # cupel's /update replaces only a binary that this script installed. The marker
-# says so, Homebrew and builds from source have none.
+# says so; other installation methods have none.
 echo "cupel's install.sh put the cupel binary here; /update may replace it" \
     > "$INSTALL_DIR/.cupel-installer"
 echo "installed cupel to $INSTALL_DIR/cupel"

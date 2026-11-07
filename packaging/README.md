@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
 Release publication is retryable: an interrupted draft resumes its uploads.
-Publishing is serialized, and only GitHub's latest release updates Homebrew.
+Publishing is serialized.
 The workflow never writes to `main`, opens bookkeeping PRs, or bypasses branch
 protection: metadata is already committed in the tested release PR.
 
@@ -69,39 +69,10 @@ The installer test serves local fixtures through a fake `curl`; it never fetches
 GitHub releases or uses real credentials. The packaged `examples/stdio_smoke.py`
 can also run directly against an installed `cupel-acp` using only Python's stdlib.
 
-## Homebrew tap (automated)
-
-The formula bump is AUTOMATED: after every release, the `publish` job in
-`release.yml` regenerates `cupel.rb` (via `packaging/update-formula.sh`)
-with the new version + checksums and pushes it to the tap repository.
-Users install with `brew install rommeld/tap/cupel`.
-
-One-time setup (until then the job skips with a notice, never failing a
-release):
-
-1. Create a GitHub repository named `homebrew-tap`; copy
-   `packaging/homebrew/cupel.rb` to `Formula/cupel.rb` in it after regenerating
-   its version/checksums for a release containing both binaries. The template's
-   checked-in historical checksums predate ACP and must not be published as-is.
-2. Create a fine-grained personal access token with `Contents:
-   Read and write` permission on ONLY the `homebrew-tap` repository. The
-   workflow's default `GITHUB_TOKEN` cannot push to other repos - that's
-   why a dedicated token is needed.
-3. Add it to the `cupel` repository as an Actions secret named
-   `HOMEBREW_TAP_TOKEN`.
-
-Manual fallback (or local dry-run) for any release:
-
-```sh
-curl -fsSL https://github.com/rommeld/cupel/releases/latest/download/sha256sums.txt -o /tmp/sums.txt
-packaging/update-formula.sh 0.1.4-beta /tmp/sums.txt
-# then copy packaging/homebrew/cupel.rb into the tap's Formula/ and push
-```
-
 ## macOS signing and notarization (optional)
 
 Unsigned binaries downloaded via a BROWSER are blocked by Gatekeeper until
-`xattr -d com.apple.quarantine cupel`. Installs via `install.sh`, `brew`, or
+`xattr -d com.apple.quarantine cupel`. Installs via `install.sh` or
 any curl-based flow are unaffected (no quarantine attribute is set).
 
 To remove the browser-download friction entirely: join the Apple Developer
@@ -120,9 +91,9 @@ serve everyone else.
 ## cargo-dist migration
 
 This pipeline is hand-rolled so every step is visible. `cargo-dist`
-(`dist init`) can generate an equivalent workflow plus installers and the
-Homebrew formula from Cargo.toml metadata, and keeps them updated with the
-tool. Migrate when maintaining the YAML by hand stops being instructive:
+(`dist init`) can generate an equivalent workflow plus installers from
+Cargo.toml metadata, and keeps them updated with the tool.
+Migrate when maintaining the YAML by hand stops being instructive:
 delete `release.yml` + `install.sh`, run `dist init`, commit its output.
 
 ## Platform support
