@@ -177,7 +177,8 @@ async fn exercise(steering: bool) {
         "both assignments must finish before frontend event consumption"
     );
     let transcript = recorder.transcript().unwrap().to_path_buf();
-    recorder.end_session().await;
+    // An interrupted session retains crash-recovery snapshots. An orderly
+    // end_session instead removes them, even when the transcript is resumed.
     drop(agent);
     drop(recorder);
 
@@ -212,6 +213,12 @@ async fn exercise(steering: bool) {
             .is_dir(),
         "snapshots belong beside the resumed transcript, outside the checkout"
     );
+    recorder.end_session().await;
+    assert!(
+        !transcript.with_extension("").join("undo").exists(),
+        "normal session closure must reclaim even already-undone snapshots"
+    );
+    assert!(transcript.exists(), "session history must remain resumable");
 }
 
 #[tokio::test]
