@@ -9,7 +9,7 @@
 //! [`install`] downloads the archive for this platform and the release's
 //! `sha256sums.txt`, compares the checksum, and renames the new binary over the old
 //! one. It replaces only a binary that install.sh put in place (its [`INSTALL_MARKER`]
-//! sits next to it), Homebrew or a build from source belongs to whoever put it there.
+//! sits next to it); other installations belong to whoever put them there.
 //!
 //! Nothing here knows about the terminal. The TUI decides when to ask and what to
 //! show.
@@ -199,12 +199,6 @@ pub fn managed_elsewhere(binary: &Path) -> Option<String> {
         .is_some_and(|dir| dir.join(INSTALL_MARKER).is_file())
     {
         return None;
-    }
-    // Homebrew keeps every version in its Cellar and links it into its bin/.
-    if binary.components().any(|part| part.as_os_str() == "Cellar") {
-        return Some(
-            "this cupel comes from Homebrew - update it with: brew upgrade cupel".to_string(),
-        );
     }
     Some(format!(
         "{} was not installed by install.sh, so /update leaves it alone - update it \
@@ -666,9 +660,10 @@ mod tests {
         assert!(how.contains("not installed by install.sh"), "{how}");
         assert!(how.contains(INSTALL_COMMAND), "{how}");
 
-        let brew = Path::new("/opt/homebrew/Cellar/cupel/0.29.3/bin/cupel");
-        let how = managed_elsewhere(brew).unwrap();
-        assert!(how.contains("brew upgrade cupel"), "{how}");
+        let legacy_binary = Path::new("/usr/local/Cellar/cupel/0.29.3/bin/cupel");
+        let how = managed_elsewhere(legacy_binary).unwrap();
+        assert!(how.contains("not installed by install.sh"), "{how}");
+        assert!(how.contains(INSTALL_COMMAND), "{how}");
     }
 
     #[test]

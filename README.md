@@ -20,8 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 
 Installs `cupel` and `cupel-acp` into `~/.cupel/bin`; add it to your `PATH`.
 Override the location with `CUPEL_HOME` or `CUPEL_INSTALL_DIR`.
-Alternatively: `brew install rommeld/tap/cupel`.
-Re-run the installer or use `brew upgrade cupel` to update both binaries;
+Re-run the installer to update both binaries;
 the TUI's `/update` updates only `cupel`.
 
 ### From source

@@ -123,35 +123,3 @@ jobs:
           fi
           gh release upload "$GITHUB_REF_NAME" cupel-*.tar.gz sha256sums.txt --clobber
           gh release edit "$GITHUB_REF_NAME" --draft=false
-
-      - name: Update Homebrew tap
-        env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "$TAP_TOKEN" ]; then
-            echo "::notice::HOMEBREW_TAP_TOKEN secret not set - skipping Homebrew tap update"
-            exit 0
-          fi
-
-          latest=$(gh release view --json tagName --jq .tagName)
-          if [ "$latest" != "$GITHUB_REF_NAME" ]; then
-            echo "::notice::Skipping Homebrew update: $GITHUB_REF_NAME is not the latest release"
-            exit 0
-          fi
-
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/homebrew-tap.git" tap
-          sh packaging/update-formula.sh "${GITHUB_REF_NAME#v}" dist/sha256sums.txt
-
-          mkdir -p tap/Formula
-          cp packaging/homebrew/cupel.rb tap/Formula/cupel.rb
-          cd tap
-          git config user.name "cupel-release-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git add Formula/cupel.rb
-          # An unchanged formula is the only successful operation without changes.
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "cupel $GITHUB_REF_NAME"
-          git push
