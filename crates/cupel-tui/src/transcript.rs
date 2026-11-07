@@ -753,6 +753,64 @@ mod tests {
     }
 
     #[test]
+    fn fenced_code_works_in_user_prompts_assistant_messages_and_answers() {
+        let source = "````rust\n    **literal**\n\n```not a closer\n````\n**prose**";
+        for cell in [
+            Cell::User {
+                text: source.into(),
+            },
+            Cell::Assistant {
+                text: source.into(),
+            },
+            Cell::Answer {
+                text: source.into(),
+            },
+        ] {
+            let is_user = matches!(cell, Cell::User { .. });
+            let transcript = Transcript {
+                cells: vec![cell],
+                ..Transcript::default()
+            };
+            for theme in crate::theme::example_themes() {
+                let rendered = transcript.to_lines(32, None, &theme);
+                assert!(rendered.lines.iter().all(|line| line.width() <= 32));
+                for word in ["**literal**", "```not a closer"] {
+                    let span = rendered
+                        .lines
+                        .iter()
+                        .flat_map(|line| &line.spans)
+                        .find(|span| span.content.contains(word))
+                        .unwrap();
+                    assert_eq!(span.style, theme.md_code_block, "{}: {word}", theme.id);
+                }
+                let prose = rendered
+                    .lines
+                    .iter()
+                    .flat_map(|line| &line.spans)
+                    .find(|span| span.content == "prose")
+                    .unwrap();
+                assert!(
+                    prose
+                        .style
+                        .add_modifier
+                        .contains(ratatui::style::Modifier::BOLD)
+                );
+                if is_user {
+                    assert_eq!(
+                        line_text(&rendered.lines[1]).trim_end(),
+                        " >>      **literal**"
+                    );
+                    assert_eq!(line_text(&rendered.lines[2]), " ".repeat(32));
+                    assert!(rendered.lines.iter().all(|line| line.width() == 32));
+                }
+            }
+            let rendered = transcript.to_lines(12, None, &CUPEL);
+            assert!(rendered.lines.iter().all(|line| line.width() <= 12));
+            assert_eq!(transcript.copy_text(0), Some(source));
+        }
+    }
+
+    #[test]
     fn user_messages_wrap_wide_characters_with_horizontal_padding() {
         use ratatui::style::Modifier;
 
