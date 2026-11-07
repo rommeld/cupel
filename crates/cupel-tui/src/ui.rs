@@ -241,6 +241,13 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     let rendered = app
         .transcript
         .to_lines(inner.width, app.selected_cell, theme);
+    if app.last_transcript_inner.width != inner.width
+        || app.text_selection.as_ref().is_some_and(|selection| {
+            !selection.matches(&app.last_transcript_lines, &rendered.lines)
+        })
+    {
+        app.text_selection = None;
+    }
     let total = rendered.lines.len();
     let height = inner.height as usize;
 
@@ -281,6 +288,10 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     app.last_line_cells = rendered.cell_at;
 
     frame.render_widget(Paragraph::new(rendered.lines[start..end].to_vec()), inner);
+    if let Some(selection) = &app.text_selection {
+        selection.highlight(frame.buffer_mut(), inner, start, theme.selected);
+    }
+    app.last_transcript_lines = rendered.lines;
 
     // The scrollbar rides the frame's right edge. Rendered only when there is
     // something to scroll a permanently full bar would read as
@@ -1239,6 +1250,7 @@ pub(crate) mod tests {
                 let _answer = question_open.then(|| open_question(&mut app));
                 let screen = draw(&mut app, 240, 20);
                 let hints_row = screen.lines().last().expect("hints row");
+                assert!(!hints_row.contains("drag select"), "{screen}");
                 if !question_open {
                     assert!(
                         hints_row.contains("ctrl+t exp. tools · ctrl+r exp. reasoning"),
