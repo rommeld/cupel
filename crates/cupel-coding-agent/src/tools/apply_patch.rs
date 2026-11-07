@@ -284,6 +284,7 @@ impl AgentTool for ApplyPatchTool {
                 return Err("Operation aborted".into());
             }
         }
+        let mut warning = None;
         if let Some(recording) = &mut recording {
             let mut edits = Vec::new();
             for change in &changes {
@@ -316,19 +317,25 @@ impl AgentTool for ApplyPatchTool {
                     }
                 }
             }
-            recording.prepare(&edits)?;
+            warning = recording.prepare(&edits)?;
         }
 
         let mut diff = String::new();
         let (mut added, mut modified, mut deleted) = (Vec::new(), Vec::new(), Vec::new());
         for change in &changes {
             if let Err(error) = apply(change).await {
-                if let Some(recording) = &mut recording
-                    && let Err(journal_error) = recording.finish()
-                {
-                    return Err(format!("{error}; undo journal: {journal_error}").into());
+                if let Some(recording) = &mut recording {
+                    match recording.finish() {
+                        Ok(notice) => warning = warning.or(notice),
+                        Err(journal_error) => {
+                            return Err(format!("{error}; undo journal: {journal_error}").into());
+                        }
+                    }
                 }
-                return Err(error);
+                return Err(match warning {
+                    Some(warning) => format!("{error}\nWarning: {warning}").into(),
+                    None => error,
+                });
             }
             match change {
                 Change::Add {
@@ -364,7 +371,7 @@ impl AgentTool for ApplyPatchTool {
             }
         }
         if let Some(recording) = &mut recording {
-            recording.finish()?;
+            warning = warning.or(recording.finish()?);
         }
 
         // Codex's summary, verbatim, the models know it.
@@ -373,6 +380,12 @@ impl AgentTool for ApplyPatchTool {
             for path in paths {
                 summary.push_str(&format!("\n{letter} {path}"));
             }
+        }
+        if let Some(warning) = warning {
+            summary.push_str(&format!("\nWarning: {warning}"));
+            // Frontends display the diff instead of the summary. Put the same
+            // one-time notice first so it remains visible in a short preview.
+            diff.insert_str(0, &format!("Warning: {warning}\n"));
         }
         Ok(AgentToolResult {
             content: vec![ToolResultContent::Text(TextContent::plain(summary))],

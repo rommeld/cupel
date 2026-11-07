@@ -11,6 +11,8 @@ use tokio::sync::{Mutex, MutexGuard};
 use crate::session::SessionRecorder;
 use crate::tools::file_queue::lock_file_for_mutation;
 
+const UNAVAILABLE: &str = "Undo unavailable for this turn: files changed outside apply_patch.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UndoCommand {
     Changes,
@@ -58,6 +60,7 @@ enum TurnStatus {
     Recording,
     Undoing,
     Undone,
+    Unavailable,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -187,11 +190,12 @@ impl UndoJournal {
             if manifest.version != 1 || manifest.cwd != self.cwd {
                 return Err("undo journal version or working directory does not match".to_string());
             }
-            if manifest.status != TurnStatus::Undone
-                && manifest
-                    .entries
-                    .iter()
-                    .any(|entry| entry.before != entry.after || entry.pending.is_some())
+            if manifest.status == TurnStatus::Unavailable
+                || (manifest.status != TurnStatus::Undone
+                    && manifest
+                        .entries
+                        .iter()
+                        .any(|entry| entry.before != entry.after || entry.pending.is_some()))
             {
                 return Ok(Some(StoredTurn {
                     directory,
@@ -208,6 +212,9 @@ impl UndoJournal {
         let Some(mut turn) = self.latest()? else {
             return Ok("No recorded patch edits to undo.".to_string());
         };
+        if turn.manifest.status == TurnStatus::Unavailable {
+            return Err(UNAVAILABLE.to_string());
+        }
         let _guards = lock_entries(&turn).await;
         reconcile(&mut turn)?;
         let originals = preflight(&turn)?;
@@ -251,6 +258,9 @@ impl UndoJournal {
         let Some(mut turn) = self.latest()? else {
             return Err("No recorded patch edits to undo.".to_string());
         };
+        if turn.manifest.status == TurnStatus::Unavailable {
+            return Err(format!("refusing undo: {UNAVAILABLE}"));
+        }
         let _guards = lock_entries(&turn).await;
         reconcile(&mut turn)?;
         let originals = preflight(&turn)?;
@@ -300,16 +310,15 @@ pub(crate) struct Recording<'a> {
 }
 
 impl Recording<'_> {
-    pub(crate) fn prepare(&mut self, edits: &[(PathBuf, Option<&[u8]>)]) -> Result<(), String> {
+    pub(crate) fn prepare(
+        &mut self,
+        edits: &[(PathBuf, Option<&[u8]>)],
+    ) -> Result<Option<&'static str>, String> {
         if self.journal.directory.is_none() {
-            return Ok(());
+            return Ok(None);
         }
-        if self.state.active.is_none() {
-            self.state.active = Some(self.journal.new_turn()?);
-        }
-        let turn = self.state.active.as_mut().ok_or("undo turn unavailable")?;
-        reconcile(turn)?;
-        for (path, content) in edits {
+        // These protections still apply after undo tracking has been disabled.
+        for (path, _) in edits {
             let location = location(path)?;
             if self.journal.directory.as_ref().is_some_and(|root| {
                 location.starts_with(root)
@@ -320,6 +329,20 @@ impl Recording<'_> {
             }) {
                 return Err("patches cannot modify their own undo journal".to_string());
             }
+            inspect(path)?;
+        }
+        if self.state.active.is_none() {
+            self.state.active = Some(self.journal.new_turn()?);
+        }
+        let turn = self.state.active.as_mut().ok_or("undo turn unavailable")?;
+        if turn.manifest.status == TurnStatus::Unavailable {
+            return Ok(None);
+        }
+        if !recordable(turn) {
+            return disable(turn);
+        }
+        for (path, content) in edits {
+            let location = location(path)?;
             let (before, bytes) = inspect(path)?;
             let index = if let Some(index) = turn
                 .manifest
@@ -327,9 +350,10 @@ impl Recording<'_> {
                 .iter()
                 .position(|entry| entry.location == location)
             {
-                let entry = &turn.manifest.entries[index];
-                if entry.path != *path || !entry.after.matches(&before) {
-                    return Err(conflict(path));
+                // Recheck the bytes read for this target too: a shell or user
+                // edit can race the earlier whole-turn validation.
+                if !turn.manifest.entries[index].after.matches(&before) {
+                    return disable(turn);
                 }
                 index
             } else {
@@ -358,17 +382,42 @@ impl Recording<'_> {
                 None => Fingerprint::Missing,
             });
         }
-        turn.save()
+        turn.save()?;
+        Ok(None)
     }
 
-    pub(crate) fn finish(&mut self) -> Result<(), String> {
-        if let Some(turn) = &mut self.state.active {
-            let result = reconcile(turn);
+    pub(crate) fn finish(&mut self) -> Result<Option<&'static str>, String> {
+        if let Some(turn) = &mut self.state.active
+            && turn.manifest.status != TurnStatus::Unavailable
+        {
+            if !recordable(turn) {
+                return disable(turn);
+            }
             turn.save()?;
-            result?;
         }
-        Ok(())
+        Ok(None)
     }
+}
+
+// A formatter or user edit must not be adopted as this turn's own work. Check
+// all recorded paths, not just the next patch's spelling or target subset.
+fn recordable(turn: &mut StoredTurn) -> bool {
+    reconcile(turn).is_ok()
+        && turn.manifest.entries.iter().all(|entry| {
+            checked_fingerprint(entry).is_ok_and(|current| entry.after.matches(&current))
+        })
+}
+
+fn disable(turn: &mut StoredTurn) -> Result<Option<&'static str>, String> {
+    let previous = turn.manifest.status;
+    turn.manifest.status = TurnStatus::Unavailable;
+    // Persist before allowing further edits: a resumed session must also refuse
+    // the whole turn, including otherwise unchanged files and older snapshots.
+    if let Err(error) = turn.save() {
+        turn.manifest.status = previous;
+        return Err(error);
+    }
+    Ok(Some(UNAVAILABLE))
 }
 
 fn reconcile(turn: &mut StoredTurn) -> Result<(), String> {
@@ -427,7 +476,7 @@ fn checked_fingerprint(entry: &Entry) -> Result<Fingerprint, String> {
 
 fn conflict(path: &Path) -> String {
     format!(
-        "refusing undo: {} no longer matches Cupel's recorded state",
+        "{} no longer matches Cupel's recorded state",
         path.display()
     )
 }
@@ -441,15 +490,20 @@ fn hash(bytes: &[u8]) -> String {
     output
 }
 
-// Resolve the parent rather than the leaf, preserving creation/deletion identity.
-// Missing parent directories are allowed; retargeted symlink parents are detected
-// against the stored location before undo.
+// Resolve existing regular leaves too, so case aliases use the filesystem's
+// actual spelling. Missing leaves retain creation/deletion identity, and symlink
+// leaves remain unsupported. Retargeted parents are still checked before undo.
 fn location(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err(format!(
             "undo requires an absolute path: {}",
             path.display()
         ));
+    }
+    if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+        return path
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve {} for undo: {e}", path.display()));
     }
     let mut parent = path.parent().ok_or("cannot snapshot filesystem root")?;
     let mut suffix = vec![
