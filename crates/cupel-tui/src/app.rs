@@ -75,6 +75,10 @@ pub struct App {
     pub last_transcript_inner: Rect,
     pub last_input_inner: Rect,
     pub last_input_scroll: usize,
+    pub input_scroll_override: Option<InputScroll>,
+    pub last_input_max_scroll: usize,
+    pub last_input_scrollbar_area: Rect,
+    pub input_scrollbar_dragging: bool,
     pub last_scrollbar_area: Rect,
     pub scrollbar_dragging: bool,
     pub last_top_line: usize,
@@ -90,6 +94,12 @@ pub struct App {
     pub question: Option<OpenQuestion>,
     pub write_gate: WriteGate,
     pub pending_undo: Option<cupel_coding_agent::undo::UndoCommand>,
+}
+
+/// A manually browsed prompt viewport, valid until the editing cursor changes.
+pub struct InputScroll {
+    pub offset: usize,
+    pub cursor: usize,
 }
 
 /// A content position held in place while reasoning visibility changes.
@@ -341,6 +351,10 @@ impl App {
             last_transcript_inner: Rect::ZERO,
             last_input_inner: Rect::ZERO,
             last_input_scroll: 0,
+            input_scroll_override: None,
+            last_input_max_scroll: 0,
+            last_input_scrollbar_area: Rect::ZERO,
+            input_scrollbar_dragging: false,
             last_scrollbar_area: Rect::ZERO,
             scrollbar_dragging: false,
             last_top_line: 0,
@@ -552,6 +566,7 @@ impl App {
     pub fn on_terminal_event(&mut self, event: Event) {
         if let Some(popup) = &mut self.usage_popup {
             self.scrollbar_dragging = false;
+            self.input_scrollbar_dragging = false;
             if let Some(selection) = &mut self.text_selection {
                 selection.dragging = false;
             }
@@ -563,7 +578,9 @@ impl App {
                     && matches!(key.code, KeyCode::Char('c' | 'd' | 'y'))
             );
             if !global {
-                if popup.on_terminal_event(&event) {
+                if !matches!(&event, Event::Mouse(_) if !self.mouse_captured)
+                    && popup.on_terminal_event(&event)
+                {
                     self.usage_popup = None;
                 }
                 return;
@@ -571,8 +588,14 @@ impl App {
         }
         match event {
             // Windows terminals report key releases too, only act on press.
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key),
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                self.input_scroll_override = None;
+                self.input_scrollbar_dragging = false;
+                self.on_key(key);
+            }
             Event::Paste(text) => {
+                self.input_scroll_override = None;
+                self.input_scrollbar_dragging = false;
                 self.input.insert_str(&text);
                 self.autocomplete
                     .refresh(self.input.text(), self.input.cursor());
@@ -589,8 +612,13 @@ impl App {
                     self.scrollbar_dragging = self
                         .last_scrollbar_area
                         .contains(Position::new(mouse.column, mouse.row));
+                    self.input_scrollbar_dragging = self
+                        .last_input_scrollbar_area
+                        .contains(Position::new(mouse.column, mouse.row));
                     if self.scrollbar_dragging {
                         self.scroll_to_scrollbar_row(mouse.row);
+                    } else if self.input_scrollbar_dragging {
+                        self.scroll_input_to_row(mouse.row);
                     } else {
                         self.text_selection = None;
                         if self
@@ -608,6 +636,9 @@ impl App {
                 }
                 MouseEventKind::Drag(MouseButton::Left) if self.scrollbar_dragging => {
                     self.scroll_to_scrollbar_row(mouse.row);
+                }
+                MouseEventKind::Drag(MouseButton::Left) if self.input_scrollbar_dragging => {
+                    self.scroll_input_to_row(mouse.row);
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
                     self.extend_text_selection(mouse.column, mouse.row);
@@ -1139,6 +1170,10 @@ impl App {
 
     pub(crate) fn cancel_mouse_drag(&mut self) {
         self.cancel_scrollbar_drag();
+        self.input_scrollbar_dragging = false;
+        if let Some(popup) = &mut self.usage_popup {
+            popup.cancel_scrollbar_drag();
+        }
         if let Some(selection) = &mut self.text_selection {
             selection.dragging = false;
         }
@@ -1199,6 +1234,20 @@ impl App {
         self.scroll_from_bottom = max - max.saturating_mul(position) / span;
     }
 
+    fn scroll_input_to_row(&mut self, row: u16) {
+        let area = self.last_input_scrollbar_area;
+        if area.is_empty() {
+            return;
+        }
+        let span = usize::from(area.height.saturating_sub(1).max(1));
+        let position = usize::from(row.saturating_sub(area.y)).min(span);
+        let scroll = self.last_input_max_scroll.saturating_mul(position) / span;
+        self.input_scroll_override = Some(InputScroll {
+            offset: scroll,
+            cursor: self.input.cursor(),
+        });
+    }
+
     /// A left click selects the block under the pointer (the Ctrl+O copy
     /// target), clicking it again or clicking chrome deselects. A
     /// click on a tool cell or reasoning header toggles its disclosure. Terminal
@@ -1213,6 +1262,7 @@ impl App {
                 usize::from(column - input.x),
                 usize::from(input.width),
             );
+            self.input_scroll_override = None;
             self.refresh_autocomplete_if_open();
             return;
         }

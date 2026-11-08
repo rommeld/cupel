@@ -574,7 +574,30 @@ fn render_input(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme)
     // outgrows the height capped box.
     let (cursor_line, cursor_col) = layout.cursor_position(app.input.cursor());
     let visible = inner.height.max(1) as usize;
-    let scroll = cursor_line.saturating_sub(visible - 1);
+    let total = layout.lines().len();
+    let max_scroll = total.saturating_sub(visible);
+    let scrollbar_area = if max_scroll > 0 && !inner.is_empty() {
+        Rect::new(area.right() - 1, inner.y, 1, inner.height)
+    } else {
+        Rect::ZERO
+    };
+    if app.last_input_scrollbar_area != scrollbar_area || app.last_input_inner.width != inner.width
+    {
+        app.input_scrollbar_dragging = false;
+        app.input_scroll_override = None;
+    }
+    app.last_input_scrollbar_area = scrollbar_area;
+    app.last_input_max_scroll = max_scroll;
+    // A scrollbar gesture browses without moving the editing cursor. Keyboard
+    // input resumes cursor following; direct cursor changes invalidate it too.
+    app.input_scroll_override = app
+        .input_scroll_override
+        .take()
+        .filter(|scroll| scroll.cursor == app.input.cursor());
+    let scroll = app.input_scroll_override.as_ref().map_or_else(
+        || cursor_line.saturating_sub(visible - 1),
+        |scroll| scroll.offset.min(max_scroll),
+    );
     app.last_input_inner = inner;
     app.last_input_scroll = scroll;
     let text: Vec<Line<'_>> = layout
@@ -585,9 +608,26 @@ fn render_input(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme)
         .collect();
     frame.render_widget(Paragraph::new(text), inner);
 
+    if !scrollbar_area.is_empty() {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .track_style(theme.pane_border)
+            .thumb_style(theme.scrollbar_thumb);
+        let mut state = ScrollbarState::new(total - visible + 1)
+            .position(scroll)
+            .viewport_content_length(visible);
+        // Use the existing right padding without overwriting the horizontal borders.
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
+    }
+
     // Place the real terminal cursor at the editing position. (ratatui hides
     // it unless the app explicitly positions it each frame.)
-    if app.usage_popup.is_none() && !inner.is_empty() {
+    if app.usage_popup.is_none()
+        && !inner.is_empty()
+        && (scroll..scroll + visible).contains(&cursor_line)
+    {
         frame.set_cursor_position(Position {
             x: inner.x + (cursor_col as u16).min(inner.width.saturating_sub(1)),
             y: inner.y + ((cursor_line - scroll) as u16).min(inner.height.saturating_sub(1)),
@@ -2181,6 +2221,192 @@ pub(crate) mod tests {
         assert!(
             !screen.contains("line0"),
             "scrolled-out line must be hidden:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn input_scrollbar_only_appears_for_overflow_and_hides_after_resizing() {
+        for (text, overflowing) in [
+            (String::new(), false),
+            ("zero\none\ntwo\nthree\nfour".into(), false),
+            ("zero\none\ntwo\nthree\nfour\nfive".into(), true),
+            ("abcdefghij ".repeat(8), true),
+        ] {
+            let mut app = test_app();
+            app.input.insert_str(&text);
+            let screen = draw(&mut app, 12, 24);
+            assert_eq!(screen.contains('█'), overflowing, "{text:?}:\n{screen}");
+        }
+
+        let mut app = test_app();
+        app.input.insert_str(&"abcdefghij ".repeat(8));
+        assert!(draw(&mut app, 12, 24).contains('█'));
+        assert!(!draw(&mut app, 80, 24).contains('█'));
+        assert!(draw(&mut app, 12, 24).contains('█'));
+        let _ = app.input.submit();
+        assert!(!draw(&mut app, 12, 24).contains('█'));
+    }
+
+    #[test]
+    fn input_scrollbar_follows_cursor_to_both_ends_without_covering_text_or_borders() {
+        for (width, height) in [(40, 24), (12, 20), (30, 16)] {
+            let mut app = test_app();
+            app.input
+                .insert_str("line0\nline1\nline2\nline3\nline4\nline5\nline6\nline7");
+            let screen = draw(&mut app, width, height);
+            let inner = app.last_input_inner;
+            let bottom = usize::from(inner.bottom() - 1);
+            assert!(
+                screen.lines().nth(bottom).unwrap().ends_with('█'),
+                "{screen}"
+            );
+            assert!(screen.contains("line7"), "{screen}");
+
+            for _ in 0..app.input.cursor() {
+                app.input.move_left();
+            }
+            let screen = draw(&mut app, width, height);
+            assert_eq!(app.last_input_scroll, 0);
+            let top = usize::from(inner.y);
+            assert!(screen.lines().nth(top).unwrap().ends_with('█'), "{screen}");
+            assert!(screen.contains("line0"), "{screen}");
+            for row in [top - 1, bottom + 1] {
+                assert!(screen.lines().nth(row).unwrap().ends_with('─'), "{screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn input_scrollbar_mouse_browses_without_moving_cursor_and_editing_resumes_following() {
+        let mut app = test_app();
+        app.input
+            .insert_str("line0\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8");
+        let _ = draw(&mut app, 80, 24);
+        let area = app.last_input_scrollbar_area;
+        let cursor = app.input.cursor();
+        let text = app.input.text().to_string();
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        let screen = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, 0);
+        assert!(screen.contains("line0"), "{screen}");
+        assert!(!screen.contains("line8"), "{screen}");
+        assert_eq!(app.input.cursor(), cursor);
+        assert_eq!(app.input.text(), text);
+        assert!(app.text_selection.is_none());
+        assert_eq!(app.scroll_from_bottom, 0);
+
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            0,
+            area.y + area.height / 2,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, app.last_input_max_scroll / 2);
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            0,
+            u16::MAX,
+        ));
+        let screen = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, app.last_input_max_scroll);
+        assert!(screen.contains("line8"), "{screen}");
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            0,
+            0,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, 0);
+
+        app.on_terminal_event(scrollbar_mouse(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            area.bottom() - 1,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, 0, "release ends the drag");
+        press(&mut app, KeyCode::Left);
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, app.last_input_max_scroll);
+
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        app.on_terminal_event(Event::Paste(" pasted".into()));
+        let screen = draw(&mut app, 80, 24);
+        assert!(screen.contains("pasted"), "{screen}");
+        assert_eq!(app.last_input_scroll, app.last_input_max_scroll);
+    }
+
+    #[test]
+    fn input_scrollbar_drag_cancels_on_focus_resize_capture_and_hidden_bar() {
+        for event in [Event::FocusLost, Event::Resize(60, 20)] {
+            let mut app = test_app();
+            app.input.insert_str(&"line\n".repeat(10));
+            let _ = draw(&mut app, 80, 24);
+            let area = app.last_input_scrollbar_area;
+            app.on_terminal_event(scrollbar_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x,
+                area.y,
+            ));
+            app.on_terminal_event(event);
+            app.on_terminal_event(scrollbar_mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                area.x,
+                area.bottom() - 1,
+            ));
+            let _ = draw(&mut app, 80, 24);
+            assert_eq!(app.last_input_scroll, 0);
+        }
+
+        let mut app = test_app();
+        app.input.insert_str(&"abcdefghij ".repeat(8));
+        let _ = draw(&mut app, 12, 24);
+        let area = app.last_input_scrollbar_area;
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert!(app.input_scrollbar_dragging);
+        let _ = draw(&mut app, 80, 24);
+        assert!(app.last_input_scrollbar_area.is_empty());
+        assert!(!app.input_scrollbar_dragging);
+        let _ = draw(&mut app, 12, 24);
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert!(app.input_scroll_override.is_none());
+
+        assert!(!app.apply_mouse_toggle());
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert!(app.input_scroll_override.is_none());
+        assert!(app.apply_mouse_toggle());
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert!(app.input_scrollbar_dragging);
+        let _ = draw(&mut app, 14, 24);
+        assert!(
+            !app.input_scrollbar_dragging,
+            "geometry changes cancel dragging"
         );
     }
 
