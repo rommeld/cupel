@@ -161,6 +161,9 @@ async fn event_loop(
     // The spinner's clock lives outside the loop.
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Keep session time live while idle without redrawing at spinner speed.
+    let mut session_clock = tokio::time::interval(std::time::Duration::from_secs(1));
+    session_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut status = Reporter::for_stdout();
 
     let result = loop {
@@ -201,6 +204,7 @@ async fn event_loop(
             _ = ticker.tick(), if sessions.any_running() => {
                 sessions.tick();
             }
+            _ = session_clock.tick(), if !sessions.any_running() => {}
         }
 
         // Catch up without waiting, rendering the entire transcript per queued

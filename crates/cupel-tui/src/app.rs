@@ -48,6 +48,8 @@ pub struct App {
     pub autocomplete: Autocomplete,
     pub totals: UsageTotals,
     pub usage_by_model: UsageByModel,
+    /// Time spent in completed agent runs in the current session/process.
+    pub session_work_time: Duration,
     pub usage_popup: Option<UsagePopup>,
     pub run_events: Option<AgentEventStream>,
     pub scroll_from_bottom: usize,
@@ -323,6 +325,7 @@ impl App {
             autocomplete,
             totals: UsageTotals::default(),
             usage_by_model: UsageByModel::default(),
+            session_work_time: Duration::ZERO,
             usage_popup: None,
             run_events: None,
             scroll_from_bottom: 0,
@@ -996,6 +999,7 @@ impl App {
         // The session continues, retain its open transcript, started state,
         // and pending hook chain rather than creating a fresh recorder.
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, self.recorder);
+        app.session_work_time = self.session_work_time;
         app.questions = ingredients.questions;
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
@@ -1526,6 +1530,16 @@ impl App {
         self.run_started = Some(Instant::now());
         self.activity = Activity::Waiting;
         self.last_answer = Status::New;
+    }
+
+    /// Total agent run time, including the active run but excluding time between runs.
+    #[must_use]
+    pub fn working_time(&self) -> Duration {
+        self.session_work_time
+            + self
+                .run_started
+                .map(|started| started.elapsed())
+                .unwrap_or_default()
     }
 
     /// The title's words, the headline of the reasoning while the model
@@ -2386,8 +2400,10 @@ impl App {
         self.transcript.promote_final_answer();
         // How long the run took, below its last answer.
         if let Some(started) = self.run_started.take() {
+            let elapsed = started.elapsed();
+            self.session_work_time += elapsed;
             self.transcript.cells.push(Cell::Usage {
-                text: format!("worked for {}", format_elapsed(started.elapsed())),
+                text: format!("worked for {}", format_elapsed(elapsed)),
             });
         }
         self.run_events = None;

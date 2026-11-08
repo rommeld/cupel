@@ -672,13 +672,14 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     });
     let totals = app.session_totals();
     let left = format!(
-        " {} in · {} out · {} cached | ctx {}/{}{window_label} ({percent}%){maximum_segment} | ${:.4}",
+        " {} in · {} out · {} cached | ctx {}/{}{window_label} ({percent}%){maximum_segment} | ${:.4} | time {}",
         crate::token_count::format(totals.input),
         crate::token_count::format(totals.output),
         crate::token_count::format(totals.cache_read),
         crate::token_count::format(app.context_tokens),
         crate::token_count::format(window),
         totals.cost,
+        format_elapsed(app.working_time()),
     );
     // Add current `cupel` version to footer.
     let version_label = format!("version: {}", env!("CARGO_PKG_VERSION"));
@@ -1235,6 +1236,79 @@ pub(crate) mod tests {
         assert!(
             !screen.contains("cupel-test"),
             "internal session key leaked into footer:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn footer_shows_total_working_time() {
+        use std::time::{Duration, Instant};
+
+        let mut app = test_app();
+        assert!(!app.is_running());
+        assert_eq!(app.working_time(), Duration::ZERO);
+        assert!(draw(&mut app, 120, 20).contains(" | time 0s"));
+        app.session_work_time = Duration::from_secs(65);
+        for width in [80, 120, 200] {
+            let screen = draw(&mut app, width, 20);
+            let status_row = screen.lines().nth(18).expect("footer status row");
+            assert!(status_row.contains(" | time 1m 05s"), "{screen}");
+        }
+
+        app.run_started = Some(Instant::now().checked_sub(Duration::from_secs(60)).unwrap());
+        let screen = draw(&mut app, 120, 20);
+        assert!(screen.contains(" | time 2m 05s"), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn working_time_survives_in_place_reload_but_resets_for_new_sessions() {
+        use crate::app::ReloadTarget;
+        use std::time::Duration;
+
+        let mut app = test_app();
+        let worked = Duration::from_secs(65);
+        app.session_work_time = worked;
+        let app = app.hot_reload(ReloadTarget::Current).await;
+        assert_eq!(app.working_time(), worked);
+        let app = app.hot_reload(ReloadTarget::New).await;
+        assert_eq!(app.working_time(), Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn working_time_accumulates_runs_and_freezes_when_idle() {
+        use std::time::{Duration, Instant};
+
+        let mut app = test_app();
+        for _ in 0..2 {
+            app.start_run("work");
+            app.run_started = Some(Instant::now().checked_sub(Duration::from_secs(30)).unwrap());
+            while app.is_running() {
+                let event = app.next_event().await;
+                app.on_event(event).await;
+            }
+            let worked = app.working_time();
+            assert_eq!(worked, app.session_work_time);
+            app.tick();
+            assert_eq!(app.working_time(), worked, "idle time must not be counted");
+        }
+        assert!(app.working_time() >= Duration::from_secs(60));
+        assert!(app.working_time() < Duration::from_secs(61));
+    }
+
+    #[tokio::test]
+    async fn working_time_is_retained_when_the_event_stream_closes() {
+        use std::time::{Duration, Instant};
+
+        let mut app = test_app();
+        app.run_started = Some(Instant::now().checked_sub(Duration::from_secs(30)).unwrap());
+        app.on_agent_event(None).await;
+        let worked = app.working_time();
+        assert!(worked >= Duration::from_secs(30));
+        assert!(app.run_started.is_none());
+        app.on_agent_event(None).await;
+        assert_eq!(
+            app.working_time(),
+            worked,
+            "a run must only be counted once"
         );
     }
 
