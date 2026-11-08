@@ -36,7 +36,7 @@ use crate::input::InputState;
 use crate::login;
 use crate::text_selection::{Point, TextSelection};
 use crate::theme::Theme;
-use crate::transcript::{Cell, ToolOutcome, Transcript};
+use crate::transcript::{Cell, ToolDisplay, ToolOutcome, Transcript};
 
 use crate::usage::UsagePopup;
 
@@ -48,6 +48,8 @@ pub struct App {
     pub autocomplete: Autocomplete,
     pub totals: UsageTotals,
     pub usage_by_model: UsageByModel,
+    /// Time spent in completed agent runs in the current session/process.
+    pub session_work_time: Duration,
     pub usage_popup: Option<UsagePopup>,
     pub run_events: Option<AgentEventStream>,
     pub scroll_from_bottom: usize,
@@ -67,7 +69,7 @@ pub struct App {
     pub selected_cell: Option<usize>,
     pub text_selection: Option<TextSelection>,
     pub last_transcript_lines: Vec<ratatui::text::Line<'static>>,
-    pub tools_expanded: bool,
+    pub tool_display: ToolDisplay,
     pub frame: usize,
     pub context_tokens: u64,
     pub pending_copy: Option<String>,
@@ -75,6 +77,10 @@ pub struct App {
     pub last_transcript_inner: Rect,
     pub last_input_inner: Rect,
     pub last_input_scroll: usize,
+    pub input_scroll_override: Option<InputScroll>,
+    pub last_input_max_scroll: usize,
+    pub last_input_scrollbar_area: Rect,
+    pub input_scrollbar_dragging: bool,
     pub last_scrollbar_area: Rect,
     pub scrollbar_dragging: bool,
     pub last_top_line: usize,
@@ -90,6 +96,12 @@ pub struct App {
     pub question: Option<OpenQuestion>,
     pub write_gate: WriteGate,
     pub pending_undo: Option<cupel_coding_agent::undo::UndoCommand>,
+}
+
+/// A manually browsed prompt viewport, valid until the editing cursor changes.
+pub struct InputScroll {
+    pub offset: usize,
+    pub cursor: usize,
 }
 
 /// A content position held in place while reasoning visibility changes.
@@ -313,6 +325,7 @@ impl App {
             autocomplete,
             totals: UsageTotals::default(),
             usage_by_model: UsageByModel::default(),
+            session_work_time: Duration::ZERO,
             usage_popup: None,
             run_events: None,
             scroll_from_bottom: 0,
@@ -333,7 +346,7 @@ impl App {
             selected_cell: None,
             text_selection: None,
             last_transcript_lines: Vec::new(),
-            tools_expanded: false,
+            tool_display: ToolDisplay::default(),
             frame: 0,
             context_tokens: 0,
             pending_copy: None,
@@ -341,6 +354,10 @@ impl App {
             last_transcript_inner: Rect::ZERO,
             last_input_inner: Rect::ZERO,
             last_input_scroll: 0,
+            input_scroll_override: None,
+            last_input_max_scroll: 0,
+            last_input_scrollbar_area: Rect::ZERO,
+            input_scrollbar_dragging: false,
             last_scrollbar_area: Rect::ZERO,
             scrollbar_dragging: false,
             last_top_line: 0,
@@ -437,7 +454,7 @@ impl App {
                                 call: self
                                     .agent
                                     .describe_tool_call(&tool_call.name, &tool_call.arguments),
-                                expanded: self.tools_expanded,
+                                display: self.tool_display,
                                 started_at: None,
                                 live: None,
                                 result: None,
@@ -552,6 +569,7 @@ impl App {
     pub fn on_terminal_event(&mut self, event: Event) {
         if let Some(popup) = &mut self.usage_popup {
             self.scrollbar_dragging = false;
+            self.input_scrollbar_dragging = false;
             if let Some(selection) = &mut self.text_selection {
                 selection.dragging = false;
             }
@@ -563,7 +581,9 @@ impl App {
                     && matches!(key.code, KeyCode::Char('c' | 'd' | 'y'))
             );
             if !global {
-                if popup.on_terminal_event(&event) {
+                if !matches!(&event, Event::Mouse(_) if !self.mouse_captured)
+                    && popup.on_terminal_event(&event)
+                {
                     self.usage_popup = None;
                 }
                 return;
@@ -571,8 +591,14 @@ impl App {
         }
         match event {
             // Windows terminals report key releases too, only act on press.
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key),
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                self.input_scroll_override = None;
+                self.input_scrollbar_dragging = false;
+                self.on_key(key);
+            }
             Event::Paste(text) => {
+                self.input_scroll_override = None;
+                self.input_scrollbar_dragging = false;
                 self.input.insert_str(&text);
                 self.autocomplete
                     .refresh(self.input.text(), self.input.cursor());
@@ -589,8 +615,13 @@ impl App {
                     self.scrollbar_dragging = self
                         .last_scrollbar_area
                         .contains(Position::new(mouse.column, mouse.row));
+                    self.input_scrollbar_dragging = self
+                        .last_input_scrollbar_area
+                        .contains(Position::new(mouse.column, mouse.row));
                     if self.scrollbar_dragging {
                         self.scroll_to_scrollbar_row(mouse.row);
+                    } else if self.input_scrollbar_dragging {
+                        self.scroll_input_to_row(mouse.row);
                     } else {
                         self.text_selection = None;
                         if self
@@ -608,6 +639,9 @@ impl App {
                 }
                 MouseEventKind::Drag(MouseButton::Left) if self.scrollbar_dragging => {
                     self.scroll_to_scrollbar_row(mouse.row);
+                }
+                MouseEventKind::Drag(MouseButton::Left) if self.input_scrollbar_dragging => {
+                    self.scroll_input_to_row(mouse.row);
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
                     self.extend_text_selection(mouse.column, mouse.row);
@@ -766,10 +800,10 @@ impl App {
                 self.anchor_transcript(self.last_top_line);
                 self.transcript.toggle_all_reasoning();
             }
-            // Ctrl+T shows every tool result in full (and hides them again).
+            // Ctrl+T cycles preview, one-line headers, and full output.
             (KeyCode::Char('t'), true, _) => {
-                self.tools_expanded = !self.tools_expanded;
-                self.transcript.set_all_tools_expanded(self.tools_expanded);
+                self.tool_display = self.tool_display.next();
+                self.transcript.set_all_tools_display(self.tool_display);
             }
             (KeyCode::PageUp, ..) => {
                 self.scroll_by(i64::from(self.last_transcript_height / 2).max(1));
@@ -965,6 +999,7 @@ impl App {
         // The session continues, retain its open transcript, started state,
         // and pending hook chain rather than creating a fresh recorder.
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, self.recorder);
+        app.session_work_time = self.session_work_time;
         app.questions = ingredients.questions;
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
@@ -1139,6 +1174,10 @@ impl App {
 
     pub(crate) fn cancel_mouse_drag(&mut self) {
         self.cancel_scrollbar_drag();
+        self.input_scrollbar_dragging = false;
+        if let Some(popup) = &mut self.usage_popup {
+            popup.cancel_scrollbar_drag();
+        }
         if let Some(selection) = &mut self.text_selection {
             selection.dragging = false;
         }
@@ -1199,6 +1238,20 @@ impl App {
         self.scroll_from_bottom = max - max.saturating_mul(position) / span;
     }
 
+    fn scroll_input_to_row(&mut self, row: u16) {
+        let area = self.last_input_scrollbar_area;
+        if area.is_empty() {
+            return;
+        }
+        let span = usize::from(area.height.saturating_sub(1).max(1));
+        let position = usize::from(row.saturating_sub(area.y)).min(span);
+        let scroll = self.last_input_max_scroll.saturating_mul(position) / span;
+        self.input_scroll_override = Some(InputScroll {
+            offset: scroll,
+            cursor: self.input.cursor(),
+        });
+    }
+
     /// A left click selects the block under the pointer (the Ctrl+O copy
     /// target), clicking it again or clicking chrome deselects. A
     /// click on a tool cell or reasoning header toggles its disclosure. Terminal
@@ -1213,6 +1266,7 @@ impl App {
                 usize::from(column - input.x),
                 usize::from(input.width),
             );
+            self.input_scroll_override = None;
             self.refresh_autocomplete_if_open();
             return;
         }
@@ -1476,6 +1530,16 @@ impl App {
         self.run_started = Some(Instant::now());
         self.activity = Activity::Waiting;
         self.last_answer = Status::New;
+    }
+
+    /// Total agent run time, including the active run but excluding time between runs.
+    #[must_use]
+    pub fn working_time(&self) -> Duration {
+        self.session_work_time
+            + self
+                .run_started
+                .map(|started| started.elapsed())
+                .unwrap_or_default()
     }
 
     /// The title's words, the headline of the reasoning while the model
@@ -2192,7 +2256,7 @@ impl App {
                         id: tool_call.id,
                         name: tool_call.name,
                         call,
-                        expanded: self.tools_expanded,
+                        display: self.tool_display,
                         started_at: None,
                         live: None,
                         result: None,
@@ -2336,8 +2400,10 @@ impl App {
         self.transcript.promote_final_answer();
         // How long the run took, below its last answer.
         if let Some(started) = self.run_started.take() {
+            let elapsed = started.elapsed();
+            self.session_work_time += elapsed;
             self.transcript.cells.push(Cell::Usage {
-                text: format!("worked for {}", format_elapsed(started.elapsed())),
+                text: format!("worked for {}", format_elapsed(elapsed)),
             });
         }
         self.run_events = None;

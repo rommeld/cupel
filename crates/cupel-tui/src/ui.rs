@@ -574,7 +574,30 @@ fn render_input(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme)
     // outgrows the height capped box.
     let (cursor_line, cursor_col) = layout.cursor_position(app.input.cursor());
     let visible = inner.height.max(1) as usize;
-    let scroll = cursor_line.saturating_sub(visible - 1);
+    let total = layout.lines().len();
+    let max_scroll = total.saturating_sub(visible);
+    let scrollbar_area = if max_scroll > 0 && !inner.is_empty() {
+        Rect::new(area.right() - 1, inner.y, 1, inner.height)
+    } else {
+        Rect::ZERO
+    };
+    if app.last_input_scrollbar_area != scrollbar_area || app.last_input_inner.width != inner.width
+    {
+        app.input_scrollbar_dragging = false;
+        app.input_scroll_override = None;
+    }
+    app.last_input_scrollbar_area = scrollbar_area;
+    app.last_input_max_scroll = max_scroll;
+    // A scrollbar gesture browses without moving the editing cursor. Keyboard
+    // input resumes cursor following; direct cursor changes invalidate it too.
+    app.input_scroll_override = app
+        .input_scroll_override
+        .take()
+        .filter(|scroll| scroll.cursor == app.input.cursor());
+    let scroll = app.input_scroll_override.as_ref().map_or_else(
+        || cursor_line.saturating_sub(visible - 1),
+        |scroll| scroll.offset.min(max_scroll),
+    );
     app.last_input_inner = inner;
     app.last_input_scroll = scroll;
     let text: Vec<Line<'_>> = layout
@@ -585,9 +608,26 @@ fn render_input(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme)
         .collect();
     frame.render_widget(Paragraph::new(text), inner);
 
+    if !scrollbar_area.is_empty() {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .track_style(theme.pane_border)
+            .thumb_style(theme.scrollbar_thumb);
+        let mut state = ScrollbarState::new(total - visible + 1)
+            .position(scroll)
+            .viewport_content_length(visible);
+        // Use the existing right padding without overwriting the horizontal borders.
+        frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
+    }
+
     // Place the real terminal cursor at the editing position. (ratatui hides
     // it unless the app explicitly positions it each frame.)
-    if app.usage_popup.is_none() && !inner.is_empty() {
+    if app.usage_popup.is_none()
+        && !inner.is_empty()
+        && (scroll..scroll + visible).contains(&cursor_line)
+    {
         frame.set_cursor_position(Position {
             x: inner.x + (cursor_col as u16).min(inner.width.saturating_sub(1)),
             y: inner.y + ((cursor_line - scroll) as u16).min(inner.height.saturating_sub(1)),
@@ -632,13 +672,14 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     });
     let totals = app.session_totals();
     let left = format!(
-        " {} in · {} out · {} cached | ctx {}/{}{window_label} ({percent}%){maximum_segment} | ${:.4}",
+        " {} in · {} out · {} cached | ctx {}/{}{window_label} ({percent}%){maximum_segment} | ${:.4} | time {}",
         crate::token_count::format(totals.input),
         crate::token_count::format(totals.output),
         crate::token_count::format(totals.cache_read),
         crate::token_count::format(app.context_tokens),
         crate::token_count::format(window),
         totals.cost,
+        format_elapsed(app.working_time()),
     );
     // Add current `cupel` version to footer.
     let version_label = format!("version: {}", env!("CARGO_PKG_VERSION"));
@@ -648,9 +689,9 @@ fn render_footer(frame: &mut Frame<'_>, app: &App, area: Rect, theme: &Theme) {
     let hints = if app.question.is_some() {
         " ↑↓ choose · enter answer (typed text wins) · @ file"
     } else if app.mouse_captured {
-        " ctrl+enter steer · @ file / cmds · ctrl+o copy · ctrl+y select · ctrl+t exp. tools · ctrl+r exp. reasoning"
+        " ctrl+enter steer · @ file / cmds · ctrl+o copy · ctrl+y select · ctrl+t cycle tools · ctrl+r exp. reasoning"
     } else {
-        " ctrl+enter steer · @ file / cmds · SELECTION MODE · ctrl+y scroll · ctrl+t exp. tools · ctrl+r exp. reasoning"
+        " ctrl+enter steer · @ file / cmds · SELECTION MODE · ctrl+y scroll · ctrl+t cycle tools · ctrl+r exp. reasoning"
     };
 
     let [status_row, hints_row] =
@@ -695,7 +736,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::theme::CUPEL;
-    use crate::transcript::{Cell, ToolOutcome};
+    use crate::transcript::{Cell, ToolDisplay, ToolOutcome};
     use cupel_agent::{Agent, AgentEvent, AgentOptions};
     use cupel_coding_agent::modes::SessionMeta;
     use cupel_coding_agent::tools::ask_user::{Answer, AskUserTool, PendingQuestion};
@@ -1199,6 +1240,79 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn footer_shows_total_working_time() {
+        use std::time::{Duration, Instant};
+
+        let mut app = test_app();
+        assert!(!app.is_running());
+        assert_eq!(app.working_time(), Duration::ZERO);
+        assert!(draw(&mut app, 120, 20).contains(" | time 0s"));
+        app.session_work_time = Duration::from_secs(65);
+        for width in [80, 120, 200] {
+            let screen = draw(&mut app, width, 20);
+            let status_row = screen.lines().nth(18).expect("footer status row");
+            assert!(status_row.contains(" | time 1m 05s"), "{screen}");
+        }
+
+        app.run_started = Some(Instant::now().checked_sub(Duration::from_secs(60)).unwrap());
+        let screen = draw(&mut app, 120, 20);
+        assert!(screen.contains(" | time 2m 05s"), "{screen}");
+    }
+
+    #[tokio::test]
+    async fn working_time_survives_in_place_reload_but_resets_for_new_sessions() {
+        use crate::app::ReloadTarget;
+        use std::time::Duration;
+
+        let mut app = test_app();
+        let worked = Duration::from_secs(65);
+        app.session_work_time = worked;
+        let app = app.hot_reload(ReloadTarget::Current).await;
+        assert_eq!(app.working_time(), worked);
+        let app = app.hot_reload(ReloadTarget::New).await;
+        assert_eq!(app.working_time(), Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn working_time_accumulates_runs_and_freezes_when_idle() {
+        use std::time::{Duration, Instant};
+
+        let mut app = test_app();
+        for _ in 0..2 {
+            app.start_run("work");
+            app.run_started = Some(Instant::now().checked_sub(Duration::from_secs(30)).unwrap());
+            while app.is_running() {
+                let event = app.next_event().await;
+                app.on_event(event).await;
+            }
+            let worked = app.working_time();
+            assert_eq!(worked, app.session_work_time);
+            app.tick();
+            assert_eq!(app.working_time(), worked, "idle time must not be counted");
+        }
+        assert!(app.working_time() >= Duration::from_secs(60));
+        assert!(app.working_time() < Duration::from_secs(61));
+    }
+
+    #[tokio::test]
+    async fn working_time_is_retained_when_the_event_stream_closes() {
+        use std::time::{Duration, Instant};
+
+        let mut app = test_app();
+        app.run_started = Some(Instant::now().checked_sub(Duration::from_secs(30)).unwrap());
+        app.on_agent_event(None).await;
+        let worked = app.working_time();
+        assert!(worked >= Duration::from_secs(30));
+        assert!(app.run_started.is_none());
+        app.on_agent_event(None).await;
+        assert_eq!(
+            app.working_time(),
+            worked,
+            "a run must only be counted once"
+        );
+    }
+
+    #[test]
     fn footer_omits_run_status() {
         for running in [false, true] {
             let mut app = test_app();
@@ -1253,7 +1367,7 @@ pub(crate) mod tests {
                 assert!(!hints_row.contains("drag select"), "{screen}");
                 if !question_open {
                     assert!(
-                        hints_row.contains("ctrl+t exp. tools · ctrl+r exp. reasoning"),
+                        hints_row.contains("ctrl+t cycle tools · ctrl+r exp. reasoning"),
                         "{screen}"
                     );
                     let selection_hints = if mouse_captured {
@@ -1879,7 +1993,7 @@ pub(crate) mod tests {
             id: "call_1".into(),
             name: "grep".into(),
             call: "grep /bug/ in src".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: Some(ToolOutcome {
@@ -2185,6 +2299,192 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn input_scrollbar_only_appears_for_overflow_and_hides_after_resizing() {
+        for (text, overflowing) in [
+            (String::new(), false),
+            ("zero\none\ntwo\nthree\nfour".into(), false),
+            ("zero\none\ntwo\nthree\nfour\nfive".into(), true),
+            ("abcdefghij ".repeat(8), true),
+        ] {
+            let mut app = test_app();
+            app.input.insert_str(&text);
+            let screen = draw(&mut app, 12, 24);
+            assert_eq!(screen.contains('█'), overflowing, "{text:?}:\n{screen}");
+        }
+
+        let mut app = test_app();
+        app.input.insert_str(&"abcdefghij ".repeat(8));
+        assert!(draw(&mut app, 12, 24).contains('█'));
+        assert!(!draw(&mut app, 80, 24).contains('█'));
+        assert!(draw(&mut app, 12, 24).contains('█'));
+        let _ = app.input.submit();
+        assert!(!draw(&mut app, 12, 24).contains('█'));
+    }
+
+    #[test]
+    fn input_scrollbar_follows_cursor_to_both_ends_without_covering_text_or_borders() {
+        for (width, height) in [(40, 24), (12, 20), (30, 16)] {
+            let mut app = test_app();
+            app.input
+                .insert_str("line0\nline1\nline2\nline3\nline4\nline5\nline6\nline7");
+            let screen = draw(&mut app, width, height);
+            let inner = app.last_input_inner;
+            let bottom = usize::from(inner.bottom() - 1);
+            assert!(
+                screen.lines().nth(bottom).unwrap().ends_with('█'),
+                "{screen}"
+            );
+            assert!(screen.contains("line7"), "{screen}");
+
+            for _ in 0..app.input.cursor() {
+                app.input.move_left();
+            }
+            let screen = draw(&mut app, width, height);
+            assert_eq!(app.last_input_scroll, 0);
+            let top = usize::from(inner.y);
+            assert!(screen.lines().nth(top).unwrap().ends_with('█'), "{screen}");
+            assert!(screen.contains("line0"), "{screen}");
+            for row in [top - 1, bottom + 1] {
+                assert!(screen.lines().nth(row).unwrap().ends_with('─'), "{screen}");
+            }
+        }
+    }
+
+    #[test]
+    fn input_scrollbar_mouse_browses_without_moving_cursor_and_editing_resumes_following() {
+        let mut app = test_app();
+        app.input
+            .insert_str("line0\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8");
+        let _ = draw(&mut app, 80, 24);
+        let area = app.last_input_scrollbar_area;
+        let cursor = app.input.cursor();
+        let text = app.input.text().to_string();
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        let screen = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, 0);
+        assert!(screen.contains("line0"), "{screen}");
+        assert!(!screen.contains("line8"), "{screen}");
+        assert_eq!(app.input.cursor(), cursor);
+        assert_eq!(app.input.text(), text);
+        assert!(app.text_selection.is_none());
+        assert_eq!(app.scroll_from_bottom, 0);
+
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            0,
+            area.y + area.height / 2,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, app.last_input_max_scroll / 2);
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            0,
+            u16::MAX,
+        ));
+        let screen = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, app.last_input_max_scroll);
+        assert!(screen.contains("line8"), "{screen}");
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            0,
+            0,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, 0);
+
+        app.on_terminal_event(scrollbar_mouse(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            area.bottom() - 1,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, 0, "release ends the drag");
+        press(&mut app, KeyCode::Left);
+        let _ = draw(&mut app, 80, 24);
+        assert_eq!(app.last_input_scroll, app.last_input_max_scroll);
+
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        let _ = draw(&mut app, 80, 24);
+        app.on_terminal_event(Event::Paste(" pasted".into()));
+        let screen = draw(&mut app, 80, 24);
+        assert!(screen.contains("pasted"), "{screen}");
+        assert_eq!(app.last_input_scroll, app.last_input_max_scroll);
+    }
+
+    #[test]
+    fn input_scrollbar_drag_cancels_on_focus_resize_capture_and_hidden_bar() {
+        for event in [Event::FocusLost, Event::Resize(60, 20)] {
+            let mut app = test_app();
+            app.input.insert_str(&"line\n".repeat(10));
+            let _ = draw(&mut app, 80, 24);
+            let area = app.last_input_scrollbar_area;
+            app.on_terminal_event(scrollbar_mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x,
+                area.y,
+            ));
+            app.on_terminal_event(event);
+            app.on_terminal_event(scrollbar_mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                area.x,
+                area.bottom() - 1,
+            ));
+            let _ = draw(&mut app, 80, 24);
+            assert_eq!(app.last_input_scroll, 0);
+        }
+
+        let mut app = test_app();
+        app.input.insert_str(&"abcdefghij ".repeat(8));
+        let _ = draw(&mut app, 12, 24);
+        let area = app.last_input_scrollbar_area;
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert!(app.input_scrollbar_dragging);
+        let _ = draw(&mut app, 80, 24);
+        assert!(app.last_input_scrollbar_area.is_empty());
+        assert!(!app.input_scrollbar_dragging);
+        let _ = draw(&mut app, 12, 24);
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert!(app.input_scroll_override.is_none());
+
+        assert!(!app.apply_mouse_toggle());
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert!(app.input_scroll_override.is_none());
+        assert!(app.apply_mouse_toggle());
+        app.on_terminal_event(scrollbar_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x,
+            area.y,
+        ));
+        assert!(app.input_scrollbar_dragging);
+        let _ = draw(&mut app, 14, 24);
+        assert!(
+            !app.input_scrollbar_dragging,
+            "geometry changes cancel dragging"
+        );
+    }
+
+    #[test]
     fn modified_arrows_jump_words_and_plain_arrows_still_move_one_char() {
         for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
             let mut app = test_app();
@@ -2419,10 +2719,15 @@ pub(crate) mod tests {
         );
         assert!(screen.contains("+1 fix();"), "diff replayed:\n{screen}");
         assert!(!screen.contains("Updated the following"), "{screen}");
+        assert_eq!(app.tool_display, ToolDisplay::Preview);
+        assert!(app.transcript.cells.iter().all(|cell| !matches!(
+            cell,
+            Cell::Tool { display, .. } if *display != ToolDisplay::Preview
+        )));
     }
 
     #[test]
-    fn ctrl_t_expands_every_tool_result_and_a_click_expands_one() {
+    fn ctrl_t_cycles_tool_display_and_a_click_expands_one() {
         use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
         let mut app = test_app();
@@ -2432,7 +2737,7 @@ pub(crate) mod tests {
                 id: id.into(),
                 name: "read".into(),
                 call: format!("read file{id}.rs"),
-                expanded: false,
+                display: ToolDisplay::Preview,
                 started_at: None,
                 live: None,
                 result: Some(ToolOutcome {
@@ -2446,10 +2751,24 @@ pub(crate) mod tests {
                 }),
             });
         }
+        app.transcript.cells.push(Cell::Tool {
+            id: "patch".into(),
+            name: "apply_patch".into(),
+            call: "apply_patch src/main.rs".into(),
+            display: ToolDisplay::Preview,
+            started_at: None,
+            live: None,
+            result: Some(ToolOutcome {
+                text: "Success".into(),
+                is_error: false,
+                diff: Some("-1 old();\n+1 new();".into()),
+                took: None,
+            }),
+        });
         // Wide enough that the marker line renders unwrapped.
         let screen = draw(&mut app, 120, 40);
         assert!(
-            screen.contains("... (3 more lines, ctrl+t to expand)"),
+            screen.contains("... (3 more lines, click to expand)"),
             "{screen}"
         );
         assert!(
@@ -2472,12 +2791,15 @@ pub(crate) mod tests {
         }));
         assert!(matches!(
             app.transcript.cells[1],
-            Cell::Tool { expanded: true, .. }
+            Cell::Tool {
+                display: ToolDisplay::Full,
+                ..
+            }
         ));
         assert!(matches!(
             app.transcript.cells[2],
             Cell::Tool {
-                expanded: false,
+                display: ToolDisplay::Preview,
                 ..
             }
         ));
@@ -2488,20 +2810,84 @@ pub(crate) mod tests {
         let screen = draw(&mut app, 120, 40);
         assert_eq!(screen.matches("row 9").count(), 1, "{screen}");
 
-        // Ctrl+T, everything, then nothing.
+        // Ctrl+T overrides individual cells: preview -> collapsed -> full -> preview.
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('t'),
             KeyModifiers::CONTROL,
         )));
         let screen = draw(&mut app, 120, 40);
+        assert_eq!(app.tool_display, ToolDisplay::Collapsed);
+        assert!(!screen.contains("row 1"), "{screen}");
+        assert!(!screen.contains("row 9"), "{screen}");
+        for index in [1, 2] {
+            assert_eq!(
+                app.last_line_cells
+                    .iter()
+                    .filter(|cell| **cell == Some(index))
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            screen.contains("-1 old();") && screen.contains("+1 new();"),
+            "{screen}"
+        );
+        app.on_terminal_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            KeyModifiers::CONTROL,
+        )));
+        let screen = draw(&mut app, 120, 40);
+        assert_eq!(app.tool_display, ToolDisplay::Full);
         assert_eq!(screen.matches("row 9").count(), 2, "{screen}");
         assert!(!screen.contains("expand"), "{screen}");
+        assert!(
+            screen.contains("-1 old();") && screen.contains("+1 new();"),
+            "{screen}"
+        );
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Char('t'),
             KeyModifiers::CONTROL,
         )));
         let screen = draw(&mut app, 120, 40);
+        assert_eq!(app.tool_display, ToolDisplay::Preview);
+        assert_eq!(screen.matches("row 1").count(), 2, "{screen}");
         assert!(!screen.contains("row 9"), "{screen}");
+        assert!(
+            screen.contains("-1 old();") && screen.contains("+1 new();"),
+            "{screen}"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_tool_calls_inherit_each_ctrl_t_display_mode() {
+        let mut app = test_app();
+        for expected in [
+            ToolDisplay::Preview,
+            ToolDisplay::Collapsed,
+            ToolDisplay::Full,
+            ToolDisplay::Preview,
+        ] {
+            assert_eq!(app.tool_display, expected);
+            app.on_agent_event(Some(AgentEvent::MessageUpdate {
+                event: cupel_core::types::AssistantMessageEvent::ToolCallEnd {
+                    content_index: 0,
+                    tool_call: cupel_core::types::ToolCall {
+                        id: format!("call-{expected:?}"),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path": "src/main.rs"}),
+                    },
+                },
+            }))
+            .await;
+            assert!(app.transcript.cells.iter().all(|cell| matches!(
+                cell,
+                Cell::Tool { display, .. } if *display == expected
+            )));
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('t'),
+                KeyModifiers::CONTROL,
+            )));
+        }
     }
 
     /// A finished assistant message for event tests.
@@ -3241,7 +3627,7 @@ pub(crate) mod tests {
             id: "call_1".into(),
             name: "apply_patch".into(),
             call: "apply_patch M a.rs".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: None,
@@ -3993,7 +4379,7 @@ pub(crate) mod tests {
             id: "1".into(),
             name: "read".into(),
             call: "read src/main.rs".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: None,

@@ -928,7 +928,6 @@ mod tests {
             models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
             [
                 "codex/gpt-6.1-sol",
-                "codex/gpt-6-sol",
                 "codex/gpt-6.1-terra",
                 "codex/gpt-6-astra",
                 "codex/gpt-6-luna",
@@ -1003,7 +1002,7 @@ mod tests {
                 "gpt-6-astra-ultrafast",
                 "codex/gpt-6.1-sol",
                 "codex/gpt-6.1-sol-ultrafast",
-                "codex/gpt-6-sol",
+                "codex/gpt-6.1-terra",
             ]
         );
 

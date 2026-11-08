@@ -25,6 +25,26 @@ use std::time::{Duration, Instant};
 
 const TOOL_PREVIEW_LINES: usize = 6;
 
+/// Tool output visibility. Diffs remain visible in every mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolDisplay {
+    #[default]
+    Preview,
+    Collapsed,
+    Full,
+}
+
+impl ToolDisplay {
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            Self::Preview => Self::Collapsed,
+            Self::Collapsed => Self::Full,
+            Self::Full => Self::Preview,
+        }
+    }
+}
+
 /// One visual block in the conversation.
 pub enum Cell {
     User {
@@ -44,7 +64,7 @@ pub enum Cell {
         id: String,
         name: String,
         call: String,
-        expanded: bool,
+        display: ToolDisplay,
         started_at: Option<Instant>,
         live: Option<String>,
         result: Option<ToolOutcome>,
@@ -167,18 +187,22 @@ impl Transcript {
         }
     }
 
-    /// Flip one toll cell between preview and full result.
+    /// Clicking a tool opens its full result, or restores its preview.
     pub fn toggle_tool(&mut self, index: usize) {
-        if let Some(Cell::Tool { expanded, .. }) = self.cells.get_mut(index) {
-            *expanded = !*expanded;
+        if let Some(Cell::Tool { display, .. }) = self.cells.get_mut(index) {
+            *display = if *display == ToolDisplay::Full {
+                ToolDisplay::Preview
+            } else {
+                ToolDisplay::Full
+            };
         }
     }
 
-    /// Expand or collapse every tool cell (Ctrl+T).
-    pub fn set_all_tools_expanded(&mut self, expanded: bool) {
+    /// Apply the global Ctrl+T display mode to existing tools.
+    pub fn set_all_tools_display(&mut self, display: ToolDisplay) {
         for cell in &mut self.cells {
-            if let Cell::Tool { expanded: e, .. } = cell {
-                *e = expanded;
+            if let Cell::Tool { display: mode, .. } = cell {
+                *mode = display;
             }
         }
     }
@@ -414,7 +438,7 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let Cell::Tool {
         name,
         call,
-        expanded,
+        display,
         started_at,
         live,
         result,
@@ -424,13 +448,33 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         return Vec::new();
     };
     let mut out: Vec<Line<'static>> = Vec::new();
+    let has_diff = matches!(result, Some(ToolOutcome { diff: Some(_), .. }));
+    if *display == ToolDisplay::Collapsed && !has_diff {
+        // Truncate rather than wrap so even multiline or long calls occupy one
+        // physical row. Sanitize before taking the first line (OSC can span rows).
+        let call = sanitize(call);
+        let header = call.lines().next().unwrap_or_default();
+        let mut columns = 0;
+        let header: String = header
+            .chars()
+            .take_while(|c| {
+                columns += c.width().unwrap_or(0);
+                columns <= width
+            })
+            .collect();
+        return vec![Line::from(Span::styled(header, theme.tool_header))];
+    }
     push_wrapped(&mut out, call, width, theme.tool_header);
     match result {
         None => {
             if let Some(live) = live {
                 let live = sanitize(live);
                 let lines: Vec<&str> = live.lines().collect();
-                let hidden = lines.len().saturating_sub(TOOL_PREVIEW_LINES);
+                let hidden = if *display == ToolDisplay::Full {
+                    0
+                } else {
+                    lines.len().saturating_sub(TOOL_PREVIEW_LINES)
+                };
                 for line in &lines[hidden..] {
                     push_wrapped(&mut out, &format!("  {line}"), width, theme.detail);
                 }
@@ -455,14 +499,14 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             let text = sanitize(&outcome.text);
             let lines: Vec<&str> = text.lines().collect();
             let hidden = lines.len().saturating_sub(TOOL_PREVIEW_LINES);
-            if *expanded || hidden == 0 {
+            if *display == ToolDisplay::Full || hidden == 0 {
                 for line in &lines {
                     push_wrapped(&mut out, &format!(" {line} "), width, style);
                 }
             } else if previews_the_tail(name) {
                 push_wrapped(
                     &mut out,
-                    &format!("  ... ({hidden} earlier lines, ctrl+t to expand)"),
+                    &format!("  ... ({hidden} earlier lines, click to expand)"),
                     width,
                     theme.detail,
                 );
@@ -475,7 +519,7 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
                 }
                 push_wrapped(
                     &mut out,
-                    &format!("  ... ({hidden} more lines, ctrl+t to expand)"),
+                    &format!("  ... ({hidden} more lines, click to expand)"),
                     width,
                     theme.detail,
                 );
@@ -974,7 +1018,7 @@ mod tests {
             id: "call_1".into(),
             name: "grep".into(),
             call: "{}".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: None,
@@ -999,12 +1043,12 @@ mod tests {
     }
 
     /// A finished bash cell with ten numbered output lines.
-    fn bash_cell(expanded: bool) -> Cell {
+    fn bash_cell(display: ToolDisplay) -> Cell {
         Cell::Tool {
             id: "1".into(),
             name: "bash".into(),
             call: "$ cargo test".into(),
-            expanded,
+            display,
             started_at: None,
             live: None,
             result: Some(ToolOutcome {
@@ -1021,16 +1065,16 @@ mod tests {
 
     #[test]
     fn bash_previews_the_tail_and_files_the_head() {
-        let texts: Vec<String> = tool_lines(&bash_cell(false), 60, &CUPEL)
+        let texts: Vec<String> = tool_lines(&bash_cell(ToolDisplay::Preview), 60, &CUPEL)
             .iter()
             .map(line_text)
             .collect();
         assert_eq!(texts[0], "$ cargo test");
-        assert_eq!(texts[1], "  ... (4 earlier lines, ctrl+t to expand)");
+        assert_eq!(texts[1], "  ... (4 earlier lines, click to expand)");
         assert_eq!(texts[2], "  line 5");
         assert_eq!(texts.last().unwrap(), "  line 10");
 
-        let mut read = bash_cell(false);
+        let mut read = bash_cell(ToolDisplay::Preview);
         if let Cell::Tool { name, .. } = &mut read {
             *name = "read".into();
         }
@@ -1040,13 +1084,13 @@ mod tests {
             .collect();
         assert_eq!(texts[1], "  line 1");
         assert_eq!(texts[6], "  line 6");
-        assert_eq!(texts[7], "  ... (4 more lines, ctrl+t to expand)");
+        assert_eq!(texts[7], "  ... (4 more lines, click to expand)");
     }
 
     #[test]
     fn a_running_tool_shows_its_latest_output_and_a_clock() {
         let mut t = Transcript::default();
-        let mut cell = bash_cell(false);
+        let mut cell = bash_cell(ToolDisplay::Preview);
         if let Cell::Tool { result, .. } = &mut cell {
             *result = None;
         }
@@ -1081,7 +1125,7 @@ mod tests {
 
     #[test]
     fn expansion_shows_every_line_and_toggles_per_cell_or_for_all() {
-        let texts: Vec<String> = tool_lines(&bash_cell(true), 60, &CUPEL)
+        let texts: Vec<String> = tool_lines(&bash_cell(ToolDisplay::Full), 60, &CUPEL)
             .iter()
             .map(line_text)
             .collect();
@@ -1089,24 +1133,36 @@ mod tests {
         assert!(!texts.iter().any(|t| t.contains("expand")));
 
         let mut t = Transcript::default();
-        t.cells.push(bash_cell(false));
-        t.cells.push(bash_cell(false));
+        t.cells.push(bash_cell(ToolDisplay::Preview));
+        t.cells.push(bash_cell(ToolDisplay::Preview));
         t.toggle_tool(1);
         assert!(matches!(
             t.cells[0],
             Cell::Tool {
-                expanded: false,
+                display: ToolDisplay::Preview,
                 ..
             }
         ));
-        assert!(matches!(t.cells[1], Cell::Tool { expanded: true, .. }));
-        t.set_all_tools_expanded(true);
-        assert!(matches!(t.cells[0], Cell::Tool { expanded: true, .. }));
-        t.set_all_tools_expanded(false);
         assert!(matches!(
             t.cells[1],
             Cell::Tool {
-                expanded: false,
+                display: ToolDisplay::Full,
+                ..
+            }
+        ));
+        t.set_all_tools_display(ToolDisplay::Full);
+        assert!(matches!(
+            t.cells[0],
+            Cell::Tool {
+                display: ToolDisplay::Full,
+                ..
+            }
+        ));
+        t.set_all_tools_display(ToolDisplay::Preview);
+        assert!(matches!(
+            t.cells[1],
+            Cell::Tool {
+                display: ToolDisplay::Preview,
                 ..
             }
         ));
@@ -1114,11 +1170,11 @@ mod tests {
 
     #[test]
     fn diff_replaces_result_text_and_colors_by_marker() {
-        let cell = Cell::Tool {
+        let mut cell = Cell::Tool {
             id: "1".into(),
             name: "apply_patch".into(),
             call: "{}".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: Some(ToolOutcome {
@@ -1143,6 +1199,92 @@ mod tests {
             !texts.iter().any(|t| t.contains("Updated the following")),
             "the confirmation line is for the model, not the screen"
         );
+        for width in [1, 12, 40] {
+            if let Cell::Tool { display, .. } = &mut cell {
+                *display = ToolDisplay::Preview;
+            }
+            let expected = tool_lines(&cell, width, &CUPEL);
+            for mode in [
+                ToolDisplay::Preview,
+                ToolDisplay::Collapsed,
+                ToolDisplay::Full,
+            ] {
+                if let Cell::Tool { display, .. } = &mut cell {
+                    *display = mode;
+                }
+                assert_eq!(
+                    tool_lines(&cell, width, &CUPEL),
+                    expected,
+                    "diff changed in {mode:?} mode at width {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn collapsed_tools_use_one_sanitized_display_width_limited_header() {
+        let mut cell = bash_cell(ToolDisplay::Collapsed);
+        if let Cell::Tool { call, .. } = &mut cell {
+            *call = "\x1b]52;c;hidden\npayload\x07日本語 long command\nsecond line".into();
+        }
+        for (width, expected) in [(0, ""), (1, ""), (4, "日本"), (7, "日本語 ")] {
+            let lines = tool_lines(&cell, width, &CUPEL);
+            assert_eq!(lines.len(), 1);
+            assert_eq!(line_text(&lines[0]), expected);
+            assert_eq!(lines[0].spans[0].style, CUPEL.tool_header);
+        }
+        for result in [
+            None,
+            Some(ToolOutcome {
+                text: "failure output".into(),
+                is_error: true,
+                diff: None,
+                took: Some(Duration::from_secs(1)),
+            }),
+        ] {
+            if let Cell::Tool {
+                result: outcome,
+                live,
+                started_at,
+                ..
+            } = &mut cell
+            {
+                *outcome = result;
+                *live = Some("live output".into());
+                *started_at = Some(Instant::now());
+            }
+            let lines = tool_lines(&cell, 80, &CUPEL);
+            assert_eq!(lines.len(), 1);
+            assert_eq!(line_text(&lines[0]), "日本語 long command");
+        }
+    }
+
+    #[test]
+    fn full_tool_display_includes_all_live_output_and_click_opens_collapsed_tools() {
+        let mut t = Transcript::default();
+        let mut cell = bash_cell(ToolDisplay::Collapsed);
+        if let Cell::Tool { result, live, .. } = &mut cell {
+            *result = None;
+            *live = Some("a\nb\nc\nd\ne\nf\ng".into());
+        }
+        t.cells.push(cell);
+        assert_eq!(tool_lines(&t.cells[0], 60, &CUPEL).len(), 1);
+        t.toggle_tool(0);
+        let lines = tool_lines(&t.cells[0], 60, &CUPEL);
+        assert_eq!(
+            lines.len(),
+            9,
+            "header + seven live rows + running indicator"
+        );
+        assert_eq!(line_text(&lines[1]), "  a");
+        t.toggle_tool(0);
+        assert!(matches!(
+            t.cells[0],
+            Cell::Tool {
+                display: ToolDisplay::Preview,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1156,7 +1298,7 @@ mod tests {
             id: "1".into(),
             name: "read".into(),
             call: "{}".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: None,
@@ -1195,7 +1337,7 @@ mod tests {
             id: id.into(),
             name: "grep".into(),
             call: "{}".into(),
-            expanded: false,
+            display: ToolDisplay::Preview,
             started_at: None,
             live: None,
             result: None,
@@ -1303,12 +1445,12 @@ mod tests {
     fn read_and_bash_expand_tabs_and_strip_terminal_commands() {
         let raw = "\tgo build ./...\n\x1b[31mred\x1b[0m\x1b]52;c;clipboard-payload\x07\u{009b}2J\0\x08\r\u{0085}";
         for name in ["read", "bash"] {
-            for expanded in [false, true] {
+            for display in [ToolDisplay::Preview, ToolDisplay::Full] {
                 let cell = Cell::Tool {
                     id: "1".into(),
                     name: name.into(),
                     call: "\x1b]0;evil-title\x07read\tMakefile".into(),
-                    expanded,
+                    display,
                     started_at: None,
                     live: None,
                     result: Some(ToolOutcome {
@@ -1370,7 +1512,7 @@ mod tests {
         let raw =
             "\x1b]52;c;hidden\npayload\npayload\npayload\npayload\npayload\npayload\x07\tvisible";
         let mut t = Transcript::default();
-        let mut cell = bash_cell(false);
+        let mut cell = bash_cell(ToolDisplay::Preview);
         if let Cell::Tool { result, .. } = &mut cell {
             *result = None;
         }

@@ -7,7 +7,10 @@ use ratatui::Frame;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table};
+use ratatui::widgets::{
+    Block, Borders, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Table,
+};
 use tokio::task::{JoinError, JoinHandle};
 
 use crate::terminal_text::sanitize;
@@ -26,6 +29,8 @@ pub struct UsagePopup {
     pub content_rows: usize,
     pub viewport_rows: usize,
     pub close_button: Rect,
+    pub scrollbar_area: Rect,
+    pub scrollbar_dragging: bool,
 }
 
 impl UsagePopup {
@@ -41,6 +46,8 @@ impl UsagePopup {
             content_rows: 0,
             viewport_rows: 0,
             close_button: Rect::ZERO,
+            scrollbar_area: Rect::ZERO,
+            scrollbar_dragging: false,
         }
     }
 
@@ -83,14 +90,49 @@ impl UsagePopup {
                 {
                     return true;
                 }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.scrollbar_dragging = self
+                        .scrollbar_area
+                        .contains(Position::new(mouse.column, mouse.row));
+                    if self.scrollbar_dragging {
+                        self.scroll_to_row(mouse.row);
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) if self.scrollbar_dragging => {
+                    self.scroll_to_row(mouse.row);
+                }
+                MouseEventKind::Up(_) | MouseEventKind::Down(_) => self.cancel_scrollbar_drag(),
                 MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_sub(3),
                 MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_add(3),
                 _ => {}
             },
+            Event::Resize(_, _) | Event::FocusLost => self.cancel_scrollbar_drag(),
             _ => {}
         }
         self.clamp_scroll();
         false
+    }
+
+    pub(crate) fn cancel_scrollbar_drag(&mut self) {
+        self.scrollbar_dragging = false;
+    }
+
+    fn set_scrollbar_area(&mut self, area: Rect) {
+        if self.scrollbar_area != area {
+            self.cancel_scrollbar_drag();
+        }
+        self.scrollbar_area = area;
+    }
+
+    fn scroll_to_row(&mut self, row: u16) {
+        let area = self.scrollbar_area;
+        if area.is_empty() {
+            return;
+        }
+        let span = usize::from(area.height.saturating_sub(1).max(1));
+        let position = usize::from(row.saturating_sub(area.y)).min(span);
+        let max = self.content_rows.saturating_sub(self.viewport_rows);
+        self.scroll = max.saturating_mul(position) / span;
     }
 
     fn clamp_scroll(&mut self) {
@@ -104,6 +146,7 @@ impl UsagePopup {
 pub fn render(frame: &mut Frame<'_>, popup: &mut UsagePopup, area: Rect, theme: &Theme) {
     popup.close_button = Rect::ZERO;
     if area.width < 3 || area.height < 3 {
+        popup.set_scrollbar_area(Rect::ZERO);
         return;
     }
     let width = area.width.saturating_sub(4).clamp(3, 150);
@@ -129,6 +172,7 @@ pub fn render(frame: &mut Frame<'_>, popup: &mut UsagePopup, area: Rect, theme: 
     // Ratatui starts a left title immediately after the top left corner.
     popup.close_button = Rect::new(area.x + 1, area.y, 3.min(inner.width), 1);
     if inner.width < 56 || inner.height < 5 {
+        popup.set_scrollbar_area(Rect::ZERO);
         frame.render_widget(
             Paragraph::new("Enlarge terminal to view usage; Esc closes."),
             inner,
@@ -178,6 +222,7 @@ pub fn render(frame: &mut Frame<'_>, popup: &mut UsagePopup, area: Rect, theme: 
     popup.clamp_scroll();
     let numeric_width: u16 = widths.iter().sum();
     if numeric_width + 4 + 12 > inner.width {
+        popup.set_scrollbar_area(Rect::ZERO);
         frame.render_widget(
             Paragraph::new("Enlarge terminal to show full token counts."),
             table_area,
@@ -196,6 +241,32 @@ pub fn render(frame: &mut Frame<'_>, popup: &mut UsagePopup, area: Rect, theme: 
         .column_spacing(1)
         .header(Row::new(["Provider / model", "In", "Out", "Cached", "Cost"]).style(theme.chrome));
         frame.render_widget(table, table_area);
+        // Ride the right border beside the data rows, leaving headers, notes,
+        // and table columns untouched.
+        let max_scroll = popup.content_rows.saturating_sub(popup.viewport_rows);
+        let scrollbar_area = if max_scroll > 0 && popup.viewport_rows > 0 {
+            Rect::new(
+                area.right() - 1,
+                table_area.y + 1,
+                1,
+                popup.viewport_rows as u16,
+            )
+        } else {
+            Rect::ZERO
+        };
+        popup.set_scrollbar_area(scrollbar_area);
+        if !scrollbar_area.is_empty() {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("│"))
+                .track_style(theme.pane_border)
+                .thumb_style(theme.scrollbar_thumb);
+            let mut state = ScrollbarState::new(max_scroll + 1)
+                .position(popup.scroll)
+                .viewport_content_length(popup.viewport_rows);
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
+        }
     }
     let notes = Rect {
         y: table_area.bottom(),

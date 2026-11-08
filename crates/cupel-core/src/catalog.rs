@@ -541,6 +541,23 @@ mod tests {
     }
 
     #[test]
+    fn openai_providers_keep_61_replacements_without_retiring_luna_or_astra() {
+        let models = builtin_models();
+        for prefix in ["", "codex/"] {
+            for family in ["sol", "terra"] {
+                let current = format!("{prefix}gpt-6.1-{family}");
+                let retired = format!("{prefix}gpt-6-{family}");
+                assert!(models.iter().any(|m| m.id == current), "{current}");
+                assert!(!models.iter().any(|m| m.id == retired), "{retired}");
+            }
+            for family in ["luna", "astra"] {
+                let id = format!("{prefix}gpt-6-{family}");
+                assert!(models.iter().any(|m| m.id == id), "{id}");
+            }
+        }
+    }
+
+    #[test]
     fn sol_luna_rows_switch_off_where_the_scale_has_none() {
         // GPT 6 Sol and Luna share Astra's shape (no temperature, xhigh
         // and max selectable) with one difference, models.dev lists
@@ -548,11 +565,9 @@ mod tests {
         // The Codex backend's scale has no none, so off stays disabled.
         let models = builtin_models();
         for id in [
-            "gpt-6-sol",
             "gpt-6-luna",
             "openai/gpt-6-sol",
             "openai/gpt-6-luna",
-            "codex/gpt-6-sol",
             "codex/gpt-6-luna",
         ] {
             let model = models.iter().find(|m| m.id == id).expect(id);
@@ -1037,7 +1052,7 @@ mod tests {
                 model.id
             );
         }
-        assert_eq!(seen, 6, "only supported Codex models belong in the catalog");
+        assert_eq!(seen, 5, "only supported Codex models belong in the catalog");
     }
 
     #[test]

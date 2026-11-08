@@ -679,10 +679,12 @@ mod tests {
 
     #[test]
     fn thinking_defaults_to_high_for_codex_sol_only_and_respects_overrides() {
-        let codex = cupel_core::catalog::builtin_models()
+        // Legacy Sol can still be supplied through a custom models.json.
+        let mut codex = cupel_core::catalog::builtin_models()
             .into_iter()
-            .find(|m| m.id == "codex/gpt-6-sol")
-            .expect("shipped GPT-6 Sol model");
+            .find(|m| m.id == "codex/gpt-6.1-sol")
+            .expect("shipped GPT-6.1 Sol model");
+        codex.id = "codex/gpt-6-sol".into();
         let other_codex = cupel_core::catalog::builtin_models()
             .into_iter()
             .find(|m| m.id == "codex/gpt-6-astra")
