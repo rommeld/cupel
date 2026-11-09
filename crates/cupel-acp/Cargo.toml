@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-agent-client-protocol = { version = "=3.6.0", features = ["stdio"] }
+agent-client-protocol = { version = "=5.0.0", features = ["stdio"] }
 cupel-core.workspace = true
 cupel-agent.workspace = true
 cupel-coding-agent.workspace = true
