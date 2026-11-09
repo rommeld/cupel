@@ -11,7 +11,8 @@
 //! block indexed events, chunks have one choice whose `delta` may carry
 //! `content`, a reasoning field, and/or `tool_calls` keyed by their own
 //! index. We accumulate one text block, one thinking block, and a map
-//! of tool call blocks.
+//! of tool call blocks. OpenRouter's structured reasoning is preserved in
+//! the thinking block's signature as a JSON array for replay.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -193,6 +194,7 @@ async fn run(
     // per call `index`.
     let mut text_index: Option<usize> = None;
     let mut thinking_index: Option<usize> = None;
+    let mut reasoning_details: Option<Vec<Value>> = None;
     // tool call stream index → (content index, partial JSON scratch).
     // BTreeMap (not HashMap) so the finalization pass below emits
     // `toolcall_end` events in a deterministic, stream order.
@@ -305,10 +307,31 @@ async fn run(
                 }
             }
 
-            // Clones disagree on the field name, take the first non empty one.
-            // The field name is stored as the thinking signature so replay can
-            // write the text back into the same vendor field.
-            let reasoning_field = ["reasoning_content", "reasoning", "reasoning_text"]
+            let details = if compat.thinking_format == ThinkingFormat::Openrouter {
+                delta.get("reasoning_details").and_then(Value::as_array)
+            } else {
+                None
+            };
+            let mut detail_text = String::new();
+            if let Some(details) = details {
+                let accumulated = reasoning_details.get_or_insert_with(Vec::new);
+                for detail in details {
+                    append_reasoning_detail(accumulated, detail);
+                    let field = match detail.get("type").and_then(Value::as_str) {
+                        Some("reasoning.text") => "text",
+                        Some("reasoning.summary") => "summary",
+                        _ => continue,
+                    };
+                    if let Some(text) = detail.get(field).and_then(Value::as_str) {
+                        detail_text.push_str(text);
+                    }
+                }
+            }
+
+            // Prefer structured reasoning over a duplicate plaintext delta.
+            // Signature-only and encrypted details still need a thinking block
+            // so their metadata survives persistence even without visible text.
+            let legacy_reasoning = ["reasoning_content", "reasoning", "reasoning_text"]
                 .iter()
                 .find_map(|field| {
                     delta
@@ -317,6 +340,11 @@ async fn run(
                         .filter(|v| !v.is_empty())
                         .map(|v| (*field, v))
                 });
+            let reasoning_field = if !detail_text.is_empty() {
+                Some(("reasoning", detail_text.as_str()))
+            } else {
+                legacy_reasoning.or_else(|| details.map(|_| ("reasoning", "")))
+            };
             if let Some((field, fragment)) = reasoning_field {
                 let index = match thinking_index {
                     Some(index) => index,
@@ -337,8 +365,13 @@ async fn run(
                     }
                 };
                 if let Some(AssistantContent::Thinking(block)) = output.content.get_mut(index) {
+                    // An earlier metadata-only delta may have created the block
+                    // before the actual legacy reasoning field was known.
+                    if block.thinking.is_empty() && !fragment.is_empty() {
+                        block.thinking_signature = Some(field.to_string());
+                    }
                     block.thinking.push_str(fragment);
-                    if !sink.thinking_delta(index, fragment.to_string()) {
+                    if !fragment.is_empty() && !sink.thinking_delta(index, fragment.to_string()) {
                         break 'outer;
                     }
                 }
@@ -424,10 +457,16 @@ async fn run(
         return Ok(());
     }
     if let Some(index) = thinking_index
-        && let Some(AssistantContent::Thinking(block)) = output.content.get(index)
-        && !sink.thinking_end(index, block.thinking.clone())
+        && let Some(AssistantContent::Thinking(block)) = output.content.get_mut(index)
     {
-        return Ok(());
+        if let Some(details) = reasoning_details
+            && (!details.is_empty() || block.thinking.is_empty())
+        {
+            block.thinking_signature = Some(Value::Array(details).to_string());
+        }
+        if !sink.thinking_end(index, block.thinking.clone()) {
+            return Ok(());
+        }
     }
     for (content_index, partial_json) in tool_calls.values() {
         if let Some(AssistantContent::ToolCall(tc)) = output.content.get_mut(*content_index) {
@@ -446,6 +485,68 @@ async fn run(
 
     finish_output(output, sink);
     Ok(())
+}
+
+/// Reassemble OpenRouter's consecutive text/summary fragments while retaining
+/// opaque metadata. A signature closes a text block; encrypted details are
+/// separate blobs even when the provider reuses an index across blocks.
+fn append_reasoning_detail(details: &mut Vec<Value>, delta: &Value) {
+    let Some(fields) = delta.as_object() else {
+        return;
+    };
+    let text_field = match delta.get("type").and_then(Value::as_str) {
+        Some("reasoning.text") => Some("text"),
+        Some("reasoning.summary") => Some("summary"),
+        _ => None,
+    };
+    let previous = details.last_mut().filter(|previous| {
+        previous.get("type") == delta.get("type")
+            && (text_field != Some("text")
+                || previous
+                    .get("signature")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty))
+            && ["id", "index", "format"].iter().all(|key| {
+                match (previous.get(*key), delta.get(*key)) {
+                    (Some(left), Some(right)) if !left.is_null() && !right.is_null() => {
+                        left == right
+                    }
+                    _ => true,
+                }
+            })
+    });
+    if let Some(previous) = previous
+        && let Some(text_field) = text_field
+    {
+        for (key, value) in fields {
+            if key == text_field {
+                if let Some(fragment) = value.as_str() {
+                    match previous.get_mut(key) {
+                        Some(Value::String(text)) => text.push_str(fragment),
+                        _ => previous[key] = value.clone(),
+                    }
+                }
+            } else if !value.is_null() || previous.get(key).is_none() {
+                previous[key] = value.clone();
+            }
+        }
+    } else {
+        details.push(delta.clone());
+    }
+}
+
+/// OpenRouter details occupy the existing opaque signature slot, so saved
+/// conversations retain them without changing the shared message schema.
+fn replay_reasoning_details(thinking: &[&ThinkingContent]) -> Option<Vec<Value>> {
+    let mut details: Option<Vec<Value>> = None;
+    for block in thinking {
+        if let Some(signature) = &block.thinking_signature
+            && let Ok(mut blocks) = serde_json::from_str::<Vec<Value>>(signature)
+        {
+            details.get_or_insert_with(Vec::new).append(&mut blocks);
+        }
+    }
+    details
 }
 
 fn parse_usage(usage: &Value, model: &Model, output: &mut AssistantMessage) {
@@ -693,7 +794,7 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                     .content
                     .iter()
                     .filter_map(|block| match block {
-                        AssistantContent::Thinking(t) if !t.thinking.trim().is_empty() => Some(t),
+                        AssistantContent::Thinking(t) => Some(t),
                         _ => None,
                     })
                     .collect();
@@ -704,25 +805,40 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                     }
                 } else if compat.requires_thinking_as_text {
                     // No tags around it because tags teach the model to mimic them.
-                    let mut combined: Vec<String> =
-                        thinking.iter().map(|t| t.thinking.clone()).collect();
+                    let mut combined: Vec<String> = thinking
+                        .iter()
+                        .filter(|t| !t.thinking.trim().is_empty())
+                        .map(|t| t.thinking.clone())
+                        .collect();
                     if !text.is_empty() {
                         combined.push(text.clone());
                     }
-                    message["content"] = json!(combined.join("\n\n"));
+                    if !combined.is_empty() {
+                        message["content"] = json!(combined.join("\n\n"));
+                    }
                 } else {
                     if !text.is_empty() {
                         message["content"] = json!(text);
                     }
-                    // The signature is the vendor field name the reasoning
-                    // came from (see the streaming side), write it back there.
-                    if let Some(field) = thinking
-                        .first()
-                        .and_then(|t| t.thinking_signature.as_deref())
-                        .filter(|s| !s.is_empty())
+                    if compat.thinking_format == ThinkingFormat::Openrouter
+                        && let Some(details) = replay_reasoning_details(&thinking)
                     {
-                        let joined: Vec<&str> =
-                            thinking.iter().map(|t| t.thinking.as_str()).collect();
+                        message["reasoning_details"] = Value::Array(details);
+                    } else if let Some(field) = thinking
+                        .iter()
+                        .find(|t| !t.thinking.trim().is_empty())
+                        .and_then(|t| t.thinking_signature.as_deref())
+                        .filter(|field| {
+                            matches!(*field, "reasoning" | "reasoning_content" | "reasoning_text")
+                        })
+                    {
+                        // Legacy completions store a vendor field name instead
+                        // of structured details. Only known names belong on wire.
+                        let joined: Vec<&str> = thinking
+                            .iter()
+                            .filter(|t| !t.thinking.trim().is_empty())
+                            .map(|t| t.thinking.as_str())
+                            .collect();
                         message[field] = json!(joined.join("\n"));
                     }
                 }
@@ -746,9 +862,12 @@ fn convert_messages(model: &Model, context: &Context, compat: &CompletionsCompat
                     message["tool_calls"] = Value::Array(tool_calls);
                 }
 
-                // "Either content or tool_calls" means fully empty messages (e.g.
-                // from aborted turns) get skipped.
-                if message.get("content").is_none() && message.get("tool_calls").is_none() {
+                // Opaque reasoning can be the entire response. Retain it even
+                // when there is no visible text or tool call to replay.
+                if message.get("content").is_none()
+                    && message.get("tool_calls").is_none()
+                    && message.get("reasoning_details").is_none()
+                {
                     i += 1;
                     continue;
                 }
@@ -1011,21 +1130,29 @@ mod tests {
     }
 
     async fn stream_chunks(
+        mut chunks: Vec<Value>,
+    ) -> core::result::Result<AssistantMessage, crate::error::MessageStreamError> {
+        chunks.insert(
+            0,
+            json!({"choices": [{"delta": {"content": "partial output"}}]}),
+        );
+        stream_chunks_for_model(chunks, model_with_compat(None)).await
+    }
+
+    async fn stream_chunks_for_model(
         chunks: Vec<Value>,
+        mut model: Model,
     ) -> core::result::Result<AssistantMessage, crate::error::MessageStreamError> {
         use core::fmt::Write as _;
         use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let tail = chunks.iter().fold(String::new(), |mut tail, chunk| {
-            writeln!(tail, "data: {chunk}\n").unwrap();
-            tail
+        let mut body = chunks.iter().fold(String::new(), |mut body, chunk| {
+            writeln!(body, "data: {chunk}\n").unwrap();
+            body
         });
-        let body = format!(
-            "data: {}\n\n{tail}data: [DONE]\n\n",
-            json!({"choices": [{"delta": {"content": "partial output"}}]})
-        );
+        body.push_str("data: [DONE]\n\n");
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
             let (reader, mut writer) = socket.into_split();
@@ -1053,7 +1180,7 @@ mod tests {
             );
             writer.write_all(response.as_bytes()).await.unwrap();
         });
-        let mut model = model_with_compat(Some(json!({"requiresApiKey": false})));
+        model.compat.get_or_insert_with(|| json!({}))["requiresApiKey"] = json!(false);
         model.base_url = format!("http://{address}/v1");
         let options = StreamOptions {
             timeout_ms: Some(5_000),
@@ -1184,6 +1311,273 @@ mod tests {
             output.content,
             vec![AssistantContent::Text(TextContent::plain("partial output"))]
         );
+    }
+
+    fn openrouter_fable_model() -> Model {
+        crate::catalog::builtin_models()
+            .into_iter()
+            .find(|model| model.id == "anthropic/claude-fable-5.2")
+            .expect("OpenRouter Fable 5.2 row")
+    }
+
+    #[tokio::test]
+    async fn openrouter_signed_reasoning_survives_tool_replay_and_session_serialization() {
+        let model = openrouter_fable_model();
+        let output = stream_chunks_for_model(
+            vec![
+                json!({"choices": [{"delta": {
+                    "reasoning": "Inspect ",
+                    "reasoning_details": [{
+                        "type": "reasoning.text", "text": "Inspect ",
+                        "id": "thinking-1", "index": 0, "format": "anthropic-claude-v1",
+                        "signature": null,
+                    }],
+                }}]}),
+                json!({"choices": [{"delta": {
+                    "reasoning": "the tool.",
+                    "reasoning_details": [{"type": "reasoning.text", "text": "the tool.", "index": 0}],
+                }}]}),
+                json!({"choices": [{"delta": {"content": "Calling the tool."}}]}),
+                // The signature can arrive after visible answer text.
+                json!({"choices": [{"delta": {"reasoning_details": [{
+                    "type": "reasoning.text", "signature": "opaque-signature", "index": 0,
+                }]}}]}),
+                json!({"choices": [{"delta": {"tool_calls": [{
+                    "index": 0, "id": "call_read", "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }]}, "finish_reason": "tool_calls"}]}),
+            ],
+            model.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.stop_reason, StopReason::ToolUse);
+        let thinking: Vec<_> = output
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                AssistantContent::Thinking(thinking) => Some(thinking),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(thinking.len(), 1);
+        assert_eq!(thinking[0].thinking, "Inspect the tool.");
+
+        let saved = serde_json::to_string(&Message::Assistant(output)).unwrap();
+        let restored: Message = serde_json::from_str(&saved).unwrap();
+        let mut context = empty_context();
+        context.messages = vec![
+            restored,
+            Message::ToolResult(ToolResultMessage {
+                tool_call_id: "call_read".into(),
+                tool_name: "read".into(),
+                content: vec![ToolResultContent::Text(TextContent::plain("file contents"))],
+                details: None,
+                is_error: false,
+                timestamp: 0,
+            }),
+        ];
+        let body = build_request_body(
+            &model,
+            &context,
+            &StreamOptions::default(),
+            &completions_compat(&model),
+        );
+        assert_eq!(
+            body["messages"][0]["reasoning_details"],
+            json!([{
+                "type": "reasoning.text", "text": "Inspect the tool.",
+                "id": "thinking-1", "index": 0, "format": "anthropic-claude-v1",
+                "signature": "opaque-signature",
+            }])
+        );
+        assert!(body["messages"][0].get("reasoning").is_none());
+        assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "call_read");
+        assert_eq!(body["messages"][1]["tool_call_id"], "call_read");
+        assert_eq!(body["messages"][1]["content"], "file contents");
+
+        for (boundary, other) in [
+            (
+                "model",
+                Model {
+                    id: "different-model".into(),
+                    ..model.clone()
+                },
+            ),
+            (
+                "provider",
+                Model {
+                    provider: ProviderName::from("different-provider"),
+                    ..model.clone()
+                },
+            ),
+            (
+                "api",
+                Model {
+                    api: Api::from(Api::ANTHROPIC_MESSAGES),
+                    ..model.clone()
+                },
+            ),
+        ] {
+            let body = build_request_body(
+                &other,
+                &context,
+                &StreamOptions::default(),
+                &completions_compat(&other),
+            );
+            let serialized = body.to_string();
+            assert!(
+                !serialized.contains("opaque-signature"),
+                "{boundary}: {body}"
+            );
+            assert!(
+                !serialized.contains("reasoning_details"),
+                "{boundary}: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn openrouter_reasoning_keeps_signed_blocks_and_encrypted_details_separate() {
+        let model = openrouter_fable_model();
+        let deltas = [
+            json!({"type": "reasoning.text", "text": "First ", "index": 0}),
+            json!({"type": "reasoning.text", "text": "block", "signature": "first-signature", "index": 0}),
+            json!({"type": "reasoning.text", "text": "Second block", "signature": "second-signature", "index": 0}),
+            json!({"type": "reasoning.summary", "summary": "Summary ", "index": 0}),
+            json!({"type": "reasoning.summary", "summary": "done", "index": 0}),
+            json!({"type": "reasoning.encrypted", "data": "opaque-one", "id": "encrypted-1", "index": 0}),
+            json!({"type": "reasoning.encrypted", "data": "opaque-two", "id": "encrypted-2", "index": 0}),
+        ];
+        let mut chunks: Vec<_> = deltas
+            .into_iter()
+            .map(|detail| json!({"choices": [{"delta": {"reasoning_details": [detail]}}]}))
+            .collect();
+        chunks.push(json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}));
+        let output = stream_chunks_for_model(chunks, model.clone())
+            .await
+            .unwrap();
+        let thinking: Vec<_> = output
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                AssistantContent::Thinking(thinking) => Some(thinking.thinking.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(thinking, vec!["First blockSecond blockSummary done"]);
+        let saved = serde_json::to_string(&Message::Assistant(output)).unwrap();
+        let mut context = empty_context();
+        context.messages.push(serde_json::from_str(&saved).unwrap());
+        let messages = convert_messages(&model, &context, &completions_compat(&model));
+        assert_eq!(
+            messages[0]["reasoning_details"],
+            json!([
+                {"type": "reasoning.text", "text": "First block", "signature": "first-signature", "index": 0},
+                {"type": "reasoning.text", "text": "Second block", "signature": "second-signature", "index": 0},
+                {"type": "reasoning.summary", "summary": "Summary done", "index": 0},
+                {"type": "reasoning.encrypted", "data": "opaque-one", "id": "encrypted-1", "index": 0},
+                {"type": "reasoning.encrypted", "data": "opaque-two", "id": "encrypted-2", "index": 0},
+            ])
+        );
+        assert!(messages[0].get("reasoning").is_none());
+    }
+
+    #[tokio::test]
+    async fn openrouter_reasoning_metadata_without_visible_text_survives_replay() {
+        let model = openrouter_fable_model();
+        for details in [
+            json!([]),
+            json!([{"type": "reasoning.text", "text": "", "signature": "opaque-signature", "index": 0}]),
+            json!([{"type": "reasoning.text", "signature": "opaque-signature", "index": 0}]),
+            json!([{"type": "reasoning.encrypted", "data": "opaque-data", "index": 0}]),
+        ] {
+            let output = stream_chunks_for_model(
+                vec![json!({"choices": [{
+                    "delta": {"reasoning_details": details},
+                    "finish_reason": "stop",
+                }]})],
+                model.clone(),
+            )
+            .await
+            .unwrap();
+            for content in &output.content {
+                match content {
+                    AssistantContent::Thinking(thinking) => assert!(thinking.thinking.is_empty()),
+                    AssistantContent::Text(_) | AssistantContent::ToolCall(_) => {
+                        panic!("unexpected visible output")
+                    }
+                }
+            }
+            let saved = serde_json::to_string(&Message::Assistant(output)).unwrap();
+            let mut context = empty_context();
+            context.messages.push(serde_json::from_str(&saved).unwrap());
+            let messages = convert_messages(&model, &context, &completions_compat(&model));
+            assert_eq!(messages[0]["reasoning_details"], details);
+            assert!(messages[0].get("reasoning").is_none());
+
+            let mut other = model.clone();
+            other.id = "different-model".into();
+            assert_eq!(
+                convert_messages(&other, &context, &completions_compat(&other)),
+                json!([]),
+                "opaque-only reasoning must not cross models"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn plaintext_reasoning_fields_still_replay_after_streaming() {
+        for (model, empty_details) in [
+            (model_with_compat(None), false),
+            (openrouter_fable_model(), true),
+        ] {
+            for field in ["reasoning_content", "reasoning", "reasoning_text"] {
+                let mut delta = json!({"content": "Answer"});
+                delta[field] = json!("Visible reasoning");
+                if empty_details {
+                    delta["reasoning_details"] = json!([]);
+                }
+                let mut chunks = Vec::new();
+                if empty_details {
+                    chunks.push(json!({"choices": [{"delta": {"reasoning_details": []}}]}));
+                }
+                chunks.push(json!({"choices": [{"delta": delta, "finish_reason": "stop"}]}));
+                let output = stream_chunks_for_model(chunks, model.clone())
+                    .await
+                    .unwrap();
+                let saved = serde_json::to_string(&Message::Assistant(output)).unwrap();
+                let mut context = empty_context();
+                context.messages.push(serde_json::from_str(&saved).unwrap());
+                let messages = convert_messages(&model, &context, &completions_compat(&model));
+                assert_eq!(messages[0][field], "Visible reasoning", "{field}");
+                assert!(messages[0].get("reasoning_details").is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn openrouter_opaque_details_keep_plaintext_for_display_only() {
+        let model = openrouter_fable_model();
+        let details = json!([{"type": "reasoning.encrypted", "data": "opaque-data", "index": 0}]);
+        let output = stream_chunks_for_model(
+            vec![json!({"choices": [{
+                "delta": {"reasoning": "Visible reasoning", "reasoning_details": details},
+                "finish_reason": "stop",
+            }]})],
+            model.clone(),
+        )
+        .await
+        .unwrap();
+        let [AssistantContent::Thinking(thinking)] = output.content.as_slice() else {
+            panic!("expected one thinking block");
+        };
+        assert_eq!(thinking.thinking, "Visible reasoning");
+        let mut context = empty_context();
+        context.messages.push(Message::Assistant(output));
+        let messages = convert_messages(&model, &context, &completions_compat(&model));
+        assert_eq!(messages[0]["reasoning_details"], details);
+        assert!(messages[0].get("reasoning").is_none());
     }
 
     #[test]
