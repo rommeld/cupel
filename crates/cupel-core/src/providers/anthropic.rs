@@ -1485,8 +1485,8 @@ mod tests {
     }
 
     #[test]
-    fn fable5_and_51_use_adaptive_thinking_without_temperature() {
-        for id in ["claude-fable-5", "claude-fable-5-1"] {
+    fn fable_models_use_adaptive_thinking_without_temperature() {
+        for id in ["claude-fable-5", "claude-fable-5-1", "claude-fable-5-2"] {
             let model = catalog_model(id);
             let off = body_for(
                 &model,
@@ -1496,10 +1496,19 @@ mod tests {
                 },
             );
             assert!(off.get("thinking").is_none(), "{id}: {off}");
+            assert!(off.get("output_config").is_none(), "{id}: {off}");
             assert!(off.get("temperature").is_none(), "{id}: {off}");
 
+            let mut expected_thinking = json!({"type": "adaptive", "display": "summarized"});
+            if id == "claude-fable-5-2" {
+                expected_thinking["block_binding"] =
+                    json!({"prefix_mismatch_behavior": "drop_block"});
+            }
             for (level, effort) in [
                 (ThinkingLevel::Minimal, "low"),
+                (ThinkingLevel::Low, "low"),
+                (ThinkingLevel::Medium, "medium"),
+                (ThinkingLevel::High, "high"),
                 (ThinkingLevel::XHigh, "xhigh"),
                 (ThinkingLevel::Max, "max"),
             ] {
@@ -1507,19 +1516,17 @@ mod tests {
                     &model,
                     &StreamOptions {
                         reasoning: Some(level),
+                        temperature: Some(0.2),
                         ..StreamOptions::default()
                     },
                 );
-                assert_eq!(
-                    body["thinking"],
-                    json!({"type": "adaptive", "display": "summarized"}),
-                    "{id}: {level:?}"
-                );
+                assert_eq!(body["thinking"], expected_thinking, "{id}: {level:?}");
                 assert_eq!(
                     body["output_config"],
                     json!({"effort": effort}),
                     "{id}: {level:?}"
                 );
+                assert!(body.get("temperature").is_none(), "{id}: {body}");
             }
         }
     }
@@ -1604,15 +1611,19 @@ mod tests {
 
     #[test]
     fn preserved_thinking_binds_adaptive_requests_only() {
-        // Opus 5.5, Sonnet 5.5 and Haiku 5.5 run the preserved thinking check.
-        // Their adaptive requests ask the API to drop blocks that a history
+        // Models with preserved thinking ask the API to drop blocks that a history
         // edit invalidated, plus the beta header that field needs (the field
         // without the header is a 400 of its own).
         let medium = StreamOptions {
             reasoning: Some(ThinkingLevel::Medium),
             ..StreamOptions::default()
         };
-        for id in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] {
+        for id in [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-fable-5-2",
+        ] {
             let model = catalog_model(id);
             let body = body_for(&model, &medium);
             assert_eq!(
@@ -1628,7 +1639,12 @@ mod tests {
         // Off never carries it, `between_tools` and `disabled` reject the
         // field, and omitted `thinking` has no object to put it in. No
         // field, no header, the agent loop covers these requests.
-        for id in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"] {
+        for id in [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-fable-5-2",
+        ] {
             let model = catalog_model(id);
             let body = body_for(&model, &StreamOptions::default());
             assert!(body.pointer("/thinking/block_binding").is_none(), "{id}");

@@ -118,7 +118,7 @@ const SONNET55_THINKING: &[(&str, Option<&str>)] =
 // old catalog.rs used (fireworks_anthropic / fireworks_glm52 helpers).
 
 /// Claude models that answer `budget_tokens` with a 400 (Sonnet 5,
-/// Opus 5, Opus 5.5, Fable 5/5.1), effort levels replace token budgets, and
+/// Opus 5, Opus 5.5, Fable 5/5.1/5.2), effort levels replace token budgets, and
 /// `temperature` is rejected too. The level map comes from models.dev's
 /// effort list, a model listed with a toggle keeps "off" (the provider
 /// sends `thinking` with `type` set to `disabled`), one without a toggle gets
@@ -136,9 +136,10 @@ const fn anthropic_adaptive(id: &'static str) -> Curated {
 }
 
 /// Adaptive Claude models that run the preserved thinking check (Opus 5.5,
-/// Sonnet 5.5, Haiku 5.5), a thinking block is only valid in the unchanged
-/// conversation that produced it. Accounts created on or after 2026 08 31
-/// get a 400 for a replayed block after an edit, and cupel edits history
+/// Sonnet 5.5, Haiku 5.5, Fable 5.2), a thinking block is only valid in the
+/// unchanged conversation that produced it. Fable 5.2 enforces this for all
+/// accounts; the other models enforce it for accounts created on or after
+/// 2026 08 31. Replayed blocks after an edit get a 400, and cupel edits history
 /// (compaction, the date line of a resumed session). "drop_block" makes
 /// the API drop such blocks instead, see the anthropic provider.
 const fn anthropic_preserved(id: &'static str) -> Curated {
@@ -253,6 +254,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             anthropic_adaptive("claude-opus-5"),
             anthropic_adaptive("claude-fable-5"),
             anthropic_adaptive("claude-fable-5-1"),
+            anthropic_preserved("claude-fable-5-2"),
             // Haiku accepts `disabled` (unlike Sonnet 5.5), so derive its
             // map from the toggle/effort list. Plan below the 100k price
             // boundary, the full 1M window remains an explicit opt in.

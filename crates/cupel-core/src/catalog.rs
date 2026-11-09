@@ -193,6 +193,49 @@ mod tests {
     }
 
     #[test]
+    fn fable_52_catalog_row_keeps_verified_metadata() {
+        use crate::types::{InputModality, ModelCost};
+
+        let model = builtin_models()
+            .into_iter()
+            .find(|model| model.id == "claude-fable-5-2")
+            .expect("Fable 5.2 row");
+        assert_eq!(model.name, "Claude Fable 5.2");
+        assert_eq!(model.provider.as_str(), Provider::ANTHROPIC);
+        assert_eq!(model.api.as_str(), Api::ANTHROPIC_MESSAGES);
+        assert_eq!(model.base_url, "https://api.anthropic.com");
+        assert!(model.reasoning);
+        assert_eq!(model.input, vec![InputModality::Text, InputModality::Image]);
+        assert_eq!(
+            (model.context_window, model.max_tokens),
+            (1_000_000, 128_000)
+        );
+        assert_eq!(model.max_context_window, None);
+        assert_eq!(
+            model.cost,
+            ModelCost {
+                input: 8.0,
+                output: 40.0,
+                cached_read: 0.2,
+                cached_write: 10.0,
+                tiers: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+            serde_json::json!({"minimal": null, "off": null})
+        );
+        assert_eq!(
+            model.compat,
+            Some(serde_json::json!({
+                "forceAdaptiveThinking": true,
+                "prefixMismatchBehavior": "drop_block",
+                "supportsTemperature": false,
+            }))
+        );
+    }
+
+    #[test]
     fn every_catalog_model_has_a_registered_provider() {
         // A model whose `api` has no provider would fail at request time,
         // catch it at test time instead.
