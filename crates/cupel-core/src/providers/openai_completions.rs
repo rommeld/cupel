@@ -1201,6 +1201,44 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_fable_52_uses_native_effort_without_temperature() {
+        let model = crate::catalog::builtin_models()
+            .into_iter()
+            .find(|model| model.id == "anthropic/claude-fable-5.2")
+            .expect("OpenRouter Fable 5.2 row");
+        let compat = completions_compat(&model);
+        for (level, effort) in [
+            (Some(ThinkingLevel::Minimal), Some("low")),
+            (Some(ThinkingLevel::Low), Some("low")),
+            (Some(ThinkingLevel::Medium), Some("medium")),
+            (Some(ThinkingLevel::High), Some("high")),
+            (Some(ThinkingLevel::XHigh), Some("xhigh")),
+            (Some(ThinkingLevel::Max), Some("max")),
+            (None, None),
+        ] {
+            let options = StreamOptions {
+                reasoning: level,
+                temperature: Some(0.2),
+                ..StreamOptions::default()
+            };
+            let body = build_request_body(&model, &empty_context(), &options, &compat);
+            assert_eq!(body["model"], "anthropic/claude-fable-5.2");
+            match effort {
+                Some(effort) => assert_eq!(body["reasoning"], json!({"effort": effort})),
+                None => assert!(body.get("reasoning").is_none(), "{body}"),
+            }
+            for field in [
+                "reasoning_effort",
+                "thinking",
+                "output_config",
+                "temperature",
+            ] {
+                assert!(body.get(field).is_none(), "{level:?}: {body}");
+            }
+        }
+    }
+
+    #[test]
     fn openrouter_off_sends_an_explicit_none() {
         // Without an `off → null` map entry, off is an explicit
         // {effort, "none"} so OpenRouter disables reasoning server side.

@@ -1611,6 +1611,42 @@
         ],
         "temperature": false
       },
+      "anthropic/claude-fable-5.2": {
+        "cost": {
+          "cache_read": 0.2,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "Claude Fable 5.2",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
       "anthropic/claude-haiku-5.5": {
         "cost": {
           "cache_read": 0.01,

@@ -448,6 +448,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("anthropic/claude-opus-5", Thinking::FromEffort),
             openrouter("anthropic/claude-fable-5", Thinking::FromEffort),
             openrouter("anthropic/claude-fable-5.1", Thinking::FromEffort),
+            openrouter("anthropic/claude-fable-5.2", Thinking::FromEffort),
             Curated {
                 window: Window::PriceTier,
                 ..openrouter("anthropic/claude-haiku-5.5", Thinking::FromEffort)
