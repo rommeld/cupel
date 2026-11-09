@@ -3,6 +3,20 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.36.0] - 2026-11-09
+
+- fix(tui): reconcile completed reasoning by content index
+- fix(tui): refine tool details and reasoning presentation
+- fix(openrouter): preserve structured reasoning across replay
+- feat(catalog): add Claude Fable 5.2 on OpenRouter
+- feat: add Claude Fable 5.2 to Anthropic catalog
+- fix(acp): migrate adapter to protocol SDK 5
+- chore(deps): bump agent-client-protocol from 3.6.0 to 5.0.0
+- feat(tui): show cumulative agent working time in footer
+- feat(tui): cycle tool output visibility while preserving diffs
+- feat(tui): add draggable prompt and usage scrollbars
+- fix(catalog): retire GPT-6 Sol from OpenAI and Codex
+
 ## [v0.35.2] - 2026-11-07
 
 - fix(tui): allow transcript drag selection alongside mouse-wheel scrolling, with Ctrl+O copying selected ranges without mode toggling
