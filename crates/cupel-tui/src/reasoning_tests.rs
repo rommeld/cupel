@@ -63,6 +63,154 @@ fn click_line(app: &mut App, line: usize) {
     }));
 }
 
+async fn message_update(app: &mut App, event: AssistantMessageEvent) {
+    app.on_agent_event(Some(AgentEvent::MessageUpdate { event }))
+        .await;
+}
+
+#[tokio::test]
+async fn reasoning_end_replaces_partial_text_without_changing_visibility() {
+    let heading = "**Formatting cupel-tui package**";
+    let full = format!("{heading}\n\nCheck formatting and preserve the reasoning details.");
+    for collapsed in [false, true] {
+        let mut app = test_app();
+        let index = app.transcript.cells.len();
+        message_update(
+            &mut app,
+            AssistantMessageEvent::ThinkingStart { content_index: 0 },
+        )
+        .await;
+        message_update(
+            &mut app,
+            AssistantMessageEvent::ThinkingDelta {
+                content_index: 0,
+                delta: heading.into(),
+            },
+        )
+        .await;
+        if collapsed {
+            app.transcript.toggle_reasoning(index);
+        }
+        message_update(
+            &mut app,
+            AssistantMessageEvent::ThinkingEnd {
+                content_index: 0,
+                content: full.clone(),
+            },
+        )
+        .await;
+        assert_eq!(app.transcript.copy_text(index), Some(full.as_str()));
+        assert_eq!(app.transcript.cells.len(), index + 1);
+        assert!(
+            matches!(&app.transcript.cells[index], Cell::Thinking { collapsed: actual, .. } if *actual == collapsed)
+        );
+        let screen = draw(&mut app, 120, 25);
+        assert_eq!(
+            screen.contains("preserve the reasoning details"),
+            !collapsed,
+            "{screen}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn reasoning_end_without_deltas_keeps_the_started_blocks_position() {
+    let mut app = test_app();
+    let index = app.transcript.cells.len();
+    for event in [
+        AssistantMessageEvent::ThinkingStart { content_index: 0 },
+        AssistantMessageEvent::TextDelta {
+            content_index: 1,
+            delta: "visible commentary".into(),
+        },
+        AssistantMessageEvent::ThinkingEnd {
+            content_index: 0,
+            content: "reasoning supplied only at completion".into(),
+        },
+    ] {
+        message_update(&mut app, event).await;
+    }
+    assert!(
+        matches!(&app.transcript.cells[index], Cell::Thinking { text, .. } if text == "reasoning supplied only at completion")
+    );
+    assert!(
+        matches!(&app.transcript.cells[index + 1], Cell::Assistant { text } if text == "visible commentary")
+    );
+    assert_eq!(app.transcript.cells.len(), index + 2);
+}
+
+#[tokio::test]
+async fn reasoning_ends_update_their_own_interleaved_content_blocks() {
+    let mut app = test_app();
+    let index = app.transcript.cells.len();
+    for event in [
+        AssistantMessageEvent::ThinkingStart { content_index: 0 },
+        AssistantMessageEvent::ThinkingDelta {
+            content_index: 0,
+            delta: "first partial".into(),
+        },
+        AssistantMessageEvent::TextDelta {
+            content_index: 1,
+            delta: "visible commentary".into(),
+        },
+        AssistantMessageEvent::ThinkingStart { content_index: 2 },
+        AssistantMessageEvent::ThinkingDelta {
+            content_index: 2,
+            delta: "second partial".into(),
+        },
+        AssistantMessageEvent::ThinkingEnd {
+            content_index: 0,
+            content: "first complete".into(),
+        },
+        AssistantMessageEvent::ThinkingEnd {
+            content_index: 2,
+            content: "second complete".into(),
+        },
+    ] {
+        message_update(&mut app, event).await;
+    }
+    assert_eq!(app.transcript.copy_text(index), Some("first complete"));
+    assert_eq!(
+        app.transcript.copy_text(index + 1),
+        Some("visible commentary")
+    );
+    assert_eq!(app.transcript.copy_text(index + 2), Some("second complete"));
+    assert_eq!(app.transcript.cells.len(), index + 3);
+}
+
+#[tokio::test]
+async fn reasoning_content_indices_are_scoped_to_each_turn() {
+    let mut app = test_app();
+    let index = app.transcript.cells.len();
+    for text in ["first turn", "second turn"] {
+        app.on_agent_event(Some(AgentEvent::TurnStart)).await;
+        message_update(
+            &mut app,
+            AssistantMessageEvent::ThinkingStart { content_index: 0 },
+        )
+        .await;
+        message_update(
+            &mut app,
+            AssistantMessageEvent::ThinkingDelta {
+                content_index: 0,
+                delta: text.into(),
+            },
+        )
+        .await;
+        message_update(
+            &mut app,
+            AssistantMessageEvent::ThinkingEnd {
+                content_index: 0,
+                content: text.into(),
+            },
+        )
+        .await;
+    }
+    assert_eq!(app.transcript.copy_text(index), Some("first turn"));
+    assert_eq!(app.transcript.copy_text(index + 1), Some("second turn"));
+    assert_eq!(app.transcript.cells.len(), index + 2);
+}
+
 #[test]
 fn disclosure_defaults_to_expanded_and_preserves_markdown_and_source() {
     let source = "**Reading the parser**\n\n- Check `parse`\n- Keep *emphasis*\n\n**Next section**\n\n```rust\nfn parse() {}\n```";
