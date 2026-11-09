@@ -14,7 +14,7 @@
 //! and the prose that follows. `to_lines` flattens the cells
 //! into styled lines plus a line→cell map for mouse hit testing.
 
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
@@ -366,10 +366,15 @@ fn reasoning_lines(text: &str, collapsed: bool, width: usize, theme: &Theme) -> 
         |title| format!("{marker} Reasoning · {title}"),
     );
     // Keep the disclosure row a single physical line, even for long headings.
-    let header = crate::markdown::render(&label, width, theme.reasoning, theme)
-        .into_iter()
-        .next()
-        .unwrap_or_default();
+    let header = crate::markdown::render(
+        &label,
+        width,
+        theme.reasoning.add_modifier(Modifier::BOLD),
+        theme,
+    )
+    .into_iter()
+    .next()
+    .unwrap_or_default();
     let mut lines = vec![header];
     if !collapsed {
         let body = if title.is_some() {
@@ -381,6 +386,11 @@ fn reasoning_lines(text: &str, collapsed: bool, width: usize, theme: &Theme) -> 
             for mut line in
                 crate::markdown::render(body, width.saturating_sub(2), theme.reasoning, theme)
             {
+                // Reserve bold for the disclosure header, not provider Markdown.
+                line.style = line.style.remove_modifier(Modifier::BOLD);
+                for span in &mut line.spans {
+                    span.style = span.style.remove_modifier(Modifier::BOLD);
+                }
                 line.spans.insert(0, Span::raw("  "));
                 lines.push(line);
             }
@@ -476,14 +486,14 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
                     lines.len().saturating_sub(TOOL_PREVIEW_LINES)
                 };
                 for line in &lines[hidden..] {
-                    push_wrapped(&mut out, &format!("  {line}"), width, theme.detail);
+                    push_tool_detail(&mut out, line, width, theme.detail);
                 }
             }
             let waiting = match started_at {
-                Some(started) => format!("  ... running {}", format_seconds(started.elapsed())),
-                None => "  ...".to_string(),
+                Some(started) => format!("... running {}", format_seconds(started.elapsed())),
+                None => "...".to_string(),
             };
-            push_wrapped(&mut out, &waiting, width, theme.detail);
+            push_tool_detail(&mut out, &waiting, width, theme.detail);
         }
         Some(ToolOutcome {
             diff: Some(diff), ..
@@ -501,25 +511,25 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             let hidden = lines.len().saturating_sub(TOOL_PREVIEW_LINES);
             if *display == ToolDisplay::Full || hidden == 0 {
                 for line in &lines {
-                    push_wrapped(&mut out, &format!(" {line} "), width, style);
+                    push_tool_detail(&mut out, line, width, style);
                 }
             } else if previews_the_tail(name) {
-                push_wrapped(
+                push_tool_detail(
                     &mut out,
-                    &format!("  ... ({hidden} earlier lines, click to expand)"),
+                    &format!("... ({hidden} earlier lines, click to expand)"),
                     width,
                     theme.detail,
                 );
                 for line in &lines[hidden..] {
-                    push_wrapped(&mut out, &format!("  {line}"), width, style);
+                    push_tool_detail(&mut out, line, width, style);
                 }
             } else {
                 for line in &lines[..TOOL_PREVIEW_LINES] {
-                    push_wrapped(&mut out, &format!("  {line}"), width, style);
+                    push_tool_detail(&mut out, line, width, style);
                 }
-                push_wrapped(
+                push_tool_detail(
                     &mut out,
-                    &format!("  ... ({hidden} more lines, click to expand)"),
+                    &format!("... ({hidden} more lines, click to expand)"),
                     width,
                     theme.detail,
                 );
@@ -527,9 +537,9 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
             if let Some(took) = outcome.took
                 && previews_the_tail(name)
             {
-                push_wrapped(
+                push_tool_detail(
                     &mut out,
-                    &format!("  took {}", format_seconds(took)),
+                    &format!("took {}", format_seconds(took)),
                     width,
                     theme.detail,
                 );
@@ -560,7 +570,17 @@ fn push_diff(out: &mut Vec<Line<'static>>, diff: &str, width: usize, theme: &The
             Some(b'-') => theme.diff_del,
             _ => theme.diff_ctx,
         };
-        push_wrapped(out, &format!("  {line}"), width, style);
+        push_tool_detail(out, line, width, style);
+    }
+}
+
+/// Wrap tool details before adding a two-space indent to every physical row.
+fn push_tool_detail(out: &mut Vec<Line<'static>>, text: &str, width: usize, style: Style) {
+    let text = sanitize(text);
+    for logical in text.split('\n') {
+        for chunk in wrap_line(logical, width.saturating_sub(2)) {
+            out.push(Line::from(Span::styled(format!("  {chunk}"), style)));
+        }
     }
 }
 
@@ -1088,6 +1108,64 @@ mod tests {
     }
 
     #[test]
+    fn tool_details_keep_two_space_indentation_on_every_wrapped_line() {
+        for display in [ToolDisplay::Preview, ToolDisplay::Full] {
+            for output in [
+                "ok",
+                "日本語abcdefghijklmnop\n\n    nested\none\ntwo\nthree\nfour\n日本語abcdefghijklmnop",
+            ] {
+                for (live, result) in [
+                    (
+                        None,
+                        Some(ToolOutcome {
+                            text: output.into(),
+                            is_error: false,
+                            diff: None,
+                            took: Some(Duration::from_secs(1)),
+                        }),
+                    ),
+                    (Some(output.into()), None),
+                    (
+                        None,
+                        Some(ToolOutcome {
+                            text: String::new(),
+                            is_error: false,
+                            diff: Some(format!("+1 {output}")),
+                            took: None,
+                        }),
+                    ),
+                ] {
+                    let cell = Cell::Tool {
+                        id: "1".into(),
+                        name: "bash".into(),
+                        call: "$ true".into(),
+                        display,
+                        started_at: Some(Instant::now()),
+                        live,
+                        result,
+                    };
+                    for width in [10, 60] {
+                        let lines = tool_lines(&cell, width, &CUPEL);
+                        let texts: Vec<String> = lines.iter().map(line_text).collect();
+                        assert_eq!(texts[0], "$ true");
+                        assert!(
+                            texts[1..].iter().all(|text| text.starts_with("  ")),
+                            "{display:?} at {width}: {texts:?}"
+                        );
+                        assert!(
+                            lines.iter().all(|line| line.width() <= width),
+                            "{display:?} at {width}: {texts:?}"
+                        );
+                        if output == "ok" {
+                            assert!(texts[1] == "  ok" || texts[1] == "  +1 ok", "{texts:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_running_tool_shows_its_latest_output_and_a_clock() {
         let mut t = Transcript::default();
         let mut cell = bash_cell(ToolDisplay::Preview);
@@ -1119,7 +1197,7 @@ mod tests {
             .iter()
             .map(line_text)
             .collect();
-        assert_eq!(texts, vec!["$ cargo test", " g ", "  took 0.0s"]);
+        assert_eq!(texts, vec!["$ cargo test", "  g", "  took 0.0s"]);
         assert!(matches!(&t.cells[0], Cell::Tool { live: None, .. }));
     }
 
@@ -1464,8 +1542,8 @@ mod tests {
                 assert_safe(&lines);
                 let texts: Vec<String> = lines.iter().map(line_text).collect();
                 assert_eq!(texts[0], "read    Makefile");
-                assert_eq!(texts[1], "     go build ./... ");
-                assert_eq!(texts[2], " red ");
+                assert_eq!(texts[1], "      go build ./...");
+                assert_eq!(texts[2], "  red");
                 assert!(
                     matches!(&cell, Cell::Tool { result: Some(outcome), .. } if outcome.text == raw)
                 );
@@ -1540,7 +1618,7 @@ mod tests {
         );
         let lines = tool_lines(&t.cells[0], 80, &CUPEL);
         assert_safe(&lines);
-        assert_eq!(line_text(&lines[1]), "     visible ");
+        assert_eq!(line_text(&lines[1]), "      visible");
 
         let mut lines = Vec::new();
         push_diff(

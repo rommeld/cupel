@@ -92,6 +92,33 @@ fn disclosure_defaults_to_expanded_and_preserves_markdown_and_source() {
 }
 
 #[test]
+fn reasoning_header_is_bold_but_details_are_not() {
+    let source = "**Formatting `cupel-tui` package**\n\n**Formatting cupel-tui package**\n\n# Detail heading\n\nPlain **bold** and *italic*.";
+    for theme in theme::example_themes() {
+        let mut transcript = Transcript::default();
+        transcript.append_thinking(source);
+        for collapsed in [false, true] {
+            let rendered = transcript.to_lines(80, None, &theme);
+            assert_eq!(rendered.lines.len() > 1, !collapsed);
+            for (index, line) in rendered.lines.iter().enumerate() {
+                for span in &line.spans {
+                    let style = line.style.patch(span.style);
+                    assert_eq!(
+                        style.add_modifier.contains(Modifier::BOLD),
+                        index == 0,
+                        "{} (collapsed={collapsed}) at line {index}: {:?}",
+                        theme.id,
+                        span.content
+                    );
+                }
+            }
+            assert_eq!(transcript.copy_text(0), Some(source));
+            transcript.toggle_reasoning(0);
+        }
+    }
+}
+
+#[test]
 fn reasoning_uses_only_a_complete_leading_provider_heading() {
     for (source, label, body) in [
         (
@@ -136,6 +163,18 @@ fn reasoning_is_readable_and_wraps_within_the_column_in_every_theme() {
                     .iter()
                     .all(|line| line.width() <= usize::from(width)),
                 "{} at {width}",
+                theme.id
+            );
+            let body_end = rendered
+                .cell_at
+                .iter()
+                .rposition(|cell| *cell == Some(0))
+                .unwrap();
+            assert!(
+                rendered.lines[1..=body_end]
+                    .iter()
+                    .all(|line| line.spans.first().is_some_and(|span| span.content == "  ")),
+                "reasoning body must keep its two-space indent: {} at {width}",
                 theme.id
             );
             assert!(
