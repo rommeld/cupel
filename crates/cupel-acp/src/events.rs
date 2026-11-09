@@ -1,6 +1,7 @@
 //! Translate visible Cupel events without exposing provider private reasoning.
 
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::Result;
+use agent_client_protocol::v1::schema as acp;
 use cupel_agent::{AgentEvent, AgentMessage};
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
@@ -12,7 +13,7 @@ use crate::session::failure;
 #[derive(Default)]
 pub struct Mapper {
     streamed_text: bool,
-    result: Option<acp::Result<acp::StopReason>>,
+    result: Option<Result<acp::StopReason>>,
 }
 
 fn text_chunk(text: &str) -> acp::ContentChunk {
@@ -145,7 +146,7 @@ impl Mapper {
         }
     }
 
-    pub fn finish(self, cancelled: bool) -> acp::Result<acp::PromptResponse> {
+    pub fn finish(self, cancelled: bool) -> Result<acp::PromptResponse> {
         let reason = if cancelled {
             acp::StopReason::Cancelled
         } else {

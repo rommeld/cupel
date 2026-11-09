@@ -6,7 +6,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::Result;
+use agent_client_protocol::v1::schema as acp;
 use cupel_core::provider::Registry;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -65,7 +66,7 @@ impl Server {
         })
     }
 
-    pub fn initialized(&self) -> acp::Result<acp::InitializeResponse> {
+    pub fn initialized(&self) -> Result<acp::InitializeResponse> {
         let mut state = self.state.lock().expect("server state lock poisoned");
         if state.initialized {
             return Err(invalid("connection already initialized"));
@@ -83,7 +84,7 @@ impl Server {
         )
     }
 
-    pub fn spawn(&self, work: impl Future<Output = acp::Result<()>> + Send + 'static) {
+    pub fn spawn(&self, work: impl Future<Output = Result<()>> + Send + 'static) {
         let mut tasks = self.tasks.lock().expect("task lock poisoned");
         while let Some(result) = tasks.try_join_next() {
             if let Err(error) = result {
@@ -97,7 +98,7 @@ impl Server {
         });
     }
 
-    pub fn fresh_id() -> acp::Result<String> {
+    pub fn fresh_id() -> Result<String> {
         let mut bytes = [0_u8; 16];
         getrandom::fill(&mut bytes)
             .map_err(|error| failure(format!("session id randomness failed: {error}")))?;
@@ -114,7 +115,7 @@ impl Server {
         mcp_server: &[acp::McpServer],
         load: bool,
         notify: Notify,
-    ) -> acp::Result<()> {
+    ) -> Result<()> {
         if !mcp_server.is_empty() {
             return Err(invalid(
                 "MCP server injection is not supported by cupel-acp",
@@ -163,7 +164,7 @@ impl Server {
         }
     }
 
-    pub fn begin_prompt(&self, request: acp::PromptRequest) -> acp::Result<Turn> {
+    pub fn begin_prompt(&self, request: acp::PromptRequest) -> Result<Turn> {
         let text = prompt_text(&request.prompt)?;
         let id = request.session_id.to_string();
         let cancel = self.closing.child_token();
@@ -210,7 +211,7 @@ impl Server {
         &self,
         mut turn: Turn,
         notify: Notify,
-    ) -> acp::Result<acp::PromptResponse> {
+    ) -> Result<acp::PromptResponse> {
         let result = turn.runtime.prompt(&turn.text, &turn.cancel, &notify).await;
         self.state
             .lock()
@@ -227,7 +228,7 @@ impl Server {
         }
     }
 
-    pub async fn shutdown(&self) -> acp::Result<()> {
+    pub async fn shutdown(&self) -> Result<()> {
         self.closing.cancel();
         let mut tasks = std::mem::take(&mut *self.tasks.lock().expect("task lock poisoned"));
         let mut task_error = None;

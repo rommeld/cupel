@@ -3,7 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1 as acp;
+use agent_client_protocol::v1::schema as acp;
+use agent_client_protocol::{Error, Result};
 use cupel_agent::{Agent, AgentEvent, AgentOptions};
 use cupel_coding_agent::{bootstrap, session::SessionRecorder, settings::DEFAULT_PRESET, startup};
 use cupel_core::provider::Registry;
@@ -13,17 +14,17 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Config;
 use crate::events::{Mapper, replay};
 
-pub type Notify = Arc<dyn Fn(acp::SessionUpdate) -> acp::Result<()> + Send + Sync>;
+pub type Notify = Arc<dyn Fn(acp::SessionUpdate) -> Result<()> + Send + Sync>;
 
-pub fn invalid(message: impl Into<String>) -> acp::Error {
-    acp::Error::new(-32602, message)
+pub fn invalid(message: impl Into<String>) -> Error {
+    Error::new(-32602, message)
 }
 
-pub fn failure(message: impl Into<String>) -> acp::Error {
-    acp::Error::new(-32603, message)
+pub fn failure(message: impl Into<String>) -> Error {
+    Error::new(-32603, message)
 }
 
-pub fn directory(path: &Path) -> acp::Result<PathBuf> {
+pub fn directory(path: &Path) -> Result<PathBuf> {
     if !path.is_absolute() {
         return Err(invalid("session cwd must be absolute"));
     }
@@ -36,7 +37,7 @@ pub fn directory(path: &Path) -> acp::Result<PathBuf> {
     Ok(cwd)
 }
 
-pub fn prompt_text(blocks: &[acp::ContentBlock]) -> acp::Result<String> {
+pub fn prompt_text(blocks: &[acp::ContentBlock]) -> Result<String> {
     let mut text = String::new();
     for block in blocks {
         let acp::ContentBlock::Text(block) = block else {
@@ -74,7 +75,7 @@ impl Runtime {
         id: &str,
         load: bool,
         notify: &Notify,
-    ) -> acp::Result<Self> {
+    ) -> Result<Self> {
         let (restored_model, messages) = if load {
             if id.is_empty()
                 || id.len() > 128
@@ -155,7 +156,7 @@ impl Runtime {
         text: &str,
         cancel: &CancellationToken,
         notify: &Notify,
-    ) -> acp::Result<acp::PromptResponse> {
+    ) -> Result<acp::PromptResponse> {
         // Do not drop a running hook future. Cancellation is checked after bounded preparation.
         self.recorder.before_prompt(text).await;
         if cancel.is_cancelled() {
@@ -207,7 +208,7 @@ impl Runtime {
         mapper.finish(cancel.is_cancelled())
     }
 
-    fn report_usage(&self, notify: &Notify) -> acp::Result<()> {
+    fn report_usage(&self, notify: &Notify) -> Result<()> {
         notify(acp::SessionUpdate::UsageUpdate(
             acp::UsageUpdate::new(self.used, self.agent.context_window())
                 .cost(acp::Cost::new(self.cost, "USD")),

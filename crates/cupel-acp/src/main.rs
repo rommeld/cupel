@@ -7,8 +7,9 @@ mod session;
 
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1 as acp;
-use agent_client_protocol::{Agent, Client, ConnectionTo, Stdio};
+use agent_client_protocol::v1::ConnectionTo;
+use agent_client_protocol::v1::schema as acp;
+use agent_client_protocol::{Agent, Client, Error, Result, Stdio};
 
 use crate::server::Server;
 use crate::session::Notify;
@@ -33,7 +34,7 @@ async fn interrupted() -> std::io::Result<()> {
     tokio::signal::ctrl_c().await
 }
 
-async fn run(config: config::Config) -> acp::Result<()> {
+async fn run(config: config::Config) -> Result<()> {
     let server = Server::new(config);
     let initialize = Arc::clone(&server);
     let create = Arc::clone(&server);
@@ -41,7 +42,7 @@ async fn run(config: config::Config) -> acp::Result<()> {
     let prompt = Arc::clone(&server);
     let cancel = Arc::clone(&server);
     let connection = Agent
-        .builder()
+        .v1()
         .name("cupel-acp")
         .on_receive_request(
             async move |_request: acp::InitializeRequest, responder, _cx| {
@@ -112,7 +113,7 @@ async fn run(config: config::Config) -> acp::Result<()> {
         .connect_to(Stdio::new());
     let result = tokio::select! {
         result = connection => result,
-        signal = interrupted() => signal.map_err(acp::Error::into_internal_error),
+        signal = interrupted() => signal.map_err(Error::into_internal_error),
     };
     server.shutdown().await?;
     result
