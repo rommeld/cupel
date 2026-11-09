@@ -44,6 +44,8 @@ pub struct App {
     pub agent: Agent,
     pub meta: SessionMeta,
     pub transcript: Transcript,
+    /// Current turn's reasoning content indices mapped to transcript cells.
+    pub thinking_cells: std::collections::HashMap<usize, usize>,
     pub input: InputState,
     pub autocomplete: Autocomplete,
     pub totals: UsageTotals,
@@ -321,6 +323,7 @@ impl App {
             agent,
             meta,
             transcript: Transcript::default(),
+            thinking_cells: std::collections::HashMap::new(),
             input: InputState::default(),
             autocomplete,
             totals: UsageTotals::default(),
@@ -2225,6 +2228,22 @@ impl App {
         }
     }
 
+    /// Keep a reasoning block addressable after later text or tools arrive.
+    fn thinking_text(&mut self, content_index: usize) -> Option<&mut String> {
+        let index = self.thinking_cells.entry(content_index).or_insert_with(|| {
+            let index = self.transcript.cells.len();
+            self.transcript.cells.push(Cell::Thinking {
+                text: String::new(),
+                collapsed: self.transcript.reasoning_collapsed,
+            });
+            index
+        });
+        match self.transcript.cells.get_mut(*index) {
+            Some(Cell::Thinking { text, .. }) => Some(text),
+            _ => None,
+        }
+    }
+
     pub async fn on_agent_event(&mut self, event: Option<AgentEvent>) {
         let Some(event) = event else {
             // Stream closed without AgentEnd (shouldn't happen, be robust).
@@ -2241,9 +2260,25 @@ impl App {
                     self.activity = Activity::Writing;
                     self.transcript.append_assistant(&delta);
                 }
-                AssistantMessageEvent::ThinkingDelta { delta, .. } => {
+                AssistantMessageEvent::ThinkingStart { content_index } => {
+                    let _ = self.thinking_text(content_index);
+                }
+                AssistantMessageEvent::ThinkingDelta {
+                    content_index,
+                    delta,
+                } => {
                     self.activity = Activity::Thinking;
-                    self.transcript.append_thinking(&delta);
+                    if let Some(text) = self.thinking_text(content_index) {
+                        text.push_str(&delta);
+                    }
+                }
+                AssistantMessageEvent::ThinkingEnd {
+                    content_index,
+                    content,
+                } => {
+                    if let Some(text) = self.thinking_text(content_index) {
+                        *text = content;
+                    }
                 }
                 AssistantMessageEvent::ToolCallStart { .. } => {
                     self.activity = Activity::CallingTool;
@@ -2386,7 +2421,10 @@ impl App {
                 });
             }
             AgentEvent::AgentEnd { .. } => self.finish_run().await,
-            AgentEvent::TurnStart => self.activity = Activity::Waiting,
+            AgentEvent::TurnStart => {
+                self.activity = Activity::Waiting;
+                self.thinking_cells.clear();
+            }
             AgentEvent::TurnEnd { .. } | AgentEvent::ThinkingBlocksRemoved { .. } => {}
         }
     }

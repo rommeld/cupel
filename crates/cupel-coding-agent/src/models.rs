@@ -466,6 +466,10 @@ mod tests {
         assert!(catalog.iter().any(|m| m.id == "local-model"));
         // Builtins that nobody touched are still there.
         assert!(catalog.iter().any(|m| m.id == "claude-haiku-5-5"));
+        let fable = catalog.iter().find(|m| m.id == "claude-fable-5-2").unwrap();
+        assert_eq!(fable.provider.as_str(), "anthropic");
+        assert_eq!(fable.context_window, 1_000_000);
+        assert_eq!(fable.max_tokens, 128_000);
     }
 
     #[test]

@@ -169,6 +169,35 @@
     }
   },
   {
+    "id": "claude-fable-5-2",
+    "name": "Claude Fable 5.2",
+    "api": "anthropic-messages",
+    "provider": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8.0,
+      "output": 40.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 10.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "prefixMismatchBehavior": "drop_block",
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "claude-haiku-5-5",
     "name": "Claude Haiku 5.5",
     "api": "anthropic-messages",
@@ -2624,6 +2653,35 @@
       "output": 50.0,
       "cachedRead": 0.25,
       "cachedWrite": 12.5
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsTemperature": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "anthropic/claude-fable-5.2",
+    "name": "Claude Fable 5.2",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8.0,
+      "output": 40.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 10.0
     },
     "contextWindow": 1000000,
     "maxTokens": 128000,

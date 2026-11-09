@@ -1007,6 +1007,94 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn reasoning_final_items_preserve_summary_text_for_both_apis() {
+        use crate::types::AssistantMessageEvent;
+        use core::fmt::Write as _;
+        use futures_util::StreamExt as _;
+
+        let parts = [
+            "**Formatting cupel-tui package**",
+            "Check formatting and preserve the reasoning details.",
+        ];
+        let full = parts.join("\n\n");
+        for (api, provider) in [
+            (Api::OPENAI_RESPONSES, ProviderName::OPENAI),
+            (Api::OPENAI_CODEX_RESPONSES, ProviderName::OPENAI_CODEX),
+        ] {
+            for streamed_parts in 0..=parts.len() {
+                let mut model = astra_model();
+                model.api = Api::from(api);
+                model.provider = ProviderName::from(provider);
+                let item = json!({
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": parts.iter().map(|text| json!({"type": "summary_text", "text": text})).collect::<Vec<_>>(),
+                    "encrypted_content": "opaque-reasoning",
+                });
+                let mut events = vec![json!({
+                    "type": "response.output_item.added", "output_index": 0,
+                    "item": {"type": "reasoning", "id": "rs_1", "summary": []},
+                })];
+                for (index, text) in parts.iter().enumerate() {
+                    if index < streamed_parts {
+                        events.push(json!({
+                            "type": "response.reasoning_summary_text.delta", "output_index": 0,
+                            "summary_index": index, "delta": text,
+                        }));
+                    }
+                    events.push(json!({
+                        "type": "response.reasoning_summary_text.done", "output_index": 0,
+                        "summary_index": index, "text": text,
+                    }));
+                    events.push(json!({
+                        "type": "response.reasoning_summary_part.done", "output_index": 0,
+                        "summary_index": index, "part": {"type": "summary_text", "text": text},
+                    }));
+                }
+                events.push(json!({
+                    "type": "response.output_item.done", "output_index": 0, "item": item,
+                }));
+                events.push(json!({
+                    "type": "response.completed", "response": {"status": "completed", "output": [item]},
+                }));
+                let mut body = String::new();
+                for event in events {
+                    writeln!(body, "data: {event}\n").unwrap();
+                }
+                let request = crate::providers::tests::request_for_response(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )).await;
+                let (stream, sink) = assistant_message_channel();
+                process_response_stream(
+                    request.send().await.unwrap(),
+                    &model,
+                    &StreamOptions::default(),
+                    &sink,
+                )
+                .await
+                .unwrap();
+                drop(sink);
+                let events: Vec<_> = stream.collect().await;
+                assert!(events.iter().any(|event| matches!(event,
+                    AssistantMessageEvent::ThinkingEnd { content_index: 0, content } if content == &full
+                )), "{api} with {streamed_parts} streamed parts: {events:?}");
+                let Some(AssistantMessageEvent::Done { message, .. }) = events.last() else {
+                    panic!("missing final message: {events:?}");
+                };
+                let [AssistantContent::Thinking(thinking)] = message.content.as_slice() else {
+                    panic!("expected one reasoning block: {message:?}");
+                };
+                assert_eq!(thinking.thinking, full);
+                assert_eq!(
+                    thinking.thinking_signature.as_deref(),
+                    Some(item.to_string().as_str())
+                );
+            }
+        }
+    }
+
     #[test]
     fn tool_result_placeholders_match_the_actual_output() {
         for supports_images in [false, true] {

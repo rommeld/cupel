@@ -193,6 +193,72 @@ mod tests {
     }
 
     #[test]
+    fn fable_52_catalog_rows_keep_verified_metadata() {
+        use crate::types::{InputModality, ModelCost};
+
+        let models = builtin_models();
+        for (id, provider, api, base_url, compat) in [
+            (
+                "claude-fable-5-2",
+                Provider::ANTHROPIC,
+                Api::ANTHROPIC_MESSAGES,
+                "https://api.anthropic.com",
+                serde_json::json!({
+                    "forceAdaptiveThinking": true,
+                    "prefixMismatchBehavior": "drop_block",
+                    "supportsTemperature": false,
+                }),
+            ),
+            (
+                "anthropic/claude-fable-5.2",
+                Provider::OPENROUTER,
+                Api::OPENAI_COMPLETIONS,
+                "https://openrouter.ai/api/v1",
+                serde_json::json!({
+                    "thinkingFormat": "openrouter",
+                    "supportsDeveloperRole": false,
+                    "supportsTemperature": false,
+                }),
+            ),
+        ] {
+            let model = models.iter().find(|model| model.id == id).expect(id);
+            assert_eq!(model.name, "Claude Fable 5.2", "{id}");
+            assert_eq!(model.provider.as_str(), provider, "{id}");
+            assert_eq!(model.api.as_str(), api, "{id}");
+            assert_eq!(model.base_url, base_url, "{id}");
+            assert!(model.reasoning, "{id}");
+            assert_eq!(
+                model.input,
+                vec![InputModality::Text, InputModality::Image],
+                "{id}"
+            );
+            assert_eq!(
+                (model.context_window, model.max_tokens),
+                (1_000_000, 128_000),
+                "{id}"
+            );
+            assert_eq!(model.max_context_window, None, "{id}");
+            assert_eq!(
+                model.cost,
+                ModelCost {
+                    input: 8.0,
+                    output: 40.0,
+                    cached_read: 0.2,
+                    cached_write: 10.0,
+                    tiers: None,
+                },
+                "{id}"
+            );
+            assert_eq!(
+                serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
+                serde_json::json!({"minimal": null, "off": null}),
+                "{id}"
+            );
+            assert_eq!(model.compat, Some(compat), "{id}");
+        }
+    }
+
+    #[test]
     fn every_catalog_model_has_a_registered_provider() {
         // A model whose `api` has no provider would fail at request time,
         // catch it at test time instead.

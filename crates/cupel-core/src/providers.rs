@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(stream.result().await.unwrap(), expected);
     }
 
-    async fn request_for_response(response: String) -> reqwest::RequestBuilder {
+    pub(crate) async fn request_for_response(response: String) -> reqwest::RequestBuilder {
         use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
