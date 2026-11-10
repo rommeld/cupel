@@ -1019,6 +1019,7 @@ dependencies = [
  "cupel-agent",
  "cupel-core",
  "futures-util",
+ "getrandom 0.4.3",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",

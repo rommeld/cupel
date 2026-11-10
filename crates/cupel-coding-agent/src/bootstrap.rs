@@ -17,6 +17,7 @@ use crate::guard::BashGuard;
 use crate::loop_killer::LoopKiller;
 use crate::search::GrepSearch;
 use crate::settings::Settings;
+use crate::source_observations::SourceObservations;
 use crate::system_prompt::build_system_prompt;
 use crate::tools::{
     apply_patch::ApplyPatchTool,
@@ -69,13 +70,25 @@ pub struct Ingredients {
 }
 
 impl Ingredients {
-    /// Startup and every reload bind both the tool and hooks to the recorder's
-    /// journal. Unbound tools remain useful for standalone callers and tests.
+    /// Startup and reload bind tools to the recorder's journal and live source
+    /// observations. Unbound tools remain useful for standalone callers/tests.
     pub fn bind_session(&mut self, recorder: &crate::session::SessionRecorder, cwd: &Path) {
         let undo = recorder.undo();
+        let observations = recorder.source_observations();
         for tool in &mut self.tools {
-            if tool.name() == "apply_patch" {
-                *tool = Arc::new(ApplyPatchTool::new(cwd).with_undo(Arc::clone(&undo)));
+            match tool.name() {
+                "apply_patch" => {
+                    *tool = Arc::new(
+                        ApplyPatchTool::new(cwd)
+                            .with_undo(Arc::clone(&undo))
+                            .with_observations(Arc::clone(&observations)),
+                    );
+                }
+                "read" => {
+                    *tool =
+                        Arc::new(ReadTool::new(cwd).with_observations(Arc::clone(&observations)));
+                }
+                _ => {}
             }
         }
         self.hooks.undo = Some(undo);
@@ -143,10 +156,11 @@ pub async fn load(
 #[must_use]
 pub fn coding_tools(cwd: &Path) -> Vec<Arc<dyn AgentTool>> {
     let backend = Arc::new(GrepSearch::new(cwd));
+    let observations = Arc::new(SourceObservations::new());
     vec![
-        Arc::new(ReadTool::new(cwd)),
+        Arc::new(ReadTool::new(cwd).with_observations(Arc::clone(&observations))),
         Arc::new(BashTool::new(cwd)),
-        Arc::new(ApplyPatchTool::new(cwd)),
+        Arc::new(ApplyPatchTool::new(cwd).with_observations(observations)),
         Arc::new(GrepTool::new(cwd, backend)),
     ]
 }
@@ -372,6 +386,83 @@ mod tests {
         assert!(plain.tools.iter().all(|tool| tool.name() != "ask_user"));
         assert!(plain.questions.is_none());
         assert!(!plain.system_prompt.contains("ask_user"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn binding_preserves_observations_across_reload_but_not_resume() {
+        use serde_json::json;
+        use tokio_util::sync::CancellationToken;
+
+        let root = std::env::temp_dir().join(format!(
+            "cupel-bootstrap-observations-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("file"), "old\n").unwrap();
+        let registry = cupel_core::default_registry();
+        let mut ingredients =
+            load(&root, Some(root.join("home")), &registry, Frontend::Plain).await;
+        let recorder = crate::session::SessionRecorder::new(None, &root, "same-session", "mock");
+        ingredients.bind_session(&recorder, &root);
+        let reader = ingredients
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "read")
+            .unwrap();
+        let read = reader
+            .execute(
+                "read",
+                json!({"path": "file"}),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let id = read.details.unwrap()["observation"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        ingredients.tools = coding_tools(&root);
+        ingredients.bind_session(&recorder, &root);
+        let patcher = ingredients
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "apply_patch")
+            .unwrap();
+        let input = "*** Begin Patch\n*** Update File: file\n@@\n-old\n+new\n*** End Patch";
+        patcher
+            .execute(
+                "patch",
+                json!({"input": input, "expectedObservations": [id.clone()]}),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("file")).unwrap(), "new\n");
+
+        let resumed = crate::session::SessionRecorder::new(None, &root, "same-session", "mock");
+        ingredients.bind_session(&resumed, &root);
+        let patcher = ingredients
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "apply_patch")
+            .unwrap();
+        let error = patcher
+            .execute(
+                "patch",
+                json!({"input": input, "expectedObservations": [id]}),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unavailable or expired"), "{error}");
+        assert_eq!(std::fs::read_to_string(root.join("file")).unwrap(), "new\n");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

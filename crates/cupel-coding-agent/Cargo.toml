@@ -17,6 +17,7 @@ base64.workspace = true
 cupel-agent.workspace = true
 cupel-core.workspace = true
 futures-util.workspace = true
+getrandom.workspace = true
 grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true

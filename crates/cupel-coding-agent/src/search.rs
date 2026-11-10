@@ -90,6 +90,30 @@ pub fn resolve_to_root(path: &str, root: &Path) -> PathBuf {
     }
 }
 
+/// A locator that `read` can resolve from the same working directory, independent
+/// of the search scope. External files keep their absolute paths.
+#[must_use]
+pub fn source_locator(path: &Path, cwd: &Path) -> String {
+    let relative = path
+        .strip_prefix(cwd)
+        .ok()
+        .filter(|p| !p.as_os_str().is_empty());
+    let locator = relative.unwrap_or(path).display().to_string();
+    // Relative Windows paths can use slashes, but external verbatim paths
+    // (\\?\...) must retain their native spelling to round-trip faithfully.
+    let locator = if cfg!(windows) && relative.is_some() {
+        locator.replace('\\', "/")
+    } else {
+        locator
+    };
+    // Do not let resolve_to_root interpret a literal leading @ or ~/ as syntax.
+    if relative.is_some() && (locator.starts_with('@') || locator.starts_with("~/")) {
+        format!("./{locator}")
+    } else {
+        locator
+    }
+}
+
 /// File scan search backend using ripgrep's engine. Respects `.gitignore`,
 /// includes hidden files (but never the `.git` directory itself).
 pub struct GrepSearch {
@@ -296,6 +320,35 @@ mod tests {
             resolve_to_root("@@weird", root),
             PathBuf::from("/project/@weird")
         );
+    }
+
+    #[test]
+    fn source_locators_escape_resolution_syntax_and_keep_scope() {
+        let root = Path::new("/project");
+        for path in ["nested/file.rs", "@literal.rs", "~/literal.rs"] {
+            let source = root.join(path);
+            let locator = source_locator(&source, root);
+            assert_eq!(resolve_to_root(&locator, root), source, "{locator}");
+        }
+        let external = Path::new("/external/nested/file.rs");
+        assert_eq!(
+            resolve_to_root(&source_locator(external, root), root),
+            external
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn external_verbatim_locators_keep_their_native_spelling() {
+        let root = Path::new(r"C:\project");
+        let external = Path::new(r"\\?\C:\external\file.rs");
+        let locator = source_locator(external, root);
+        assert_eq!(locator, r"\\?\C:\external\file.rs");
+        assert_eq!(resolve_to_root(&locator, root), external);
+        let special = root.join(r"~\literal.rs");
+        let locator = source_locator(&special, root);
+        assert_eq!(locator, "./~/literal.rs");
+        assert_eq!(resolve_to_root(&locator, root), special);
     }
 
     fn write_tree(dir: &Path, files: &[(&str, &str)]) {
