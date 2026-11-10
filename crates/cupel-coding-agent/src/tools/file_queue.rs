@@ -7,8 +7,8 @@
 //!
 //! One `Mutex` per file provides this guarantee, lock, do the work,
 //! drop the guard. Files are keyed by their *canonical* path so `./src/a.rs`
-//! and `src/a.rs` (or a symlink) share a lock, a file that doesn't exist yet
-//! (a patch adding it) falls back to the absolute path.
+//! and `src/a.rs` (or a symlink) share a lock. New files use their canonical
+//! parent plus filename when the parent exists, otherwise the supplied path.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,10 +28,20 @@ fn registry() -> &'static StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>> {
     REGISTRY.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-fn queue_key(path: &Path) -> PathBuf {
-    // canonicalize resolves symlinks and relative segments, but requires the
-    // path to exist, fall back to the plain absolute path for new files.
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+/// Shared identity for mutation locks and duplicate patch targets.
+pub(crate) fn queue_key(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    // A missing leaf still has a stable identity when its parent exists.
+    // Canonicalize the parent rather than collapsing `..` across symlinks.
+    if let Some(parent) = path.parent()
+        && let Some(name) = path.file_name()
+        && let Ok(parent) = parent.canonicalize()
+    {
+        return parent.join(name);
+    }
+    path.to_path_buf()
 }
 
 /// Acquire the mutation lock for `path`, returning a guard. Mutating tools
@@ -51,6 +61,32 @@ pub async fn lock_file_for_mutation(path: &Path) -> tokio::sync::OwnedMutexGuard
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn new_file_aliases_share_a_lock_before_and_after_creation() {
+        use futures_util::FutureExt as _;
+
+        let root =
+            std::env::temp_dir().join(format!("cupel-file-queue-new-alias-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let path = root.join("new.txt");
+        let alias = root.join("nested/../new.txt");
+        let guard = lock_file_for_mutation(&alias).await;
+        let mut other = Box::pin(lock_file_for_mutation(&path));
+        assert!(
+            other.as_mut().now_or_never().is_none(),
+            "aliases of a new file must share a lock"
+        );
+        let key_before_creation = queue_key(&alias);
+        std::fs::write(&path, "created\n").unwrap();
+        assert_eq!(queue_key(&path), key_before_creation);
+        assert!(other.as_mut().now_or_never().is_none());
+        drop(guard);
+        assert!(other.now_or_never().is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn same_file_mutations_are_serialized() {
