@@ -10,7 +10,7 @@
 //! * [`event_stream`], the async channel providers stream events through
 //! * [`error`], error types
 //! * [`provider`], the `Provider` trait + registry
-//! * [`providers`], the concrete adapters (Anthropic, `OpenAI`, Bedrock)
+//! * [`providers`], the concrete adapters (Anthropic, `OpenAI`, Bedrock, Google)
 //! * [`model`], model registry, cost math, thinking level clamping
 //! * [`catalog`], a small built in model catalog
 //! * [`sse`] / [`json_util`] / [`transform`] / [`options_util`], shared
@@ -50,5 +50,6 @@ pub fn default_registry() -> provider::Registry {
         providers::openai_codex_responses::OpenAiCodexResponsesProvider::new(),
     ));
     registry.register(Arc::new(providers::bedrock::BedrockProvider::new()));
+    registry.register(Arc::new(providers::google::GoogleProvider::new()));
     registry
 }

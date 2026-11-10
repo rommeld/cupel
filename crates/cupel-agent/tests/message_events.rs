@@ -56,6 +56,7 @@ impl Provider for ToolThenTextProvider {
         if call == 0 {
             let message = AssistantMessage {
                 content: vec![AssistantContent::ToolCall(ToolCall {
+                    thought_signature: None,
                     id: "call_1".into(),
                     name: "echo".into(),
                     arguments: serde_json::json!({"text": "ping"}),

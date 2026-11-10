@@ -76,6 +76,7 @@ impl Provider for ScriptedProvider {
             match reply {
                 Reply::Tool => {
                     let call = AssistantContent::ToolCall(ToolCall {
+                        thought_signature: None,
                         id: "call_1".into(),
                         name: "wait".into(),
                         arguments: serde_json::json!({}),

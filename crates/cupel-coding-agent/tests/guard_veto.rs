@@ -59,6 +59,7 @@ impl Provider for DeleteHappyProvider {
         if call == 0 {
             let message = AssistantMessage {
                 content: vec![AssistantContent::ToolCall(ToolCall {
+                    thought_signature: None,
                     id: "call_rm".into(),
                     name: "bash".into(),
                     arguments: serde_json::json!({"command": "rm -rf /"}),

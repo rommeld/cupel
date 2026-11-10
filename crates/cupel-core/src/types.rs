@@ -22,6 +22,7 @@ impl Api {
     pub const OPENAI_COMPLETIONS: &'static str = "openai-completions";
     pub const OPENAI_CODEX_RESPONSES: &'static str = "openai-codex-responses";
     pub const BEDROCK_CONVERSE_STREAM: &'static str = "bedrock-converse-stream";
+    pub const GOOGLE_GENERATIVE_AI: &'static str = "google-generative-ai";
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -52,6 +53,7 @@ impl Provider {
     pub const AMAZON_BEDROCK: &'static str = "amazon-bedrock";
     pub const FIREWORKS: &'static str = "fireworks";
     pub const OPENROUTER: &'static str = "openrouter";
+    pub const GOOGLE: &'static str = "google";
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -116,6 +118,9 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
+    /// Opaque provider metadata required to replay this call in later turns.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thought_signature: Option<String>,
 }
 
 /// Allow content in a **user** message.
@@ -501,7 +506,31 @@ pub enum AssistantMessageEvent {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{ModelThinkingLevel, StreamOptions, ThinkingLevel};
+    use crate::types::{ModelThinkingLevel, StreamOptions, ThinkingLevel, ToolCall};
+
+    #[test]
+    fn tool_call_without_signature_preserves_legacy_serialization() {
+        let legacy = serde_json::json!({
+            "id": "call_1", "name": "read", "arguments": {"path": "src/main.rs"}
+        });
+        let call: ToolCall = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(call.thought_signature, None);
+        assert_eq!(serde_json::to_value(call).unwrap(), legacy);
+    }
+
+    #[test]
+    fn tool_call_signature_survives_serialization() {
+        let signed = serde_json::json!({
+            "id": "call_1", "name": "read", "arguments": {"path": "src/main.rs"},
+            "thoughtSignature": "opaque-provider-signature"
+        });
+        let call: ToolCall = serde_json::from_value(signed.clone()).unwrap();
+        assert_eq!(
+            call.thought_signature.as_deref(),
+            Some("opaque-provider-signature")
+        );
+        assert_eq!(serde_json::to_value(call).unwrap(), signed);
+    }
 
     #[test]
     fn thinking_level_conversion_preserves_every_enabled_level() {

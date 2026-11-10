@@ -101,6 +101,7 @@ finally:
                         .into_iter()
                         .map(|name| {
                             AssistantContent::ToolCall(ToolCall {
+                                thought_signature: None,
                                 id: name.into(),
                                 name: "bash".into(),
                                 arguments: json!({

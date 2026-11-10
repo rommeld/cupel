@@ -303,6 +303,7 @@ async fn consume_stream(
                     output
                         .content
                         .push(AssistantContent::ToolCall(crate::types::ToolCall {
+                            thought_signature: None,
                             id: tool_use.tool_use_id,
                             name: tool_use.name,
                             arguments: json!({}),

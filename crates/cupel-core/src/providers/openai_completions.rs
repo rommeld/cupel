@@ -384,6 +384,7 @@ async fn run(
                         Some(entry) => entry,
                         None => {
                             output.content.push(AssistantContent::ToolCall(ToolCall {
+                                thought_signature: None,
                                 id: call
                                     .get("id")
                                     .and_then(Value::as_str)

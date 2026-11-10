@@ -45,6 +45,7 @@ impl Provider for Script {
         let content = edit.map_or_else(
             || vec![AssistantContent::Text(TextContent::plain("done"))],
             |(before, after)| vec![AssistantContent::ToolCall(ToolCall {
+                thought_signature: None,
                 id: format!("call-{call}"),
                 name: "apply_patch".to_string(),
                 arguments: serde_json::json!({"input": format!("*** Begin Patch\n*** Update File: a\n@@\n-{before}\n+{after}\n*** End Patch")}),

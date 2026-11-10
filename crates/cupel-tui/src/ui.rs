@@ -2630,11 +2630,13 @@ pub(crate) mod tests {
             content: vec![
                 AssistantContent::Text(TextContent::plain("the answer")),
                 AssistantContent::ToolCall(ToolCall {
+                    thought_signature: None,
                     id: "call_1".into(),
                     name: "grep".into(),
                     arguments: serde_json::json!({"pattern": "bug"}),
                 }),
                 AssistantContent::ToolCall(ToolCall {
+                    thought_signature: None,
                     id: "call_2".into(),
                     name: "apply_patch".into(),
                     arguments: serde_json::json!({"input": "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-bug();\n+fix();\n*** End Patch"}),
@@ -2872,6 +2874,7 @@ pub(crate) mod tests {
                 event: cupel_core::types::AssistantMessageEvent::ToolCallEnd {
                     content_index: 0,
                     tool_call: cupel_core::types::ToolCall {
+                        thought_signature: None,
                         id: format!("call-{expected:?}"),
                         name: "read".into(),
                         arguments: serde_json::json!({"path": "src/main.rs"}),
@@ -3597,6 +3600,7 @@ pub(crate) mod tests {
             event: cupel_core::types::AssistantMessageEvent::ToolCallEnd {
                 content_index: 0,
                 tool_call: cupel_core::types::ToolCall {
+                    thought_signature: None,
                     id: format!("call_{name}"),
                     name: name.into(),
                     arguments,

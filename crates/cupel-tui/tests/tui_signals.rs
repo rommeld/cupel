@@ -53,6 +53,7 @@ mod tests {
                 "question" => (
                     StopReason::ToolUse,
                     vec![AssistantContent::ToolCall(ToolCall {
+                        thought_signature: None,
                         id: "question".into(),
                         name: "ask_user".into(),
                         arguments: serde_json::json!({
@@ -67,6 +68,7 @@ mod tests {
                 _ => (
                     StopReason::ToolUse,
                     vec![AssistantContent::ToolCall(ToolCall {
+                        thought_signature: None,
                         id: "sleep".into(),
                         name: "bash".into(),
                         arguments: serde_json::json!({

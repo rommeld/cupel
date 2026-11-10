@@ -52,6 +52,7 @@ mod tests {
             let _ = sink.start();
             let mut message = AssistantMessage {
                 content: vec![AssistantContent::ToolCall(ToolCall {
+                    thought_signature: None,
                     id: "sleep".into(),
                     name: "bash".into(),
                     arguments: serde_json::json!({
@@ -73,6 +74,7 @@ mod tests {
                 // Finish a parallel tool only after the reader closes stdout,
                 // forcing EPIPE while the silent sleep is still running.
                 message.content.push(AssistantContent::ToolCall(ToolCall {
+                    thought_signature: None,
                     id: "output".into(),
                     name: "bash".into(),
                     arguments: serde_json::json!({
