@@ -404,7 +404,15 @@ fn to_model(
         },
         context_window,
         max_context_window,
-        max_tokens: entry.limit.output,
+        // models.dev still lists the older 32K cap for Gemini 4. Google's
+        // synchronous streaming API supports 64K; larger output requires
+        // continuation, which this provider does not implement.
+        // https://aistudio.google.com/docs/models/gemini-4-carbon
+        // https://aistudio.google.com/docs/models/gemini-4-argon
+        max_tokens: match (row.api, row.id) {
+            (Api::GOOGLE_GENERATIVE_AI, "gemini-4-argon" | "gemini-4-carbon") => 65_536,
+            _ => entry.limit.output,
+        },
         headers: None,
         compat: with_temperature_knob(row.compat.to_value(), row.api, entry.temperature),
     })
@@ -474,6 +482,7 @@ fn validate(models: &[Model]) -> Result<(), String> {
         Api::OPENAI_COMPLETIONS,
         Api::OPENAI_CODEX_RESPONSES,
         Api::BEDROCK_CONVERSE_STREAM,
+        Api::GOOGLE_GENERATIVE_AI,
     ];
     let mut errors = Vec::new();
     let mut seen = BTreeSet::new();
@@ -577,6 +586,57 @@ mod tests {
             include_str!("../../../../cupel-core/src/catalog.json"),
             "catalog drift: run cargo run -p cupel-coding-agent --bin generate-catalog"
         );
+    }
+
+    #[test]
+    fn google_models_use_native_api_and_supported_thinking_levels() {
+        let (models, _) = generate(include_str!("models_dev.json")).expect("valid catalog");
+        let google: Vec<&Model> = models
+            .iter()
+            .filter(|model| model.provider.as_str() == Provider::GOOGLE)
+            .collect();
+        assert_eq!(
+            google
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "gemini-4-argon",
+                "gemini-4-carbon",
+                "gemini-3.8-flash",
+                "gemini-3.5-flash-lite",
+            ]
+        );
+        for model in google {
+            assert_eq!(
+                model.api.as_str(),
+                Api::GOOGLE_GENERATIVE_AI,
+                "{}",
+                model.id
+            );
+            assert_eq!(model.base_url, curation::GOOGLE_BASE_URL);
+            assert_eq!(model.context_window, 1_048_576);
+            assert_eq!(model.max_tokens, 65_536);
+            assert_eq!(
+                model
+                    .compat
+                    .as_ref()
+                    .and_then(|compat| compat.get("supportsTemperature")),
+                Some(&serde_json::json!(false))
+            );
+            let thinking = model.thinking_level_map.as_ref().expect("effort map");
+            for unsupported in ["off", "xhigh", "max"] {
+                assert_eq!(thinking.get(unsupported), Some(&None), "{}", model.id);
+            }
+            for supported in ["low", "medium", "high"] {
+                assert!(!thinking.contains_key(supported), "{}", model.id);
+            }
+            assert_eq!(
+                thinking.contains_key("minimal"),
+                model.id != "gemini-3.5-flash-lite",
+                "only Flash-Lite supports minimal thinking"
+            );
+        }
     }
 
     #[test]

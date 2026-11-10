@@ -22,6 +22,7 @@ pub fn env_var_name(provider: &str) -> Option<&'static str> {
         "openai" => Some("OPENAI_API_KEY"),
         "fireworks" => Some("FIREWORKS_API_KEY"),
         "openrouter" => Some("OPENROUTER_API_KEY"),
+        "google" => Some("GEMINI_API_KEY"),
         _ => None,
     }
 }
@@ -36,6 +37,7 @@ pub fn env_token_var_name(provider: &str) -> Option<&'static str> {
 }
 
 /// The exported key and its source variable, preferring the bearer token.
+/// Google follows its SDK convention: GOOGLE_API_KEY precedes GEMINI_API_KEY.
 #[must_use]
 pub fn exported_key(provider: &str) -> Option<(&'static str, String)> {
     exported_key_with(provider, |var| std::env::var(var).ok())
@@ -45,6 +47,11 @@ fn exported_key_with(
     provider: &str,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Option<(&'static str, String)> {
+    if provider == "google"
+        && let Some(key) = lookup("GOOGLE_API_KEY")
+    {
+        return Some(("GOOGLE_API_KEY", key));
+    }
     [env_token_var_name(provider), env_var_name(provider)]
         .into_iter()
         .flatten()
@@ -157,9 +164,58 @@ mod tests {
         assert_eq!(env_var_name("openai"), Some("OPENAI_API_KEY"));
         assert_eq!(env_var_name("fireworks"), Some("FIREWORKS_API_KEY"));
         assert_eq!(env_var_name("openrouter"), Some("OPENROUTER_API_KEY"));
+        assert_eq!(env_var_name("google"), Some("GEMINI_API_KEY"));
         // Bedrock has no key variable because the AWS chain handles it.
         assert_eq!(env_var_name("amazon-bedrock"), None);
         assert_eq!(env_var_name("unknown"), None);
+    }
+
+    #[test]
+    fn google_keys_follow_the_sdk_precedence() {
+        assert_eq!(
+            exported_key_with("google", |var| Some(format!("key from {var}"))),
+            Some(("GOOGLE_API_KEY", "key from GOOGLE_API_KEY".to_string()))
+        );
+        assert_eq!(
+            exported_key_with("google", |var| {
+                (var == "GEMINI_API_KEY").then(|| "gemini key".to_string())
+            }),
+            Some(("GEMINI_API_KEY", "gemini key".to_string()))
+        );
+        assert_eq!(exported_key_with("google", |_| None), None);
+    }
+
+    #[test]
+    fn google_is_selectable_with_a_saved_api_key() {
+        let models = cupel_core::catalog::builtin_models();
+        let providers = catalog_providers(&models);
+        let (_, model) = providers
+            .iter()
+            .find(|(provider, _)| provider == "google")
+            .expect("Google appears in provider listing and autocomplete");
+        assert_eq!(model.id, "gemini-4-argon");
+        assert!(takes_api_key(&models, "google"));
+        assert!(!provider_is_keyless(&models, "google"));
+        let mut settings = crate::settings::Settings::default();
+        settings
+            .providers
+            .insert("google".to_string(), "saved Google key".to_string());
+        assert_eq!(
+            resolve_key_layers(None, settings.api_key("google")),
+            Some("saved Google key".to_string())
+        );
+        let google_models: Vec<Model> = models
+            .into_iter()
+            .filter(|model| model.provider.as_str() == "google")
+            .collect();
+        let (default, key) =
+            crate::startup::select_model(None, &google_models, &settings, None).expect("saved key");
+        assert_eq!(default.id, "gemini-4-argon");
+        assert!(key.is_some());
+        let (carbon, _) =
+            crate::startup::select_model(Some("gemini-4-carbon"), &google_models, &settings, None)
+                .expect("explicit Carbon model");
+        assert_eq!(carbon.id, "gemini-4-carbon");
     }
 
     #[test]

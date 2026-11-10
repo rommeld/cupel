@@ -13,6 +13,7 @@ pub const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub const GOOGLE_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 /// Empty on purpose, the AWS SDK derives the endpoint from the region
 /// (see build_client).
 pub const BEDROCK_BASE_URL: &str = "";
@@ -48,6 +49,7 @@ pub enum Compat {
     AdaptiveAnthropic,
     PreservedThinkingAnthropic,
     OpenrouterCompletions,
+    Google,
 }
 
 impl Compat {
@@ -76,6 +78,9 @@ impl Compat {
             Self::OpenrouterCompletions => Some(serde_json::json!({
                 "thinkingFormat": "openrouter",
                 "supportsDeveloperRole": false,
+            })),
+            Self::Google => Some(serde_json::json!({
+                "supportsTemperature": false,
             })),
         }
     }
@@ -158,6 +163,20 @@ const fn openai(id: &'static str, rename: Option<&'static str>) -> Curated {
         thinking: Thinking::FromEffort,
         compat: Compat::None,
         window: Window::PriceTier,
+    }
+}
+
+/// Google deprecated sampling parameters for these models. Thinking effort
+/// comes from models.dev: low/medium/high, plus minimal for Flash-Lite.
+const fn google(id: &'static str) -> Curated {
+    Curated {
+        id,
+        rename: None,
+        api: Api::GOOGLE_GENERATIVE_AI,
+        base_url: GOOGLE_BASE_URL,
+        thinking: Thinking::FromEffort,
+        compat: Compat::Google,
+        window: Window::ModelsDev,
     }
 }
 
@@ -277,6 +296,22 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openai("gpt-6-astra", None),
             openai("gpt-6.1-terra", None),
             openai("gpt-6-luna", None),
+        ],
+    },
+    CuratedProvider {
+        models_dev_id: "google",
+        cupel_id: Provider::GOOGLE,
+        models: &[
+            // Argon is the interactive coding default; Carbon spends more
+            // thinking tokens on difficult tasks. Introductory Gemini 4
+            // pricing expires November 30, 2026; refresh the snapshot then.
+            // Sources: https://aistudio.google.com/docs/whats-new-gemini-4-carbon
+            // and https://aistudio.google.com/docs/pricing.
+            google("gemini-4-argon"),
+            google("gemini-4-carbon"),
+            // Flash introductory pricing expires December 31, 2026.
+            google("gemini-3.8-flash"),
+            google("gemini-3.5-flash-lite"),
         ],
     },
     CuratedProvider {
