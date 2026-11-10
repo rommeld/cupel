@@ -14,17 +14,23 @@
 //! 2. Matchin and rewriting are separate passes. Every chunk is resolved against the
 //! original lines into a `(start, old_len, new_lines)` replacement. The replacements
 //! are then applied back to front so earlier indices stay valid. A chunk that does
-//! not match absorts before anything is rewritten.
+//! not match uniquely at the strongest matching tier aborts before anything is rewritten.
 
 use crate::tools::patch_parser::UpdateFileChunk;
+use crate::truncate::truncate_line;
 use unicode_normalization::UnicodeNormalization as _;
+
+const MAX_CANDIDATES: usize = 5;
+const EXCERPT_LINES: usize = 5;
+const EXCERPT_CHARS: usize = 160;
 
 /// `(start_index, old_len, new_lines)`, replace `old_len` lines from `start_index`
 /// with `new_lines`. `old_len == 0` is a pure inseration.
 type Replacement = (usize, usize, Vec<String>);
 
 /// Find `pattern` as a run of consecutive lines in `lines`, at or after `start`.
-/// Returns the index of the first matching line.
+/// Returns the index of the first matching line. This navigation helper does not
+/// prove uniqueness; patch application uses `unique_sequence` instead.
 ///
 /// With `eof` the search begins where a match would end the file, so a chunk marked
 /// `*** End of File` lands on the last occurence even when an identical block appears
@@ -40,13 +46,24 @@ pub fn seek_sequence(
     start: usize,
     eof: bool,
 ) -> Option<usize> {
+    sequence_matches(lines, pattern, start, eof)
+        .first()
+        .copied()
+}
+
+/// Bounded candidates at the strongest matching tier. A weaker tier must never
+/// add ambiguity to an exact unique match, or rescue an ambiguous stronger one.
+fn sequence_matches(lines: &[String], pattern: &[String], start: usize, eof: bool) -> Vec<usize> {
     if pattern.is_empty() {
-        return Some(start);
+        return vec![start];
     }
     if pattern.len() > lines.len() {
-        return None;
+        return Vec::new();
     }
     let last_start = lines.len() - pattern.len();
+    if start > last_start {
+        return Vec::new();
+    }
     let search_start = if eof { last_start } else { start };
 
     // Four passes of decreasing strictness. A pass is a line comparison. The loop
@@ -58,17 +75,107 @@ pub fn seek_sequence(
         |file_line, wanted| normalise(file_line) == normalise(wanted),
     ];
     for equal in passes {
+        let mut candidates = Vec::new();
         for index in search_start..=last_start {
             let matches = pattern
                 .iter()
                 .enumerate()
                 .all(|(offset, wanted)| equal(&lines[index + offset], wanted));
             if matches {
-                return Some(index);
+                candidates.push(index);
+                if candidates.len() > MAX_CANDIDATES {
+                    break;
+                }
             }
         }
+        if !candidates.is_empty() {
+            return candidates;
+        }
     }
-    None
+    Vec::new()
+}
+
+fn unique_sequence(
+    lines: &[String],
+    pattern: &[String],
+    start: usize,
+    eof: bool,
+    path: &str,
+    kind: &str,
+) -> Result<Option<usize>, String> {
+    let candidates = sequence_matches(lines, pattern, start, eof);
+    if candidates.len() <= 1 {
+        return Ok(candidates.first().copied());
+    }
+    let locations = candidates
+        .iter()
+        .take(MAX_CANDIDATES)
+        .map(|index| (index + 1).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut error = format!(
+        "Ambiguous {kind} in {path}: matching locations at lines {locations}{}. Use a distinctive named @@ anchor or more context; no files were written.",
+        if candidates.len() > MAX_CANDIDATES {
+            ", ..."
+        } else {
+            ""
+        },
+    );
+    for index in candidates.iter().take(MAX_CANDIDATES) {
+        error.push_str(&format!(
+            "\nCandidate at line {}:\n{}",
+            index + 1,
+            excerpt(lines, *index)
+        ));
+    }
+    Err(error)
+}
+
+fn excerpt(lines: &[String], index: usize) -> String {
+    if lines.is_empty() {
+        return "(empty file)".to_string();
+    }
+    let start = index.min(lines.len() - 1).saturating_sub(2);
+    lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(EXCERPT_LINES)
+        .map(|(index, line)| format!("{}: {}", index + 1, truncate_line(line, EXCERPT_CHARS).0))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn missing_target(
+    lines: &[String],
+    pattern: &[String],
+    start: usize,
+    path: &str,
+    kind: &str,
+) -> String {
+    // Prefer actual text near a surviving first context line, or the named
+    // anchor/search cursor when the entire expected block disappeared.
+    let first = pattern.iter().find(|line| !line.trim().is_empty());
+    let near = first
+        .and_then(|wanted| {
+            lines
+                .iter()
+                .enumerate()
+                .skip(start)
+                .find(|(_, line)| line.trim() == wanted.trim())
+                .map(|(index, _)| index)
+        })
+        .unwrap_or(start);
+    let expected = pattern
+        .iter()
+        .take(EXCERPT_LINES)
+        .map(|line| truncate_line(line, EXCERPT_CHARS).0)
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "Failed to find {kind} in {path}:\n{expected}\nNearby actual source:\n{}\nRead the current target and strengthen the anchor before retrying.",
+        excerpt(lines, near)
+    )
 }
 
 /// Normalize text for fuzzy matching, NFKC, strip trailing whitespace per
@@ -145,10 +252,10 @@ fn compute_replacements(
     for chunk in chunks {
         // `@@` fn name()`, jump to the line that matches, then search below it.
         if let Some(context) = &chunk.change_context {
-            let Some(index) =
-                seek_sequence(lines, std::slice::from_ref(context), line_index, false)
+            let pattern = std::slice::from_ref(context);
+            let Some(index) = unique_sequence(lines, pattern, line_index, false, path, "context")?
             else {
-                return Err(format!("Failed to find context '{context}' in {path}"));
+                return Err(missing_target(lines, pattern, line_index, path, "context"));
             };
             line_index = index + 1;
         }
@@ -167,7 +274,14 @@ fn compute_replacements(
 
         let mut pattern: &[String] = &chunk.old_lines;
         let mut new_lines: &[String] = &chunk.new_lines;
-        let mut found = seek_sequence(lines, pattern, line_index, chunk.is_end_of_file);
+        let mut found = unique_sequence(
+            lines,
+            pattern,
+            line_index,
+            chunk.is_end_of_file,
+            path,
+            "target",
+        )?;
         if found.is_none() && pattern.last().is_some_and(String::is_empty) {
             // The trailing empty line stood for the final newline, which is not a line
             // of its own after `split`, retry without it.
@@ -175,12 +289,22 @@ fn compute_replacements(
             if new_lines.last().is_some_and(String::is_empty) {
                 new_lines = &new_lines[..new_lines.len() - 1];
             }
-            found = seek_sequence(lines, pattern, line_index, chunk.is_end_of_file);
+            found = unique_sequence(
+                lines,
+                pattern,
+                line_index,
+                chunk.is_end_of_file,
+                path,
+                "target",
+            )?;
         }
         let Some(start) = found else {
-            return Err(format!(
-                "Failed to find expected lines in {path}:\n{}",
-                chunk.old_lines.join("\n")
+            return Err(missing_target(
+                lines,
+                &chunk.old_lines,
+                line_index,
+                path,
+                "expected lines",
             ));
         };
         replacements.push((start, pattern.len(), new_lines.to_vec()));
@@ -333,14 +457,120 @@ mod tests {
             "modify.txt",
         )
         .unwrap_err();
-        assert_eq!(err, "Failed to find expected lines in modify.txt:\nmissing");
+        assert!(
+            err.starts_with("Failed to find expected lines in modify.txt:\nmissing"),
+            "{err}"
+        );
+        assert!(
+            err.contains("Nearby actual source:\n1: line1\n2: line2"),
+            "{err}"
+        );
         let err = apply_chunks(
             "line1\n",
             &[chunk(Some("nowhere"), &["line1"], &["x"], false)],
             "f.txt",
         )
         .unwrap_err();
-        assert_eq!(err, "Failed to find context 'nowhere' in f.txt");
+        assert!(
+            err.contains("Failed to find context in f.txt:\nnowhere"),
+            "{err}"
+        );
+        assert!(err.contains("Nearby actual source:\n1: line1"), "{err}");
+    }
+
+    #[test]
+    fn repeated_blocks_require_a_unique_target_and_named_anchor_can_select_the_second() {
+        let original = "fn first() {\n    before1();\n    before2();\n    before3();\n    old();\n    after1();\n    after2();\n    after3();\n}\nfn second() {\n    before1();\n    before2();\n    before3();\n    old();\n    after1();\n    after2();\n    after3();\n}\n";
+        let old = [
+            "    before1();",
+            "    before2();",
+            "    before3();",
+            "    old();",
+            "    after1();",
+            "    after2();",
+            "    after3();",
+        ];
+        let new = [
+            "    before1();",
+            "    before2();",
+            "    before3();",
+            "    new();",
+            "    after1();",
+            "    after2();",
+            "    after3();",
+        ];
+        let error = apply_chunks(original, &[chunk(None, &old, &new, false)], "f.rs").unwrap_err();
+        assert!(
+            error.contains("Ambiguous target in f.rs: matching locations at lines 2, 11"),
+            "{error}"
+        );
+        assert!(error.contains("Candidate at line 11"), "{error}");
+        let result = apply_chunks(
+            original,
+            &[chunk(Some("fn second() {"), &old, &new, false)],
+            "f.rs",
+        )
+        .unwrap();
+        let (first, second) = result.split_once("fn second()").unwrap();
+        assert!(first.contains("old();"));
+        assert!(second.contains("new();"));
+        assert!(!second.contains("old();"));
+    }
+
+    #[test]
+    fn ambiguity_is_decided_only_at_the_strongest_matching_tier() {
+        assert_eq!(
+            apply_chunks(
+                " old \nold\n",
+                &[chunk(None, &["old"], &["new"], false)],
+                "f"
+            )
+            .unwrap(),
+            " old \nnew\n"
+        );
+        for text in [
+            "old\nold\n",
+            "old \nold\t\n",
+            " old \n  old\n",
+            "‘old’\n’old‘\n",
+        ] {
+            let wanted = if text.contains('‘') { "'old'" } else { "old" };
+            let error =
+                apply_chunks(text, &[chunk(None, &[wanted], &["new"], false)], "f").unwrap_err();
+            assert!(error.starts_with("Ambiguous target"), "{text:?}: {error}");
+        }
+        let error = apply_chunks(
+            "fn f() {\nx\n}\nfn f() {\nx\n}\n",
+            &[chunk(Some("fn f() {"), &["x"], &["y"], false)],
+            "f",
+        )
+        .unwrap_err();
+        assert!(error.starts_with("Ambiguous context"), "{error}");
+        assert_eq!(
+            apply_chunks("old\nold\n", &[chunk(None, &["old"], &["new"], true)], "f").unwrap(),
+            "old\nnew\n"
+        );
+    }
+
+    #[test]
+    fn ambiguity_and_missing_target_diagnostics_are_bounded() {
+        let large = "x".repeat(1000);
+        let error = apply_chunks(
+            &format!("{large}\n").repeat(100),
+            &[chunk(None, &[&large], &["new"], false)],
+            "f",
+        )
+        .unwrap_err();
+        assert!(error.len() < 6000, "diagnostic was {} bytes", error.len());
+        assert_eq!(error.matches("Candidate at line").count(), MAX_CANDIDATES);
+        let error = apply_chunks(
+            &format!("{large}\n").repeat(100),
+            &[chunk(None, &[&"z".repeat(100_000)], &["new"], false)],
+            "f",
+        )
+        .unwrap_err();
+        assert!(error.len() < 2000, "diagnostic was {} bytes", error.len());
+        assert!(error.contains("Nearby actual source:"));
     }
 
     #[test]

@@ -15,6 +15,7 @@
 //!
 //! Every file the patch touches is locked for the whole verify and apply cycle.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{TextContent, ToolResultContent};
 
 use crate::search::resolve_to_root;
+use crate::source_observations::{SourceObservation, SourceObservations};
 use crate::tools::file_queue::lock_file_for_mutation;
 use crate::tools::patch_parser::{Hunk, parse_patch};
 use crate::tools::patch_update::apply_chunks;
@@ -62,20 +64,33 @@ the initial contents), '*** Delete File: <path>' (nothing follows), or '*** Upda
 An update holds one or more hunks; each starts with '@@' (optionally followed by the \
 enclosing function or class line to locate it) and every line inside starts with a space \
 (context), '-' (removed), or '+' (added). Show 3 lines of context above and below each \
-change so the hunk is unique in the file; if it is still ambiguous, add '@@ <function>' \
-markers. Put '*** End of File' after a hunk that ends at the end of the file. A hunk with \
+change. Use distinctive named '@@ <function>' anchors for nontrivial edits and repeated \
+blocks; ambiguity at the best matching tier is rejected, never resolved by taking the first \
+occurrence. Put '*** End of File' after a hunk that ends at the end of the file. A hunk with \
 only '+' lines and no context is appended to the end of the file. Paths are relative to \
-the working directory. Lines are matched exactly, then ignoring trailing whitespace. If any \
-hunk does not match, the whole patch is rejected and no file is written.";
+the working directory. Matching tiers are exact, trailing-whitespace-insensitive, \
+surrounding-whitespace-insensitive, then normalized punctuation; ambiguity is checked at \
+the strongest tier with matches. If any hunk does not match, the whole patch is rejected \
+and no file is written. Optionally supply \
+expectedObservations alongside input: an array of ids returned by read, one per protected \
+file (including move destinations or existing files overwritten by Add File). Each is a \
+whole-file raw-byte revision precondition: stale, unavailable, wrong-checkout or unrelated \
+observations reject the entire patch before writes. Unrelated edits also invalidate it. \
+Re-read after mutations rather than weakening context. Hashes and patch locks do not isolate \
+arbitrary shell/editor writes; application I/O failures may leave earlier writes in place.";
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ApplyPatchArgs {
     input: String,
+    #[serde(default)]
+    expected_observations: Vec<String>,
 }
 
 pub struct ApplyPatchTool {
     cwd: PathBuf,
     undo: Option<Arc<crate::undo::UndoJournal>>,
+    observations: Option<Arc<SourceObservations>>,
 }
 
 impl ApplyPatchTool {
@@ -84,6 +99,7 @@ impl ApplyPatchTool {
         Self {
             cwd: cwd.into(),
             undo: None,
+            observations: None,
         }
     }
 
@@ -91,6 +107,75 @@ impl ApplyPatchTool {
     pub fn with_undo(mut self, undo: Arc<crate::undo::UndoJournal>) -> Self {
         self.undo = undo.enabled().then_some(undo);
         self
+    }
+
+    #[must_use]
+    pub fn with_observations(mut self, observations: Arc<SourceObservations>) -> Self {
+        self.observations = Some(observations);
+        self
+    }
+
+    /// Bind ids to the paths explicitly touched by this patch, before any
+    /// writes. Do not silently ignore an expired id or a precondition for a
+    /// different checkout/file. Aliased spellings still name the same file.
+    async fn preconditions(
+        &self,
+        hunks: &[Hunk],
+        ids: &[String],
+    ) -> Result<HashMap<PathBuf, SourceObservation>, ToolError> {
+        let mut expected = HashMap::new();
+        if ids.is_empty() {
+            return Ok(expected);
+        }
+        let store = self.observations.as_ref().ok_or(
+            "Source observations are unavailable for this tool. Read with session-bound tools before retrying.",
+        )?;
+        let checkout = tokio::fs::canonicalize(&self.cwd).await.map_err(|error| {
+            format!(
+                "Could not identify patch checkout {}: {error}",
+                self.cwd.display()
+            )
+        })?;
+        let mut targets = Vec::new();
+        for hunk in hunks {
+            let path = match hunk {
+                Hunk::AddFile { path, .. }
+                | Hunk::DeleteFile { path }
+                | Hunk::UpdateFile { path, .. } => path,
+            };
+            targets.push(resolve_to_root(path, &self.cwd));
+            if let Hunk::UpdateFile {
+                move_path: Some(destination),
+                ..
+            } = hunk
+            {
+                targets.push(resolve_to_root(destination, &self.cwd));
+            }
+        }
+        targets.sort();
+        targets.dedup();
+        for id in ids {
+            let observation = store.get(id).await?;
+            if observation.checkout != checkout {
+                return Err(format!("Source observation {id} belongs to a different checkout. Read the file in this checkout before retrying.").into());
+            }
+            let mut matched = false;
+            for target in &targets {
+                if queue_key(target) == observation.path {
+                    if expected
+                        .insert(target.clone(), observation.clone())
+                        .is_some()
+                    {
+                        return Err(format!("Multiple source observations supplied for {}. Supply one current observation per file.", target.display()).into());
+                    }
+                    matched = true;
+                }
+            }
+            if !matched {
+                return Err(format!("Source observation {id} does not identify a current patch target (it may have moved or disappeared). Read the intended file before retrying.").into());
+            }
+        }
+        Ok(expected)
     }
 
     /// Every absolute path the patch writes or removes, deduplicated the
@@ -131,15 +216,24 @@ impl ApplyPatchTool {
 
     /// Read and match, never write. Errors here mean the patch does not fit
     /// the files as they are.
-    async fn verify(&self, hunk: &Hunk) -> Result<Change, ToolError> {
+    async fn verify(
+        &self,
+        hunk: &Hunk,
+        expected: &HashMap<PathBuf, SourceObservation>,
+    ) -> Result<Change, ToolError> {
         match hunk {
-            Hunk::AddFile { path, contents } => Ok(Change::Add {
-                path: resolve_to_root(path, &self.cwd),
-                display: path.clone(),
-                content: contents.clone(),
-            }),
+            Hunk::AddFile { path, contents } => {
+                let absolute = resolve_to_root(path, &self.cwd);
+                check_expected(&absolute, None, expected).await?;
+                Ok(Change::Add {
+                    path: absolute,
+                    display: path.clone(),
+                    content: contents.clone(),
+                })
+            }
             Hunk::DeleteFile { path } => {
                 let absolute = resolve_to_root(path, &self.cwd);
+                check_expected(&absolute, None, expected).await?;
                 let metadata = tokio::fs::metadata(&absolute)
                     .await
                     .map_err(|e| format!("Failed to delete file {path}: {e}"))?;
@@ -157,9 +251,19 @@ impl ApplyPatchTool {
                 chunks,
             } => {
                 let absolute = resolve_to_root(path, &self.cwd);
-                let raw = tokio::fs::read_to_string(&absolute)
+                let bytes = tokio::fs::read(&absolute)
                     .await
-                    .map_err(|e| format!("Failed to read file to update {path}: {e}"))?;
+                    .map_err(|error| expected.get(&absolute).map_or_else(
+                        || format!("Failed to read file to update {path}: {error}"),
+                        |observation| format!("Observed source {} for {path} is unavailable: {error}. Read the current file before retrying.", observation.id),
+                    ))?;
+                check_expected(&absolute, Some(&bytes), expected).await?;
+                let raw = String::from_utf8(bytes)
+                    .map_err(|error| format!("Failed to read file to update {path}: {error}"))?;
+                if let Some(destination) = move_path {
+                    check_expected(&resolve_to_root(destination, &self.cwd), None, expected)
+                        .await?;
+                }
                 // Match in BOM free, LF normalized space, restore both on
                 // write.
                 let (bom, text) = strip_bom(&raw);
@@ -222,6 +326,11 @@ impl AgentTool for ApplyPatchTool {
                 "input": {
                     "type": "string",
                     "description": "The full patch text, from '*** Begin Patch' to '*** End Patch'"
+                },
+                "expectedObservations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional read observation ids, one per protected file. Whole-file revision checks reject stale or unavailable source before any writes. Omit for ordinary path-based patches."
                 }
             },
             "required": ["input"]
@@ -277,9 +386,12 @@ impl AgentTool for ApplyPatchTool {
             return Err("Operation aborted".into());
         }
 
+        let expected = self
+            .preconditions(&hunks, &args.expected_observations)
+            .await?;
         let mut changes: Vec<Change> = Vec::with_capacity(hunks.len());
         for hunk in &hunks {
-            changes.push(self.verify(hunk).await?);
+            changes.push(self.verify(hunk, &expected).await?);
             if cancel.is_cancelled() {
                 return Err("Operation aborted".into());
             }
@@ -324,6 +436,9 @@ impl AgentTool for ApplyPatchTool {
         let (mut added, mut modified, mut deleted) = (Vec::new(), Vec::new(), Vec::new());
         for change in &changes {
             if let Err(error) = apply(change).await {
+                let error: ToolError = format!(
+                    "Patch application I/O failure: {error}\nEarlier writes may already have occurred; inspect the workspace before retrying."
+                ).into();
                 if let Some(recording) = &mut recording {
                     match recording.finish() {
                         Ok(notice) => warning = warning.or(notice),
@@ -371,7 +486,9 @@ impl AgentTool for ApplyPatchTool {
             }
         }
         if let Some(recording) = &mut recording {
-            warning = warning.or(recording.finish()?);
+            warning = warning.or(recording.finish().map_err(|error| {
+                format!("Patch writes completed, but undo bookkeeping failed: {error}. Inspect the workspace before retrying.")
+            })?);
         }
 
         // Codex's summary, verbatim, the models know it.
@@ -395,6 +512,34 @@ impl AgentTool for ApplyPatchTool {
             terminate: false,
         })
     }
+}
+
+async fn check_expected(
+    path: &Path,
+    raw: Option<&[u8]>,
+    expected: &HashMap<PathBuf, SourceObservation>,
+) -> Result<(), ToolError> {
+    let Some(observation) = expected.get(path) else {
+        return Ok(());
+    };
+    let unavailable = |error| {
+        format!(
+            "Observed source {} for {} is unavailable: {error}. Read the current file before retrying.",
+            observation.id,
+            path.display()
+        )
+    };
+    let identity = tokio::fs::canonicalize(path).await.map_err(unavailable)?;
+    let bytes;
+    let raw = match raw {
+        Some(raw) => raw,
+        None => {
+            bytes = tokio::fs::read(path).await.map_err(unavailable)?;
+            &bytes
+        }
+    };
+    observation.check(&identity, raw)?;
+    Ok(())
 }
 
 /// The file queue's key, symlinks and `./` resolved when the file exists,
@@ -791,8 +936,12 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            err.to_string(),
-            "Failed to find expected lines in modify.txt:\nmissing"
+            err.to_string().lines().next().unwrap(),
+            "Failed to find expected lines in modify.txt:"
+        );
+        assert!(
+            err.to_string()
+                .contains("Nearby actual source:\n1: line1\n2: line2")
         );
         assert_eq!(read(&root, "modify.txt"), "line1\nline2\n");
         let err = run(&root, "*** Begin Patch\n*** End Patch")
@@ -818,6 +967,44 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.to_string(), "multiple operations target ./a.txt");
         assert_eq!(read(&root, "a.txt"), "one\n");
+    }
+
+    #[tokio::test]
+    async fn ambiguous_target_rejects_the_entire_patch_before_writing() {
+        let root = temp_root("ambiguous");
+        write(
+            &root,
+            "f.py",
+            "def first():\n    old()\n\ndef second():\n    old()\n",
+        );
+        let patch = "*** Begin Patch\n*** Add File: created.txt\n+created\n*** Update File: f.py\n@@\n-    old()\n+    new()\n*** End Patch";
+        let error = run(&root, patch).await.unwrap_err().to_string();
+        assert!(error.contains("Ambiguous target in f.py"), "{error}");
+        assert!(!root.join("created.txt").exists());
+        assert_eq!(
+            read(&root, "f.py"),
+            "def first():\n    old()\n\ndef second():\n    old()\n"
+        );
+        run(&root, &patch.replace("@@\n", "@@ def second():\n"))
+            .await
+            .unwrap();
+        assert_eq!(
+            read(&root, "f.py"),
+            "def first():\n    old()\n\ndef second():\n    new()\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn application_io_failure_explicitly_warns_about_partial_writes() {
+        let root = temp_root("partial-io");
+        write(&root, "blocked", "not a directory\n");
+        let error = run(&root, "*** Begin Patch\n*** Add File: created.txt\n+created\n*** Add File: blocked/child.txt\n+child\n*** End Patch").await.unwrap_err().to_string();
+        assert!(error.contains("Patch application I/O failure"), "{error}");
+        assert!(
+            error.contains("Earlier writes may already have occurred"),
+            "{error}"
+        );
+        assert_eq!(read(&root, "created.txt"), "created\n");
     }
 
     #[tokio::test]

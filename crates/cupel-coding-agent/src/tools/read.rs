@@ -9,6 +9,7 @@
 //! without vision, so the tool doesn't need to know the active model.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use base64::Engine as _;
 use serde::Deserialize;
@@ -20,6 +21,7 @@ use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{ImageContent, TextContent, ToolResultContent};
 
 use crate::search::resolve_to_root;
+use crate::source_observations::{SourceObservations, SourceRange};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, format_size,
     truncate_head,
@@ -78,6 +80,7 @@ fn image_size_error(path: &str, size: u64) -> Option<String> {
 pub struct ReadTool {
     cwd: PathBuf,
     description: String,
+    observations: Arc<SourceObservations>,
 }
 
 impl ReadTool {
@@ -85,6 +88,7 @@ impl ReadTool {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
             cwd: cwd.into(),
+            observations: Arc::new(SourceObservations::new()),
             description: format!(
                 "Read the contents of a file. Supports text files and images (jpg, png, gif, \
                  webp). Images up to 4 MiB with matching file signatures are sent as \
@@ -92,10 +96,19 @@ impl ReadTool {
                  is truncated to \
                  {DEFAULT_MAX_LINES} lines or {}KB (whichever is hit first). Use offset/limit \
                  for large files. When you need the full file, continue with offset until \
-                 complete.",
+                 complete. Text results include a source observation id, checkout, path, raw-byte \
+                 revision and actual returned range. Supply the id in apply_patch's \
+                 expectedObservations for an optional whole-file stale-source check. Observations \
+                 are bounded and session-local; expired ids require a fresh read.",
                 DEFAULT_MAX_BYTES / 1024
             ),
         }
+    }
+
+    #[must_use]
+    pub fn with_observations(mut self, observations: Arc<SourceObservations>) -> Self {
+        self.observations = observations;
+        self
     }
 }
 
@@ -143,7 +156,10 @@ impl AgentTool for ReadTool {
         let start = offset.unwrap_or(1);
 
         match limit {
-            Some(limit) => format!("read {path}:{start}-{}", (start + limit).saturating_sub(1)),
+            Some(limit) => format!(
+                "read {path}:{start}-{}",
+                start.saturating_add(limit).saturating_sub(1)
+            ),
             None => format!("read {path}:{start}"),
         }
     }
@@ -210,14 +226,32 @@ impl AgentTool for ReadTool {
             });
         }
 
-        let content = tokio::fs::read_to_string(&absolute_path)
+        // Resolve identities before reading, then hash exactly these read bytes.
+        // In particular, do not canonicalize a potentially retargeted symlink
+        // after reading and attach that identity to an earlier observation.
+        let checkout = tokio::fs::canonicalize(&self.cwd).await.map_err(|error| {
+            format!(
+                "Could not identify checkout {}: {error}",
+                self.cwd.display()
+            )
+        })?;
+        let source_path = tokio::fs::canonicalize(resolve_to_root(&args.path, &checkout))
+            .await
+            .map_err(|error| format!("Could not read file: {} ({error})", args.path))?;
+        let content = tokio::fs::read_to_string(&source_path)
             .await
             .map_err(|e| format!("Could not read file: {} ({e})", args.path))?;
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
 
-        let all_lines: Vec<&str> = content.split('\n').collect();
+        // A terminal newline is not an extra source line. Keep one empty line
+        // for an empty file, consistent with the offset=1 fallback.
+        let all_lines: Vec<&str> = content
+            .strip_suffix('\n')
+            .unwrap_or(&content)
+            .split('\n')
+            .collect();
         let total_file_lines = all_lines.len();
 
         let start_line = args.offset.map_or(0, |o| o.saturating_sub(1));
@@ -232,18 +266,38 @@ impl AgentTool for ReadTool {
 
         // A user provided limit is honored first, truncate_head still applies
         // its own line/byte caps afterwards.
-        let (selected, user_limited_lines) = match args.limit {
-            Some(limit) => {
-                let end = (start_line + limit).min(all_lines.len());
-                (
-                    all_lines[start_line..end].join("\n"),
-                    Some(end - start_line),
-                )
-            }
-            None => (all_lines[start_line..].join("\n"), None),
-        };
+        let end_line = args.limit.map_or(total_file_lines, |limit| {
+            start_line.saturating_add(limit).min(total_file_lines)
+        });
+        let selected_lines = end_line - start_line;
+        let mut selected = all_lines[start_line..end_line].join("\n");
+        // Preserve the last selected line's terminator. Otherwise a selected
+        // trailing blank line looks like a terminator to truncate_head, which
+        // can undercount the view and bypass the line cap by one.
+        if selected_lines > 0 && (end_line < total_file_lines || content.ends_with('\n')) {
+            selected.push('\n');
+        }
 
         let truncation = truncate_head(&selected, TruncationOptions::default());
+        let returned_lines = if truncation.truncated {
+            truncation.output_lines
+        } else {
+            selected_lines
+        };
+        let range = (returned_lines > 0).then(|| SourceRange {
+            start: start_line_display,
+            end: start_line + returned_lines,
+        });
+        let observation = self
+            .observations
+            .record(
+                &checkout,
+                &source_path,
+                content.as_bytes(),
+                range,
+                total_file_lines,
+            )
+            .await?;
         let output = if truncation.first_line_exceeds_limit {
             let first_line_size = format_size(all_lines[start_line].len());
             format!(
@@ -270,12 +324,10 @@ impl AgentTool for ReadTool {
                 "{}\n\n[{reason} Use offset={next_offset} to continue.]",
                 truncation.content
             )
-        } else if let Some(shown) =
-            user_limited_lines.filter(|shown| start_line + shown < all_lines.len())
-        {
+        } else if end_line < total_file_lines {
             // The user's limit stopped early but the file continues.
-            let remaining = all_lines.len() - (start_line + shown);
-            let next_offset = start_line + shown + 1;
+            let remaining = total_file_lines - end_line;
+            let next_offset = end_line + 1;
             format!(
                 "{}\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]",
                 truncation.content
@@ -284,7 +336,22 @@ impl AgentTool for ReadTool {
             truncation.content
         };
 
-        Ok(AgentToolResult::text(output))
+        Ok(AgentToolResult {
+            content: vec![ToolResultContent::Text(TextContent::plain(format!(
+                "{}\n\n{output}",
+                observation.header()
+            )))],
+            details: Some(json!({
+                "observation": observation.id,
+                "checkout": observation.checkout,
+                "path": observation.path,
+                "revision": observation.revision,
+                "range": range.map(|range| json!({"start": range.start, "end": range.end})),
+                "totalLines": total_file_lines,
+                "truncated": truncation.truncated,
+            })),
+            terminate: false,
+        })
     }
 }
 
@@ -332,7 +399,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("f.txt"), "one\ntwo\nthree").unwrap();
         let out = run_read(&dir, json!({"path": "f.txt"})).await.unwrap();
-        assert_eq!(out, "one\ntwo\nthree");
+        assert!(out.starts_with("[Observation: R"), "{out}");
+        assert!(out.contains("Path: f.txt\nRevision: sha256:"), "{out}");
+        assert!(
+            out.contains("Range: 1-3 of 3 lines\nCoverage: complete file"),
+            "{out}"
+        );
+        assert!(out.ends_with("\n\none\ntwo\nthree"), "{out}");
     }
 
     #[tokio::test]
@@ -343,8 +416,107 @@ mod tests {
         let out = run_read(&dir, json!({"path": "f.txt", "offset": 2, "limit": 2}))
             .await
             .unwrap();
-        assert!(out.starts_with("2\n3"), "got: {out}");
+        assert!(
+            out.contains("Range: 2-3 of 5 lines\nCoverage: partial file"),
+            "got: {out}"
+        );
+        assert!(out.contains("\n\n2\n3"), "got: {out}");
         assert!(out.contains("Use offset=4 to continue"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn observation_uses_the_same_raw_bytes_as_the_view() {
+        let dir = std::env::temp_dir().join(format!("cupel-read-raw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let raw = "\u{feff}one\r\ntwo\r\nthree\r\n";
+        std::fs::write(dir.join("f.txt"), raw).unwrap();
+        let store = Arc::new(SourceObservations::new());
+        let tool = ReadTool::new(&dir).with_observations(Arc::clone(&store));
+        let result = tool
+            .execute(
+                "read",
+                json!({"path": "./f.txt", "offset": 2, "limit": 1}),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        let details = result.details.unwrap();
+        let observation = store
+            .get(details["observation"].as_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(observation.checkout, dir.canonicalize().unwrap());
+        assert_eq!(observation.path, dir.join("f.txt").canonicalize().unwrap());
+        assert_eq!(observation.range, Some(SourceRange { start: 2, end: 2 }));
+        assert_eq!(
+            observation.total_lines, 3,
+            "terminal newline is not another source line"
+        );
+        observation
+            .check(&observation.path, raw.as_bytes())
+            .unwrap();
+        assert!(
+            observation
+                .check(&observation.path, raw.replace("\r\n", "\n").as_bytes())
+                .is_err()
+        );
+        let ToolResultContent::Text(text) = &result.content[0] else {
+            panic!("expected text");
+        };
+        assert!(text.text.contains(&observation.revision));
+        assert!(text.text.contains("\n\ntwo\r\n\n\n["), "{}", text.text);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn observations_report_actual_ranges_after_both_hard_caps() {
+        let dir = std::env::temp_dir().join(format!("cupel-read-ranges-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = ReadTool::new(&dir);
+        for (text, expected_end) in [
+            ("x\n".repeat(2100), 2000),
+            (format!("{}\n", "x".repeat(1000)).repeat(200), 51),
+            ("\n".repeat(2001), 2000),
+        ] {
+            std::fs::write(dir.join("f.txt"), text).unwrap();
+            let result = tool
+                .execute(
+                    "read",
+                    json!({"path": "f.txt"}),
+                    CancellationToken::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+            let details = result.details.unwrap();
+            assert_eq!(details["range"], json!({"start": 1, "end": expected_end}));
+            assert_eq!(details["truncated"], true);
+            let ToolResultContent::Text(text) = &result.content[0] else {
+                panic!("expected text");
+            };
+            assert!(text.text.contains("Coverage: partial file"));
+            assert!(
+                text.text
+                    .contains(&format!("Use offset={} to continue", expected_end + 1))
+            );
+        }
+        std::fs::write(dir.join("f.txt"), "x".repeat(DEFAULT_MAX_BYTES + 1)).unwrap();
+        let result = tool
+            .execute(
+                "read",
+                json!({"path": "f.txt"}),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.details.unwrap()["range"], Value::Null);
+        let ToolResultContent::Text(text) = &result.content[0] else {
+            panic!("expected text");
+        };
+        assert!(text.text.contains("Coverage: no source returned"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

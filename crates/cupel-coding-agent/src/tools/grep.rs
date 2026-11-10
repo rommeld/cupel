@@ -6,7 +6,7 @@
 //!   line/byte truncation, and the output format the model sees
 //!   (path, line number and text separated by colons for matches, path, line number and text separated by hyphens for context).
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,7 +16,9 @@ use tokio_util::sync::CancellationToken;
 
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 
-use crate::search::{CodeSearch, SearchLimit, SearchQuery, resolve_to_root};
+use crate::search::{
+    CodeSearch, SearchLimit, SearchMatch, SearchQuery, resolve_to_root, source_locator,
+};
 use crate::tools::grep_rank::{Bucket, FileSummary, Ranker};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, GREP_MAX_LINE_LENGTH, TruncationOptions, format_size, truncate_head,
@@ -76,7 +78,9 @@ impl GrepTool {
                 {GREP_MAX_LINE_LENGTH} chars. outputMode \"files\" returns one line per file \
                 instead ({FILES_DEFAULT_LIMIT} by default), ranked with definitions first and \
                 test code last, each with its best matching line as preview - use it to learn \
-                which files to read.",
+                which files to read. Returned paths open directly with read from the current \
+                working directory, even for scoped searches. Locations are navigation hints, \
+                not versioned source observations; re-read before editing.",
                 DEFAULT_MAX_BYTES / 1024
             ),
         }
@@ -180,10 +184,8 @@ impl AgentTool for GrepTool {
             },
         };
 
-        // Where are we searching? Needed for both the backend query and for
-        // making result paths relative + readable.
+        // The search scope affects ranking, never the meaning of a result path.
         let search_path = resolve_to_root(args.path.as_deref().unwrap_or("."), &self.cwd);
-        let searching_directory = search_path.is_dir();
 
         // The scope, spelled out for the no match message, a model that sees
         // what was searched where fixes a bad glob instead of retrying blind.
@@ -207,7 +209,7 @@ impl AgentTool for GrepTool {
         // like, the ranker reads that off the query before the backend
         // takes ownership of it.
         let ranker = (args.output_mode == OutputMode::Files).then(|| Ranker::new(&query));
-        let outcome = self.backend.search(query, cancel).await?;
+        let outcome = self.backend.search(query, cancel.clone()).await?;
 
         if outcome.matches.is_empty() {
             return Ok(AgentToolResult::text(format!(
@@ -215,18 +217,7 @@ impl AgentTool for GrepTool {
             )));
         }
 
-        let format_path = |path: &Path| -> String {
-            if searching_directory
-                && let Ok(relative) = path.strip_prefix(&search_path)
-                && !relative.as_os_str().is_empty()
-            {
-                return relative.display().to_string().replace('\\', "/");
-            }
-            path.file_name().map_or_else(
-                || path.display().to_string(),
-                |n| n.to_string_lossy().into(),
-            )
-        };
+        let format_path = |path: &Path| source_locator(path, &self.cwd);
 
         if let Some(ranker) = ranker {
             let ranked = ranker.rank(&outcome.matches, &search_path);
@@ -238,58 +229,8 @@ impl AgentTool for GrepTool {
             ));
         }
 
-        // File cache so N matches in one file read it once (context mode).
-        let mut file_cache: HashMap<PathBuf, Vec<String>> = HashMap::new();
-        let mut output_lines: Vec<String> = Vec::new();
-        let mut lines_truncated = false;
-
-        for m in &outcome.matches {
-            let relative_path = format_path(&m.path);
-
-            if args.context == 0 {
-                // Fast path, the backend already gave us the matching line.
-                let (text, was_truncated) = truncate_line(&m.line, GREP_MAX_LINE_LENGTH);
-                lines_truncated |= was_truncated;
-                output_lines.push(format!("{relative_path}:{}: {text}", m.line_number));
-                continue;
-            }
-
-            // Context mode, pull surrounding lines from the file.
-            let lines = file_cache.entry(m.path.clone()).or_insert_with(|| {
-                std::fs::read_to_string(&m.path)
-                    .map(|content| {
-                        content
-                            .replace("\r\n", "\n")
-                            .split('\n')
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            });
-            if lines.is_empty() {
-                output_lines.push(format!(
-                    "{relative_path}:{}: (unable to read file)",
-                    m.line_number
-                ));
-                continue;
-            }
-            let start = m.line_number.saturating_sub(args.context).max(1);
-            let end = (m.line_number + args.context).min(lines.len() as u64);
-            for current in start..=end {
-                let line_text = lines
-                    .get(usize::try_from(current - 1).unwrap_or(usize::MAX))
-                    .map_or("", String::as_str);
-                let (text, was_truncated) = truncate_line(line_text, GREP_MAX_LINE_LENGTH);
-                lines_truncated |= was_truncated;
-                // Match lines use a colon, context lines use a hyphen, as in the classic
-                // grep convention, and what the model is trained on.
-                if current == m.line_number {
-                    output_lines.push(format!("{relative_path}:{current}: {text}"));
-                } else {
-                    output_lines.push(format!("{relative_path}-{current}- {text}"));
-                }
-            }
-        }
+        let (output_lines, lines_truncated, context_changed) =
+            render_content(&outcome.matches, args.context, format_path, &cancel)?;
 
         // No line limit here, the match limit already capped the row count.
         let raw_output = output_lines.join("\n");
@@ -321,6 +262,10 @@ impl AgentTool for GrepTool {
             ));
             details.insert("linesTruncated".into(), json!(true));
         }
+        if context_changed {
+            notices.push("Context unavailable or changed since search. Match text is from search; use read for current source".into());
+            details.insert("contextChanged".into(), json!(true));
+        }
         if !notices.is_empty() {
             output.push_str(&format!("\n\n[{}]", notices.join(". ")));
         }
@@ -333,6 +278,103 @@ impl AgentTool for GrepTool {
             terminate: false,
         })
     }
+}
+
+/// Union context intervals before rendering, keeping the union of match markers.
+/// Match text remains the backend observation, not a later reread of that line.
+fn render_content(
+    matches: &[SearchMatch],
+    context: u64,
+    format_path: impl Fn(&Path) -> String,
+    cancel: &CancellationToken,
+) -> Result<(Vec<String>, bool, bool), ToolError> {
+    let mut files: BTreeMap<&Path, BTreeMap<u64, &str>> = BTreeMap::new();
+    for m in matches {
+        files
+            .entry(&m.path)
+            .or_default()
+            .insert(m.line_number, &m.line);
+    }
+    let mut output = Vec::new();
+    let mut output_bytes = 0_usize;
+    let mut lines_truncated = false;
+    let mut context_changed = false;
+    'files: for (path, hits) in files {
+        if cancel.is_cancelled() {
+            return Err("Operation aborted".into());
+        }
+        let locator = format_path(path);
+        let content = (context > 0).then(|| std::fs::read_to_string(path));
+        let lines: Vec<&str> = match &content {
+            Some(Ok(content)) => {
+                // Match the search backend's removal of a leading UTF-8 BOM.
+                content
+                    .strip_prefix('\u{feff}')
+                    .unwrap_or(content)
+                    .lines()
+                    .collect()
+            }
+            Some(Err(_)) => {
+                context_changed = true;
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        let mut windows = Vec::new();
+        for (&line, &text) in &hits {
+            let current = usize::try_from(line.saturating_sub(1))
+                .ok()
+                .and_then(|i| lines.get(i));
+            let (start, end) = if context > 0 && current.copied() == Some(text) {
+                (
+                    line.saturating_sub(context).max(1),
+                    line.saturating_add(context).min(lines.len() as u64),
+                )
+            } else {
+                context_changed |= context > 0;
+                (line, line)
+            };
+            windows.push((start, end));
+        }
+        windows.sort_unstable();
+        let mut intervals: Vec<(u64, u64)> = Vec::new();
+        for (start, end) in windows {
+            if let Some((_, previous_end)) = intervals.last_mut()
+                && start <= previous_end.saturating_add(1)
+            {
+                *previous_end = (*previous_end).max(end);
+            } else {
+                intervals.push((start, end));
+            }
+        }
+        for (start, end) in intervals {
+            for line in start..=end {
+                if cancel.is_cancelled() {
+                    return Err("Operation aborted".into());
+                }
+                let source = hits.get(&line).copied().unwrap_or_else(|| {
+                    usize::try_from(line - 1)
+                        .ok()
+                        .and_then(|i| lines.get(i))
+                        .copied()
+                        .unwrap_or("")
+                });
+                let (text, truncated) = truncate_line(source, GREP_MAX_LINE_LENGTH);
+                lines_truncated |= truncated;
+                let separator = if hits.contains_key(&line) { ':' } else { '-' };
+                let row = format!("{locator}{separator}{line}{separator} {text}");
+                output_bytes =
+                    output_bytes.saturating_add(row.len() + usize::from(!output.is_empty()));
+                output.push(row);
+                // Keep one overflow row so the usual truncation path emits its
+                // notice, without building unbounded context output in memory.
+                if output_bytes > DEFAULT_MAX_BYTES {
+                    break 'files;
+                }
+            }
+        }
+    }
+    Ok((output, lines_truncated, context_changed))
 }
 
 /// `files` mode output, the best `limit` files, one line each.
@@ -495,6 +537,170 @@ mod tests {
         assert!(text.contains("a.txt-1- one"), "got: {text}");
         assert!(text.contains("a.txt:2: two"), "got: {text}");
         assert!(text.contains("a.txt-3- three"), "got: {text}");
+    }
+
+    #[tokio::test]
+    async fn utf8_bom_preserves_context_without_reporting_source_changes() {
+        let root = temp_root("bom-context");
+        for newline in ["\n", "\r\n"] {
+            std::fs::write(
+                root.join("a.txt"),
+                format!("\u{feff}hit{newline}context{newline}"),
+            )
+            .unwrap();
+            let result = run_tool(&root, json!({"pattern": "hit", "context": 1})).await;
+            assert_eq!(text_of(&result), "a.txt:1: hit\na.txt-2- context");
+            assert!(
+                result.details.is_none(),
+                "unexpected notices: {:?}",
+                result.details
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn scoped_locators_round_trip_to_read_in_both_modes() {
+        use crate::tools::read::ReadTool;
+
+        let root = temp_root("locators");
+        let external = temp_root("external-locators");
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/same.txt"), "needle local\n").unwrap();
+        std::fs::write(external.join("same.txt"), "needle external\n").unwrap();
+        for (scope, expected) in [
+            ("nested".to_string(), root.join("nested/same.txt")),
+            ("nested/same.txt".to_string(), root.join("nested/same.txt")),
+            (external.display().to_string(), external.join("same.txt")),
+            (
+                external.join("same.txt").display().to_string(),
+                external.join("same.txt"),
+            ),
+        ] {
+            for mode in ["content", "files"] {
+                let found = run_tool(
+                    &root,
+                    json!({"pattern": "needle", "path": scope, "outputMode": mode}),
+                )
+                .await;
+                let text = text_of(&found);
+                let locator = text.split_once(":1").unwrap().0;
+                let read = ReadTool::new(&root)
+                    .execute(
+                        "read-hit",
+                        json!({"path": locator}),
+                        CancellationToken::new(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                let actual =
+                    PathBuf::from(read.details.as_ref().unwrap()["path"].as_str().unwrap());
+                assert_eq!(
+                    actual,
+                    expected.canonicalize().unwrap(),
+                    "scope={scope}, mode={mode}, locator={locator}"
+                );
+                assert!(text_of(&read).contains("Coverage: complete file"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_context_is_merged_without_losing_match_markers() {
+        let root = temp_root("merged-context");
+        std::fs::write(
+            root.join("a.txt"),
+            "one\r\nhit two\r\nhit three\r\nhit four\r\nfive\r\n",
+        )
+        .unwrap();
+        let result = run_tool(&root, json!({"pattern": "hit", "context": 1})).await;
+        assert_eq!(
+            text_of(&result),
+            "a.txt-1- one\na.txt:2: hit two\na.txt:3: hit three\na.txt:4: hit four\na.txt-5- five"
+        );
+        assert!(result.details.is_none());
+    }
+
+    #[tokio::test]
+    async fn disjoint_context_and_files_keep_source_order() {
+        let root = temp_root("disjoint-context");
+        std::fs::write(root.join("a.txt"), "a\nhit\nc\nskipped\ne\nhit\ng\n").unwrap();
+        std::fs::write(root.join("b.txt"), "hit\n").unwrap();
+        let result = run_tool(&root, json!({"pattern": "hit", "context": 1})).await;
+        assert_eq!(
+            text_of(&result),
+            "a.txt-1- a\na.txt:2: hit\na.txt-3- c\na.txt-5- e\na.txt:6: hit\na.txt-7- g\nb.txt:1: hit"
+        );
+    }
+
+    #[tokio::test]
+    async fn merged_context_preserves_byte_and_line_truncation_notices() {
+        let root = temp_root("context-caps");
+        std::fs::write(
+            root.join("a.txt"),
+            format!("hit\n{}\n", "x".repeat(600)).repeat(200),
+        )
+        .unwrap();
+        let result = run_tool(
+            &root,
+            json!({"pattern": "hit", "context": u64::MAX, "limit": 2}),
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(text.contains("2 matches limit reached"), "{text}");
+        assert!(text.contains("50.0KB limit reached"));
+        assert!(text.contains("Some lines truncated to 500 chars"));
+        let details = result.details.unwrap();
+        assert_eq!(details["truncated"], true);
+        assert_eq!(details["linesTruncated"], true);
+        assert_eq!(details["matchLimitReached"], 2);
+    }
+
+    #[test]
+    fn changed_or_unavailable_context_does_not_replace_the_observed_match() {
+        let root = temp_root("changed-context");
+        let path = root.join("a.txt");
+        std::fs::write(&path, "one\nnew text\nhit\nfour\n").unwrap();
+        let matches = vec![
+            SearchMatch {
+                path: path.clone(),
+                line_number: 2,
+                line: "old hit".to_string(),
+            },
+            SearchMatch {
+                path: path.clone(),
+                line_number: 3,
+                line: "hit".to_string(),
+            },
+        ];
+        let (rows, _, changed) = render_content(
+            &matches,
+            2,
+            |path| source_locator(path, &root),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(
+            rows,
+            [
+                "a.txt-1- one",
+                "a.txt:2: old hit",
+                "a.txt:3: hit",
+                "a.txt-4- four"
+            ]
+        );
+        std::fs::remove_file(&path).unwrap();
+        let (rows, _, changed) = render_content(
+            &matches,
+            2,
+            |path| source_locator(path, &root),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(rows, ["a.txt:2: old hit", "a.txt:3: hit"]);
     }
 
     #[tokio::test]

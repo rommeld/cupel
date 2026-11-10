@@ -333,6 +333,7 @@ pub struct SessionRecorder {
     hooks: HookRunner,
     started: bool,
     undo: std::sync::Arc<crate::undo::UndoJournal>,
+    source_observations: std::sync::Arc<crate::source_observations::SourceObservations>,
 }
 
 impl SessionRecorder {
@@ -361,6 +362,9 @@ impl SessionRecorder {
                 started_at: cupel_core::types::now_ms(),
             },
             undo: crate::undo::shared(path.as_deref(), cwd),
+            source_observations: std::sync::Arc::new(
+                crate::source_observations::SourceObservations::new(),
+            ),
             path,
             file: None,
             persistence_error: None,
@@ -392,6 +396,14 @@ impl SessionRecorder {
     #[must_use]
     pub fn undo(&self) -> std::sync::Arc<crate::undo::UndoJournal> {
         std::sync::Arc::clone(&self.undo)
+    }
+
+    /// Live read observations survive tool hot reload, not transcript resume.
+    #[must_use]
+    pub fn source_observations(
+        &self,
+    ) -> std::sync::Arc<crate::source_observations::SourceObservations> {
+        std::sync::Arc::clone(&self.source_observations)
     }
 
     /// Let stop hooks finish before inspecting or restoring the workspace.

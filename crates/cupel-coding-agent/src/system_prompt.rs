@@ -22,6 +22,7 @@ pub fn build_system_prompt(
 
     let has = |tool: &str| tools.iter().any(|(name, _)| *name == tool);
     let mut guidelines: Vec<&str> = Vec::new();
+    guidelines.push("Establish the repository layout before guessing source directories.");
     if has("grep") {
         guidelines.push("Use grep to locate code before answering questions about it");
         guidelines.push(
@@ -30,12 +31,45 @@ pub fn build_system_prompt(
     }
     if has("read") {
         guidelines.push("Use read to examine files instead of cat or sed");
+        guidelines.push(
+            "Read headers identify the observed source bytes and actual returned range. \
+            Partial views are not complete code units; search locations are navigation hints, \
+            not source revisions. Do not skip required policy text or necessary rereads.",
+        );
     }
     if has("apply_patch") {
         guidelines.push(
             "Use apply_patch for all file changes: create, delete, or rename files and to \
             change several files at once; give every hunk 3 lines of context so it is \
             unique in the file",
+        );
+        guidelines.push(
+            "Use distinctive named @@ anchors for nontrivial patches, repeated blocks, and large \
+            files. Ambiguous targets are rejected. Re-establish the current target text after \
+            formatting or other relevant mutations; do not guess context or loosen matching.",
+        );
+        if has("read") {
+            guidelines.push(
+                "For edits that depend on inspected source, pass read observation ids in \
+                apply_patch expectedObservations. These optional whole-file preconditions \
+                reject stale bytes, including unrelated edits; unavailable ids require a new read.",
+            );
+        }
+        guidelines.push(
+            "Before a nontrivial edit, briefly state the intended behavior change, what must \
+            remain unchanged, and what evidence would expose a mistake. This is reasoning, \
+            not runtime proof or a mandatory approval step.",
+        );
+    }
+    if has("bash") {
+        guidelines.push(
+            "Preserve validation command exit statuses: avoid piping checks through tail/head \
+            without pipefail or explicitly capturing the original status. Confirm the intended \
+            tests actually ran; exit zero or an empty test selection is not proof of correctness.",
+        );
+        guidelines.push(
+            "Parallelize independent work, not competing builds on the same Cargo target or \
+            reads that race with formatting/edits. Do not assume larger batches are faster.",
         );
     }
     if has("ask_user") {
@@ -49,6 +83,11 @@ pub fn build_system_prompt(
     guidelines.push("Explain non-obvious decisions and risks; skip routine status updates.");
     guidelines.push("Never apologize; acknowledge mistakes directly.");
     guidelines.push("Show file paths clearly when working with files");
+    guidelines.push(
+        "In the final answer distinguish applied changes, observed check outcomes, and \
+        requirement-level conclusions. Keep missing results, stale evidence, ambiguous targets, \
+        and unverified cases explicit; earlier checks may no longer apply after later edits.",
+    );
     let guidelines = guidelines
         .iter()
         .map(|g| format!("- {g}"))
@@ -161,6 +200,37 @@ mod tests {
         );
         assert!(prompt.contains("<project_instructions path=\"/tmp/project/AGENTS.md\">"));
         assert!(prompt.contains("Always run cargo clippy."));
+    }
+
+    #[test]
+    fn coding_guidance_connects_navigation_observations_edits_and_checks() {
+        let prompt = build_system_prompt(
+            Path::new("/project"),
+            &[
+                ("read", "Read files"),
+                ("grep", "Search"),
+                ("apply_patch", "Patch"),
+                ("bash", "Shell"),
+            ],
+            &[],
+        );
+        for instruction in [
+            "Establish the repository layout",
+            "distinctive named @@ anchors",
+            "Ambiguous targets are rejected",
+            "expectedObservations",
+            "formatting or other relevant mutations",
+            "not runtime proof",
+            "pipefail",
+            "Confirm the intended tests actually ran",
+            "Parallelize independent work",
+            "unverified cases explicit",
+        ] {
+            assert!(prompt.contains(instruction), "missing: {instruction}");
+        }
+        let no_tools = build_system_prompt(Path::new("/project"), &[], &[]);
+        assert!(!no_tools.contains("expectedObservations"));
+        assert!(!no_tools.contains("pipefail"));
     }
 
     #[test]
