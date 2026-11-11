@@ -3,6 +3,13 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.37.0] - 2026-11-11
+
+- feat(google): add native Gemini streaming provider
+- feat(catalog): add Gemini models and API key setup
+- feat(tools): strengthen source handoffs and patch safety
+- fix(tools): reject aliased new patch destinations
+
 ## [v0.36.0] - 2026-11-09
 
 - fix(tui): reconcile completed reasoning by content index
