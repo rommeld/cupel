@@ -276,6 +276,7 @@ pub(crate) async fn process_response_stream(
                     .to_string();
                 output.content.push(AssistantContent::ToolCall(ToolCall {
                     // Both halves are needed for replay, see module docs.
+                    thought_signature: None,
                     id: format!("{call_id}|{item_id}"),
                     name: item
                         .get("name")

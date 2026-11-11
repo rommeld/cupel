@@ -239,6 +239,7 @@ mod tests {
             timestamp: cupel_core::types::now_ms(),
         };
         let call = |name: &str, args: serde_json::Value| ToolCall {
+            thought_signature: None,
             id: "call_1".into(),
             name: name.into(),
             arguments: args,

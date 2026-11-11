@@ -28,7 +28,7 @@ use cupel_core::types::{TextContent, ToolResultContent};
 
 use crate::search::resolve_to_root;
 use crate::source_observations::{SourceObservation, SourceObservations};
-use crate::tools::file_queue::lock_file_for_mutation;
+use crate::tools::file_queue::{lock_file_for_mutation, queue_key};
 use crate::tools::patch_parser::{Hunk, parse_patch};
 use crate::tools::patch_update::apply_chunks;
 use crate::tools::text_diff::{
@@ -178,9 +178,8 @@ impl ApplyPatchTool {
         Ok(expected)
     }
 
-    /// Every absolute path the patch writes or removes, deduplicated the
-    /// way the file queue keys its locks (canonical path when the file
-    /// exists) and sorted. Two hunks on one file are refused up front, as
+    /// Every absolute path the patch writes or removes, deduplicated with
+    /// the file queue's identity key and sorted. Two hunks on one file are refused up front, as
     /// in Codex, applying them in sequence would make the second one
     /// operate on the first one's result, which the patch did not say.
     fn lock_keys(&self, hunks: &[Hunk]) -> Result<Vec<PathBuf>, ToolError> {
@@ -540,12 +539,6 @@ async fn check_expected(
     };
     observation.check(&identity, raw)?;
     Ok(())
-}
-
-/// The file queue's key, symlinks and `./` resolved when the file exists,
-/// the plain absolute path otherwise (a file about to be created).
-fn queue_key(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 async fn lock_all(keys: &[PathBuf]) -> Vec<tokio::sync::OwnedMutexGuard<()>> {

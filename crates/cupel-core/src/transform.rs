@@ -301,6 +301,9 @@ fn transform_assistant(
             }
             AssistantContent::ToolCall(tool_call) => {
                 let mut tool_call = tool_call.clone();
+                if !is_same_model {
+                    tool_call.thought_signature = None;
+                }
                 if !is_same_model && let Some(normalize) = normalize_tool_call_id {
                     let normalized = normalize(&tool_call.id, model, assistant);
                     if normalized != tool_call.id {
@@ -457,9 +460,48 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_signatures_are_replayed_only_for_the_same_model_provider_and_api() {
+        let call = ToolCall {
+            id: "call_1".into(),
+            name: "read".into(),
+            arguments: serde_json::json!({"path": "src/main.rs"}),
+            thought_signature: Some("opaque-provider-signature".into()),
+        };
+        let Message::Assistant(assistant) = assistant_with(
+            vec![AssistantContent::ToolCall(call.clone())],
+            StopReason::ToolUse,
+        ) else {
+            panic!("expected assistant message");
+        };
+        let model = test_model(true);
+        let mut other_model = model.clone();
+        other_model.id = "m2".into();
+        let mut other_provider = model.clone();
+        other_provider.provider = Provider::from("other-provider");
+        let mut other_api = model.clone();
+        other_api.api = Api::from("other-api");
+
+        for (target, keep_signature) in [
+            (model, true),
+            (other_model, false),
+            (other_provider, false),
+            (other_api, false),
+        ] {
+            let output = transform_assistant(&assistant, &target, None, &mut HashMap::new());
+            let mut expected = call.clone();
+            if !keep_signature {
+                expected.thought_signature = None;
+            }
+            assert_eq!(output.content, vec![AssistantContent::ToolCall(expected)]);
+        }
+        assert_eq!(assistant.content, vec![AssistantContent::ToolCall(call)]);
+    }
+
+    #[test]
     fn orphaned_tool_calls_get_synthetic_results() {
         let messages = vec![assistant_with(
             vec![AssistantContent::ToolCall(ToolCall {
+                thought_signature: None,
                 id: "call_1".into(),
                 name: "grep".into(),
                 arguments: serde_json::json!({}),

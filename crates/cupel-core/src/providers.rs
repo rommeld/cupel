@@ -11,6 +11,7 @@
 //!   dialect (SSE), driven by ChatGPT OAuth tokens instead of API keys
 //! * [`bedrock`], AWS Bedrock `ConverseStream` (binary event stream via the
 //!   official AWS SDK)
+//! * [`google`], Google Gemini `streamGenerateContent` (SSE)
 //!
 //! All providers follow the same stream functions,
 //! `stream()` returns immediately, the network work happens on a spawned
@@ -19,6 +20,7 @@
 
 pub mod anthropic;
 pub mod bedrock;
+pub mod google;
 pub mod openai_codex_responses;
 pub mod openai_completions;
 pub mod openai_responses;

@@ -705,6 +705,7 @@ mod tests {
             [
                 AgentMessage::Llm(Message::Assistant(cupel_core::types::AssistantMessage {
                     content: vec![AssistantContent::ToolCall(cupel_core::types::ToolCall {
+                        thought_signature: None,
                         id: id.clone(),
                         name: "read".into(),
                         arguments: serde_json::json!({}),

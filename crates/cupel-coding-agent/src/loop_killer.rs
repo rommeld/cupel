@@ -88,6 +88,7 @@ mod tests {
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
         ToolCall {
+            thought_signature: None,
             id: "call_1".into(),
             name: name.into(),
             arguments: args,

@@ -69,6 +69,7 @@ impl Provider for Capture {
         };
         let content = if reading {
             vec![AssistantContent::ToolCall(ToolCall {
+                thought_signature: None,
                 id: "evidence-1".into(),
                 name: "read".into(),
                 arguments: serde_json::json!({}),

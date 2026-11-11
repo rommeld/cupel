@@ -266,6 +266,7 @@ async fn thinking_removal_persists_across_runs_even_when_recovery_fails() {
         registry.register(Arc::<BindingProvider>::clone(&provider));
         let mut seed = earlier_turn(&mock_model());
         let tool_call = ToolCall {
+            thought_signature: None,
             id: "old_call".into(),
             name: "read".into(),
             arguments: serde_json::json!({}),

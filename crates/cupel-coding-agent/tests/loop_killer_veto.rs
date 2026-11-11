@@ -62,6 +62,7 @@ impl Provider for StuckProvider {
                 content: vec![AssistantContent::ToolCall(ToolCall {
                     // Unique id per attempt, identical name + arguments.
                     // the killer must key on the call, never on the id.
+                    thought_signature: None,
                     id: format!("call_{call}"),
                     name: "bash".into(),
                     arguments: serde_json::json!({"command": "echo tick >> counter.txt"}),

@@ -287,3 +287,68 @@ async fn an_alias_can_use_the_observation_but_retargeting_it_cannot() {
     assert_eq!(project.read("first"), "before\nnew\n");
     assert_eq!(project.read("second"), "before\nold\n");
 }
+
+#[tokio::test]
+async fn new_destination_aliases_reject_before_any_writes() {
+    let project = Project::new("new-destination-aliases");
+    std::fs::create_dir_all(project.0.join("nested")).unwrap();
+    let tools = bootstrap::coding_tools(&project.0);
+    let first = "*** Add File: destination.txt\n+first\n";
+    for second in [
+        "*** Add File: nested/../destination.txt\n+second\n",
+        "*** Update File: source.txt\n*** Move to: nested/../destination.txt\n@@\n-old\n+second\n",
+    ] {
+        for sections in [format!("{first}{second}"), format!("{second}{first}")] {
+            project.write("source.txt", "old\n");
+            let input = format!(
+                "*** Begin Patch\n*** Add File: created.txt\n+created\n{sections}*** End Patch"
+            );
+            let result = execute(tool(&tools, "apply_patch"), json!({"input": input})).await;
+            assert!(
+                result.is_err(),
+                "alias collision was accepted: {result:?}; destination bytes: {:?}",
+                std::fs::read(project.0.join("destination.txt"))
+            );
+            let error = result.unwrap_err().to_string();
+            assert!(error.starts_with("multiple operations target "), "{error}");
+            assert_eq!(project.read("source.txt"), "old\n");
+            assert!(!project.0.join("destination.txt").exists());
+            assert!(!project.0.join("created.txt").exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn new_destination_keys_follow_parent_symlinks_before_dot_dot() {
+    use std::os::unix::fs::symlink;
+
+    let project = Project::new("new-destination-symlinks");
+    std::fs::create_dir_all(project.0.join("actual/deep")).unwrap();
+    symlink(Path::new("actual/deep"), project.0.join("link")).unwrap();
+    let tools = bootstrap::coding_tools(&project.0);
+    for (destination, alias) in [
+        ("actual/destination.txt", "link/../destination.txt"),
+        ("actual/deep/destination.txt", "link/destination.txt"),
+    ] {
+        let input = format!(
+            "*** Begin Patch\n*** Add File: created.txt\n+created\n*** Add File: {destination}\n+first\n*** Add File: {alias}\n+second\n*** End Patch"
+        );
+        let error = execute(tool(&tools, "apply_patch"), json!({"input": input}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("multiple operations target "), "{error}");
+        assert!(!project.0.join(destination).exists());
+        assert!(!project.0.join("created.txt").exists());
+    }
+    // Lexically collapsing link/.. would incorrectly merge these distinct files.
+    execute(
+        tool(&tools, "apply_patch"),
+        json!({"input": "*** Begin Patch\n*** Add File: destination.txt\n+top\n*** Add File: link/../destination.txt\n+nested\n*** End Patch"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(project.read("destination.txt"), "top\n");
+    assert_eq!(project.read("actual/destination.txt"), "nested\n");
+}

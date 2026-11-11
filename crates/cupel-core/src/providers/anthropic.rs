@@ -361,6 +361,7 @@ async fn run(
                                 raw_name.to_string()
                             };
                             output.content.push(AssistantContent::ToolCall(ToolCall {
+                                thought_signature: None,
                                 id,
                                 name,
                                 arguments: json!({}),
