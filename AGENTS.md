@@ -17,8 +17,10 @@ For Rust coding guidelines, read and follow [RUST-CODING-GUIDE.md](RUST-CODING-G
 
 ## Testing Scope
 
-* Add tests only for new behavior, compatibility exceptions, or regressions not already covered by existing tests.
-* Do not add tests that merely repeat model catalog data (names, IDs, prices, context windows, or supported thinking levels) when existing provider and generator logic already handles it. Use shared validation and catalog-generation consistency checks for routine model additions.
+* Write tests only for new behavior, new features, regressions, compatibility exceptions, or non-obvious edge cases.
+* Do not add a test that repeats coverage provided by an existing test or shared validation. Extend the existing test instead.
+* Omit tests that merely restate input data, metadata, or an obvious success path; they add maintenance cost without protection.
+* Prefer edge cases, boundaries, and behavior that is easy to get wrong or hard to infer from the implementation.
 
 ## Post-Implementation Hygiene
 
