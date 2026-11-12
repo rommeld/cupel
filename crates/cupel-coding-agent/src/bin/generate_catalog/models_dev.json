@@ -1,6 +1,42 @@
 {
   "amazon-bedrock": {
     "models": {
+      "global.anthropic.claude-fable-5-2": {
+        "cost": {
+          "cache_read": 0.2,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "Claude Fable 5.2 (Global)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
       "global.anthropic.claude-haiku-5-5": {
         "cost": {
           "cache_read": 0.01,
@@ -179,6 +215,42 @@
           ]
         },
         "name": "Claude Fable 5.1 (US)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "us.anthropic.claude-fable-5-2": {
+        "cost": {
+          "cache_read": 0.22,
+          "cache_write": 11.0,
+          "input": 8.8,
+          "output": 44.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "Claude Fable 5.2 (US)",
         "reasoning": true,
         "reasoning_options": [
           {
@@ -861,6 +933,43 @@
         ],
         "temperature": false
       },
+      "accounts/fireworks/models/kimi-k3p1-pro": {
+        "cost": {
+          "cache_read": 0.2,
+          "cache_write": 0.0,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Kimi K3.1 Pro",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
       "accounts/fireworks/models/minimax-m3": {
         "cost": {
           "cache_read": 0.06,
@@ -1085,6 +1194,42 @@
           ]
         },
         "name": "DeepSeek V4.1 Flash 1017 Spot",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast": {
+        "cost": {
+          "cache_read": 0.048,
+          "cache_write": 0.0,
+          "input": 2.4,
+          "output": 9.6,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1000000,
+          "input": null,
+          "output": 384000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "DeepSeek V4.1 Flash 1017 Ultra-fast",
         "reasoning": true,
         "reasoning_options": [
           {
@@ -1989,6 +2134,69 @@
         ],
         "temperature": false
       },
+      "baidu/ernie-5.5-flash-preview:free": {
+        "cost": {
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "input": 0.0,
+          "output": 0.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1024000,
+          "input": null,
+          "output": 921600
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "ERNIE-5.5-Flash-Preview (free)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "high"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "baidu/ernie-light-dt-1.0-intl": {
+        "cost": {
+          "cache_read": 0.113,
+          "cache_write": 0.0,
+          "input": 1.13,
+          "output": 3.94,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1024000,
+          "input": null,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "ERNIE-Light-DT-1.0",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "bytedance-seed/seed-2-1-turbo": {
         "cost": {
           "cache_read": 0.0,
@@ -2505,6 +2713,42 @@
         ],
         "temperature": true
       },
+      "google/gemini-4-carbon": {
+        "cost": {
+          "cache_read": 0.1,
+          "cache_write": 0.1875,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ]
+        },
+        "name": "Gemini 4 Carbon",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "google/gemma-4-26b-a4b-it": {
         "cost": {
           "cache_read": 0.05,
@@ -2811,6 +3055,52 @@
         "reasoning_options": [],
         "temperature": true
       },
+      "liquid/lfm-3-1.7b": {
+        "cost": {
+          "cache_read": 0.02,
+          "cache_write": 0.0,
+          "input": 0.08,
+          "output": 0.2,
+          "tiers": []
+        },
+        "limit": {
+          "context": 262144,
+          "input": null,
+          "output": 8192
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "LFM3-1.7B",
+        "reasoning": true,
+        "reasoning_options": [],
+        "temperature": true
+      },
+      "liquid/lfm-3-1.7b:free": {
+        "cost": {
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "input": 0.0,
+          "output": 0.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 262144,
+          "input": null,
+          "output": 8192
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "LFM3-1.7B (free)",
+        "reasoning": true,
+        "reasoning_options": [],
+        "temperature": true
+      },
       "meituan/longcat-2.0": {
         "cost": {
           "cache_read": 0.006,
@@ -2837,6 +3127,45 @@
           },
           {
             "type": "budget_tokens"
+          }
+        ],
+        "temperature": true
+      },
+      "meta/muse-ember": {
+        "cost": {
+          "cache_read": 0.004,
+          "cache_write": 0.125,
+          "input": 0.1,
+          "output": 0.5,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "pdf",
+            "audio"
+          ]
+        },
+        "name": "Muse Ember",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
           }
         ],
         "temperature": true
@@ -3310,6 +3639,38 @@
             "type": "effort",
             "values": [
               "none",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "nex-agi/nex-n2.6": {
+        "cost": {
+          "cache_read": 0.024,
+          "cache_write": 0.0,
+          "input": 0.12,
+          "output": 0.4,
+          "tiers": []
+        },
+        "limit": {
+          "context": 262144,
+          "input": null,
+          "output": 235929
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Nex-N2.6",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
               "medium",
               "high"
             ]
@@ -4787,6 +5148,41 @@
             "type": "effort",
             "values": [
               "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "thinkingmachines/inkling-2-small:free": {
+        "cost": {
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "input": 0.0,
+          "output": 0.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Inkling 2 Small (free)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
               "minimal",
               "low",
               "medium",

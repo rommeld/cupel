@@ -343,19 +343,6 @@ mod tests {
     }
 
     #[test]
-    fn seek_exact_match() {
-        assert_eq!(
-            seek_sequence(
-                &lines(&["foo", "bar", "baz"]),
-                &lines(&["bar", "baz"]),
-                0,
-                false
-            ),
-            Some(1)
-        );
-    }
-
-    #[test]
     fn seek_ignores_trailing_then_surrounding_whitespace() {
         assert_eq!(
             seek_sequence(

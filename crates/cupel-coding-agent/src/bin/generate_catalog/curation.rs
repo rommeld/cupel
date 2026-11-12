@@ -364,6 +364,16 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 Some("Claude Fable 5.1 (Bedrock)"),
                 Thinking::FromEffort,
             ),
+            bedrock_adaptive(
+                "global.anthropic.claude-fable-5-2",
+                Some("Claude Fable 5.2 (Bedrock)"),
+                Thinking::FromEffort,
+            ),
+            bedrock_adaptive(
+                "us.anthropic.claude-fable-5-2",
+                Some("Claude Fable 5.2 (Bedrock US)"),
+                Thinking::FromEffort,
+            ),
         ],
     },
     CuratedProvider {
@@ -424,6 +434,15 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             ),
             fireworks_completions(
                 "accounts/fireworks/routers/kimi-k3-spot",
+                Thinking::FromEffort,
+            ),
+            fireworks_completions(
+                "accounts/fireworks/models/kimi-k3p1-pro",
+                Thinking::FromEffort,
+            ),
+            // Fireworks selects this speed by router id, not service_tier.
+            fireworks_completions(
+                "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
                 Thinking::FromEffort,
             ),
         ],
@@ -555,6 +574,17 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter_tiered("bytedance-seed/seed-2.0-mini"),
             openrouter("perceptron/perceptron-mk1.5", Thinking::FromEffort),
             openrouter("particle-ai/particle-1", Thinking::FromEffort),
+            openrouter("baidu/ernie-light-dt-1.0-intl", Thinking::FromEffort),
+            openrouter("baidu/ernie-5.5-flash-preview:free", Thinking::FromEffort),
+            openrouter("meta/muse-ember", Thinking::FromEffort),
+            openrouter("liquid/lfm-3-1.7b", Thinking::FromEffort),
+            openrouter("liquid/lfm-3-1.7b:free", Thinking::FromEffort),
+            openrouter("nex-agi/nex-n2.6", Thinking::FromEffort),
+            openrouter(
+                "thinkingmachines/inkling-2-small:free",
+                Thinking::FromEffort,
+            ),
+            openrouter("google/gemini-4-carbon", Thinking::FromEffort),
         ],
     },
 ];

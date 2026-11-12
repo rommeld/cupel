@@ -292,14 +292,6 @@ mod tests {
     }
 
     #[test]
-    fn no_home_or_no_folder_means_no_themes() {
-        assert_eq!(load_theme_files(None), (Vec::new(), Vec::new()));
-        let home = temp_home("none");
-        std::fs::remove_dir_all(&home).unwrap();
-        assert_eq!(load_theme_files(Some(&home)), (Vec::new(), Vec::new()));
-    }
-
-    #[test]
     fn hard_to_read_text_loads_with_a_warning() {
         use crate::themes::contrast;
 

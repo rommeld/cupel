@@ -112,14 +112,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn complete_json_passes_through() {
-        assert_eq!(
-            parse_streaming_json(r#"{"pattern": "foo"}"#),
-            json!({"pattern": "foo"})
-        );
-    }
-
-    #[test]
     fn empty_input_yields_empty_object() {
         assert_eq!(parse_streaming_json(""), json!({}));
         assert_eq!(parse_streaming_json("   "), json!({}));

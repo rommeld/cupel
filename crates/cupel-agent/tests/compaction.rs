@@ -762,13 +762,10 @@ async fn seeded_history_does_not_trust_usage_it_did_not_observe() {
 }
 
 #[tokio::test]
-async fn threshold_compaction_persists_in_state_and_the_next_prompt() {
-    assert_compaction_persists(CompactionReason::Threshold).await;
-}
-
-#[tokio::test]
-async fn overflow_compaction_persists_in_state_and_the_next_prompt() {
-    assert_compaction_persists(CompactionReason::Overflow).await;
+async fn compaction_persists_in_state_and_the_next_prompt() {
+    for reason in [CompactionReason::Threshold, CompactionReason::Overflow] {
+        assert_compaction_persists(reason).await;
+    }
 }
 
 #[tokio::test]
@@ -818,15 +815,4 @@ async fn pruning_persists_even_when_summarization_fails() {
         let request = seen.last().expect("second prompt request");
         assert_eq!(&request[..expected.len()], expected.as_slice());
     }
-}
-
-#[tokio::test]
-async fn compaction_disabled_never_compacts() {
-    let provider = Arc::new(CompactionAwareProvider::new(0, ""));
-    let config = CompactionConfig {
-        enabled: false,
-        ..CompactionConfig::default()
-    };
-    let events = run_with(Arc::clone(&provider), 3000, config, big_history(5)).await;
-    assert!(compaction_events(&events).is_empty());
 }

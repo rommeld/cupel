@@ -769,6 +769,62 @@
     }
   },
   {
+    "id": "global.anthropic.claude-fable-5-2",
+    "name": "Claude Fable 5.2 (Bedrock)",
+    "api": "bedrock-converse-stream",
+    "provider": "amazon-bedrock",
+    "baseUrl": "",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8.0,
+      "output": 40.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 10.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "us.anthropic.claude-fable-5-2",
+    "name": "Claude Fable 5.2 (Bedrock US)",
+    "api": "bedrock-converse-stream",
+    "provider": "amazon-bedrock",
+    "baseUrl": "",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8.8,
+      "output": 44.0,
+      "cachedRead": 0.22,
+      "cachedWrite": 11.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "accounts/fireworks/models/deepseek-v4p1-flash",
     "name": "DeepSeek V4.1 Flash",
     "api": "anthropic-messages",
@@ -1289,6 +1345,64 @@
       "supportsDeveloperRole": false,
       "supportsStore": false,
       "supportsTemperature": false
+    }
+  },
+  {
+    "id": "accounts/fireworks/models/kimi-k3p1-pro",
+    "name": "Kimi K3.1 Pro",
+    "api": "openai-completions",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.2,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false,
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
+    "name": "DeepSeek V4.1 Flash 1017 Ultra-fast",
+    "api": "openai-completions",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.4,
+      "output": 9.6,
+      "cachedRead": 0.048,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 384000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false
     }
   },
   {
@@ -4505,6 +4619,228 @@
     },
     "contextWindow": 1048576,
     "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "baidu/ernie-light-dt-1.0-intl",
+    "name": "ERNIE-Light-DT-1.0",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "off": "none",
+      "xhigh": null
+    },
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 1.13,
+      "output": 3.94,
+      "cachedRead": 0.113,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1024000,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "baidu/ernie-5.5-flash-preview:free",
+    "name": "ERNIE-5.5-Flash-Preview (free)",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "low": null,
+      "max": null,
+      "medium": null,
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cachedRead": 0.0,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1024000,
+    "maxTokens": 921600,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "meta/muse-ember",
+    "name": "Muse Ember",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cachedRead": 0.004,
+      "cachedWrite": 0.125
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "liquid/lfm-3-1.7b",
+    "name": "LFM3-1.7B",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.08,
+      "output": 0.2,
+      "cachedRead": 0.02,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 262144,
+    "maxTokens": 8192,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "liquid/lfm-3-1.7b:free",
+    "name": "LFM3-1.7B (free)",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cachedRead": 0.0,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 262144,
+    "maxTokens": 8192,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "nex-agi/nex-n2.6",
+    "name": "Nex-N2.6",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "low": null,
+      "max": null,
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.12,
+      "output": 0.4,
+      "cachedRead": 0.024,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 262144,
+    "maxTokens": 235929,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "thinkingmachines/inkling-2-small:free",
+    "name": "Inkling 2 Small (free)",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cachedRead": 0.0,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "google/gemini-4-carbon",
+    "name": "Gemini 4 Carbon",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 0.1875
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"

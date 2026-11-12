@@ -968,14 +968,10 @@ mod tests {
     }
 
     #[test]
-    fn requires_api_key_defaults_to_true() {
+    fn requires_api_key_defaults_true_and_parses_camel_case_false() {
         // No compat at all, a well behaved cloud endpoint wants a key.
-        let compat = completions_compat(&model_with_compat(None));
-        assert!(compat.requires_api_key);
-    }
+        assert!(completions_compat(&model_with_compat(None)).requires_api_key);
 
-    #[test]
-    fn requires_api_key_false_parses_from_camel_case() {
         let compat = completions_compat(&model_with_compat(Some(serde_json::json!({
             "requiresApiKey": false,
             "supportsStore": false,

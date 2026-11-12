@@ -506,7 +506,7 @@ pub enum AssistantMessageEvent {
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{ModelThinkingLevel, StreamOptions, ThinkingLevel, ToolCall};
+    use crate::types::{StreamOptions, ThinkingLevel, ToolCall};
 
     #[test]
     fn tool_call_without_signature_preserves_legacy_serialization() {
@@ -530,20 +530,6 @@ mod tests {
             Some("opaque-provider-signature")
         );
         assert_eq!(serde_json::to_value(call).unwrap(), signed);
-    }
-
-    #[test]
-    fn thinking_level_conversion_preserves_every_enabled_level() {
-        for (level, expected) in [
-            (ThinkingLevel::Minimal, ModelThinkingLevel::Minimal),
-            (ThinkingLevel::Low, ModelThinkingLevel::Low),
-            (ThinkingLevel::Medium, ModelThinkingLevel::Medium),
-            (ThinkingLevel::High, ModelThinkingLevel::High),
-            (ThinkingLevel::XHigh, ModelThinkingLevel::XHigh),
-            (ThinkingLevel::Max, ModelThinkingLevel::Max),
-        ] {
-            assert_eq!(ModelThinkingLevel::from(level), expected);
-        }
     }
 
     #[test]

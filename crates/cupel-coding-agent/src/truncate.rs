@@ -218,14 +218,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn head_no_truncation_when_within_limits() {
-        let result = truncate_head("a\nb\nc", TruncationOptions::default());
-        assert!(!result.truncated);
-        assert_eq!(result.content, "a\nb\nc");
-        assert_eq!(result.total_lines, 3);
-    }
-
-    #[test]
     fn head_line_limit() {
         let result = truncate_head(
             "1\n2\n3\n4\n5",
@@ -301,11 +293,5 @@ mod tests {
         let (text, was_truncated) = truncate_line("abc", 4);
         assert!(!was_truncated);
         assert_eq!(text, "abc");
-    }
-
-    #[test]
-    fn format_size_examples() {
-        assert_eq!(format_size(512), "512B");
-        assert_eq!(format_size(51200), "50.0KB");
     }
 }

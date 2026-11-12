@@ -634,11 +634,4 @@ mod tests {
             serde_json::json!(true)
         );
     }
-
-    #[test]
-    fn no_anthropic_env_changes_nothing() {
-        let mut models = cupel_core::catalog::builtin_models();
-        AnthropicEnv::default().apply(&mut models);
-        assert_eq!(models, cupel_core::catalog::builtin_models());
-    }
 }

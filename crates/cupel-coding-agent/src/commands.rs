@@ -386,14 +386,10 @@ mod tests {
     }
 
     #[test]
-    fn builtin_descriptions_are_single_line() {
+    fn builtin_help_lines_are_single_line_and_group_quit() {
         for command in BUILTIN_COMMANDS {
             assert!(!command.description.contains('\n'), "{}", command.name);
         }
-    }
-
-    #[test]
-    fn help_groups_quit_and_exit_on_one_line() {
         let lines: Vec<String> = BUILTIN_COMMANDS
             .iter()
             .filter_map(BuiltinCommand::help_line)
