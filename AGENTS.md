@@ -15,6 +15,11 @@ Do not change the README.md, as this is my job.
 
 For Rust coding guidelines, read and follow [RUST-CODING-GUIDE.md](RUST-CODING-GUIDE.md).
 
+## Testing Scope
+
+* Add tests only for new behavior, compatibility exceptions, or regressions not already covered by existing tests.
+* Do not add tests that merely repeat model catalog data (names, IDs, prices, context windows, or supported thinking levels) when existing provider and generator logic already handles it. Use shared validation and catalog-generation consistency checks for routine model additions.
+
 ## Post-Implementation Hygiene
 
 * Run `cargo fmt --check` or `cargo fmt` to either verifying or formatting Rust code accordingly.

@@ -353,15 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn astra_shaped_effort_disables_off_and_minimal_only() {
-        // GPT 6 Astra on models.dev, low..max, no none, no toggle. Both
-        // top levels are supported, so both keys stay absent.
-        let options = [effort(&["low", "medium", "high", "xhigh", "max"])];
-        let map = thinking_level_map_from_effort(&options).expect("map derived");
-        assert_eq!(map, map_of(&[("off", None), ("minimal", None)]));
-    }
-
-    #[test]
     fn scales_without_max_get_an_explicit_null() {
         // The mirror image of the omission rule, a model whose scale stops
         // at xhigh must carry `max` set to null, or max would be selectable.
