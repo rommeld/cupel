@@ -4,24 +4,20 @@
 
 # cupel
 
-`cupel` is a lean Rust coding agent with a terminal UI, plain-text mode, and ACP
-support. It combines provider-neutral inference with file reading, ranked grep,
+A cupel is a small vessel for refining precious metals. This project borrows that idea: it separates useful code context from repository noise, then feeds that refined signal into fast, local agent workflows.
+
+`cupel` is a lean coding agent written in Rust. It combines provider-neutral inference with file reading, ranked grep,
 patching, and shell tools. A single agent runs independent tool calls in parallel.
 
-## Install
+## Getting started
 
-### Prebuilt binary
-
-No Rust required. macOS (Intel & Silicon) and Linux (x86_64/aarch64, static musl) via `curl`:
+Install the command-line interface:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
-Installs `cupel` and `cupel-acp` into `~/.cupel/bin`; add it to your `PATH`.
-Override the location with `CUPEL_HOME` or `CUPEL_INSTALL_DIR`.
-Re-run the installer to update both binaries;
-the TUI's `/update` updates only `cupel`.
+Installs `cupel` and `cupel-acp` into `~/.cupel/bin`; add it to your `PATH`. Override the location with `CUPEL_HOME` or `CUPEL_INSTALL_DIR`.
 
 ### From source
 
@@ -36,9 +32,7 @@ cargo install --locked --path crates/cupel-acp
 
 ## Usage
 
-Run `cupel` in your project directory. Set a provider key (see below), or use
-`/login openai-codex` for a ChatGPT subscription. Use `@path` to reference files,
-`Esc` to cancel work, and `cupel --help` for CLI options.
+Run `cupel` in your project directory. Set a provider key (see below), or use `/login openai-codex` for a ChatGPT subscription. Use `@path` to reference files, `Esc` to cancel work, and `cupel --help` for CLI options.
 
 ```sh
 cupel                                     # interactive TUI
@@ -47,58 +41,14 @@ cupel --resume "fix the login bug"         # find a session by its opening promp
 printf 'Explain this project\n' | cupel --plain
 ```
 
-In the prompt pane, `Enter` sends a prompt (or queues it while the agent is
-running), `Shift+Enter` inserts a newline, and `Ctrl+Enter` steers the running
-agent (or sends when idle). `Ctrl+J` is an alternative steering binding.
-Modified Enter keys require a terminal with keyboard enhancement support;
-`Alt+Enter` is unbound.
-
-Reasoning starts expanded in the TUI. Click its `▾ Reasoning` header to collapse
-one block, or use `Ctrl+R` to collapse/expand all reasoning. Tool previews retain
-their separate `Ctrl+T` control. Click reasoning body text to select it for
-`Ctrl+O` copying; copying preserves the original Markdown without UI labels.
-
 ### Configuration and sessions
 
-- Put instructions in `AGENTS.md` or `CLAUDE.md`, and prompt templates in
-  `prompts/<name>.md` to expose `/<name>` with `$1`/`$@` argument substitution.
+- Put instructions in `AGENTS.md` or `CLAUDE.md`, and prompt templates in `prompts/<name>.md` to expose `/<name>` with `$1`/`$@` argument substitution.
   Precedence: working directory > project `.cupel/` > `~/.cupel/`.
-- Store settings in `~/.cupel/settings.json` or `<project>/.cupel/settings.json`.
-  `CUPEL_HOME` overrides the home directory. `/hot-reload` applies config changes.
-- Sessions are JSONL transcripts under `~/.cupel/sessions/`. Use `/sessions [search]`
-  to find them by their opening prompt, then `/hot-reload <prompt search>` or
-  `cupel --resume "prompt search"` to resume one. Searches are case-insensitive,
-  use the full opening prompt, and must match exactly one session. Never open
+- Store settings in `~/.cupel/settings.json` or `<project>/.cupel/settings.json`. `CUPEL_HOME` overrides the home directory. `/hot-reload` applies config changes.
+- Sessions are JSONL transcripts under `~/.cupel/sessions/`. Use `/sessions [search]` to find them by their opening prompt, then `/hot-reload <prompt search>` or
+  `cupel --resume "prompt search"` to resume one. Searches are case-insensitive, use the full opening prompt, and must match exactly one session. Never open
   the same session in two processes at once.
-
-### Inspecting and undoing edits
-
-Use `/changes` to inspect the latest edited turn and `/undo` to restore its
-`apply_patch` edits. Both commands work in the TUI and plain mode while idle;
-press `Esc` to stop a running agent first. A turn groups patch calls until the next
-user prompt, queued follow-up, or consumed steering message. Repeated `/undo`
-walks backward through edited turns. The conversation is not rewound, and the
-agent is told to reread restored files.
-
-Undo preserves pre-existing uncommitted work, including overwritten files and
-rename destinations. It checks every affected path and snapshot before restoring
-anything, refusing newer content or permission changes rather than overwriting
-them. An I/O failure during restoration can leave some paths restored; keep the
-snapshots, fix the error, and retry `/undo` to finish. Shell commands, migrations,
-external side effects, and newly created empty
-directories are **not undone**. Avoid concurrent external writers during undo;
-these checks are not a filesystem sandbox.
-
-Original bytes and after-hashes are saved privately beside each transcript under
-`~/.cupel/sessions/<project-slug>/<session-id>/undo/` (`CUPEL_HOME` overrides the
-home). History survives resume and hot reload; `/new` starts separate history.
-Snapshots may contain sensitive code and are retained until explicitly removed.
-Deleting that session's `undo/` directory discards its undo history.
-
-Tracked patches refuse leaf symlinks, hard-linked files, and aliased renames
-(including case-only renames on case-insensitive filesystems). If snapshot storage
-fails, the patch is refused before writing. Without a resolvable Cupel home,
-editing still works but undo is unavailable.
 
 ### Providers
 
@@ -111,16 +61,12 @@ editing still works but undo is unavailable.
 | `fireworks` | `FIREWORKS_API_KEY` |
 | `openrouter` | `OPENROUTER_API_KEY` |
 
-API keys entered through `/provider` are saved to home settings.
-Resolution order: session key > environment variable > home settings.
-For gateways such as LiteLLM, use `ANTHROPIC_BASE_URL` with
-`ANTHROPIC_AUTH_TOKEN`, or `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` with
-`AWS_BEARER_TOKEN_BEDROCK` and `AWS_REGION`.
+API keys entered through `/provider` are saved to home settings. Resolution order: session key > environment variable > home settings.
+For gateways such as LiteLLM, use `ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOKEN`, or `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` with `AWS_BEARER_TOKEN_BEDROCK` and `AWS_REGION`.
 
 ### Presets
 
-A preset combines provider, model, thinking level, and an optional `prompt`.
-Define it in `settings.json`; `default` also applies at startup:
+A preset combines provider, model, thinking level, and an optional `prompt`. Define it in `settings.json`:
 
 ```json
 {
@@ -138,24 +84,19 @@ Use IDs from `/model` and switch named presets with `/preset <name>`.
 
 ### Themes
 
-`/themes <id>` switches themes and saves the choice in home settings. The default
-`cupel` theme uses your terminal's colors. To install the [example palettes](themes/)
-from the repository root:
+`/themes <id>` switches themes and saves the choice in home settings. The default `cupel` theme uses your terminal's colors. To install the [example palettes](themes/) from the repository root:
 
 ```bash
 mkdir -p "${CUPEL_HOME:-$HOME/.cupel}/themes"
 cp -n themes/*.json "${CUPEL_HOME:-$HOME/.cupel}/themes/"
 ```
 
-Run `/hot-reload`, then `/themes` to list them. Customize a palette by editing
-`~/.cupel/themes/<id>.json` and reloading; project theme files are not loaded.
+Run `/hot-reload`, then `/themes` to list them. Customize a palette by editing `~/.cupel/themes/<id>.json` and reloading; project theme files are not loaded.
 
 ### Local models
 
-With `ollama serve` running, pulled models appear in `/model` and `/provider`.
-Discovery uses `OLLAMA_HOST` or `http://localhost:11434` and assumes a 4096-token
-context window. To override it or add another OpenAI-compatible endpoint, put
-an entry in `~/.cupel/models.json` or `<project>/.cupel/models.json`:
+With `ollama serve` running, pulled models appear in `/model` and `/provider`. Discovery uses `OLLAMA_HOST` or `http://localhost:11434` and assumes a 4096-token
+context window. To override it or add another OpenAI-compatible endpoint, put an entry in `~/.cupel/models.json` or `<project>/.cupel/models.json`:
 
 ```json
 [
@@ -177,33 +118,22 @@ an entry in `~/.cupel/models.json` or `<project>/.cupel/models.json`:
 ]
 ```
 
-For `llama-server`, change `baseUrl` to `http://localhost:8080/v1`.
-`requiresApiKey: false` marks a keyless endpoint.
+For `llama-server`, change `baseUrl` to `http://localhost:8080/v1`. `requiresApiKey: false` marks a keyless endpoint.
 
 ### Guardrails
 
-- Common `rm -rf` forms are blocked. Add regex rules (one per line) to
-  `~/.cupel/bash-deny` or `<project>/.cupel/bash-deny`.
-- Enable repeated-tool-call protection with `"loopKiller": {"maxRepeats": 3}`
-  in home or project settings.
-- Project trust gates hooks and sensitive configuration. These checks are
-  **not an execution sandbox**; review changes and protect your credentials.
+- Common `rm -rf` forms are blocked. Add regex rules (one per line) to `~/.cupel/bash-deny` or `<project>/.cupel/bash-deny`.
+- Enable repeated-tool-call protection with `"loopKiller": {"maxRepeats": 3}` in home or project settings.
+- Project trust gates hooks and sensitive configuration. These checks are **not an execution sandbox**; review changes and protect your credentials.
 
 ## ACP clients
 
-`cupel-acp` exposes ACP v1 over stdio with text prompts, streamed tool activity,
-cancellation, session restoration, and usage updates. Configure your client's
-agent command as the absolute path to `cupel-acp`, optionally adding
-`--model <id>` and `--thinking <level>`.
+`cupel-acp` exposes ACP v1 over stdio with text prompts, streamed tool activity, cancellation, session restoration, and usage updates. Configure your client's
+agent command as the absolute path to `cupel-acp`, optionally adding `--model <id>` and `--thinking <level>`.
 
-The binary and credentials must be available where the client runs it; the client
-supplies the working directory. Complete login and project trust in the TUI first.
-Images, injected MCP servers, structured user questions, and interactive login
-are unsupported over ACP.
+The binary and credentials must be available where the client runs it; the client supplies the working directory. Complete login and project trust in the TUI first.
 
 ## More
 
 - [Contributing and workspace layout](CONTRIBUTING.md)
-- [Releases and packaging](packaging/README.md)
-- [Development benchmarks](scripts/benchmarks/)
-- [Changelog](CHANGELOG.md) · [MIT license](LICENSE)
+- [Changelog](CHANGELOG.md)
