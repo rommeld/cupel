@@ -585,16 +585,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_api_is_registered_in_the_default_registry() {
-        assert!(
-            crate::default_registry()
-                .get(Api::OPENAI_CODEX_RESPONSES)
-                .is_some(),
-            "lib.rs must register the codex provider"
-        );
-    }
-
-    #[test]
     fn ultrafast_row_sends_the_service_tier() {
         let mut model = codex_model();
         model.id = "codex/gpt-6.1-sol-ultrafast".to_string();

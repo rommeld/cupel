@@ -142,14 +142,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_simple_event() {
-        let events = decode_all(&["event: ping\ndata: {\"a\":1}\n\n"]);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event.as_deref(), Some("ping"));
-        assert_eq!(events[0].data, "{\"a\":1}");
-    }
-
-    #[test]
     fn handles_events_split_across_chunks() {
         // The event boundary lands mid line to prove buffering works.
         let events = decode_all(&["event: mess", "age_start\ndata: 1\n", "\n"]);

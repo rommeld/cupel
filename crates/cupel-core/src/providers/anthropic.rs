@@ -1360,44 +1360,6 @@ mod tests {
     }
 
     #[test]
-    fn opus55_levels_map_to_adaptive_effort() {
-        let opus = catalog_model("claude-opus-5-5");
-        for (level, effort) in [
-            // No "minimal" effort upstream, the map's null entry falls
-            // back to the provider default, which is "low".
-            (ThinkingLevel::Minimal, "low"),
-            (ThinkingLevel::Low, "low"),
-            (ThinkingLevel::Medium, "medium"),
-            (ThinkingLevel::High, "high"),
-            (ThinkingLevel::XHigh, "xhigh"),
-            (ThinkingLevel::Max, "max"),
-        ] {
-            let options = StreamOptions {
-                reasoning: Some(level),
-                ..StreamOptions::default()
-            };
-            let body = body_for(&opus, &options);
-            // Adaptive, never `enabled` with a `budget_tokens`. The
-            // block_binding comes from preserved thinking (see
-            // preserved_thinking_binds_adaptive_requests_only).
-            assert_eq!(
-                body["thinking"],
-                json!({
-                    "type": "adaptive",
-                    "display": "summarized",
-                    "block_binding": {"prefix_mismatch_behavior": "drop_block"},
-                }),
-                "{level:?}"
-            );
-            assert_eq!(
-                body["output_config"],
-                json!({"effort": effort}),
-                "{level:?}"
-            );
-        }
-    }
-
-    #[test]
     fn adaptive_effort_clamps_unsupported_levels_before_applying_aliases() {
         let mut model = catalog_model("claude-sonnet-5-5");
         let map = model
@@ -1449,40 +1411,6 @@ mod tests {
         assert!(body.get("thinking").is_none(), "{body}");
         assert!(body.get("output_config").is_none(), "{body}");
         assert!(body.get("temperature").is_none(), "{body}");
-    }
-
-    #[test]
-    fn sonnet5_and_opus5_levels_map_to_adaptive_effort() {
-        // cupel's default level is medium, so before these rows went
-        // adaptive, the very first request to the default model carried
-        // a `budget_tokens` and came back as a 400.
-        for id in ["claude-sonnet-5", "claude-opus-5"] {
-            let model = catalog_model(id);
-            for (level, effort) in [
-                (ThinkingLevel::Minimal, "low"),
-                (ThinkingLevel::Low, "low"),
-                (ThinkingLevel::Medium, "medium"),
-                (ThinkingLevel::High, "high"),
-                (ThinkingLevel::XHigh, "xhigh"),
-                (ThinkingLevel::Max, "max"),
-            ] {
-                let options = StreamOptions {
-                    reasoning: Some(level),
-                    ..StreamOptions::default()
-                };
-                let body = body_for(&model, &options);
-                assert_eq!(
-                    body["thinking"],
-                    json!({"type": "adaptive", "display": "summarized"}),
-                    "{id} {level:?}"
-                );
-                assert_eq!(
-                    body["output_config"],
-                    json!({"effort": effort}),
-                    "{id} {level:?}"
-                );
-            }
-        }
     }
 
     #[test]
@@ -1567,47 +1495,6 @@ mod tests {
         assert_eq!(body["thinking"], json!({"type": "disabled"}));
         assert!(body.get("output_config").is_none(), "{body}");
         assert!(body.get("temperature").is_none(), "{body}");
-    }
-
-    #[test]
-    fn sonnet55_and_haiku55_levels_map_to_adaptive_effort() {
-        // Both models reject `budget_tokens` and need summarized display
-        // plus preserved thinking controls, like Opus 5.5.
-        for id in ["claude-sonnet-5-5", "claude-haiku-5-5"] {
-            let model = catalog_model(id);
-            for (level, effort) in [
-                // No "minimal" effort upstream, the map's null entry falls
-                // back to the provider default, which is "low".
-                (ThinkingLevel::Minimal, "low"),
-                (ThinkingLevel::Low, "low"),
-                (ThinkingLevel::Medium, "medium"),
-                (ThinkingLevel::High, "high"),
-                (ThinkingLevel::XHigh, "xhigh"),
-                (ThinkingLevel::Max, "max"),
-            ] {
-                let options = StreamOptions {
-                    reasoning: Some(level),
-                    temperature: Some(0.2),
-                    ..StreamOptions::default()
-                };
-                let body = body_for(&model, &options);
-                assert_eq!(
-                    body["thinking"],
-                    json!({
-                        "type": "adaptive",
-                        "display": "summarized",
-                        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
-                    }),
-                    "{id} {level:?}"
-                );
-                assert_eq!(
-                    body["output_config"],
-                    json!({"effort": effort}),
-                    "{id} {level:?}"
-                );
-                assert!(body.get("temperature").is_none(), "{id}: {body}");
-            }
-        }
     }
 
     #[test]

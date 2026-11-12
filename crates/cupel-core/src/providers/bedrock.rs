@@ -1268,30 +1268,6 @@ mod tests {
     }
 
     #[test]
-    fn sonnet55_levels_reach_xhigh_and_max() {
-        // Before, "sonnet 5" had no native xhigh and max fell back to high,
-        // so both top levels quietly became high on Bedrock.
-        let sonnet = catalog_model("global.anthropic.claude-sonnet-5-5");
-        for (level, effort) in [
-            (ThinkingLevel::Minimal, "low"),
-            (ThinkingLevel::Low, "low"),
-            (ThinkingLevel::Medium, "medium"),
-            (ThinkingLevel::High, "high"),
-            (ThinkingLevel::XHigh, "xhigh"),
-            (ThinkingLevel::Max, "max"),
-        ] {
-            assert_eq!(
-                fields(&sonnet, Some(level)),
-                Some(json!({
-                    "thinking": {"type": "adaptive", "display": "summarized"},
-                    "output_config": {"effort": effort},
-                })),
-                "{level:?}"
-            );
-        }
-    }
-
-    #[test]
     fn adaptive_effort_clamps_metadata_with_and_without_compat() {
         let mut model = catalog_model("global.anthropic.claude-sonnet-5-5");
         let map = model

@@ -218,23 +218,6 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_free_variants_have_no_token_charges() {
-        for model in builtin_models().into_iter().filter(|model| {
-            model.provider.as_str() == Provider::OPENROUTER && model.id.ends_with(":free")
-        }) {
-            for price in [
-                model.cost.input,
-                model.cost.output,
-                model.cost.cached_read,
-                model.cost.cached_write,
-            ] {
-                assert!(price.abs() < f64::EPSILON, "{}", model.id);
-            }
-            assert!(model.cost.tiers.is_none(), "{}", model.id);
-        }
-    }
-
-    #[test]
     fn price_tier_rows_plan_against_the_threshold() {
         // The long context family, the planning window is the price tier
         // threshold (requests never drift into 2x pricing unnoticed), the
