@@ -240,17 +240,14 @@ mod tests {
     }
 
     #[test]
-    fn agents_md_wins_over_claude_md() {
+    fn agents_md_wins_over_claude_md_which_remains_the_fallback() {
         let root = temp_root("preference");
         std::fs::write(root.join("AGENTS.md"), "agents instructions").unwrap();
         std::fs::write(root.join("CLAUDE.md"), "claude instructions").unwrap();
         let files = load_context_files(&[root]);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].content, "agents instructions");
-    }
 
-    #[test]
-    fn claude_md_is_the_fallback() {
         let root = temp_root("fallback");
         std::fs::write(root.join("CLAUDE.md"), "claude instructions").unwrap();
         let files = load_context_files(&[root]);
@@ -267,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn config_home_env_override_wins() {
+    fn config_home_env_override_wins_and_defaults_to_dot_cupel() {
         assert_eq!(
             resolve_config_home(Some("/custom/home".into()), Some(PathBuf::from("/u"))),
             Some(PathBuf::from("/custom/home"))
@@ -277,10 +274,6 @@ mod tests {
             resolve_config_home(Some("  ".into()), Some(PathBuf::from("/u"))),
             Some(PathBuf::from("/u/.cupel"))
         );
-    }
-
-    #[test]
-    fn config_home_defaults_to_dot_cupel_or_none() {
         assert_eq!(
             resolve_config_home(None, Some(PathBuf::from("/u"))),
             Some(PathBuf::from("/u/.cupel"))

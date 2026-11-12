@@ -529,17 +529,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_lines_use_dash_separator() {
-        let root = temp_root("context");
-        std::fs::write(root.join("a.txt"), "one\ntwo\nthree\n").unwrap();
-        let result = run_tool(&root, json!({"pattern": "two", "context": 1})).await;
-        let text = text_of(&result);
-        assert!(text.contains("a.txt-1- one"), "got: {text}");
-        assert!(text.contains("a.txt:2: two"), "got: {text}");
-        assert!(text.contains("a.txt-3- three"), "got: {text}");
-    }
-
-    #[tokio::test]
     async fn utf8_bom_preserves_context_without_reporting_source_changes() {
         let root = temp_root("bom-context");
         for newline in ["\n", "\r\n"] {

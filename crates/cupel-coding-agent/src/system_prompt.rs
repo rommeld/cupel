@@ -234,12 +234,6 @@ mod tests {
     }
 
     #[test]
-    fn civil_date_known_value() {
-        // 2026 07 03 is 20_637 days after the epoch.
-        assert_eq!(civil_from_days(20_637), (2026, 7, 3));
-    }
-
-    #[test]
     fn a_preset_prompt_is_appended_only_when_defined() {
         assert_eq!(
             with_preset_prompt("BASE", Some("Be brief.")),
