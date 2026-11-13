@@ -129,7 +129,7 @@ pub fn is_retryable_assistant_error(message: &AssistantMessage) -> bool {
     }
     let error_message = message.error_message.as_deref().unwrap_or_default();
     let status = match message.error_kind {
-        Some(ErrorKind::Aborted | ErrorKind::Config) => return false,
+        Some(ErrorKind::Aborted | ErrorKind::Config | ErrorKind::NonReplayable) => return false,
         Some(ErrorKind::Transport) => return true,
         Some(ErrorKind::HttpStatus { status }) => Some(status),
         Some(ErrorKind::Provider) | None => legacy_http_status(error_message),
@@ -244,6 +244,7 @@ mod tests {
         for (kind, expected) in [
             (ErrorKind::Aborted, false),
             (ErrorKind::Config, false),
+            (ErrorKind::NonReplayable, false),
             (ErrorKind::Transport, true),
             (ErrorKind::HttpStatus { status: 400 }, false),
             (ErrorKind::HttpStatus { status: 401 }, false),
@@ -256,7 +257,12 @@ mod tests {
             (ErrorKind::HttpStatus { status: 504 }, true),
             (ErrorKind::HttpStatus { status: 529 }, true),
         ] {
-            for text in [None, Some("overloaded Error Code 400: request id 500429")] {
+            for text in [
+                None,
+                Some("overloaded Error Code 400: request id 500429"),
+                Some("provider returned HTTP 503: service unavailable"),
+                Some("HTTP transport error: error decoding response body"),
+            ] {
                 let mut message = message(StopReason::Error, text);
                 message.error_kind = Some(kind);
                 assert_eq!(
@@ -351,5 +357,8 @@ mod tests {
             StopReason::Aborted,
             Some(stale)
         )));
+        let mut streamed = message(StopReason::Error, Some(stale));
+        streamed.error_kind = Some(ErrorKind::NonReplayable);
+        assert!(!is_thinking_binding_mismatch(&streamed));
     }
 }

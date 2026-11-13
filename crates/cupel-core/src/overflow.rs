@@ -65,7 +65,12 @@ fn may_report_overflow(kind: Option<ErrorKind>, error_message: &str) -> bool {
     let status = match kind {
         Some(ErrorKind::HttpStatus { status }) => Some(status),
         Some(ErrorKind::Provider) | None => legacy_http_status(error_message),
-        Some(ErrorKind::Transport | ErrorKind::Aborted | ErrorKind::Config) => return false,
+        Some(
+            ErrorKind::Transport
+            | ErrorKind::Aborted
+            | ErrorKind::Config
+            | ErrorKind::NonReplayable,
+        ) => return false,
     };
     status.is_none_or(|status| matches!(status, 400 | 413 | 422))
 }
@@ -96,10 +101,15 @@ pub fn is_context_overflow(message: &AssistantMessage, context_window: u64) -> b
     if context_window == 0 {
         return false;
     }
-    let input_tokens = message.usage.input + message.usage.cache_read;
+    // Continuations can bill the same input repeatedly. Their retained context,
+    // when reported, is authoritative for the silent-overflow heuristics.
+    let context_tokens = message
+        .usage
+        .context_tokens
+        .unwrap_or(message.usage.input + message.usage.cache_read);
 
     // Case 2, silent acceptance means "success" with more input than fits.
-    if message.stop_reason == StopReason::Stop && input_tokens > context_window {
+    if message.stop_reason == StopReason::Stop && context_tokens > context_window {
         return true;
     }
 
@@ -107,7 +117,7 @@ pub fn is_context_overflow(message: &AssistantMessage, context_window: u64) -> b
     // zero tokens of room.
     if message.stop_reason == StopReason::Length
         && message.usage.output == 0
-        && input_tokens as f64 >= context_window as f64 * 0.99
+        && context_tokens as f64 >= context_window as f64 * 0.99
     {
         return true;
     }
@@ -212,6 +222,7 @@ mod tests {
         for (kind, expected) in [
             (ErrorKind::Aborted, false),
             (ErrorKind::Config, false),
+            (ErrorKind::NonReplayable, false),
             (ErrorKind::Transport, false),
             (ErrorKind::HttpStatus { status: 401 }, false),
             (ErrorKind::HttpStatus { status: 403 }, false),
@@ -234,25 +245,39 @@ mod tests {
 
     #[test]
     fn silent_overflow_is_detected_via_usage() {
-        let usage = Usage {
+        let mut usage = Usage {
             input: 190_000,
             cache_read: 20_000,
             ..Usage::default()
         };
         assert!(is_context_overflow(
-            &message(StopReason::Stop, None, usage),
+            &message(StopReason::Stop, None, usage.clone()),
+            200_000
+        ));
+        usage.context_tokens = Some(40_000);
+        assert!(!is_context_overflow(
+            &message(StopReason::Stop, None, usage.clone()),
+            200_000
+        ));
+        assert!(is_context_overflow(
+            &message(StopReason::Error, Some("prompt is too long"), usage),
             200_000
         ));
     }
 
     #[test]
     fn silent_truncation_is_detected_via_full_window_and_zero_output() {
-        let usage = Usage {
+        let mut usage = Usage {
             input: 199_500,
             output: 0,
             ..Usage::default()
         };
         assert!(is_context_overflow(
+            &message(StopReason::Length, None, usage.clone()),
+            200_000
+        ));
+        usage.context_tokens = Some(40_000);
+        assert!(!is_context_overflow(
             &message(StopReason::Length, None, usage),
             200_000
         ));

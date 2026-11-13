@@ -167,7 +167,8 @@ const fn openai(id: &'static str, rename: Option<&'static str>) -> Curated {
 }
 
 /// Google deprecated sampling parameters for these models. Thinking effort
-/// comes from models.dev: low/medium/high, plus minimal for Flash-Lite.
+/// comes from models.dev: low/medium/high, plus minimal for Flash-Lite
+/// and xhigh for Hydrogen.
 const fn google(id: &'static str) -> Curated {
     Curated {
         id,
@@ -309,6 +310,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             // and https://aistudio.google.com/docs/pricing.
             google("gemini-4-argon"),
             google("gemini-4-carbon"),
+            google("gemini-4-hydrogen"),
             // Flash introductory pricing expires December 31, 2026.
             google("gemini-3.8-flash"),
             google("gemini-3.5-flash-lite"),
@@ -482,6 +484,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("google/gemini-3.8-flash", Thinking::FromEffort),
             openrouter("google/gemini-3.5-flash-lite", Thinking::FromEffort),
             openrouter("google/gemini-4-argon", Thinking::FromEffort),
+            openrouter("google/gemini-4-hydrogen", Thinking::FromEffort),
             openrouter("google/gemma-4-31b-it", Thinking::FromEffort),
             openrouter("google/gemma-4-31b-it:free", Thinking::FromEffort),
             openrouter("google/gemma-4-26b-a4b-it", Thinking::FromEffort),

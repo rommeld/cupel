@@ -579,8 +579,7 @@ fn reports_context_size(message: &AgentMessage) -> bool {
     ) {
         return false;
     }
-    let usage = &assistant.usage;
-    usage.total_tokens > 0 || usage.input + usage.output + usage.cache_read + usage.cache_write > 0
+    assistant.usage.context_size() > 0
 }
 
 /// Hook decorator that adds the Agent's queue draining on top of user hooks.

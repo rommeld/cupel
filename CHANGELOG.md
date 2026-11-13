@@ -3,6 +3,17 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.38.0] - 2026-11-13
+
+- feat(google): support checkpointed Gemini 4 long decode with safe continuation and per-request usage pricing
+- feat(catalog): add Gemini 4 Hydrogen to Google and OpenRouter, including xhigh thinking and provider-specific output limits
+- feat(catalog): expand Bedrock, Fireworks, and OpenRouter model coverage
+- fix(context): distinguish retained context from billed usage for compaction, output budgets, and the TUI meter; exclude failed turns from context estimates and summaries
+- fix(retry): prevent automatic replay after non-replayable streamed output
+- fix(deps): update rustix to 1.1.6 to resolve the extended-attribute unsoundness advisory
+- refactor(agent): remove redundant single-agent checkout gates
+- test: consolidate redundant coverage while retaining behavior and regression checks
+
 ## [v0.37.0] - 2026-11-11
 
 - feat(google): add native Gemini streaming provider

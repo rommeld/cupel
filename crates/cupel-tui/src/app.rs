@@ -1575,11 +1575,7 @@ impl App {
             });
         }
         let usage = &assistant.usage;
-        self.context_tokens = if usage.total_tokens > 0 {
-            usage.total_tokens
-        } else {
-            usage.input + usage.output + usage.cache_read + usage.cache_write
-        };
+        self.context_tokens = usage.context_size();
         // Reasoning tokens are part of `out`. Only some providers report them
         // separately, so the note appears only when there is a count.
         let reasoning = match usage.reasoning {

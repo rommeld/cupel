@@ -170,8 +170,12 @@ pub struct UserMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ErrorKind {
-    HttpStatus { status: u16 },
+    HttpStatus {
+        status: u16,
+    },
     Transport,
+    /// Output has escaped, so automatically replaying the request is unsafe.
+    NonReplayable,
     Aborted,
     Config,
     Provider,
@@ -260,7 +264,24 @@ pub struct Usage {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub reasoning: Option<u64>,
     pub total_tokens: u64,
+    /// Tokens retained in the conversation, when billed usage spans multiple requests.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub context_tokens: Option<u64>,
     pub cost: Cost,
+}
+
+impl Usage {
+    /// Context footprint, falling back to single-request usage for older providers/sessions.
+    #[must_use]
+    pub fn context_size(&self) -> u64 {
+        self.context_tokens.unwrap_or_else(|| {
+            if self.total_tokens > 0 {
+                self.total_tokens
+            } else {
+                self.input + self.output + self.cache_read + self.cache_write
+            }
+        })
+    }
 }
 
 /// `Error`/`Aborted` are terminal states (the provider maps vendor specific

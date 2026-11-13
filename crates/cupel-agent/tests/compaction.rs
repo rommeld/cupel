@@ -487,16 +487,18 @@ async fn tool_heavy_history_compacts_without_a_summarization_call() {
 async fn pruning_invalidates_usage_anchors_in_the_kept_tail() {
     let model = mock_model(16_000);
     let usage = Usage {
-        input: 12_000,
+        input: 147_000,
         output: 1000,
         cache_read: 1000,
         cache_write: 1000,
-        total_tokens: 15_000,
+        total_tokens: 150_000,
+        context_tokens: Some(15_000),
         ..Usage::default()
     };
     let mut old = assistant(&model, Vec::new());
     old.usage = Usage {
         total_tokens: 0,
+        context_tokens: None,
         ..usage.clone()
     };
     let mut recent = assistant(
@@ -516,6 +518,41 @@ async fn pruning_invalidates_usage_anchors_in_the_kept_tail() {
     let config = CompactionConfig::default();
     assert_eq!(estimate_context_tokens(&context), 15_000);
     assert!(should_compact(15_000, model.context_window, &config));
+
+    let AgentMessage::Llm(Message::Assistant(recent)) = context.messages.last_mut().unwrap() else {
+        panic!("expected the most recent reply");
+    };
+    recent.usage.context_tokens = Some(8000);
+    let retained_messages = context.messages.len();
+    for stop_reason in [StopReason::Error, StopReason::Aborted] {
+        let mut failed = assistant(
+            &model,
+            vec![AssistantContent::Text(TextContent::plain(
+                "x".repeat(100_000),
+            ))],
+        );
+        failed.stop_reason = stop_reason;
+        failed.usage.context_tokens = Some(100_000);
+        context
+            .messages
+            .push(AgentMessage::Llm(Message::Assistant(failed)));
+    }
+    assert!(!should_compact(
+        estimate_context_tokens(&context),
+        model.context_window,
+        &config
+    ));
+    let request = Context {
+        system_prompt: Some(context.system_prompt.clone()),
+        messages: NoHooks.convert_to_llm(&context.messages).await,
+        tools: None,
+    };
+    assert_eq!(options_util::estimate_context_tokens(&request), 8000);
+    context.messages.truncate(retained_messages);
+    let AgentMessage::Llm(Message::Assistant(recent)) = context.messages.last_mut().unwrap() else {
+        panic!("expected the most recent reply");
+    };
+    recent.usage.context_tokens = Some(15_000);
 
     // An empty registry makes any unnecessary summarization call fail.
     let outcome = compact(
@@ -744,6 +781,8 @@ async fn seeded_history_does_not_trust_usage_it_did_not_observe() {
     // Window 3000, threshold 2250, five ~1000 token messages exceed it, but
     // this anchor from a compacted request says the context held 200 tokens.
     reply.usage.input = 200;
+    reply.usage.total_tokens = 20_000;
+    reply.usage.context_tokens = Some(200);
     history.push(AgentMessage::Llm(Message::Assistant(reply)));
     let mut agent = stateful_agent(Arc::clone(&provider), 3000, history);
 

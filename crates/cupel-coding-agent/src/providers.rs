@@ -212,10 +212,12 @@ mod tests {
             crate::startup::select_model(None, &google_models, &settings, None).expect("saved key");
         assert_eq!(default.id, "gemini-4-argon");
         assert!(key.is_some());
-        let (carbon, _) =
-            crate::startup::select_model(Some("gemini-4-carbon"), &google_models, &settings, None)
-                .expect("explicit Carbon model");
-        assert_eq!(carbon.id, "gemini-4-carbon");
+        for id in ["gemini-4-carbon", "gemini-4-hydrogen"] {
+            let (selected, _) =
+                crate::startup::select_model(Some(id), &google_models, &settings, None)
+                    .expect("explicit Gemini 4 model");
+            assert_eq!(selected.id, id);
+        }
     }
 
     #[test]

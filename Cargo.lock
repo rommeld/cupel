@@ -979,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-acp"
-version = "0.37.0"
+version = "0.38.0"
 dependencies = [
  "agent-client-protocol",
  "cupel-agent",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-agent"
-version = "0.37.0"
+version = "0.38.0"
 dependencies = [
  "async-trait",
  "cupel-core",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-coding-agent"
-version = "0.37.0"
+version = "0.38.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1039,7 +1039,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-core"
-version = "0.37.0"
+version = "0.38.0"
 dependencies = [
  "aws-config",
  "aws-sdk-bedrockruntime",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "cupel-tui"
-version = "0.37.0"
+version = "0.38.0"
 dependencies = [
  "base64 0.23.1",
  "cupel-agent",
@@ -3048,9 +3048,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.12.1",
  "errno",
