@@ -404,13 +404,17 @@ fn to_model(
         },
         context_window,
         max_context_window,
-        // models.dev still lists the older 32K cap for Gemini 4. Long decode
+        // models.dev lists the single-hop caps for native Gemini 4. Long decode
         // supports output up to the unified 1M context window; the provider
         // reserves room for input and follows continuation tokens past 64K.
         // https://aistudio.google.com/docs/models/gemini-4-carbon
         // https://aistudio.google.com/docs/models/gemini-4-argon
+        // https://aistudio.google.com/docs/models/gemini-4-hydrogen
         max_tokens: match (row.api, row.id) {
-            (Api::GOOGLE_GENERATIVE_AI, "gemini-4-argon" | "gemini-4-carbon") => 1_048_576,
+            (
+                Api::GOOGLE_GENERATIVE_AI,
+                "gemini-4-argon" | "gemini-4-carbon" | "gemini-4-hydrogen",
+            ) => 1_048_576,
             _ => entry.limit.output,
         },
         headers: None,
@@ -604,8 +608,11 @@ mod tests {
                 model.id
             );
             assert_eq!(model.base_url, curation::GOOGLE_BASE_URL);
-            if matches!(model.id.as_str(), "gemini-4-argon" | "gemini-4-carbon") {
-                // Override models.dev's 32K cap with the full long decode window.
+            if matches!(
+                model.id.as_str(),
+                "gemini-4-argon" | "gemini-4-carbon" | "gemini-4-hydrogen"
+            ) {
+                // Override the single-hop cap with the full long decode window.
                 assert_eq!(model.max_tokens, 1_048_576, "{}", model.id);
             }
             assert_eq!(
@@ -614,6 +621,23 @@ mod tests {
                     .as_ref()
                     .and_then(|compat| compat.get("supportsTemperature")),
                 Some(&serde_json::json!(false))
+            );
+        }
+        // OpenRouter handles continuation itself; do not apply the native
+        // output-limit override or native API compat to its Gemini rows.
+        for id in [
+            "google/gemini-4-argon",
+            "google/gemini-4-carbon",
+            "google/gemini-4-hydrogen",
+        ] {
+            let model = models.iter().find(|model| model.id == id).expect(id);
+            assert_eq!(model.provider.as_str(), Provider::OPENROUTER);
+            assert_eq!(model.api.as_str(), Api::OPENAI_COMPLETIONS);
+            assert_eq!(model.max_tokens, 943_718, "{id}");
+            assert_eq!(model.base_url, curation::OPENROUTER_COMPLETIONS_BASE_URL);
+            assert_eq!(
+                model.compat.as_ref().unwrap()["thinkingFormat"],
+                "openrouter"
             );
         }
     }

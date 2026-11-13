@@ -303,7 +303,7 @@ async fn long_decode_emits_text_and_thinking_before_checkpoint_or_eof() {
 
 #[tokio::test]
 async fn long_decode_sums_hop_usage_without_counting_replayed_context_twice() {
-    for id in ["gemini-4-argon", "gemini-4-carbon"] {
+    for id in ["gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"] {
         let first = sse(&[
             json!({"candidates": [{"content": {"parts": [{"thought": true, "text": "Plan "}]}}],
                 "usageMetadata": {"promptTokenCount": 100, "cachedContentTokenCount": 40,
@@ -1098,13 +1098,22 @@ fn request_config_clamps_gemini_4_thinking_and_output_and_keeps_images() {
         ]),
         timestamp: 0,
     })];
-    for id in ["gemini-4-argon", "gemini-4-carbon"] {
-        let mut model = fixture_model();
-        model.id = id.into();
+    for id in ["gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"] {
+        let mut model = crate::catalog::builtin_models()
+            .into_iter()
+            .find(|model| model.id == id)
+            .expect("native Gemini 4 model");
+        model.max_tokens = 16_384;
+        let highest = if id == "gemini-4-hydrogen" {
+            "XHIGH"
+        } else {
+            "HIGH"
+        };
         for (reasoning, expected) in [
             (None, "LOW"),
             (Some(ThinkingLevel::Minimal), "LOW"),
-            (Some(ThinkingLevel::Max), "HIGH"),
+            (Some(ThinkingLevel::XHigh), highest),
+            (Some(ThinkingLevel::Max), highest),
         ] {
             let mut options = options();
             options.reasoning = reasoning;

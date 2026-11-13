@@ -1574,6 +1574,43 @@
           }
         ],
         "temperature": true
+      },
+      "gemini-4-hydrogen": {
+        "cost": {
+          "cache_read": 0.075,
+          "cache_write": 0.0,
+          "input": 1.5,
+          "output": 7.5,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ]
+        },
+        "name": "Gemini 4 Hydrogen",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "temperature": true
       }
     }
   },
@@ -2744,6 +2781,43 @@
               "low",
               "medium",
               "high"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "google/gemini-4-hydrogen": {
+        "cost": {
+          "cache_read": 0.075,
+          "cache_write": 0.083333,
+          "input": 1.5,
+          "output": 7.5,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ]
+        },
+        "name": "Gemini 4 Hydrogen",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
             ]
           }
         ],

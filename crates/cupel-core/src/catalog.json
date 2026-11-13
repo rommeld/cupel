@@ -481,6 +481,34 @@
     }
   },
   {
+    "id": "gemini-4-hydrogen",
+    "name": "Gemini 4 Hydrogen",
+    "api": "google-generative-ai",
+    "provider": "google",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.5,
+      "output": 7.5,
+      "cachedRead": 0.075,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 1048576,
+    "compat": {
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "gemini-3.8-flash",
     "name": "Gemini 3.8 Flash",
     "api": "google-generative-ai",
@@ -2223,6 +2251,35 @@
       "output": 10.0,
       "cachedRead": 0.1,
       "cachedWrite": 0.1875
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "google/gemini-4-hydrogen",
+    "name": "Gemini 4 Hydrogen",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.5,
+      "output": 7.5,
+      "cachedRead": 0.075,
+      "cachedWrite": 0.083333
     },
     "contextWindow": 1048576,
     "maxTokens": 943718,
