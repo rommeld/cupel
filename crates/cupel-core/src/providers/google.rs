@@ -2,6 +2,8 @@
 //! calls (argument streaming is deliberately not enabled). Thought signatures
 //! stay attached to their original content blocks for stateless replay.
 
+use std::collections::HashSet;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -15,7 +17,7 @@ use crate::sse::{ServerSentEvent, SseDecoder};
 use crate::transform;
 use crate::types::{
     Api, AssistantContent, AssistantMessage, Context, Message, Model, ModelThinkingLevel,
-    StopReason, StreamOptions, TextContent, ThinkingContent, ToolCall, ToolResultContent,
+    StopReason, StreamOptions, TextContent, ThinkingContent, ToolCall, ToolResultContent, Usage,
     UserContent, UserContentBody,
 };
 
@@ -88,32 +90,145 @@ async fn run(
         .as_deref()
         .ok_or_else(|| InferenceError::MissingApiKey(model.provider.as_str().to_string()))?;
     let compat = providers::compat(model);
-    let body = build_request_body(model, context, options, &compat);
+    let mut body = build_request_body(model, context, options, &compat);
     tracing::trace!(body = %body, "request body");
+    let output_limit = body["generationConfig"]["maxOutputTokens"]
+        .as_u64()
+        .unwrap_or(model.max_tokens);
+    let long_decode = matches!(
+        model.id.strip_prefix("models/").unwrap_or(&model.id),
+        "gemini-4-argon" | "gemini-4-carbon"
+    ) && output_limit > 65_536;
     let url = format!(
         "{}/models/{}:streamGenerateContent?alt=sse",
         model.base_url.trim_end_matches('/'),
         model.id.strip_prefix("models/").unwrap_or(&model.id),
     );
-    // Keep the key out of the URL, including transport-error messages.
-    let request = http
-        .post(url)
-        .header("x-goog-api-key", key)
-        .header("accept", "text/event-stream");
-    let mut request = providers::apply_custom_headers(request, model, options);
-    if let Some(timeout) = options.timeout_ms {
-        request = request.timeout(core::time::Duration::from_millis(timeout));
-    }
-    let response = providers::send_request(request.json(&body), options).await?;
-    if !sink.start() {
-        return Ok(());
-    }
     let mut state = GoogleStream {
         output: providers::new_output_message(model),
         active: None,
-        finish_reason: None,
+        initial_prompt: None,
     };
-    if let Err(error) = read_response(response, options, sink, &mut state).await {
+    let mut seen_tokens = HashSet::new();
+    let mut reconnects = 0;
+    let mut started = false;
+    let failure = loop {
+        // Keep the key out of the URL, including transport-error messages.
+        let request = http
+            .post(&url)
+            .header("x-goog-api-key", key)
+            .header("accept", "text/event-stream");
+        let mut request = providers::apply_custom_headers(request, model, options);
+        // Google allows 20 minutes per streaming hop. An explicit caller
+        // timeout still wins, and is renewed for each continuation request.
+        if let Some(timeout) = options.timeout_ms.or(long_decode.then_some(1_200_000)) {
+            request = request.timeout(core::time::Duration::from_millis(timeout));
+        }
+        let response = match providers::send_request(request.json(&body), options).await {
+            Ok(response) => response,
+            Err(error) => break Some(error),
+        };
+        if !started {
+            if !sink.start() {
+                return Ok(());
+            }
+            started = true;
+        }
+        let mut hop = GoogleHop::new(long_decode);
+        let result = read_response(
+            response,
+            options,
+            sink,
+            &mut state,
+            &mut hop,
+            &mut seen_tokens,
+        )
+        .await;
+        if matches!(result, Ok(false)) {
+            return Ok(()); // Consumer dropped the stream.
+        }
+        // Usage is cumulative inside a hop. A dropped long-decode stream is
+        // billed only through its last checkpoint, even if more was displayed.
+        let usage = if result.is_err() && long_decode {
+            hop.checkpoint_usage.as_ref()
+        } else {
+            hop.usage.as_ref()
+        };
+        if let Some(usage) = usage {
+            state.record_usage(model, usage);
+        }
+        if !state.close_block(sink) {
+            return Ok(());
+        }
+        if let Err(error) = result {
+            if !long_decode
+                || hop.output_since_checkpoint
+                || hop
+                    .finish_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason != "CONTINUATION")
+                || !is_stream_drop(&error)
+            {
+                break Some(error);
+            }
+            if options.max_retries == Some(0) {
+                break Some(error);
+            }
+            if let Some(token) = hop.continuation_token {
+                // Everything emitted is covered by this checkpoint. Starting
+                // here cannot replay visible text, thinking or tool calls.
+                body["continuationToken"] = json!(token);
+                reconnects = 0;
+            } else {
+                if reconnects >= options.max_retries.unwrap_or(3) {
+                    break Some(error);
+                }
+                reconnects += 1;
+            }
+            continue;
+        }
+        if hop.finish_reason.as_deref() == Some("CONTINUATION") && long_decode {
+            if hop.output_since_checkpoint {
+                break Some(InferenceError::Other(
+                    "Google continuation does not cover all streamed output".to_string(),
+                ));
+            }
+            if state.output.usage.output >= output_limit {
+                state.output.stop_reason = StopReason::Length;
+                break None;
+            }
+            let Some(token) = hop.continuation_token.filter(|_| hop.terminal_checkpoint) else {
+                break Some(InferenceError::Other(
+                    "Google continuation ended without a new continuation token".to_string(),
+                ));
+            };
+            if hop.usage.as_ref().is_none_or(|usage| usage.output == 0) {
+                break Some(InferenceError::Other(
+                    "Google continuation did not report generated token usage".to_string(),
+                ));
+            }
+            // Only this top-level field changes. In particular, keep the same
+            // total output budget and never append partial output to contents.
+            body["continuationToken"] = json!(token);
+            reconnects = 0;
+            continue;
+        }
+        state.finish(hop.finish_reason.as_deref().unwrap_or("UNKNOWN"));
+        break None;
+    };
+    if let Some(error) = failure {
+        // All consumers receive append-only events. The outer agent must not
+        // restart the whole request after even checkpointed output escaped.
+        let error = if long_decode
+            && !state.output.content.is_empty()
+            && !matches!(error, InferenceError::Aborted)
+        {
+            InferenceError::NonReplayable(format!(
+                "Google generation interrupted after streaming output; automatic replay is unsafe: {error}"
+            ))
+        } else {
+            error
+        };
         state.output.stop_reason = if matches!(error, InferenceError::Aborted) {
             StopReason::Aborted
         } else {
@@ -123,7 +238,6 @@ async fn run(
         state.output.error_message = Some(error.to_string());
     }
     let _ = state.close_block(sink);
-    model::calculate_cost(model, &mut state.output.usage);
     providers::finish_output(state.output, sink);
     Ok(())
 }
@@ -290,7 +404,113 @@ fn message_parts(message: &Message) -> (&'static str, Vec<Value>) {
 struct GoogleStream {
     output: AssistantMessage,
     active: Option<usize>,
+    initial_prompt: Option<u64>,
+}
+
+/// Stream immediately, but only resume when the checkpoint covers every emitted
+/// part. Consumers cannot retract output that a recovery request may regenerate.
+struct GoogleHop {
+    long_decode: bool,
+    output_since_checkpoint: bool,
     finish_reason: Option<String>,
+    continuation_token: Option<String>,
+    terminal_checkpoint: bool,
+    usage: Option<Usage>,
+    checkpoint_usage: Option<Usage>,
+}
+
+impl GoogleHop {
+    fn new(long_decode: bool) -> Self {
+        Self {
+            long_decode,
+            output_since_checkpoint: false,
+            finish_reason: None,
+            continuation_token: None,
+            terminal_checkpoint: false,
+            usage: None,
+            checkpoint_usage: None,
+        }
+    }
+
+    fn consume(
+        &mut self,
+        data: &Value,
+        state: &mut GoogleStream,
+        sink: &EventSink,
+        seen_tokens: &mut HashSet<String>,
+    ) -> Result<bool> {
+        // API errors are not dropped-connection recovery signals.
+        if data.get("error").is_some() {
+            return state.consume(data, sink);
+        }
+        if let Some(usage) = data.get("usageMetadata") {
+            self.usage = Some(parse_usage(usage));
+        }
+        if let Some(reason) = data
+            .pointer("/promptFeedback/blockReason")
+            .and_then(Value::as_str)
+            && reason != "BLOCK_REASON_UNSPECIFIED"
+        {
+            self.finish_reason = Some(reason.to_string());
+        }
+        let candidate = data
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|candidates| candidates.first());
+        if let Some(reason) = candidate
+            .and_then(|candidate| candidate.get("finishReason"))
+            .and_then(Value::as_str)
+        {
+            self.finish_reason = Some(reason.to_string());
+            self.terminal_checkpoint = false;
+        }
+        let token = candidate
+            .and_then(|candidate| candidate.get("continuationToken"))
+            .and_then(Value::as_str)
+            .filter(|token| !token.trim().is_empty());
+        let token = token.filter(|_| self.long_decode);
+        let new_checkpoint =
+            token.is_some_and(|token| self.continuation_token.as_deref() != Some(token));
+        if new_checkpoint
+            && let Some(token) = token
+            && !seen_tokens.insert(token.to_string())
+        {
+            return Err(InferenceError::Other(
+                "Google returned an already used continuation token".to_string(),
+            ));
+        }
+        if candidate
+            .and_then(|candidate| candidate.pointer("/content/parts"))
+            .and_then(Value::as_array)
+            .is_some_and(|parts| !parts.is_empty())
+        {
+            // Includes empty signed text and thinking/tool parts: they affect
+            // replay even when no visible text delta was emitted.
+            self.output_since_checkpoint = true;
+        }
+        if !state.consume(data, sink)? {
+            return Ok(false);
+        }
+        if let Some(token) = token {
+            if new_checkpoint {
+                self.continuation_token = Some(token.to_string());
+                self.checkpoint_usage = self.usage.clone();
+                self.output_since_checkpoint = false;
+            }
+            // Repeating a token cannot acknowledge output produced since it.
+            self.terminal_checkpoint = self.finish_reason.as_deref() == Some("CONTINUATION")
+                && !self.output_since_checkpoint;
+        }
+        // Final usage can arrive after the terminal token. That token covers
+        // the completed hop, unlike intermediate checkpoints during thinking.
+        if self.terminal_checkpoint
+            && !self.output_since_checkpoint
+            && data.get("usageMetadata").is_some()
+        {
+            self.checkpoint_usage = self.usage.clone();
+        }
+        Ok(true)
+    }
 }
 
 async fn read_response(
@@ -298,7 +518,9 @@ async fn read_response(
     options: &StreamOptions,
     sink: &EventSink,
     state: &mut GoogleStream,
-) -> Result<()> {
+    hop: &mut GoogleHop,
+    seen_tokens: &mut HashSet<String>,
+) -> Result<bool> {
     use futures_util::StreamExt as _;
     let mut stream = response.bytes_stream();
     let mut decoder = SseDecoder::new();
@@ -314,8 +536,8 @@ async fn read_response(
             let data: Value = serde_json::from_str(&event.data).map_err(|error| {
                 InferenceError::Transport(format!("Invalid Google stream JSON: {error}"))
             })?;
-            if !state.consume(&data, sink)? {
-                return Ok(());
+            if !hop.consume(&data, state, sink, seen_tokens)? {
+                return Ok(false);
             }
         }
         // A final signature or usage-only chunk can follow finishReason.
@@ -323,30 +545,80 @@ async fn read_response(
             break;
         }
     }
-    let reason = state.finish_reason.as_deref().ok_or_else(|| {
+    hop.finish_reason.as_deref().ok_or_else(|| {
         InferenceError::Transport("Google stream ended without a finish reason".to_string())
     })?;
-    state.output.stop_reason = match reason {
-        "STOP"
-            if state
-                .output
-                .content
-                .iter()
-                .any(|block| matches!(block, AssistantContent::ToolCall(_))) =>
-        {
-            StopReason::ToolUse
-        }
-        "STOP" => StopReason::Stop,
-        "MAX_TOKENS" | "CONTINUATION" => StopReason::Length,
-        _ => {
-            state.output.error_message = Some(format!("Google stopped generation: {reason}"));
-            StopReason::Error
-        }
-    };
-    Ok(())
+    Ok(true)
+}
+
+fn is_stream_drop(error: &InferenceError) -> bool {
+    matches!(
+        error,
+        InferenceError::Transport(_) | InferenceError::Http(_)
+    )
+}
+
+fn parse_usage(usage: &Value) -> Usage {
+    let count = |name| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+    let cached = count("cachedContentTokenCount");
+    let output = count("candidatesTokenCount").saturating_add(count("thoughtsTokenCount"));
+    Usage {
+        input: count("promptTokenCount").saturating_sub(cached),
+        cache_read: cached,
+        output,
+        reasoning: usage.get("thoughtsTokenCount").and_then(Value::as_u64),
+        total_tokens: usage
+            .get("totalTokenCount")
+            .and_then(Value::as_u64)
+            .unwrap_or_else(|| count("promptTokenCount").saturating_add(output)),
+        ..Usage::default()
+    }
 }
 
 impl GoogleStream {
+    fn finish(&mut self, reason: &str) {
+        self.output.stop_reason = match reason {
+            "STOP"
+                if self
+                    .output
+                    .content
+                    .iter()
+                    .any(|block| matches!(block, AssistantContent::ToolCall(_))) =>
+            {
+                StopReason::ToolUse
+            }
+            "STOP" => StopReason::Stop,
+            "MAX_TOKENS" | "CONTINUATION" => StopReason::Length,
+            _ => {
+                self.output.error_message = Some(format!("Google stopped generation: {reason}"));
+                StopReason::Error
+            }
+        };
+    }
+
+    fn record_usage(&mut self, model: &Model, usage: &Usage) {
+        let initial_prompt = *self
+            .initial_prompt
+            .get_or_insert(usage.input.saturating_add(usage.cache_read));
+        let mut hop = usage.clone();
+        // Price each request separately; adding input first would incorrectly
+        // apply a long-context pricing tier to the combined billed input.
+        model::calculate_cost(model, &mut hop);
+        let total = &mut self.output.usage;
+        total.input = total.input.saturating_add(hop.input);
+        total.cache_read = total.cache_read.saturating_add(hop.cache_read);
+        total.output = total.output.saturating_add(hop.output);
+        total.total_tokens = total.total_tokens.saturating_add(hop.total_tokens);
+        if let Some(reasoning) = hop.reasoning {
+            total.reasoning = Some(total.reasoning.unwrap_or(0).saturating_add(reasoning));
+        }
+        total.context_tokens = Some(initial_prompt.saturating_add(total.output));
+        total.cost.input += hop.cost.input;
+        total.cost.output += hop.cost.output;
+        total.cost.cache_read += hop.cost.cache_read;
+        total.cost.total += hop.cost.total;
+    }
+
     fn consume(&mut self, data: &Value, sink: &EventSink) -> Result<bool> {
         if let Some(error) = data.get("error") {
             let body = error
@@ -371,50 +643,21 @@ impl GoogleStream {
         if let Some(model) = data.get("modelVersion").and_then(Value::as_str) {
             self.output.response_model = Some(model.to_string());
         }
-        if let Some(usage) = data.get("usageMetadata") {
-            self.update_usage(usage);
-        }
-        if let Some(reason) = data
-            .pointer("/promptFeedback/blockReason")
-            .and_then(Value::as_str)
-            && reason != "BLOCK_REASON_UNSPECIFIED"
-        {
-            self.finish_reason = Some(reason.to_string());
-        }
         if let Some(candidate) = data
             .get("candidates")
             .and_then(Value::as_array)
             .and_then(|candidates| candidates.first())
-        {
-            if let Some(parts) = candidate
+            && let Some(parts) = candidate
                 .pointer("/content/parts")
                 .and_then(Value::as_array)
-            {
-                for (position, part) in parts.iter().enumerate() {
-                    if !self.part(part, position == 0, sink)? {
-                        return Ok(false);
-                    }
+        {
+            for (position, part) in parts.iter().enumerate() {
+                if !self.part(part, position == 0, sink)? {
+                    return Ok(false);
                 }
-            }
-            if let Some(reason) = candidate.get("finishReason").and_then(Value::as_str) {
-                self.finish_reason = Some(reason.to_string());
             }
         }
         Ok(true)
-    }
-
-    fn update_usage(&mut self, usage: &Value) {
-        let count = |name| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
-        let cached = count("cachedContentTokenCount");
-        let thoughts = count("thoughtsTokenCount");
-        self.output.usage.input = count("promptTokenCount").saturating_sub(cached);
-        self.output.usage.cache_read = cached;
-        self.output.usage.output = count("candidatesTokenCount") + thoughts;
-        self.output.usage.reasoning = usage.get("thoughtsTokenCount").and_then(Value::as_u64);
-        self.output.usage.total_tokens = usage
-            .get("totalTokenCount")
-            .and_then(Value::as_u64)
-            .unwrap_or(self.output.usage.input + cached + self.output.usage.output);
     }
 
     fn part(&mut self, part: &Value, may_continue: bool, sink: &EventSink) -> Result<bool> {

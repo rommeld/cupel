@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::provider::Provider as _;
 use crate::providers::google::{GoogleCompat, GoogleProvider, build_request_body};
 use crate::types::{
-    Api, AssistantContent, AssistantMessage, AssistantMessageEvent, Context, ErrorKind,
+    Api, AssistantContent, AssistantMessage, AssistantMessageEvent, Context, CostTier, ErrorKind,
     ImageContent, InputModality, Message, Model, ModelCost, Provider, StopReason, StreamOptions,
     TextContent, ThinkingLevel, Tool, ToolCall, ToolResultContent, ToolResultMessage, UserContent,
     UserContentBody, UserMessage,
@@ -119,18 +119,32 @@ async fn capture_request(
 }
 
 async fn server(replies: Vec<(u16, String)>) -> (Model, JoinHandle<Vec<CapturedRequest>>) {
+    scripted_server(
+        replies
+            .into_iter()
+            .map(|(status, body)| (status, body, false))
+            .collect(),
+    )
+    .await
+}
+
+/// Interrupted responses declare bytes they never send, forcing a body-read error
+/// after the supplied complete SSE events have been received.
+async fn scripted_server(
+    replies: Vec<(u16, String, bool)>,
+) -> (Model, JoinHandle<Vec<CapturedRequest>>) {
     use tokio::io::AsyncWriteExt as _;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
         let mut requests = Vec::new();
-        for (status, body) in replies {
+        for (status, body, interrupted) in replies {
             let (socket, _) = listener.accept().await.unwrap();
             let (request, mut writer) = capture_request(socket).await;
             requests.push(request);
             let response = format!(
                 "HTTP/1.1 {status} Fixture\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len(),
+                body.len() + usize::from(interrupted),
             );
             writer.write_all(response.as_bytes()).await.unwrap();
             writer.shutdown().await.unwrap();
@@ -184,6 +198,523 @@ fn terminal(events: &[AssistantMessageEvent]) -> &AssistantMessage {
         AssistantMessageEvent::Error { error, .. } => error,
         other => panic!("expected terminal event, got {other:?}"),
     }
+}
+
+fn long_decode_options() -> StreamOptions {
+    StreamOptions {
+        max_tokens: Some(200_000),
+        ..options()
+    }
+}
+
+fn text_deltas(events: &[AssistantMessageEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            AssistantMessageEvent::TextDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn completed_requests(task: JoinHandle<Vec<CapturedRequest>>) -> Vec<CapturedRequest> {
+    tokio::time::timeout(Duration::from_secs(6), task)
+        .await
+        .expect("all expected requests must arrive")
+        .unwrap()
+}
+
+/// Keep accepting until the client finishes so accidental extra attempts are counted.
+async fn repeating_server(
+    body: String,
+    interrupted: bool,
+) -> (Model, CancellationToken, JoinHandle<Vec<CapturedRequest>>) {
+    use tokio::io::AsyncWriteExt as _;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut model = fixture_model();
+    model.base_url = format!("http://{}/v1beta", listener.local_addr().unwrap());
+    model.max_tokens = 1_048_576;
+    let finished = CancellationToken::new();
+    let stop = finished.clone();
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        loop {
+            let (socket, _) = tokio::select! {
+                () = stop.cancelled() => break,
+                result = listener.accept() => result.unwrap(),
+            };
+            let (request, mut writer) = capture_request(socket).await;
+            requests.push(request);
+            writer.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len() + usize::from(interrupted)).as_bytes()).await.unwrap();
+            writer.shutdown().await.unwrap();
+        }
+        requests
+    });
+    (model, finished, task)
+}
+
+#[tokio::test]
+async fn long_decode_emits_text_and_thinking_before_checkpoint_or_eof() {
+    use futures_util::StreamExt as _;
+    use tokio::io::AsyncWriteExt as _;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut model = fixture_model();
+    model.base_url = format!("http://{}/v1beta", listener.local_addr().unwrap());
+    model.max_tokens = 1_048_576;
+    let (release, wait_for_deltas) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let prefix = sse(&[json!({"candidates": [{"content": {"parts": [
+            {"thought": true, "text": "Live thought"}, {"text": "Live text"}
+        ]}}]})]);
+        let checkpoint = sse(&[
+            json!({"candidates": [{"finishReason": "STOP", "continuationToken": "final-checkpoint"}]}),
+        ]);
+        let (socket, _) = listener.accept().await.unwrap();
+        let (_, mut writer) = capture_request(socket).await;
+        writer.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{prefix}", prefix.len() + checkpoint.len()).as_bytes()).await.unwrap();
+        wait_for_deltas
+            .await
+            .expect("client must receive both deltas before checkpoint release");
+        writer.write_all(checkpoint.as_bytes()).await.unwrap();
+        writer.shutdown().await.unwrap();
+    });
+    let mut stream = GoogleProvider::new().stream(&model, context(), long_decode_options());
+    let received = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut received = Vec::new();
+        let mut release = Some(release);
+        let mut text_seen = false;
+        let mut thinking_seen = false;
+        while let Some(event) = stream.next().await {
+            text_seen |= matches!(&event, AssistantMessageEvent::TextDelta { delta, .. } if delta == "Live text");
+            thinking_seen |= matches!(&event, AssistantMessageEvent::ThinkingDelta { delta, .. } if delta == "Live thought");
+            if text_seen && thinking_seen
+                && let Some(release) = release.take()
+            {
+                release.send(()).unwrap();
+            }
+            received.push(event);
+        }
+        assert!(text_seen && thinking_seen);
+        received
+    }).await.expect("deltas must arrive while the checkpoint and EOF are withheld");
+    assert_eq!(terminal(&received).stop_reason, StopReason::Stop);
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn long_decode_sums_hop_usage_without_counting_replayed_context_twice() {
+    for id in ["gemini-4-argon", "gemini-4-carbon"] {
+        let first = sse(&[
+            json!({"candidates": [{"content": {"parts": [{"thought": true, "text": "Plan "}]}}],
+                "usageMetadata": {"promptTokenCount": 100, "cachedContentTokenCount": 40,
+                    "thoughtsTokenCount": 10, "totalTokenCount": 110}}),
+            json!({"candidates": [{"content": {"parts": [{"thought": true, "text": "carefully.", "thoughtSignature": "planning-signature"}]},
+                "finishReason": "CONTINUATION", "continuationToken": "checkpoint-1"}]}),
+            json!({"usageMetadata": {"promptTokenCount": 100, "cachedContentTokenCount": 40,
+                "thoughtsTokenCount": 30, "totalTokenCount": 130}}),
+        ]);
+        let second = sse(&[
+            json!({"candidates": [{"content": {"parts": [{"text": "Reading."}]}}],
+                "usageMetadata": {"promptTokenCount": 130, "cachedContentTokenCount": 100,
+                    "candidatesTokenCount": 8, "thoughtsTokenCount": 2, "totalTokenCount": 140}}),
+            json!({"candidates": [{"content": {"parts": [
+                {"functionCall": {"id": "retained-call", "name": "read", "args": {"path": "a.rs"}}, "thoughtSignature": "retained-signature"}
+            ]}, "finishReason": "STOP"}]}),
+            json!({"usageMetadata": {"promptTokenCount": 130, "cachedContentTokenCount": 100,
+                "candidatesTokenCount": 20, "thoughtsTokenCount": 5, "totalTokenCount": 155}}),
+        ]);
+        let (mut model, task) = server(vec![(200, first), (200, second)]).await;
+        model.id = id.into();
+        model.max_tokens = 1_048_576;
+        // Each hop's prompt stays below this tier, while their summed billing
+        // input exceeds it. Cost must be calculated per hop before aggregation.
+        model.cost.tiers = Some(vec![CostTier {
+            context_over: 200,
+            input: 4.0,
+            output: 20.0,
+            cached_read: 0.2,
+            cached_write: 0.0,
+        }]);
+        let received = events(&model, context(), long_decode_options()).await;
+        let message = terminal(&received);
+        assert_eq!(message.stop_reason, StopReason::ToolUse);
+        assert_eq!(
+            (
+                message.usage.input,
+                message.usage.cache_read,
+                message.usage.output
+            ),
+            (90, 140, 55)
+        );
+        assert_eq!(message.usage.reasoning, Some(35));
+        assert_eq!(message.usage.total_tokens, 285);
+        assert_eq!(message.usage.context_tokens, Some(155));
+        assert!((message.usage.cost.total - 0.000_744).abs() < 1e-12);
+        assert_eq!(
+            received
+                .iter()
+                .filter(|event| matches!(event, AssistantMessageEvent::Start))
+                .count(),
+            1
+        );
+        assert_eq!(text_deltas(&received), "Reading.");
+        let thoughts: String = received
+            .iter()
+            .filter_map(|event| match event {
+                AssistantMessageEvent::ThinkingDelta { delta, .. } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(thoughts, "Plan carefully.");
+        let calls: Vec<&ToolCall> = message
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                AssistantContent::ToolCall(call) => Some(call),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].thought_signature.as_deref(),
+            Some("retained-signature")
+        );
+        let mut requests = completed_requests(task).await;
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].body["generationConfig"]["maxOutputTokens"],
+            200_000
+        );
+        assert_eq!(
+            requests[1]
+                .body
+                .as_object_mut()
+                .unwrap()
+                .remove("continuationToken"),
+            Some(json!("checkpoint-1"))
+        );
+        assert_eq!(
+            requests[1].body, requests[0].body,
+            "continuation must replay the original request unchanged"
+        );
+    }
+}
+
+#[tokio::test]
+async fn long_decode_rejects_missing_empty_and_reused_checkpoint_tokens() {
+    for token in [None, Some(""), Some("reused")] {
+        let mut replies = Vec::new();
+        if token == Some("reused") {
+            replies.push((
+                200,
+                sse(&[
+                    json!({"candidates": [{"content": {"parts": [{"text": "committed"}]},
+                "finishReason": "CONTINUATION", "continuationToken": "reused"}],
+                "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 10, "totalTokenCount": 110}}),
+                ]),
+            ));
+        }
+        let mut candidate = json!({"content": {"parts": [{"text": "invalid checkpoint"}]}, "finishReason": "CONTINUATION"});
+        if let Some(token) = token {
+            candidate["continuationToken"] = json!(token);
+        }
+        replies.push((200, sse(&[json!({"candidates": [candidate]})])));
+        let expected_requests = replies.len();
+        let (mut model, task) = server(replies).await;
+        model.max_tokens = 1_048_576;
+        let received = events(&model, context(), long_decode_options()).await;
+        let message = terminal(&received);
+        assert_eq!(message.stop_reason, StopReason::Error, "token {token:?}");
+        assert_eq!(
+            message.error_kind,
+            Some(ErrorKind::NonReplayable),
+            "token {token:?}"
+        );
+        assert!(!crate::retry::is_retryable_assistant_error(message));
+        assert_eq!(completed_requests(task).await.len(), expected_requests);
+    }
+}
+
+#[tokio::test]
+async fn max_tokens_finish_never_resumes_even_with_a_continuation_token() {
+    let (mut model, task) = server(vec![(200, sse(&[json!({"candidates": [{"content": {"parts": [{"text": "budget exhausted"}]},
+        "finishReason": "MAX_TOKENS", "continuationToken": "do-not-resume"}],
+        "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 200_000, "totalTokenCount": 200_100}})]))]).await;
+    model.max_tokens = 1_048_576;
+    let received = events(&model, context(), long_decode_options()).await;
+    assert_eq!(terminal(&received).stop_reason, StopReason::Length);
+    assert_eq!(text_deltas(&received), "budget exhausted");
+    let requests = completed_requests(task).await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].body["generationConfig"]["maxOutputTokens"],
+        200_000
+    );
+}
+
+#[tokio::test]
+async fn interrupted_long_decode_resumes_only_when_checkpoint_covers_emitted_parts() {
+    for finish_reason in [None, Some("CONTINUATION")] {
+        let uncheckpointed_usage = sse(&[json!({"usageMetadata": {
+            "promptTokenCount": 10_000, "cachedContentTokenCount": 5_000,
+            "candidatesTokenCount": 1_000, "thoughtsTokenCount": 100, "totalTokenCount": 11_100}})]);
+        let mut checkpoint = json!({"candidates": [{"content": {"parts": [{"text": "kept before "}]},
+            "continuationToken": "saved-checkpoint"}],
+            "usageMetadata": {"promptTokenCount": 100, "cachedContentTokenCount": 20,
+                "candidatesTokenCount": 15, "thoughtsTokenCount": 5, "totalTokenCount": 120}});
+        if let Some(reason) = finish_reason {
+            checkpoint["candidates"][0]["finishReason"] = json!(reason);
+            checkpoint["usageMetadata"]["candidatesTokenCount"] = json!(5);
+            checkpoint["usageMetadata"]["thoughtsTokenCount"] = json!(0);
+            checkpoint["usageMetadata"]["totalTokenCount"] = json!(105);
+        }
+        let checkpoint = sse(&[checkpoint]);
+        // Usage after a terminal checkpoint is its final cumulative total.
+        // After an intermediate checkpoint it may include hidden uncommitted work.
+        let trailing_usage = if finish_reason.is_some() {
+            sse(&[
+                json!({"usageMetadata": {"promptTokenCount": 100, "cachedContentTokenCount": 20,
+                "candidatesTokenCount": 15, "thoughtsTokenCount": 5, "totalTokenCount": 120}}),
+            ])
+        } else {
+            uncheckpointed_usage.clone()
+        };
+        let interrupted = format!("{checkpoint}{trailing_usage}");
+        let final_hop = sse(&[json!({"candidates": [{"content": {"parts": [
+            {"text": "kept after"},
+            {"functionCall": {"id": "retained", "name": "read", "args": {"path": "retained.rs"}}, "thoughtSignature": "retained-signature"}
+        ]}, "finishReason": "STOP"}], "usageMetadata": {"promptTokenCount": 120, "cachedContentTokenCount": 90,
+            "candidatesTokenCount": 25, "thoughtsTokenCount": 10, "totalTokenCount": 155}})]);
+        let (mut model, task) = scripted_server(vec![
+            (200, uncheckpointed_usage, true),
+            (200, interrupted, true),
+            (200, final_hop, false),
+        ])
+        .await;
+        model.id = "gemini-4-argon".into();
+        model.max_tokens = 1_048_576;
+        let mut options = long_decode_options();
+        options.max_retries = Some(1);
+        let received = events(&model, context(), options).await;
+        let message = terminal(&received);
+        assert_eq!(
+            message.stop_reason,
+            StopReason::ToolUse,
+            "checkpoint finish reason {finish_reason:?}"
+        );
+        assert_eq!(text_deltas(&received), "kept before kept after");
+        assert_eq!(
+            (
+                message.usage.input,
+                message.usage.cache_read,
+                message.usage.output
+            ),
+            (110, 110, 55),
+            "only checkpointed usage and the completed final hop are billed"
+        );
+        assert_eq!(message.usage.reasoning, Some(15));
+        assert_eq!(message.usage.total_tokens, 275);
+        assert_eq!(message.usage.context_tokens, Some(155));
+        assert_eq!(
+            received
+                .iter()
+                .filter(|event| matches!(event, AssistantMessageEvent::ToolCallEnd { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            received
+                .iter()
+                .filter(|event| matches!(event, AssistantMessageEvent::Start))
+                .count(),
+            1
+        );
+        let requests = completed_requests(task).await;
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests[0].body, requests[1].body,
+            "before a checkpoint, retry the original request"
+        );
+        let mut expected_resume = requests[0].body.clone();
+        expected_resume["continuationToken"] = json!("saved-checkpoint");
+        assert_eq!(
+            requests[2].body, expected_resume,
+            "retry the latest checkpoint without replaying partial output"
+        );
+    }
+}
+#[tokio::test]
+async fn interrupted_long_decode_obeys_retry_limits_and_mode_boundaries() {
+    for (id, budget, max_retries, attempts) in [
+        ("gemini-4-carbon", 200_000, Some(0), 1),
+        ("gemini-4-carbon", 200_000, None, 4),
+        ("gemini-4-carbon", 65_536, None, 1),
+        ("gemini-3.8-flash", 200_000, None, 1),
+    ] {
+        let body = sse(&[json!({"usageMetadata": {"promptTokenCount": 100}})]);
+        let (mut model, finished, task) = repeating_server(body, true).await;
+        model.id = id.into();
+        let mut options = long_decode_options();
+        options.max_tokens = Some(budget);
+        options.max_retries = max_retries;
+        let received = events(&model, context(), options).await;
+        finished.cancel();
+        let message = terminal(&received);
+        assert_eq!(message.stop_reason, StopReason::Error);
+        assert_eq!(message.error_kind, Some(ErrorKind::Transport));
+        assert!(message.content.is_empty());
+        assert_eq!(
+            completed_requests(task).await.len(),
+            attempts,
+            "{id} at {budget}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn emitted_suffixes_are_retained_and_never_replayed_after_interruption() {
+    let parts = [
+        (json!({"text": "visible-text"}), "visible-text"),
+        (
+            json!({"thought": true, "text": "visible-thought"}),
+            "visible-thought",
+        ),
+        (
+            json!({"text": "", "thoughtSignature": "visible-empty-signature"}),
+            "visible-empty-signature",
+        ),
+        (
+            json!({"functionCall": {"id": "visible-call", "name": "read", "args": {"path": "a.rs"}}}),
+            "visible-call",
+        ),
+    ];
+    for (checkpointed, interrupted, repeat_token) in [
+        (false, true, false),
+        (true, true, false),
+        (true, true, true),
+        (true, false, true),
+    ] {
+        for (part, marker) in &parts {
+            let mut chunks = Vec::new();
+            if checkpointed {
+                chunks.push(json!({"candidates": [{"content": {"parts": [{"text": "checkpointed "}]},
+                    "continuationToken": "checkpoint"}],
+                    "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 10, "totalTokenCount": 110}}));
+            }
+            chunks.push(json!({"candidates": [{"content": {"parts": [part]}}],
+                "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 50, "totalTokenCount": 150}}));
+            if repeat_token {
+                let mut candidate = json!({"continuationToken": "checkpoint"});
+                if !interrupted {
+                    candidate["finishReason"] = json!("CONTINUATION");
+                }
+                chunks.push(json!({"candidates": [candidate]}));
+            }
+            let (model, finished, task) = repeating_server(sse(&chunks), interrupted).await;
+            let received = events(&model, context(), long_decode_options()).await;
+            finished.cancel();
+            let message = terminal(&received);
+            assert_eq!(message.stop_reason, StopReason::Error, "{marker}");
+            assert_eq!(
+                message.error_kind,
+                Some(ErrorKind::NonReplayable),
+                "{marker}"
+            );
+            assert!(
+                !crate::retry::is_retryable_assistant_error(message),
+                "{marker}"
+            );
+            assert!(
+                serde_json::to_string(&message.content)
+                    .unwrap()
+                    .contains(marker),
+                "partial content was lost: {marker}"
+            );
+            if interrupted {
+                assert_eq!(
+                    message.usage.output,
+                    if checkpointed { 10 } else { 0 },
+                    "repeated tokens must not advance checkpoint billing"
+                );
+            }
+            assert_eq!(
+                completed_requests(task).await.len(),
+                1,
+                "unsafe suffix must not trigger another request: {marker}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelled_long_decode_keeps_emitted_suffix_and_bills_only_checkpoint() {
+    use futures_util::StreamExt as _;
+    use tokio::io::AsyncWriteExt as _;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut model = fixture_model();
+    model.base_url = format!("http://{}/v1beta", listener.local_addr().unwrap());
+    model.max_tokens = 1_048_576;
+    let signal = CancellationToken::new();
+    let stop = signal.clone();
+    let task = tokio::spawn(async move {
+        let checkpoint = sse(&[
+            json!({"candidates": [{"content": {"parts": [{"text": "checkpointed "}]},
+            "finishReason": "CONTINUATION", "continuationToken": "saved-checkpoint"}],
+            "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 10, "totalTokenCount": 110}}),
+        ]);
+        let (socket, _) = listener.accept().await.unwrap();
+        let (_, mut writer) = capture_request(socket).await;
+        writer.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{checkpoint}", checkpoint.len()).as_bytes()).await.unwrap();
+        writer.shutdown().await.unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let (_, mut writer) = capture_request(socket).await;
+        writer
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        writer.write_all(sse(&[json!({"candidates": [{"content": {"parts": [{"text": "live suffix"}]}}],
+            "usageMetadata": {"promptTokenCount": 110, "candidatesTokenCount": 50, "totalTokenCount": 160}})]).as_bytes()).await.unwrap();
+        stop.cancelled().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                .await
+                .is_err(),
+            "cancellation must not open another request"
+        );
+    });
+    let mut options = long_decode_options();
+    options.signal = Some(signal.clone());
+    let mut stream = GoogleProvider::new().stream(&model, context(), options);
+    let received = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut received = Vec::new();
+        while let Some(event) = stream.next().await {
+            if matches!(&event, AssistantMessageEvent::TextDelta { delta, .. } if delta == "live suffix") {
+                signal.cancel();
+            }
+            received.push(event);
+        }
+        received
+    }).await.expect("cancel after the suffix is actually emitted");
+    let message = terminal(&received);
+    assert_eq!(message.stop_reason, StopReason::Aborted);
+    assert_eq!(message.error_kind, Some(ErrorKind::Aborted));
+    assert_eq!(text_deltas(&received), "checkpointed live suffix");
+    assert!(
+        serde_json::to_string(&message.content)
+            .unwrap()
+            .contains("live suffix")
+    );
+    assert_eq!(
+        (
+            message.usage.input,
+            message.usage.output,
+            message.usage.total_tokens
+        ),
+        (100, 10, 110)
+    );
+    task.await.unwrap();
 }
 
 #[tokio::test]
@@ -594,6 +1125,22 @@ fn request_config_clamps_gemini_4_thinking_and_output_and_keeps_images() {
             assert_eq!(
                 body["contents"][0]["parts"][1]["inlineData"]["mimeType"],
                 "image/png"
+            );
+        }
+        model.max_tokens = 1_048_576;
+        let mut anchored = context.clone();
+        let mut previous = crate::providers::new_output_message(&model);
+        previous.stop_reason = StopReason::Stop;
+        previous.usage.total_tokens = 2_000_000;
+        previous.usage.context_tokens = Some(900_000);
+        anchored.messages.push(Message::Assistant(previous));
+        for (requested, expected) in [(u64::MAX, 144_480), (1_000, 1_000)] {
+            let mut options = options();
+            options.max_tokens = Some(requested);
+            let body = build_request_body(&model, &anchored, &options, &GoogleCompat::default());
+            assert_eq!(
+                body["generationConfig"]["maxOutputTokens"], expected,
+                "{id}: cap against retained context and safety headroom, preserving smaller budgets"
             );
         }
     }
