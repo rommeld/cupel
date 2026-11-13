@@ -18,7 +18,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - feat(catalog): add Claude Fable 5.2 on OpenRouter
 - feat: add Claude Fable 5.2 to Anthropic catalog
 - fix(acp): migrate adapter to protocol SDK 5
-- chore(deps): bump agent-client-protocol from 3.6.0 to 5.0.0
 - feat(tui): show cumulative agent working time in footer
 - feat(tui): cycle tool output visibility while preserving diffs
 - feat(tui): add draggable prompt and usage scrollbars
@@ -92,7 +91,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - feat(agent): keep solo workflows free of team services and activate collaboration only when used
 - fix(team): archive shared evidence and preserve helper memory and usage when returning to solo mode
 - test(agent): cover solo/team lifecycle and matched tool-parallelism benchmarks
-- chore(deps): update ACP, AWS Smithy types, ignore, Tokio Util, and unicode-width
 
 ## [v0.34.7] - 2026-11-01
 
@@ -139,7 +137,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 ## [v0.34.1] - 2026-10-30
 
 - docs: reduce the README to setup, everyday usage, and essential configuration; simplify helper teams and ACP, remove client examples and benchmark tables
-- chore(deps): update base64, sha2, unicode-normalization, grep-searcher, and ignore
 - ci: update Dependabot configuration
 
 ## [v0.34.0] - 2026-10-28
@@ -176,12 +173,6 @@ from v0.2.0-beta, minor = features, patch = fixes.
 - fix(deps): preserve similar 3 in sha2 upgrade
 - ci: auto-merge release bookkeeping PRs
 - update .gitignore
-- chore(deps): bump getrandom from 0.3.4 to 0.4.3
-- chore(deps): bump sha2 from 0.10.9 to 0.11.0
-- chore(deps): bump serde from 1.0.228 to 1.0.229
-- chore(deps): bump async-trait from 0.1.89 to 0.1.92
-- chore(deps): bump similar from 2.7.0 to 3.2.0
-- chore(deps): bump actions/download-artifact from 4.3.0 to 8.0.2
 
 ## [v0.33.9] - 2026-10-25
 
