@@ -181,7 +181,6 @@ pub struct AgentLoopConfig {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub tool_execution: ToolExecutionMode,
-    pub tool_gate: Option<Arc<dyn crate::ToolExecutionGate>>,
     pub retry: RetryConfig,
     pub compaction: crate::compaction::CompactionConfig,
 }

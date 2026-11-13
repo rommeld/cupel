@@ -49,7 +49,6 @@ pub struct AgentOptions {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u64>,
     pub tool_execution: ToolExecutionMode,
-    pub tool_gate: Option<Arc<dyn crate::ToolExecutionGate>>,
     pub retry: RetryConfig,
     pub compaction: crate::compaction::CompactionConfig,
     pub messages: Vec<AgentMessage>,
@@ -70,7 +69,6 @@ impl AgentOptions {
             temperature: None,
             max_tokens: None,
             tool_execution: ToolExecutionMode::default(),
-            tool_gate: None,
             retry: RetryConfig::default(),
             compaction: crate::compaction::CompactionConfig::default(),
             messages: Vec::new(),
@@ -99,7 +97,6 @@ pub struct Agent {
     temperature: Option<f64>,
     max_tokens: Option<u64>,
     tool_execution: ToolExecutionMode,
-    tool_gate: Option<Arc<dyn crate::ToolExecutionGate>>,
     retry: RetryConfig,
     compaction: crate::compaction::CompactionConfig,
     unverified_usage: Arc<AtomicBool>,
@@ -131,17 +128,11 @@ impl Agent {
             temperature: options.temperature,
             max_tokens: options.max_tokens,
             tool_execution: options.tool_execution,
-            tool_gate: options.tool_gate,
             retry: options.retry,
             compaction: options.compaction,
             unverified_usage,
             active: None,
         }
-    }
-
-    /// Configure local leaf-tool admission for the next run. Model inputs are unchanged.
-    pub fn set_tool_gate(&mut self, gate: Option<Arc<dyn crate::ToolExecutionGate>>) {
-        self.tool_gate = gate;
     }
 
     /// Restore legacy application records as local-only data without changing usage anchors.
@@ -482,7 +473,6 @@ impl Agent {
                     temperature: self.temperature,
                     max_tokens: self.max_tokens,
                     tool_execution: self.tool_execution,
-                    tool_gate: self.tool_gate.clone(),
                     retry: self.retry,
                     compaction: self.compaction,
                 },

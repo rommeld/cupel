@@ -694,11 +694,9 @@ async fn execute_tool_calls(
     });
 
     if config.tool_execution == ToolExecutionMode::Sequential || has_sequential_tool {
-        execute_tool_calls_sequential(context, assistant, tool_calls, config, hooks, cancel, sink)
-            .await
+        execute_tool_calls_sequential(context, assistant, tool_calls, hooks, cancel, sink).await
     } else {
-        execute_tool_calls_parallel(context, assistant, tool_calls, config, hooks, cancel, sink)
-            .await
+        execute_tool_calls_parallel(context, assistant, tool_calls, hooks, cancel, sink).await
     }
 }
 
@@ -706,7 +704,6 @@ async fn execute_tool_calls_sequential(
     context: &AgentContext,
     assistant: &AssistantMessage,
     tool_calls: Vec<ToolCall>,
-    config: &AgentLoopConfig,
     hooks: &Arc<dyn AgentHooks>,
     cancel: &CancellationToken,
     sink: &AgentEventSink,
@@ -723,15 +720,7 @@ async fn execute_tool_calls_sequential(
                 is_error,
             },
             Preparation::Ready { tool, args } => {
-                let executed = execute_prepared(
-                    &tool,
-                    &tool_call,
-                    args,
-                    config.tool_gate.as_ref(),
-                    cancel,
-                    sink,
-                )
-                .await;
+                let executed = execute_prepared(&tool, &tool_call, args, cancel, sink).await;
                 finalize_executed(tool_call, executed)
             }
         };
@@ -761,7 +750,6 @@ async fn execute_tool_calls_parallel(
     context: &AgentContext,
     assistant: &AssistantMessage,
     tool_calls: Vec<ToolCall>,
-    config: &AgentLoopConfig,
     hooks: &Arc<dyn AgentHooks>,
     cancel: &CancellationToken,
     sink: &AgentEventSink,
@@ -824,11 +812,8 @@ async fn execute_tool_calls_parallel(
                 ordered.push(None);
                 let cancel = cancel.clone();
                 let sink = sink.clone();
-                let gate = config.tool_gate.clone();
                 running.push(async move {
-                    let executed =
-                        execute_prepared(&tool, &tool_call, args, gate.as_ref(), &cancel, &sink)
-                            .await;
+                    let executed = execute_prepared(&tool, &tool_call, args, &cancel, &sink).await;
                     let finalized = finalize_executed(tool_call, executed);
                     sink.emit(AgentEvent::ToolExecutionEnd {
                         tool_call_id: finalized.tool_call.id.clone(),
@@ -928,7 +913,6 @@ async fn execute_prepared(
     tool: &Arc<dyn AgentTool>,
     tool_call: &ToolCall,
     args: Value,
-    gate: Option<&Arc<dyn crate::ToolExecutionGate>>,
     cancel: &CancellationToken,
     sink: &AgentEventSink,
 ) -> (AgentToolResult, bool) {
@@ -949,13 +933,6 @@ async fn execute_prepared(
         })
     };
 
-    let _lease = match gate {
-        Some(gate) => match gate.enter(&tool_call.name, cancel).await {
-            Ok(lease) => lease,
-            Err(error) => return (AgentToolResult::text(error.to_string()), true),
-        },
-        None => None,
-    };
     if cancel.is_cancelled() {
         return (AgentToolResult::text("Operation aborted"), true);
     }
