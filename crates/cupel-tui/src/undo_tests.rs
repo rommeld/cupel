@@ -167,7 +167,7 @@ async fn shutdown_cleans_undo_snapshots_for_every_open_session() {
 }
 
 #[tokio::test]
-async fn undo_refuses_accepted_work_arguments_and_busy_checkout_gates() {
+async fn undo_refuses_arguments_and_busy_agent_work() {
     let project = Project::new("busy");
     let mut app = project.app();
     project.edit(&mut app).await;
@@ -179,10 +179,11 @@ async fn undo_refuses_accepted_work_arguments_and_busy_checkout_gates() {
     assert!(app.pending_undo.is_none());
     assert!(notices(&app).contains("agent is working"));
     app.pending_prompt = None;
-    let gate = std::sync::Arc::clone(&app.write_gate);
-    let _guard = gate.lock().await;
+    let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+    app.run_events = Some(events);
+    app.transcript.cells.clear();
     app.run_undo_command(UndoCommand::Undo).await;
-    assert!(notices(&app).contains("checkout is being modified"));
+    assert!(notices(&app).contains("agent is working"));
     assert_eq!(
         std::fs::read(project.0.join("project/a")).unwrap(),
         b"agent\n"

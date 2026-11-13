@@ -10,9 +10,7 @@
 pub mod agent;
 pub mod agent_loop;
 pub mod compaction;
-pub mod tool_gate;
 pub mod types;
-pub use tool_gate::{ToolExecutionGate, ToolLease};
 
 pub use agent::{Agent, AgentError, AgentOptions, AgentState};
 pub use agent_loop::{AgentEventStream, agent_loop};

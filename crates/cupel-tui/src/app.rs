@@ -5,7 +5,6 @@
 //! the `App` currently says. No state lives in the widgets that's the
 //! immediate mode contract that keeps ratatui apps easy to reason about.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt as _;
@@ -19,8 +18,6 @@ use cupel_coding_agent::program_status::{BlockedKind, State as ProgramState};
 use cupel_coding_agent::session::SessionRecorder;
 use cupel_coding_agent::settings::Preset;
 use cupel_coding_agent::tools::ask_user::{Answer, PendingQuestion, QuestionReceiver};
-use cupel_coding_agent::tools::checkout_write::WriteGate;
-use cupel_coding_agent::tools::solo_tool_gate::SoloToolGate;
 use cupel_coding_agent::usage::{HistoryUsage, UsageByModel, UsageTotals};
 use cupel_core::types::{
     AssistantContent, AssistantMessageEvent, Message, StopReason, ToolResultContent,
@@ -96,7 +93,6 @@ pub struct App {
     pub run_started: Option<Instant>,
     pub questions: Option<QuestionReceiver>,
     pub question: Option<OpenQuestion>,
-    pub write_gate: WriteGate,
     pub pending_undo: Option<cupel_coding_agent::undo::UndoCommand>,
 }
 
@@ -205,7 +201,7 @@ pub enum ThemeRequest {
 
 impl App {
     #[must_use]
-    pub fn new(mut agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
+    pub fn new(agent: Agent, meta: SessionMeta, recorder: SessionRecorder) -> Self {
         let mut command_candidates: Vec<Candidate> = commands::BUILTIN_COMMANDS
             .iter()
             .map(|c| Candidate {
@@ -296,8 +292,6 @@ impl App {
             value: "openai-codex".to_string(),
             is_dir: false,
         }];
-        let write_gate = Arc::new(tokio::sync::Mutex::new(()));
-        agent.set_tool_gate(Some(Arc::new(SoloToolGate::new(&write_gate))));
         // Saved sessions are selected by their opening prompt, not internal keys.
         let session_candidates: Vec<Candidate> = recorder
             .sessions_dir()
@@ -374,7 +368,6 @@ impl App {
             run_started: None,
             question: None,
             questions: None,
-            write_gate,
         };
         app.replay_history(&history);
         for warning in std::mem::take(&mut app.meta.warnings)
@@ -1006,7 +999,6 @@ impl App {
         app.questions = ingredients.questions;
         app.session_keys = self.session_keys;
         app.mouse_captured = self.mouse_captured;
-        app.set_write_gate(self.write_gate);
         if let Some(message) = delta_message {
             // The transcript file gets the update too a later resume
             // replays the same conversation the model saw.
@@ -1521,12 +1513,6 @@ impl App {
         }
     }
 
-    pub fn set_write_gate(&mut self, gate: WriteGate) {
-        self.write_gate = gate;
-        self.agent
-            .set_tool_gate(Some(Arc::new(SoloToolGate::new(&self.write_gate))));
-    }
-
     /// A run started, keep its events, start its clock, and wait for the model.
     fn begin_run(&mut self, events: AgentEventStream) {
         self.run_events = Some(events);
@@ -2023,11 +2009,6 @@ impl App {
             );
             return;
         }
-        let gate = Arc::clone(&self.write_gate);
-        let Ok(_guard) = gate.try_lock() else {
-            self.notice("cannot inspect or undo edits while this checkout is being modified");
-            return;
-        };
         let result =
             cupel_coding_agent::undo::execute_command(command, &mut self.agent, &mut self.recorder)
                 .await;
