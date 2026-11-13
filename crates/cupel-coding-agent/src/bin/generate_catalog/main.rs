@@ -404,13 +404,13 @@ fn to_model(
         },
         context_window,
         max_context_window,
-        // models.dev still lists the older 32K cap for Gemini 4. Google's
-        // synchronous streaming API supports 64K; larger output requires
-        // continuation, which this provider does not implement.
+        // models.dev still lists the older 32K cap for Gemini 4. Long decode
+        // supports output up to the unified 1M context window; the provider
+        // reserves room for input and follows continuation tokens past 64K.
         // https://aistudio.google.com/docs/models/gemini-4-carbon
         // https://aistudio.google.com/docs/models/gemini-4-argon
         max_tokens: match (row.api, row.id) {
-            (Api::GOOGLE_GENERATIVE_AI, "gemini-4-argon" | "gemini-4-carbon") => 65_536,
+            (Api::GOOGLE_GENERATIVE_AI, "gemini-4-argon" | "gemini-4-carbon") => 1_048_576,
             _ => entry.limit.output,
         },
         headers: None,
@@ -589,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    fn google_models_use_native_api_and_gemini4_streaming_cap() {
+    fn google_models_use_native_api_and_gemini4_long_decode_cap() {
         let (models, _) = generate(include_str!("models_dev.json")).expect("valid catalog");
         let google: Vec<&Model> = models
             .iter()
@@ -605,8 +605,8 @@ mod tests {
             );
             assert_eq!(model.base_url, curation::GOOGLE_BASE_URL);
             if matches!(model.id.as_str(), "gemini-4-argon" | "gemini-4-carbon") {
-                // Override models.dev's 32K cap for the synchronous streaming API.
-                assert_eq!(model.max_tokens, 65_536, "{}", model.id);
+                // Override models.dev's 32K cap with the full long decode window.
+                assert_eq!(model.max_tokens, 1_048_576, "{}", model.id);
             }
             assert_eq!(
                 model
