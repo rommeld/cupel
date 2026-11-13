@@ -3,7 +3,7 @@
 
 use crate::types::{
     AssistantContent, Context, Message, StopReason, ThinkingBudgets, ThinkingLevel,
-    ToolResultContent, Usage, UserContentBody,
+    ToolResultContent, UserContentBody,
 };
 
 /// Rough heuristic used across the industry, ~4 characters per token.
@@ -19,14 +19,6 @@ const MIN_MAX_TOKENS: u64 = 1;
 
 fn estimate_text_tokens(text: &str) -> u64 {
     (text.len() as u64).div_ceil(CHARS_PER_TOKEN)
-}
-
-fn tokens_from_usage(usage: &Usage) -> u64 {
-    if usage.total_tokens > 0 {
-        usage.total_tokens
-    } else {
-        usage.input + usage.output + usage.cache_read + usage.cache_write
-    }
 }
 
 fn estimate_message_tokens(message: &Message) -> u64 {
@@ -49,6 +41,15 @@ fn estimate_message_tokens(message: &Message) -> u64 {
                 ToolResultContent::Image(_) => ESTIMATED_IMAGE_CHARS,
             })
             .sum(),
+        // Failed turns are omitted from provider replay.
+        Message::Assistant(assistant)
+            if matches!(
+                assistant.stop_reason,
+                StopReason::Error | StopReason::Aborted
+            ) =>
+        {
+            0
+        }
         Message::Assistant(assistant) => assistant
             .content
             .iter()
@@ -81,7 +82,7 @@ pub fn estimate_context_tokens(context: &Context) -> u64 {
         if matches!(a.stop_reason, StopReason::Error | StopReason::Aborted) {
             return None;
         }
-        let tokens = tokens_from_usage(&a.usage);
+        let tokens = a.usage.context_size();
         (tokens > 0).then_some((i, tokens))
     });
 
@@ -188,6 +189,55 @@ pub fn adjust_max_tokens_for_thinking(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{TextContent, Usage, UserMessage};
+
+    #[test]
+    fn context_estimates_use_retained_tokens_with_legacy_usage_fallback() {
+        let mut model = crate::catalog::builtin_models().remove(0);
+        model.context_window = 8192;
+        let mut assistant = crate::providers::new_output_message(&model);
+        let legacy = serde_json::json!({
+            "input": 20_000, "output": 1000, "cacheRead": 2000, "cacheWrite": 0,
+            "totalTokens": 23_000,
+            "cost": {"input": 0.0, "output": 0.0, "cacheRead": 0.0, "cacheWrite": 0.0, "total": 0.0}
+        });
+        let mut usage: Usage = serde_json::from_value(legacy).unwrap();
+        assert_eq!(usage.context_size(), 23_000);
+        usage.total_tokens = 0;
+        assert_eq!(usage.context_size(), 23_000);
+        usage.total_tokens = 23_000;
+        usage.context_tokens = Some(500);
+        assistant.usage = serde_json::from_str(&serde_json::to_string(&usage).unwrap()).unwrap();
+        let mut context = Context {
+            system_prompt: None,
+            messages: vec![
+                Message::Assistant(assistant),
+                Message::User(UserMessage {
+                    content: UserContentBody::Text("next".into()),
+                    timestamp: 0,
+                }),
+            ],
+            tools: None,
+        };
+        for stop_reason in [StopReason::Error, StopReason::Aborted] {
+            let mut failed = crate::providers::new_output_message(&model);
+            failed.stop_reason = stop_reason;
+            failed.usage = usage.clone();
+            failed.content = vec![AssistantContent::Text(TextContent::plain(
+                "x".repeat(100_000),
+            ))];
+            context.messages.push(Message::Assistant(failed));
+        }
+        assert_eq!(estimate_context_tokens(&context), 501);
+        assert_eq!(clamp_max_tokens_to_context(&model, &context, 1000), 1000);
+
+        context.messages.remove(0);
+        assert_eq!(
+            estimate_context_tokens(&context),
+            1,
+            "failed output must also be excluded without a successful usage anchor"
+        );
+    }
 
     #[test]
     fn budget_fits_inside_model_cap() {

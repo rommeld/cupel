@@ -3025,6 +3025,20 @@ pub(crate) mod tests {
             )),
             "{screen}"
         );
+        // Several billed requests can leave a much smaller retained context.
+        let mut continued = assistant_message("done", cupel_core::types::StopReason::Stop, 480_000);
+        if let cupel_agent::AgentMessage::Llm(cupel_core::types::Message::Assistant(assistant)) =
+            &mut continued
+        {
+            assistant.usage.input = 470_000;
+            assistant.usage.output = 10_000;
+            assistant.usage.context_tokens = Some(48_000);
+        }
+        app.on_agent_event(Some(AgentEvent::MessageEnd { message: continued }))
+            .await;
+        assert_eq!(app.context_tokens, 48_000);
+        assert_eq!(app.session_totals().input, 470_000);
+        assert_eq!(app.session_totals().output, 10_000);
         // A compaction resets the meter to the post compaction estimate.
         app.on_agent_event(Some(AgentEvent::CompactionEnd {
             tokens_before: 48_000,

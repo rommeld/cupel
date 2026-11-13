@@ -47,6 +47,10 @@ pub enum InferenceError {
     #[error("{0}")]
     Transport(String),
 
+    /// Preserve the cause while preventing replay of output already sent.
+    #[error("{0}")]
+    NonReplayable(String),
+
     #[error("{0}")]
     Config(String),
 
@@ -62,6 +66,7 @@ impl InferenceError {
             Self::NoProvider(_) | Self::MissingApiKey(_) | Self::Config(_) => ErrorKind::Config,
             Self::ApiStatus { status, .. } => ErrorKind::HttpStatus { status: *status },
             Self::Aborted => ErrorKind::Aborted,
+            Self::NonReplayable(_) => ErrorKind::NonReplayable,
             Self::Http(error) if error.is_builder() => ErrorKind::Config,
             Self::Http(_) | Self::Transport(_) => ErrorKind::Transport,
             Self::Stream(MessageStreamError::ProviderError { reason, message }) => message
@@ -155,6 +160,10 @@ mod tests {
                 ErrorKind::Transport,
             ),
             (
+                InferenceError::NonReplayable("HTTP transport error: connection lost".into()),
+                ErrorKind::NonReplayable,
+            ),
+            (
                 InferenceError::Config("no region".into()),
                 ErrorKind::Config,
             ),
@@ -200,15 +209,23 @@ mod tests {
     #[test]
     fn collecting_a_failed_message_keeps_the_original_category() {
         let model = crate::catalog::builtin_models().remove(0);
-        let error = InferenceError::ApiStatus {
-            status: 403,
-            body: "denied".into(),
-        };
-        let message = crate::providers::error_message(&model, &error);
-        let collected = InferenceError::Stream(MessageStreamError::ProviderError {
-            reason: message.stop_reason,
-            message: Box::new(message),
-        });
-        assert_eq!(collected.kind(), error.kind());
+        for error in [
+            InferenceError::ApiStatus {
+                status: 403,
+                body: "denied".into(),
+            },
+            InferenceError::NonReplayable("HTTP transport error: connection lost".into()),
+        ] {
+            let message = crate::providers::error_message(&model, &error);
+            assert_eq!(
+                message.error_message.as_deref(),
+                Some(error.to_string().as_str())
+            );
+            let collected = InferenceError::Stream(MessageStreamError::ProviderError {
+                reason: message.stop_reason,
+                message: Box::new(message),
+            });
+            assert_eq!(collected.kind(), error.kind());
+        }
     }
 }

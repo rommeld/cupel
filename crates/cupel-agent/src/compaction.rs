@@ -73,6 +73,15 @@ pub(crate) fn estimate_message_tokens(message: &AgentMessage) -> u64 {
                 })
                 .sum(),
         },
+        // Failed turns are omitted from provider replay.
+        AgentMessage::Llm(Message::Assistant(assistant))
+            if matches!(
+                assistant.stop_reason,
+                cupel_core::types::StopReason::Error | cupel_core::types::StopReason::Aborted
+            ) =>
+        {
+            0
+        }
         AgentMessage::Llm(Message::Assistant(assistant)) => assistant
             .content
             .iter()
@@ -113,11 +122,7 @@ pub fn estimate_context_tokens(context: &AgentContext) -> u64 {
         ) {
             return None;
         }
-        let total = if a.usage.total_tokens > 0 {
-            a.usage.total_tokens
-        } else {
-            a.usage.input + a.usage.output + a.usage.cache_read + a.usage.cache_write
-        };
+        let total = a.usage.context_size();
         (total > 0).then_some((i, total))
     });
 
@@ -306,6 +311,12 @@ fn serialize_conversation(messages: &[AgentMessage]) -> String {
                 }
             }
             AgentMessage::Llm(Message::Assistant(assistant)) => {
+                if matches!(
+                    assistant.stop_reason,
+                    cupel_core::types::StopReason::Error | cupel_core::types::StopReason::Aborted
+                ) {
+                    continue;
+                }
                 out.push_str("[Assistant]\n");
                 for block in &assistant.content {
                     match block {
@@ -567,27 +578,55 @@ mod tests {
 
     #[test]
     fn local_metadata_never_consumes_context_or_summarizer_input() {
+        use cupel_core::types::{AssistantMessage, StopReason, TextContent, ToolCall, Usage};
+
         let metadata = AgentMessage::metadata(
             "archive",
             serde_json::json!({"full_answer": "LOCAL_ARCHIVE_SENTINEL".repeat(100_000)}),
             1,
         );
         assert_eq!(estimate_message_tokens(&metadata), 0);
-        let ordinary = user("ordinary conversation");
-        assert_eq!(
-            serialize_conversation(&[metadata.clone(), ordinary.clone()]),
-            serialize_conversation(&[ordinary]),
-        );
-        let context = AgentContext {
+        let mut context = AgentContext {
             system_prompt: String::new(),
             messages: vec![metadata.clone()],
             tools: Vec::new(),
         };
+        let model = model_with_window(4096);
+        for stop_reason in [StopReason::Error, StopReason::Aborted] {
+            let failed = AssistantMessage {
+                content: vec![
+                    AssistantContent::Text(TextContent::plain("FAILED_TAIL".repeat(100_000))),
+                    AssistantContent::ToolCall(ToolCall {
+                        id: "unexecuted".into(),
+                        name: "unexecuted_tool".into(),
+                        arguments: serde_json::json!({}),
+                        thought_signature: None,
+                    }),
+                ],
+                api: model.api.clone(),
+                provider: model.provider.clone(),
+                model: model.id.clone(),
+                response_model: None,
+                response_id: None,
+                usage: Usage::default(),
+                stop_reason,
+                error_message: None,
+                error_kind: None,
+                timestamp: 0,
+            };
+            context
+                .messages
+                .push(AgentMessage::Llm(Message::Assistant(failed)));
+        }
         assert_eq!(estimate_context_tokens(&context), 0);
         assert_eq!(
             cut_index(&context, 4096, &CompactionConfig::default()),
             None
         );
+        let ordinary = user("ordinary conversation");
+        let expected = serialize_conversation(std::slice::from_ref(&ordinary));
+        context.messages.push(ordinary);
+        assert_eq!(serialize_conversation(&context.messages), expected);
         let decoded: AgentMessage =
             serde_json::from_str(&serde_json::to_string(&metadata).unwrap()).unwrap();
         assert_eq!(decoded, metadata);
