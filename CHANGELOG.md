@@ -7,6 +7,7 @@ from v0.2.0-beta, minor = features, patch = fixes.
 
 - fix(security): update quinn-udp to 0.5.16 to resolve RUSTSEC-2026-0538
 - fix(deps): update AWS SDK dependencies to remove unmaintained pin-utils (RUSTSEC-2026-0441)
+- ci: audit dependencies for vulnerabilities without denying informational warnings
 
 ## [v0.38.0] - 2026-11-13
 
