@@ -3,6 +3,10 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.38.2] - 2026-11-16
+
+- feat(catalog): add Qwen4 Max on OpenRouter with models.dev pricing, limits, image input, and reasoning efforts
+
 ## [v0.38.1] - 2026-11-15
 
 - fix(security): update quinn-udp to 0.5.16 to resolve RUSTSEC-2026-0538

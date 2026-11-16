@@ -1654,6 +1654,36 @@
     }
   },
   {
+    "id": "qwen/qwen4-max",
+    "name": "Qwen4 Max",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "medium": null,
+      "minimal": null,
+      "off": "none"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.5,
+      "output": 4.5,
+      "cachedRead": 0.075,
+      "cachedWrite": 1.875
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 393216,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
     "id": "moonshotai/kimi-k2.7-code",
     "name": "Kimi K2.7 Code",
     "api": "openai-completions",
