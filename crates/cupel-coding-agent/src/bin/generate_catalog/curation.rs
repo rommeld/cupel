@@ -461,6 +461,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("qwen/qwen3.8-omni-flash", Thinking::FromEffort),
             openrouter_tiered("qwen/qwen3.7-plus"),
             openrouter("qwen/qwen3-coder-next", Thinking::FromEffort),
+            openrouter("qwen/qwen4-max", Thinking::FromEffort),
             openrouter(
                 "moonshotai/kimi-k2.7-code",
                 Thinking::Explicit(KIMI_K27_CODE_OPENROUTER_THINKING),
