@@ -226,7 +226,8 @@ mod tests {
         // that lost it would plan against its full window again.
         let mut seen = 0;
         for model in builtin_models() {
-            let plans_on_tier = model.provider.as_str() == Provider::OPENAI
+            let plans_on_tier = (model.provider.as_str() == Provider::OPENAI
+                && !model.id.starts_with("gpt-6.2-"))
                 || (model.provider.as_str() == Provider::OPENROUTER
                     && model.id.starts_with("openai/"))
                 || matches!(

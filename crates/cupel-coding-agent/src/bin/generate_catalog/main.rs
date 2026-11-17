@@ -18,7 +18,7 @@ use cupel_core::types::{Api, CostTier, InputModality, Model, ModelCost, Provider
 
 use crate::curation::{
     Curated, CuratedProvider, MODELS_DEV_URL, OPENAI_CODEX_MODELS, PROVIDERS, Thinking,
-    ULTRAFAST_BASES, ULTRAFAST_PRICE_FACTOR, Window,
+    ULTRAFAST_BASES, Window,
 };
 use crate::models_dev::ProviderEntry;
 
@@ -254,10 +254,10 @@ fn openai_codex_models() -> Vec<Model> {
 
 /// Put an Ultrafast twin right behind every row named in `bases`, so /model lists both
 /// speeds of a model next to each other.
-fn with_ultrafast_twins(models: Vec<Model>, bases: &[&str]) -> Result<Vec<Model>, String> {
-    if let Some(missing) = bases
+fn with_ultrafast_twins(models: Vec<Model>, bases: &[(&str, f64)]) -> Result<Vec<Model>, String> {
+    if let Some((missing, _)) = bases
         .iter()
-        .find(|&&id| !models.iter().any(|model| model.id == id))
+        .find(|&&(id, _)| !models.iter().any(|model| model.id == id))
     {
         return Err(format!("Ultrafast base {missing} is not in the catalog."));
     }
@@ -268,8 +268,9 @@ fn with_ultrafast_twins(models: Vec<Model>, bases: &[&str]) -> Result<Vec<Model>
         // appends nothing for None).
         .flat_map(|model| {
             let twin = bases
-                .contains(&model.id.as_str())
-                .then(|| ultrafast_twin(&model));
+                .iter()
+                .find(|&&(id, _)| id == model.id)
+                .map(|&(_, factor)| ultrafast_twin(&model, factor));
             std::iter::once(model).chain(twin)
         })
         .collect())
@@ -277,7 +278,7 @@ fn with_ultrafast_twins(models: Vec<Model>, bases: &[&str]) -> Result<Vec<Model>
 
 /// The base row on the Ultrafast tier, the same model on the wire with the same limits
 /// and effort scale, under its own id, name and prices.
-fn ultrafast_twin(base: &Model) -> Model {
+fn ultrafast_twin(base: &Model, price_factor: f64) -> Model {
     let mut compat = base.compat.clone().unwrap_or_else(|| serde_json::json!({}));
     // Codex rows already carry the backend name ("gpt 6.1 sol" for
     // "codex/gpt 6.1 sol"), a plain openai row's id is its API name.
@@ -288,7 +289,7 @@ fn ultrafast_twin(base: &Model) -> Model {
     Model {
         id: format!("{}-ultrafast", base.id),
         name: format!("{} Ultrafast", base.name),
-        cost: scaled_cost(&base.cost, ULTRAFAST_PRICE_FACTOR),
+        cost: scaled_cost(&base.cost, price_factor),
         compat: Some(compat),
         ..base.clone()
     }
@@ -353,7 +354,7 @@ fn to_model(
         ));
     }
     let (context_window, max_context_window) = match row.window {
-        Window::ModelsDev => (entry.limit.context, None),
+        Window::ModelsDev | Window::FlatPricing => (entry.limit.context, None),
         Window::PriceTier => {
             // The lowest price tier threshold is the planning window, a
             // PriceTier row whose models.dev entry lists no tier is a
@@ -389,18 +390,20 @@ fn to_model(
             output: cost.output,
             cached_read: cost.cache_read,
             cached_write: cost.cache_write,
-            tiers: (!cost.tiers.is_empty()).then(|| {
-                cost.tiers
-                    .iter()
-                    .map(|tier| CostTier {
-                        context_over: tier.tier.size,
-                        input: tier.input,
-                        output: tier.output,
-                        cached_read: tier.cache_read,
-                        cached_write: tier.cache_write,
-                    })
-                    .collect()
-            }),
+            tiers: (!matches!(row.window, Window::FlatPricing) && !cost.tiers.is_empty()).then(
+                || {
+                    cost.tiers
+                        .iter()
+                        .map(|tier| CostTier {
+                            context_over: tier.tier.size,
+                            input: tier.input,
+                            output: tier.output,
+                            cached_read: tier.cache_read,
+                            cached_write: tier.cache_write,
+                        })
+                        .collect()
+                },
+            ),
         },
         context_window,
         max_context_window,
@@ -943,7 +946,8 @@ mod tests {
             vec![to_model(&OPENAI_PROVIDER, &ASTRA_ROW, &astra_entry()).expect("maps")];
         models.extend(openai_codex_models());
         let models =
-            with_ultrafast_twins(models, &["gpt-6-astra", "codex/gpt-6.1-sol"]).expect("bases");
+            with_ultrafast_twins(models, &[("gpt-6-astra", 6.0), ("codex/gpt-6.1-sol", 6.0)])
+                .expect("bases");
         let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(
             ids[..5],
@@ -1005,8 +1009,47 @@ mod tests {
         assert_eq!(twin.max_context_window, base.max_context_window);
 
         // A base that is not in the catalog is a named error.
-        let error = with_ultrafast_twins(Vec::new(), &["gpt-6.1-sol"]).unwrap_err();
+        let error = with_ultrafast_twins(Vec::new(), &[("gpt-6.1-sol", 6.0)]).unwrap_err();
         assert!(error.contains("gpt-6.1-sol"), "{error}");
         assert!(error.contains("not in the catalog"), "{error}");
+    }
+
+    #[test]
+    fn gpt62_ignores_upstream_context_tiers_and_ultrafast_surcharges() {
+        let (models, _) = generate(include_str!("models_dev.json")).expect("valid catalog");
+        for base_id in ["gpt-6.2-sol", "gpt-6.2-astra"] {
+            for prefix in ["", "codex/"] {
+                let id = format!("{prefix}{base_id}");
+                let base = models.iter().find(|m| m.id == id).expect("standard row");
+                let twin_id = format!("{id}-ultrafast");
+                let twin = models
+                    .iter()
+                    .find(|m| m.id == twin_id)
+                    .expect("ultrafast row");
+                assert!(base.cost.tiers.is_none(), "{id}: flat even above 272k");
+                assert_eq!(twin.cost, base.cost, "{id}: standard-equivalent estimate");
+                assert_eq!(twin.context_window, base.context_window);
+                assert_eq!(twin.max_context_window, base.max_context_window);
+                let expected = if base_id == "gpt-6.2-sol" {
+                    (2.0, 10.0, 0.1, 2.5)
+                } else {
+                    (8.0, 40.0, 0.4, 10.0)
+                };
+                for (actual, expected) in [
+                    (base.cost.input, expected.0),
+                    (base.cost.output, expected.1),
+                    (base.cost.cached_read, expected.2),
+                    (base.cost.cached_write, expected.3),
+                ] {
+                    assert_close(actual, expected);
+                }
+                if prefix.is_empty() {
+                    assert_eq!(base.context_window, 1_050_000);
+                    assert_eq!(base.max_context_window, None);
+                } else {
+                    assert_eq!(base.max_context_window, Some(872_000));
+                }
+            }
+        }
     }
 }
