@@ -1263,18 +1263,15 @@ mod tests {
     fn ultrafast_rows_send_the_base_model_and_the_tier() {
         // The catalog's Ultrafast row, its own id, the API's model name
         // in requestModel, the tier in serviceTier.
-        let mut model = astra_model();
-        model.id = "gpt-6.1-sol-ultrafast".to_string();
-        model.compat = Some(json!({
-            "requestModel": "gpt-6.1-sol",
-            "serviceTier": "ultrafast",
-            "supportsTemperature": false,
-        }));
-        let body = build_request_body(&model, &context(), &with_reasoning(None));
-        assert_eq!(body["model"], json!("gpt-6.1-sol"));
-        assert_eq!(body["service_tier"], json!("ultrafast"));
-        // The old knob still applies next to the two new ones.
-        assert!(body.get("temperature").is_none(), "{body}");
+        let models = crate::catalog::builtin_models();
+        for base in ["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"] {
+            let id = format!("{base}-ultrafast");
+            let model = models.iter().find(|m| m.id == id).expect("ultrafast row");
+            let body = build_request_body(model, &context(), &with_reasoning(None));
+            assert_eq!(body["model"], json!(base));
+            assert_eq!(body["service_tier"], json!("ultrafast"));
+            assert!(body.get("temperature").is_none(), "{body}");
+        }
 
         // Rows without the knobs, the id goes out as is, and no tier
         // field, so the account's default tier applies.

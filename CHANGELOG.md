@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## [v0.39.0] - 2026-11-17
+
+- feat(catalog): add GPT-6.2 Sol and Astra to OpenAI and OpenAI Codex with flat full-window pricing
+- feat(catalog): add GPT-6.2 ultrafast variants for the $500 subscription, using standard-equivalent cost estimates where ultrafast prices are unpublished
+
 ## [v0.38.2] - 2026-11-16
 
 - feat(catalog): add Qwen4 Max on OpenRouter with models.dev pricing, limits, image input, and reasoning efforts

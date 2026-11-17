@@ -423,6 +423,118 @@
     }
   },
   {
+    "id": "gpt-6.2-sol",
+    "name": "GPT-6.2 Sol",
+    "api": "openai-responses",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 1050000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "gpt-6.2-sol-ultrafast",
+    "name": "GPT-6.2 Sol Ultrafast",
+    "api": "openai-responses",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 1050000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6.2-sol",
+      "serviceTier": "ultrafast",
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "gpt-6.2-astra",
+    "name": "GPT-6.2 Astra",
+    "api": "openai-responses",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8.0,
+      "output": 40.0,
+      "cachedRead": 0.4,
+      "cachedWrite": 10.0
+    },
+    "contextWindow": 1050000,
+    "maxTokens": 128000,
+    "compat": {
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "gpt-6.2-astra-ultrafast",
+    "name": "GPT-6.2 Astra Ultrafast",
+    "api": "openai-responses",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8.0,
+      "output": 40.0,
+      "cachedRead": 0.4,
+      "cachedWrite": 10.0
+    },
+    "contextWindow": 1050000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6.2-astra",
+      "serviceTier": "ultrafast",
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "gemini-4-argon",
     "name": "Gemini 4 Argon",
     "api": "google-generative-ai",
@@ -5121,6 +5233,124 @@
     "maxTokens": 128000,
     "compat": {
       "requestModel": "gpt-6-luna",
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "codex/gpt-6.2-sol",
+    "name": "GPT-6.2 Sol",
+    "api": "openai-codex-responses",
+    "provider": "openai-codex",
+    "baseUrl": "https://chatgpt.com/backend-api",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": "low",
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 500000,
+    "maxContextWindow": 872000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6.2-sol",
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "codex/gpt-6.2-sol-ultrafast",
+    "name": "GPT-6.2 Sol Ultrafast",
+    "api": "openai-codex-responses",
+    "provider": "openai-codex",
+    "baseUrl": "https://chatgpt.com/backend-api",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": "low",
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 2.5
+    },
+    "contextWindow": 500000,
+    "maxContextWindow": 872000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6.2-sol",
+      "serviceTier": "ultrafast",
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "codex/gpt-6.2-astra",
+    "name": "GPT-6.2 Astra",
+    "api": "openai-codex-responses",
+    "provider": "openai-codex",
+    "baseUrl": "https://chatgpt.com/backend-api",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": "low",
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8.0,
+      "output": 40.0,
+      "cachedRead": 0.4,
+      "cachedWrite": 10.0
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 872000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6.2-astra",
+      "supportsTemperature": false
+    }
+  },
+  {
+    "id": "codex/gpt-6.2-astra-ultrafast",
+    "name": "GPT-6.2 Astra Ultrafast",
+    "api": "openai-codex-responses",
+    "provider": "openai-codex",
+    "baseUrl": "https://chatgpt.com/backend-api",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "minimal": "low",
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8.0,
+      "output": 40.0,
+      "cachedRead": 0.4,
+      "cachedWrite": 10.0
+    },
+    "contextWindow": 272000,
+    "maxContextWindow": 872000,
+    "maxTokens": 128000,
+    "compat": {
+      "requestModel": "gpt-6.2-astra",
+      "serviceTier": "ultrafast",
       "supportsTemperature": false
     }
   }

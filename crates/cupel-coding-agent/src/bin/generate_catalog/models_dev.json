@@ -1801,6 +1801,98 @@
           }
         ],
         "temperature": false
+      },
+      "gpt-6.2-astra": {
+        "cost": {
+          "cache_read": 0.4,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0,
+          "tiers": [
+            {
+              "cache_read": 0.8,
+              "cache_write": 20.0,
+              "input": 16.0,
+              "output": 60.0,
+              "tier": {
+                "size": 272000
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "GPT-6.2 Astra",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "gpt-6.2-sol": {
+        "cost": {
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "GPT-6.2 Sol",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
       }
     }
   },

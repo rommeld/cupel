@@ -586,16 +586,14 @@ mod tests {
 
     #[test]
     fn ultrafast_row_sends_the_service_tier() {
-        let mut model = codex_model();
-        model.id = "codex/gpt-6.1-sol-ultrafast".to_string();
-        model.compat = Some(json!({
-            "requestModel": "gpt-6.1-sol",
-            "serviceTier": "ultrafast",
-            "supportsTemperature": false,
-        }));
-        let body = build_request_body(&model, &context_with_prompt(), &StreamOptions::default());
-        assert_eq!(body["model"], json!("gpt-6.1-sol"));
-        assert_eq!(body["service_tier"], json!("ultrafast"));
+        let models = crate::catalog::builtin_models();
+        for base in ["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"] {
+            let id = format!("codex/{base}-ultrafast");
+            let model = models.iter().find(|m| m.id == id).expect("ultrafast row");
+            let body = build_request_body(model, &context_with_prompt(), &StreamOptions::default());
+            assert_eq!(body["model"], json!(base));
+            assert_eq!(body["service_tier"], json!("ultrafast"));
+        }
         // Standard rows leave the field out, the backend then uses the
         // account's default tier.
         let body = build_request_body(

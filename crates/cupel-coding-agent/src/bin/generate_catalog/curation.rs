@@ -38,6 +38,8 @@ pub enum Thinking {
 pub enum Window {
     ModelsDev,
     PriceTier,
+    /// Use the full context window and standard prices, ignoring upstream tiers.
+    FlatPricing,
 }
 
 /// Named compat templates for the per API quirk blobs from the old
@@ -297,6 +299,16 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openai("gpt-6-astra", None),
             openai("gpt-6.1-terra", None),
             openai("gpt-6-luna", None),
+            // GPT-6.2 has flat pricing across the full window. Keep this
+            // explicit override even while models.dev still lists old tiers.
+            Curated {
+                window: Window::FlatPricing,
+                ..openai("gpt-6.2-sol", None)
+            },
+            Curated {
+                window: Window::FlatPricing,
+                ..openai("gpt-6.2-astra", None)
+            },
         ],
     },
     CuratedProvider {
@@ -680,6 +692,31 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
         levels: CODEX_LEVELS_TO_MAX,
         temperature: false,
     },
+    // Limits and supported efforts: OpenAI Codex models-manager/models.json
+    // (2026-11-17). Prices: models.dev's OpenAI rows, with the requested
+    // flat-pricing correction rather than the stale >272k tier.
+    PinnedCodex {
+        id: "gpt-6.2-sol",
+        name: "GPT-6.2 Sol",
+        vision: true,
+        cost: (2.0, 10.0, 0.1, 2.5),
+        long_context_tier: false,
+        context_window: 500_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
+    PinnedCodex {
+        id: "gpt-6.2-astra",
+        name: "GPT-6.2 Astra",
+        vision: true,
+        cost: (8.0, 40.0, 0.4, 10.0),
+        long_context_tier: false,
+        context_window: 272_000,
+        max_context_window: Some(872_000),
+        levels: CODEX_LEVELS_TO_MAX,
+        temperature: false,
+    },
 ];
 
 /// Catalog rows that also ship a twin with an ultrafast suffix.
@@ -690,9 +727,14 @@ pub const OPENAI_CODEX_MODELS: &[PinnedCodex] = &[
 /// Codex access depends on the ChatGPT plan (Pro 500, Enterprise, Edu at
 /// launch), the backend, not cupel, enforces that.
 /// Source OpenAI's developer guide to ultrafast mode
-pub const ULTRAFAST_BASES: &[&str] = &["gpt-6.1-sol", "codex/gpt-6.1-sol"];
-
-/// Every Ultrafast price is 6x the Standard price, including the >272k long context
-/// tier. models.dev lists only the short context half, so the generator scales the
-/// Standard row instead.
-pub const ULTRAFAST_PRICE_FACTOR: f64 = 6.0;
+/// Each base has an explicit price factor. GPT-6.1 keeps its published 6x
+/// surcharge, including long-context tiers. models.dev publishes no GPT-6.2
+/// ultrafast prices; use standard-equivalent estimates for the $500 plan.
+pub const ULTRAFAST_BASES: &[(&str, f64)] = &[
+    ("gpt-6.1-sol", 6.0),
+    ("codex/gpt-6.1-sol", 6.0),
+    ("gpt-6.2-sol", 1.0),
+    ("gpt-6.2-astra", 1.0),
+    ("codex/gpt-6.2-sol", 1.0),
+    ("codex/gpt-6.2-astra", 1.0),
+];
