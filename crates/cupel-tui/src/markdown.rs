@@ -547,82 +547,49 @@ fn render_table(
         return consumed.max(1);
     }
 
-    // Keep short columns compact, but reserve enough room for readable
-    // words in longer cells. When that cannot fit, render successive
-    // column groups, each with its own header and all rows in source order.
-    const MIN_COLUMN_WIDTH: usize = 8;
-    let mut first = 0;
-    while first < columns {
-        let mut end = first;
-        let mut minimum = 0;
-        while end < columns {
-            let joint = if end == first { 0 } else { 3 };
-            let next = widths[end].min(MIN_COLUMN_WIDTH).min(width);
-            if minimum + joint + next > width {
-                break;
-            }
-            minimum += joint + next;
-            end += 1;
-        }
+    // Keep up to five columns of text per cell before switching to labeled
+    // records. Short cells need only their natural width. The fallback also
+    // handles panes too narrow for the separators alone.
+    let joints = 3 * (columns - 1);
+    let minimum: usize = widths.iter().map(|width| (*width).min(5)).sum();
+    if minimum + joints > width {
+        push_stacked_table(out, &rows, columns, width, base, theme);
+        return consumed.max(1);
+    }
+    // Bound the work for very long cells, then balance the widest columns.
+    for col_width in &mut widths {
+        *col_width = (*col_width).min(width - joints);
+    }
+    let mut total: usize = widths.iter().sum::<usize>() + joints;
+    while total > width {
+        let widest = (0..columns).max_by_key(|i| widths[*i]).unwrap_or(0);
+        widths[widest] -= 1;
+        total -= 1;
+    }
 
-        let mut group_widths: Vec<usize> =
-            widths[first..end].iter().map(|w| (*w).min(width)).collect();
-        let mut total = group_widths.iter().sum::<usize>() + 3 * (group_widths.len() - 1);
-        while total > width {
-            let widest = (0..group_widths.len())
-                .max_by_key(|i| group_widths[*i])
-                .unwrap_or(0);
-            group_widths[widest] -= 1;
-            total -= 1;
+    let rule = Line::from(Span::styled(
+        widths
+            .iter()
+            .map(|w| "─".repeat(*w))
+            .collect::<Vec<_>>()
+            .join("─┼─"),
+        base.patch(theme.md_rule),
+    ));
+    let mut previous_height = 1;
+    for (idx, row) in rows.iter().enumerate() {
+        let lines = table_row_lines(row, &widths, base.patch(theme.md_rule));
+        let height = lines.len();
+        // Separate multiline body rows so continuations cannot be mistaken
+        // for new records. Compact single-line rows stay compact.
+        if idx > 1 && (previous_height > 1 || height > 1) {
+            out.push(rule.clone());
         }
-        if first > 0 {
-            out.push(Line::default());
+        out.extend(lines);
+        if idx == 0 {
+            // Place the underline after every wrapped header line.
+            out.push(rule.clone());
         }
-        let rule = Line::from(Span::styled(
-            group_widths
-                .iter()
-                .map(|w| "─".repeat(*w))
-                .collect::<Vec<_>>()
-                .join("─┼─"),
-            base.patch(theme.md_rule),
-        ));
-        let mut previous_height = 1;
-        for (idx, row) in rows.iter().enumerate() {
-            let cells: Vec<Vec<Line<'static>>> = group_widths
-                .iter()
-                .enumerate()
-                .map(|(i, budget)| {
-                    wrap_table_cell(row.get(first + i).map_or(&[], Vec::as_slice), *budget)
-                })
-                .collect();
-            let height = cells.iter().map(Vec::len).max().unwrap_or(1);
-            // Separate multiline body rows so continuation lines cannot be
-            // mistaken for a new record. Compact single-line rows stay compact.
-            if idx > 1 && (previous_height > 1 || height > 1) {
-                out.push(rule.clone());
-            }
-            for line_index in 0..height {
-                let mut spans = Vec::new();
-                for (i, budget) in group_widths.iter().enumerate() {
-                    if i > 0 {
-                        spans.push(Span::styled(" │ ", base.patch(theme.md_rule)));
-                    }
-                    let used = if let Some(line) = cells[i].get(line_index) {
-                        spans.extend(line.spans.iter().cloned());
-                        line.width()
-                    } else {
-                        0
-                    };
-                    spans.push(Span::raw(" ".repeat(budget.saturating_sub(used))));
-                }
-                out.push(Line::from(spans));
-            }
-            if idx == 0 {
-                out.push(rule.clone());
-            }
-            previous_height = height;
-        }
-        first = end;
+        previous_height = height;
     }
     consumed.max(1)
 }
@@ -631,16 +598,19 @@ fn segments_width(segments: &[(String, Style)]) -> usize {
     segments.iter().map(|(text, _)| display_width(text)).sum()
 }
 
-/// Wrap a cell without losing text or inline styles. As with code panels,
-/// only a glyph wider than the entire pane needs a replacement character.
-fn wrap_table_cell(segments: &[(String, Style)], budget: usize) -> Vec<Line<'static>> {
+/// Wrap without discarding cell content or inline styles. As in code panels,
+/// replace a glyph that cannot fit even on its own in a one-column pane.
+fn wrap_table_cell(segments: &[(String, Style)], width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![Line::default()];
+    }
     let segments = segments
         .iter()
         .map(|(text, style)| {
             let text = text
                 .chars()
                 .map(|c| {
-                    if c.width().unwrap_or(0) > budget {
+                    if c.width().unwrap_or(0) > width {
                         '�'
                     } else {
                         c
@@ -651,8 +621,83 @@ fn wrap_table_cell(segments: &[(String, Style)], budget: usize) -> Vec<Line<'sta
         })
         .collect();
     let mut lines = Vec::new();
-    push_wrapped_spans(&mut lines, segments, budget, None, 0);
+    push_wrapped_spans(&mut lines, segments, width, None, 0);
     lines
+}
+
+/// A logical row occupies as many physical rows as its tallest wrapped cell.
+/// Pad every physical row so separators stay aligned, including ragged rows.
+fn table_row_lines(
+    row: &[Vec<(String, Style)>],
+    widths: &[usize],
+    rule: Style,
+) -> Vec<Line<'static>> {
+    let cells: Vec<_> = widths
+        .iter()
+        .enumerate()
+        .map(|(i, width)| wrap_table_cell(row.get(i).map_or(&[], Vec::as_slice), *width))
+        .collect();
+    let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+    let mut lines = Vec::new();
+    for y in 0..height {
+        let mut spans = Vec::new();
+        for (i, width) in widths.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(" │ ", rule));
+            }
+            let line = cells[i].get(y);
+            if let Some(line) = line {
+                spans.extend(line.spans.iter().cloned());
+            }
+            let used = line.map_or(0, Line::width);
+            spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
+/// Narrow tables become labeled records; blank lines separate source rows.
+fn push_stacked_table(
+    out: &mut Vec<Line<'static>>,
+    rows: &[Vec<Vec<(String, Style)>>],
+    columns: usize,
+    width: usize,
+    base: Style,
+    theme: &Theme,
+) {
+    let Some((header, records)) = rows.split_first() else {
+        return;
+    };
+    // A streaming table may have its header but no data rows yet.
+    if records.is_empty() {
+        for cell in header {
+            out.extend(wrap_table_cell(cell, width));
+        }
+        return;
+    }
+    for (index, row) in records.iter().enumerate() {
+        if index > 0 {
+            out.push(Line::default());
+        }
+        for i in 0..columns {
+            let mut segments = header
+                .get(i)
+                .filter(|cell| segments_width(cell) > 0)
+                .cloned()
+                .unwrap_or_else(|| {
+                    vec![(
+                        format!("Column {}", i + 1),
+                        base.patch(theme.md_table_header),
+                    )]
+                });
+            segments.push((": ".to_string(), base));
+            if let Some(cell) = row.get(i) {
+                segments.extend(cell.iter().cloned());
+            }
+            out.extend(wrap_table_cell(&segments, width));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1039,23 +1084,39 @@ mod tests {
     }
 
     #[test]
-    fn wide_tables_wrap_the_entire_header_without_clipping() {
-        let md = "| col | eine sehr sehr sehr lange zelle |\n|---|---|\n| a | b |";
+    fn wide_tables_wrap_cells_without_losing_text_or_styles() {
+        let md = "| col | eine sehr sehr sehr lange zelle |\n|---|---|\n| a | **abcdefghijabcdefghijabcdefghij** |\n| short | 日本語日本語日本語 |\n| empty |";
         let lines = render(md, 24, Style::new(), &CUPEL);
-        let mut content = Vec::new();
+        let text = flat_text(&lines);
         for line in &lines {
-            assert_eq!(line.width(), 24);
-            let text = flat_text(std::slice::from_ref(line)).remove(0);
-            if let Some((_, cell)) = text.split_once('│') {
-                content.extend(cell.split_whitespace().map(str::to_string));
-            }
+            assert_eq!(line.width(), 24, "{line:?}");
         }
-        assert_eq!(content.join(" "), "eine sehr sehr sehr lange zelle b");
+        let underline = text.iter().position(|line| line.contains('┼')).unwrap();
         assert!(
-            style_of(&lines, "zelle")
-                .add_modifier
-                .contains(Modifier::BOLD)
+            underline > 1,
+            "the entire header wraps before its underline"
         );
+        let column_text: String = text
+            .iter()
+            .filter_map(|line| line.split_once('│').map(|(_, cell)| cell.trim()))
+            .collect();
+        let column_text = column_text.replace(' ', "");
+        assert!(
+            column_text.contains("einesehrsehrsehrlangezelle"),
+            "{text:?}"
+        );
+        assert!(
+            column_text.contains("abcdefghijabcdefghijabcdefghij"),
+            "{text:?}"
+        );
+        assert!(column_text.contains("日本語日本語日本語"), "{text:?}");
+        assert!(
+            style_of(&lines, "abc")
+                .add_modifier
+                .contains(Modifier::BOLD),
+            "wrapped spans retain inline emphasis"
+        );
+        assert!(!text.concat().contains('…'));
     }
 
     #[test]
@@ -1083,6 +1144,82 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn tables_switch_to_records_at_the_minimum_column_budget() {
+        let md = "| First | Other |\n|---|---|\n| **alpha** | beta |\n| gamma | delta |";
+        let grid = render(md, 13, Style::new(), &CUPEL);
+        assert!(flat_text(&grid).concat().contains('│'));
+        let records = render(md, 12, Style::new(), &CUPEL);
+        assert_eq!(
+            flat_text(&records),
+            [
+                "First: alpha",
+                "Other: beta",
+                "",
+                "First: gamma",
+                "Other: delta"
+            ]
+        );
+        assert!(records.iter().all(|line| line.width() <= 12));
+        for needle in ["First", "alpha"] {
+            assert!(
+                style_of(&records, needle)
+                    .add_modifier
+                    .contains(Modifier::BOLD)
+            );
+        }
+    }
+
+    #[test]
+    fn stacked_tables_handle_missing_headers_ragged_rows_and_streaming() {
+        let source = "| Name | |\n|---|---|\n| a | b | extra |\n| c |\nafter";
+        let lines = render(source, 12, Style::new(), &CUPEL);
+        assert!(
+            flat_text(&lines).concat().contains("Column 3: extra"),
+            "extra cells have a generated label rather than disappearing"
+        );
+        assert!(flat_text(&lines).concat().contains("Column 2: b"));
+        assert_eq!(flat_text(&lines).last().unwrap(), "after");
+        let header = "| First | Other |\n|---|---|";
+        assert_eq!(
+            flat_text(&render(header, 12, Style::new(), &CUPEL)),
+            ["First", "Other"]
+        );
+        let streaming = format!("{header}\n| alpha | beta |");
+        for end in header.len()..=streaming.len() {
+            let lines = render(&streaming[..end], 12, Style::new(), &CUPEL);
+            assert!(
+                lines.iter().all(|line| line.width() <= 12),
+                "{end}: {lines:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn table_rows_fit_tiny_widths_and_preserve_unicode_when_it_fits() {
+        let source = "| Name | Value |\n|---|---|\n| a | **日本語e\u{301}abcdefghij** |";
+        for width in 0..=40 {
+            let lines = render(source, width, Style::new(), &CUPEL);
+            assert!(
+                lines.iter().all(|line| line.width() <= width),
+                "width {width}: {lines:?}"
+            );
+            let text = flat_text(&lines).concat();
+            if width >= 2 {
+                let content: String = text
+                    .chars()
+                    .filter(|c| !c.is_whitespace() && !matches!(c, '│' | '┼' | '─'))
+                    .collect();
+                assert!(
+                    content.contains("日本語e\u{301}abcdefghij"),
+                    "width {width}: {text}"
+                );
+            } else if width == 1 {
+                assert!(text.contains("���"));
+            }
+        }
     }
 
     #[test]
@@ -1123,23 +1260,23 @@ mod tests {
     }
 
     #[test]
-    fn narrow_tables_split_into_column_groups_with_headers_and_missing_cells() {
+    fn narrow_tables_preserve_headers_and_missing_cells_in_records() {
         let md = "| A | B | C |\n|---|---|---|\n| alpha | bravo | charlie |\n| delta | echo |\n| | foxtrot | golf |";
         let lines = render(md, 16, Style::new(), &CUPEL);
         assert_eq!(
             flat_text(&lines),
             [
-                "A     │ B      ",
-                "──────┼────────",
-                "alpha │ bravo  ",
-                "delta │ echo   ",
-                "      │ foxtrot",
+                "A: alpha",
+                "B: bravo",
+                "C: charlie",
                 "",
-                "C      ",
-                "───────",
-                "charlie",
-                "       ",
-                "golf   ",
+                "A: delta",
+                "B: echo",
+                "C: ",
+                "",
+                "A: ",
+                "B: foxtrot",
+                "C: golf",
             ]
         );
         assert!(style_of(&lines, "C").add_modifier.contains(Modifier::BOLD));
