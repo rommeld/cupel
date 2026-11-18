@@ -542,39 +542,87 @@ fn render_table(
         }
     }
 
-    // Total = columns + " │ " joints. Shave the widest column one column
-    // at a time unitl it fits (or nothing reasonable is left to shave),
-    // over narrow cells get clipped with an ellipsis below.
-    let joints = 3 * (columns - 1);
-    let mut total: usize = widths.iter().sum::<usize>() + joints;
-    while total > width {
-        let widest = (0..columns).max_by_key(|i| widths[*i]).unwrap_or(0);
-        if widths[widest] <= 5 {
-            break;
-        }
-        widths[widest] -= 1;
-        total -= 1;
+    if width == 0 {
+        out.push(Line::default());
+        return consumed.max(1);
     }
 
-    for (idx, row) in rows.iter().enumerate() {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        for (i, col_width) in widths.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::styled(" │ ".to_string(), base.patch(theme.md_rule)));
+    // Keep short columns compact, but reserve enough room for readable
+    // words in longer cells. When that cannot fit, render successive
+    // column groups, each with its own header and all rows in source order.
+    const MIN_COLUMN_WIDTH: usize = 8;
+    let mut first = 0;
+    while first < columns {
+        let mut end = first;
+        let mut minimum = 0;
+        while end < columns {
+            let joint = if end == first { 0 } else { 3 };
+            let next = widths[end].min(MIN_COLUMN_WIDTH).min(width);
+            if minimum + joint + next > width {
+                break;
             }
-            let empty = Vec::new();
-            let cell = row.get(i).unwrap_or(&empty);
-            spans.extend(clip_segments(cell, *col_width));
+            minimum += joint + next;
+            end += 1;
         }
-        out.push(Line::from(spans));
-        if idx == 0 {
-            // The header underline, aligned with the joints.
-            let rule: Vec<String> = widths.iter().map(|w| "─".repeat(*w)).collect();
-            out.push(Line::from(Span::styled(
-                rule.join("─┼─"),
-                base.patch(theme.md_rule),
-            )));
+
+        let mut group_widths: Vec<usize> =
+            widths[first..end].iter().map(|w| (*w).min(width)).collect();
+        let mut total = group_widths.iter().sum::<usize>() + 3 * (group_widths.len() - 1);
+        while total > width {
+            let widest = (0..group_widths.len())
+                .max_by_key(|i| group_widths[*i])
+                .unwrap_or(0);
+            group_widths[widest] -= 1;
+            total -= 1;
         }
+        if first > 0 {
+            out.push(Line::default());
+        }
+        let rule = Line::from(Span::styled(
+            group_widths
+                .iter()
+                .map(|w| "─".repeat(*w))
+                .collect::<Vec<_>>()
+                .join("─┼─"),
+            base.patch(theme.md_rule),
+        ));
+        let mut previous_height = 1;
+        for (idx, row) in rows.iter().enumerate() {
+            let cells: Vec<Vec<Line<'static>>> = group_widths
+                .iter()
+                .enumerate()
+                .map(|(i, budget)| {
+                    wrap_table_cell(row.get(first + i).map_or(&[], Vec::as_slice), *budget)
+                })
+                .collect();
+            let height = cells.iter().map(Vec::len).max().unwrap_or(1);
+            // Separate multiline body rows so continuation lines cannot be
+            // mistaken for a new record. Compact single-line rows stay compact.
+            if idx > 1 && (previous_height > 1 || height > 1) {
+                out.push(rule.clone());
+            }
+            for line_index in 0..height {
+                let mut spans = Vec::new();
+                for (i, budget) in group_widths.iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::styled(" │ ", base.patch(theme.md_rule)));
+                    }
+                    let used = if let Some(line) = cells[i].get(line_index) {
+                        spans.extend(line.spans.iter().cloned());
+                        line.width()
+                    } else {
+                        0
+                    };
+                    spans.push(Span::raw(" ".repeat(budget.saturating_sub(used))));
+                }
+                out.push(Line::from(spans));
+            }
+            if idx == 0 {
+                out.push(rule.clone());
+            }
+            previous_height = height;
+        }
+        first = end;
     }
     consumed.max(1)
 }
@@ -583,43 +631,28 @@ fn segments_width(segments: &[(String, Style)]) -> usize {
     segments.iter().map(|(text, _)| display_width(text)).sum()
 }
 
-/// Emit a cell's segments clipped to `budget`columns (ellipsis when it
-/// does not fit) and padded to exactly `budget` table columns must
-/// stay aligned no matter what the cell contains.
-fn clip_segments(segments: &[(String, Style)], budget: usize) -> Vec<Span<'static>> {
-    let full = segments_width(segments);
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut used = 0;
-    for (text, style) in segments {
-        let mut piece = String::new();
-        for c in text.chars() {
-            let w = c.width().unwrap_or(0);
-            let limit = if full > budget {
-                budget.saturating_sub(1)
-            } else {
-                budget
-            };
-            if used + w > limit {
-                break;
-            }
-            used += w;
-            piece.push(c);
-        }
-        if !piece.is_empty() {
-            spans.push(Span::styled(piece, *style));
-        }
-    }
-    if full > budget {
-        spans.push(Span::styled(
-            "…".to_string(),
-            Style::new().add_modifier(Modifier::DIM),
-        ));
-        used += 1;
-    }
-    if used < budget {
-        spans.push(Span::raw(" ".repeat(budget - used)));
-    }
-    spans
+/// Wrap a cell without losing text or inline styles. As with code panels,
+/// only a glyph wider than the entire pane needs a replacement character.
+fn wrap_table_cell(segments: &[(String, Style)], budget: usize) -> Vec<Line<'static>> {
+    let segments = segments
+        .iter()
+        .map(|(text, style)| {
+            let text = text
+                .chars()
+                .map(|c| {
+                    if c.width().unwrap_or(0) > budget {
+                        '�'
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            (text, *style)
+        })
+        .collect();
+    let mut lines = Vec::new();
+    push_wrapped_spans(&mut lines, segments, budget, None, 0);
+    lines
 }
 
 #[cfg(test)]
@@ -1006,16 +1039,130 @@ mod tests {
     }
 
     #[test]
-    fn wide_tables_shrink_and_clip_with_ellipsis() {
+    fn wide_tables_wrap_the_entire_header_without_clipping() {
         let md = "| col | eine sehr sehr sehr lange zelle |\n|---|---|\n| a | b |";
         let lines = render(md, 24, Style::new(), &CUPEL);
+        let mut content = Vec::new();
         for line in &lines {
-            assert!(display_width(&flat_text(std::slice::from_ref(line))[0]) <= 24);
+            assert_eq!(line.width(), 24);
+            let text = flat_text(std::slice::from_ref(line)).remove(0);
+            if let Some((_, cell)) = text.split_once('│') {
+                content.extend(cell.split_whitespace().map(str::to_string));
+            }
+        }
+        assert_eq!(content.join(" "), "eine sehr sehr sehr lange zelle b");
+        assert!(
+            style_of(&lines, "zelle")
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn table_cells_wrap_words_and_separate_multiline_records() {
+        let md = "| Name | Description |\n|---|---|\n| a | **this is just a test** |\n| b | done |";
+        let lines = render(md, 16, Style::new(), &CUPEL);
+        assert_eq!(
+            flat_text(&lines),
+            [
+                "Name │ Descripti",
+                "     │ on       ",
+                "─────┼──────────",
+                "a    │ this is  ",
+                "     │ just a   ",
+                "     │ test     ",
+                "─────┼──────────",
+                "b    │ done     ",
+            ]
+        );
+        for word in ["Descripti", "on", "this is", "just a", "test"] {
+            assert!(style_of(&lines, word).add_modifier.contains(Modifier::BOLD));
         }
         assert!(
-            flat_text(&lines).concat().contains('…'),
-            "clipped cell is marked"
+            !style_of(&lines, "done")
+                .add_modifier
+                .contains(Modifier::BOLD)
         );
+    }
+
+    #[test]
+    fn tables_wrap_long_tokens_and_unicode_without_losing_styles_or_link_targets() {
+        for (cell, expected) in [
+            ("**日本語e\u{301}abcdefghijk**", "日本語e\u{301}abcdefghijk"),
+            (
+                "[docs](https://example.test/long/path)",
+                "docs(https://example.test/long/path)",
+            ),
+        ] {
+            let lines = render(
+                &format!("| Value |\n|---|\n| {cell} |"),
+                5,
+                Style::new(),
+                &CUPEL,
+            );
+            assert!(lines.iter().all(|line| line.width() == 5));
+            let body = &lines[2..];
+            let text: String = flat_text(body)
+                .concat()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            assert_eq!(text, expected);
+            for span in body.iter().flat_map(|line| &line.spans) {
+                if !span.content.trim().is_empty() {
+                    if cell.starts_with("**") {
+                        assert!(span.style.add_modifier.contains(Modifier::BOLD));
+                    } else if span.content == "docs" {
+                        assert_eq!(span.style, CUPEL.md_link);
+                    } else {
+                        assert_eq!(span.style, CUPEL.md_link_url);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_tables_split_into_column_groups_with_headers_and_missing_cells() {
+        let md = "| A | B | C |\n|---|---|---|\n| alpha | bravo | charlie |\n| delta | echo |\n| | foxtrot | golf |";
+        let lines = render(md, 16, Style::new(), &CUPEL);
+        assert_eq!(
+            flat_text(&lines),
+            [
+                "A     │ B      ",
+                "──────┼────────",
+                "alpha │ bravo  ",
+                "delta │ echo   ",
+                "      │ foxtrot",
+                "",
+                "C      ",
+                "───────",
+                "charlie",
+                "       ",
+                "golf   ",
+            ]
+        );
+        assert!(style_of(&lines, "C").add_modifier.contains(Modifier::BOLD));
+
+        // At tiny widths even the joints cannot fit. No column may disappear.
+        for width in 0..=16 {
+            let lines = render(md, width, Style::new(), &CUPEL);
+            assert!(
+                lines.iter().all(|line| line.width() <= width),
+                "width {width}: {lines:?}"
+            );
+            if width > 0 {
+                let text: String = flat_text(&lines)
+                    .concat()
+                    .chars()
+                    .filter(char::is_ascii_alphabetic)
+                    .collect();
+                assert!(text.contains("alpha"), "width {width}: {text}");
+                assert!(text.contains("foxtrot"), "width {width}: {text}");
+                assert!(text.contains("charlie"), "width {width}: {text}");
+                assert!(text.contains("golf"), "width {width}: {text}");
+            }
+        }
     }
 
     #[test]
