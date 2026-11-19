@@ -224,6 +224,15 @@ impl InputState {
         }
     }
 
+    /// Discard the current draft and leave history browsing without recording it.
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.cursor = 0;
+        self.preferred_column = None;
+        self.history_index = None;
+        self.stash.clear();
+    }
+
     /// Take the buffer for submission, recording it in history.
     pub fn submit(&mut self) -> String {
         let text = core::mem::take(&mut self.buffer);

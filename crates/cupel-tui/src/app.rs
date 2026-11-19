@@ -37,6 +37,8 @@ use crate::transcript::{Cell, ToolDisplay, ToolOutcome, Transcript};
 
 use crate::usage::UsagePopup;
 
+const DOUBLE_ESC_WINDOW: Duration = Duration::from_millis(500);
+
 pub struct App {
     pub agent: Agent,
     pub meta: SessionMeta,
@@ -44,6 +46,8 @@ pub struct App {
     /// Current turn's reasoning content indices mapped to transcript cells.
     pub thinking_cells: std::collections::HashMap<usize, usize>,
     pub input: InputState,
+    /// First press of a possible double-Esc shortcut in this session.
+    pub last_esc: Option<Instant>,
     pub autocomplete: Autocomplete,
     pub totals: UsageTotals,
     pub usage_by_model: UsageByModel,
@@ -319,6 +323,7 @@ impl App {
             transcript: Transcript::default(),
             thinking_cells: std::collections::HashMap::new(),
             input: InputState::default(),
+            last_esc: None,
             autocomplete,
             totals: UsageTotals::default(),
             usage_by_model: UsageByModel::default(),
@@ -563,6 +568,23 @@ impl App {
     }
 
     pub fn on_terminal_event(&mut self, event: Event) {
+        // Count Esc before dispatch: dismissing a modal still counts as the first press.
+        let mut double_esc = false;
+        match &event {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+                    let now = Instant::now();
+                    double_esc = self
+                        .last_esc
+                        .replace(now)
+                        .is_some_and(|previous| now.duration_since(previous) <= DOUBLE_ESC_WINDOW);
+                } else {
+                    self.last_esc = None;
+                }
+            }
+            Event::Paste(_) | Event::Mouse(_) | Event::FocusLost => self.last_esc = None,
+            _ => {}
+        }
         if let Some(popup) = &mut self.usage_popup {
             self.scrollbar_dragging = false;
             self.input_scrollbar_dragging = false;
@@ -590,7 +612,7 @@ impl App {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 self.input_scroll_override = None;
                 self.input_scrollbar_dragging = false;
-                self.on_key(key);
+                self.on_key(key, double_esc);
             }
             Event::Paste(text) => {
                 self.input_scroll_override = None;
@@ -660,7 +682,7 @@ impl App {
         }
     }
 
-    fn on_key(&mut self, key: KeyEvent) {
+    fn on_key(&mut self, key: KeyEvent, double_esc: bool) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
@@ -776,11 +798,14 @@ impl App {
                 self.notice("login cancelled");
             }
             (KeyCode::Esc, ..) if self.is_running() => self.abort_run(),
-            // Esc while idle drops the click selection (harmless no op
-            // when nothing is selected).
             (KeyCode::Esc, ..) => {
                 self.selected_cell = None;
                 self.text_selection = None;
+                if double_esc {
+                    self.input.clear();
+                    self.autocomplete.close();
+                    self.last_esc = None;
+                }
             }
 
             // Ctrl+Y toggles "selection mode", mouse capture off so the
@@ -1852,6 +1877,8 @@ impl App {
                     "  Shift+Enter  - insert a newline".to_string(),
                     "  Ctrl+Enter   - steer the running agent (or send when idle)".to_string(),
                     "  Ctrl+J       - alternative steering binding".to_string(),
+                    "  Esc twice    - clear the unsent prompt when idle (within 500 ms)"
+                        .to_string(),
                     "  Ctrl/Alt+Left/Right - jump by word".to_string(),
                     "  Up/Down      - move between wrapped input rows (select in popups/questions)"
                         .to_string(),

@@ -2179,14 +2179,49 @@ pub(crate) mod tests {
         let mut app = test_app_in(&autocomplete_cwd("esc"));
         type_text(&mut app, "@ma");
         assert!(app.autocomplete.is_open());
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        let esc = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.on_terminal_event(esc.clone());
         assert!(!app.autocomplete.is_open());
         assert!(!app.should_quit);
+        assert_eq!(app.input.text(), "@ma");
         let screen = draw(&mut app, 80, 20);
         assert!(
             !screen.contains("src/main.rs"),
             "popup should be gone:\n{screen}"
         );
+        app.on_terminal_event(esc);
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn double_esc_discards_only_the_current_draft() {
+        let mut app = test_app();
+        app.input.insert_str("previous prompt");
+        app.input.submit();
+        let esc = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.on_terminal_event(Event::Paste("draft\n日本語".into()));
+        app.on_terminal_event(esc.clone());
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)));
+        app.on_terminal_event(esc.clone());
+        assert_eq!(app.input.text(), "draft\n日本語");
+        app.on_terminal_event(Event::Paste("!".into()));
+        app.on_terminal_event(esc.clone());
+        assert_eq!(app.input.text(), "draft\n日本!語");
+
+        app.last_esc = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(1));
+        app.on_terminal_event(esc.clone());
+        assert_eq!(
+            app.input.text(),
+            "draft\n日本!語",
+            "an expired press cannot clear"
+        );
+        app.on_terminal_event(esc);
+        assert!(app.input.is_empty());
+        assert_eq!(app.input.cursor(), 0);
+        app.input.history_prev();
+        assert_eq!(app.input.text(), "previous prompt");
+        app.input.history_next();
+        assert!(app.input.is_empty());
     }
 
     #[test]
