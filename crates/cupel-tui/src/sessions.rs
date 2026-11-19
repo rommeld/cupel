@@ -133,6 +133,7 @@ impl Sessions {
 
     fn switch_to(&mut self, index: usize) {
         let captured = self.active().mouse_captured;
+        self.active_mut().last_esc = None;
         self.active_mut().cancel_mouse_drag();
         self.active = index;
         self.active_mut().mouse_captured = captured;

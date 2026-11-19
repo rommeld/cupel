@@ -1649,8 +1649,132 @@ pub(crate) mod tests {
         assert_eq!(app.recorder.session_id(), "cupel-test");
         assert!(app.transcript.cells.iter().any(|cell| matches!(
             cell,
-            Cell::Notice { text } if text.contains("cannot clear while the agent is working")
+            Cell::Notice { text } if text.contains("cannot start a new session while the agent is working")
         )));
+    }
+
+    #[tokio::test]
+    async fn clear_hides_old_output_but_preserves_context_for_the_next_prompt() {
+        use crate::text_selection::{Point, TextSelection};
+        use cupel_agent::AgentMessage;
+        use cupel_core::event_stream::{AssistantMessageStream, assistant_message_channel};
+        use cupel_core::provider::{Provider, Registry};
+        use cupel_core::types::{
+            Context, Message, Model, StopReason, StreamOptions, UserContentBody,
+        };
+
+        struct RecallProvider;
+
+        impl Provider for RecallProvider {
+            fn api(&self) -> &str {
+                "mock"
+            }
+
+            fn stream(
+                &self,
+                _model: &Model,
+                context: Context,
+                _options: StreamOptions,
+            ) -> AssistantMessageStream {
+                let text = if context.messages.iter().any(|message| {
+                    matches!(message, Message::User(user)
+                        if matches!(&user.content, UserContentBody::Text(text) if text == "remember lilac"))
+                }) {
+                    "I remember lilac"
+                } else {
+                    "I lost the context"
+                };
+                let AgentMessage::Llm(Message::Assistant(message)) =
+                    assistant_message(text, StopReason::Stop, 100)
+                else {
+                    panic!("expected an assistant reply from the test fixture");
+                };
+                let (stream, sink) = assistant_message_channel();
+                assert!(sink.text_delta(0, text.into()));
+                assert!(sink.done(StopReason::Stop, message));
+                stream
+            }
+        }
+
+        let root = std::env::temp_dir().join("cupel-ui-clear-output");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-clear");
+        let mut model = app.agent.state().model;
+        model.api = "mock".into();
+        let mut registry = Registry::new();
+        registry.register(Arc::new(RecallProvider));
+        let old_message = AgentMessage::user_text("remember lilac");
+        let mut options = AgentOptions::new(model, Arc::new(registry));
+        options.session_id = Some(app.recorder.session_id().into());
+        options.messages.push(old_message.clone());
+        app.agent = Agent::new(options);
+        app.recorder.before_prompt("remember lilac").await;
+        app.recorder.record(&old_message);
+        let path = app.recorder.transcript().unwrap().to_path_buf();
+        let old_contents = std::fs::read(&path).unwrap();
+        app.transcript.cells.push(Cell::User {
+            text: "remember lilac".into(),
+        });
+        assert!(draw(&mut app, 80, 24).contains("remember lilac"));
+        app.selected_cell = Some(0);
+        app.text_selection = Some(TextSelection::new(Point { row: 1, column: 1 }, 1));
+        app.transcript.reasoning_collapsed = true;
+        app.context_tokens = 90;
+        app.totals.input = 100;
+
+        run_command(&mut app, "/clear");
+
+        assert!(app.transcript.cells.is_empty());
+        assert!(app.selected_cell.is_none() && app.text_selection.is_none());
+        assert!(app.last_line_cells.is_empty() && app.last_transcript_lines.is_empty());
+        assert!(app.transcript.reasoning_collapsed);
+        assert_eq!(app.context_tokens, 90);
+        assert_eq!(app.totals.input, 100);
+        assert!(app.pending_reload.is_none() && app.pending_prompt.is_none());
+        assert_eq!(app.recorder.session_id(), "cupel-clear");
+        assert_eq!(std::fs::read(&path).unwrap(), old_contents);
+        assert!(!draw(&mut app, 80, 24).contains("remember lilac"));
+
+        submit_paste(&mut app, "what color?");
+        let prompt = app.pending_prompt.take().unwrap();
+        app.recorder.before_prompt(&prompt).await;
+        app.start_run(&prompt);
+        while app.is_running() {
+            let event = app.next_event().await;
+            app.on_event(event).await;
+        }
+        let screen = draw(&mut app, 80, 24);
+        assert!(screen.contains("I remember lilac"), "{screen}");
+        assert!(!screen.contains(">> remember lilac"), "{screen}");
+        let (header, messages) = cupel_coding_agent::session::load_transcript(&path).unwrap();
+        assert_eq!(header.session_id, "cupel-clear");
+        assert_eq!(messages.first(), Some(&old_message));
+        assert_eq!(messages.len(), 3, "old prompt, follow-up and its reply");
+        app.recorder.end_session().await;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clear_leaves_the_transcript_intact_with_arguments_or_during_a_run() {
+        let mut app = test_app();
+        app.transcript.append_assistant("part of a reply");
+        submit_paste(&mut app, "/clear extra");
+        assert!(has_notice(&app, "usage: /clear (no arguments)"));
+
+        let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
+        app.run_events = Some(events);
+        run_command(&mut app, "/clear");
+
+        assert!(has_notice(
+            &app,
+            "cannot clear output while the agent is working"
+        ));
+        assert!(matches!(
+            app.transcript.cells.first(),
+            Some(Cell::Assistant { text }) if text == "part of a reply"
+        ));
+        assert!(app.is_running());
+        assert!(app.queued.is_empty());
     }
 
     #[tokio::test]
@@ -2235,14 +2359,49 @@ pub(crate) mod tests {
         let mut app = test_app_in(&autocomplete_cwd("esc"));
         type_text(&mut app, "@ma");
         assert!(app.autocomplete.is_open());
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        let esc = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.on_terminal_event(esc.clone());
         assert!(!app.autocomplete.is_open());
         assert!(!app.should_quit);
+        assert_eq!(app.input.text(), "@ma");
         let screen = draw(&mut app, 80, 20);
         assert!(
             !screen.contains("src/main.rs"),
             "popup should be gone:\n{screen}"
         );
+        app.on_terminal_event(esc);
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn double_esc_discards_only_the_current_draft() {
+        let mut app = test_app();
+        app.input.insert_str("previous prompt");
+        app.input.submit();
+        let esc = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.on_terminal_event(Event::Paste("draft\n日本語".into()));
+        app.on_terminal_event(esc.clone());
+        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)));
+        app.on_terminal_event(esc.clone());
+        assert_eq!(app.input.text(), "draft\n日本語");
+        app.on_terminal_event(Event::Paste("!".into()));
+        app.on_terminal_event(esc.clone());
+        assert_eq!(app.input.text(), "draft\n日本!語");
+
+        app.last_esc = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(1));
+        app.on_terminal_event(esc.clone());
+        assert_eq!(
+            app.input.text(),
+            "draft\n日本!語",
+            "an expired press cannot clear"
+        );
+        app.on_terminal_event(esc);
+        assert!(app.input.is_empty());
+        assert_eq!(app.input.cursor(), 0);
+        app.input.history_prev();
+        assert_eq!(app.input.text(), "previous prompt");
+        app.input.history_next();
+        assert!(app.input.is_empty());
     }
 
     #[test]
@@ -2274,6 +2433,16 @@ pub(crate) mod tests {
         assert!(keys.contains("Shift+Up/Down - browse prompt history"));
         assert!(keys.contains("Ctrl/Alt+Left/Right - jump by word"));
         assert!(!keys.contains("Alt+Enter"));
+
+        let screen = draw(&mut app, 80, 16);
+        assert!(
+            screen.contains("commands:"),
+            "help should open at the top:\n{screen}"
+        );
+        assert!(
+            screen.contains("/clear  - Clear displayed output"),
+            "{screen}"
+        );
     }
 
     #[test]

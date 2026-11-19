@@ -37,6 +37,8 @@ use crate::transcript::{Cell, ToolDisplay, ToolOutcome, Transcript};
 
 use crate::usage::UsagePopup;
 
+const DOUBLE_ESC_WINDOW: Duration = Duration::from_millis(500);
+
 pub struct App {
     pub agent: Agent,
     pub meta: SessionMeta,
@@ -44,6 +46,8 @@ pub struct App {
     /// Current turn's reasoning content indices mapped to transcript cells.
     pub thinking_cells: std::collections::HashMap<usize, usize>,
     pub input: InputState,
+    /// First press of a possible double-Esc shortcut in this session.
+    pub last_esc: Option<Instant>,
     pub autocomplete: Autocomplete,
     pub totals: UsageTotals,
     pub usage_by_model: UsageByModel,
@@ -102,7 +106,7 @@ pub struct InputScroll {
     pub cursor: usize,
 }
 
-/// A content position held in place while reasoning visibility changes.
+/// A transcript position to place at a particular row on the next draw.
 pub struct TranscriptAnchor {
     pub cell: usize,
     pub offset: usize,
@@ -319,6 +323,7 @@ impl App {
             transcript: Transcript::default(),
             thinking_cells: std::collections::HashMap::new(),
             input: InputState::default(),
+            last_esc: None,
             autocomplete,
             totals: UsageTotals::default(),
             usage_by_model: UsageByModel::default(),
@@ -563,6 +568,23 @@ impl App {
     }
 
     pub fn on_terminal_event(&mut self, event: Event) {
+        // Count Esc before dispatch: dismissing a modal still counts as the first press.
+        let mut double_esc = false;
+        match &event {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+                    let now = Instant::now();
+                    double_esc = self
+                        .last_esc
+                        .replace(now)
+                        .is_some_and(|previous| now.duration_since(previous) <= DOUBLE_ESC_WINDOW);
+                } else {
+                    self.last_esc = None;
+                }
+            }
+            Event::Paste(_) | Event::Mouse(_) | Event::FocusLost => self.last_esc = None,
+            _ => {}
+        }
         if let Some(popup) = &mut self.usage_popup {
             self.scrollbar_dragging = false;
             self.input_scrollbar_dragging = false;
@@ -590,7 +612,7 @@ impl App {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 self.input_scroll_override = None;
                 self.input_scrollbar_dragging = false;
-                self.on_key(key);
+                self.on_key(key, double_esc);
             }
             Event::Paste(text) => {
                 self.input_scroll_override = None;
@@ -660,7 +682,7 @@ impl App {
         }
     }
 
-    fn on_key(&mut self, key: KeyEvent) {
+    fn on_key(&mut self, key: KeyEvent, double_esc: bool) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
@@ -776,11 +798,14 @@ impl App {
                 self.notice("login cancelled");
             }
             (KeyCode::Esc, ..) if self.is_running() => self.abort_run(),
-            // Esc while idle drops the click selection (harmless no op
-            // when nothing is selected).
             (KeyCode::Esc, ..) => {
                 self.selected_cell = None;
                 self.text_selection = None;
+                if double_esc {
+                    self.input.clear();
+                    self.autocomplete.close();
+                    self.last_esc = None;
+                }
             }
 
             // Ctrl+Y toggles "selection mode", mouse capture off so the
@@ -1825,6 +1850,24 @@ impl App {
             || !self.steering.is_empty()
     }
 
+    /// Drop the rendered conversation and its hit-test state, not the session history.
+    fn clear_output(&mut self) {
+        self.transcript.cells.clear();
+        self.thinking_cells.clear();
+        self.scroll_from_bottom = 0;
+        self.transcript_anchor = None;
+        self.selected_cell = None;
+        self.text_selection = None;
+        self.last_transcript_lines.clear();
+        self.last_line_cells.clear();
+        self.last_total_lines = 0;
+        self.last_top_line = 0;
+        self.last_transcript_height = 0;
+        self.last_transcript_inner = Rect::ZERO;
+        self.last_scrollbar_area = Rect::ZERO;
+        self.scrollbar_dragging = false;
+    }
+
     /// Handle a built in `/command`. Returns false when the name isn't a
     /// built in (the caller then tries prompt templates).
     fn handle_builtin(&mut self, rest: &str) -> bool {
@@ -1852,6 +1895,8 @@ impl App {
                     "  Shift+Enter  - insert a newline".to_string(),
                     "  Ctrl+Enter   - steer the running agent (or send when idle)".to_string(),
                     "  Ctrl+J       - alternative steering binding".to_string(),
+                    "  Esc twice    - clear the unsent prompt when idle (within 500 ms)"
+                        .to_string(),
                     "  Ctrl/Alt+Left/Right - jump by word".to_string(),
                     "  Up/Down      - move between wrapped input rows (select in popups/questions)"
                         .to_string(),
@@ -1860,6 +1905,12 @@ impl App {
                     "  Modified Enter keys require a terminal with keyboard enhancement support."
                         .to_string(),
                 ]);
+                // Start at the command list, not the keyboard tips at the end.
+                self.transcript_anchor = Some(TranscriptAnchor {
+                    cell: self.transcript.cells.len(),
+                    offset: 0,
+                    row: 0,
+                });
                 self.notice(lines.join("\n"));
             }
             "undo" | "changes" => {
@@ -1918,9 +1969,22 @@ impl App {
                     exclude,
                 ));
             }
+            "clear" => {
+                if !args.is_empty() {
+                    self.notice("usage: /clear (no arguments)");
+                } else if self.is_running() {
+                    self.notice(
+                        "cannot clear output while the agent is working; try again when it finishes",
+                    );
+                } else {
+                    self.clear_output();
+                }
+            }
             "new" => {
                 if self.is_running() {
-                    self.notice("cannot clear while the agent is working (esc to abort first)");
+                    self.notice(
+                        "cannot start a new session while the agent is working (esc to abort first)",
+                    );
                 } else {
                     // Ending hooks and rebuilding the recorder require async
                     // work, the event loop handles this like /hot reload.
