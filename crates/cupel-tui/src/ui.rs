@@ -916,6 +916,62 @@ pub(crate) mod tests {
         assert_eq!(style_of(&mut app, "fn main").bg, CUPEL.selected.bg);
     }
 
+    #[test]
+    fn responsive_tables_reflow_before_viewport_layout() {
+        let mut cells = vec!["ABCDE"; 10];
+        cells.push("ZZZZZ");
+        let header = format!("| {} |", cells.join(" | "));
+        let separator = format!("| {} |", ["-----"; 11].join(" | "));
+        let source = format!("{header}\n{separator}\n{header}");
+        let mut app = test_app();
+        app.transcript.cells.push(Cell::Answer {
+            text: source.clone(),
+        });
+        app.selected_cell = Some(0);
+
+        for width in [80, 120, 80] {
+            let screen = draw(&mut app, width, 40);
+            assert!(
+                screen.contains("ZZZZZ"),
+                "last column missing at width {width}:\n{screen}"
+            );
+            assert!(
+                app.last_transcript_lines
+                    .iter()
+                    .all(|line| line.width() <= usize::from(app.last_transcript_inner.width))
+            );
+            assert!(app.last_line_cells.iter().all(|cell| *cell == Some(0)));
+            assert_eq!(app.transcript.copy_text(0), Some(source.as_str()));
+            assert!(
+                app.last_transcript_lines
+                    .iter()
+                    .flat_map(|line| &line.spans)
+                    .all(|span| span.style.bg == CUPEL.selected.bg)
+            );
+        }
+
+        let tail = draw(&mut app, 80, 12);
+        assert!(tail.contains("ZZZZZ: ZZZZZ"), "{tail}");
+        assert!(app.last_total_lines > usize::from(app.last_transcript_height));
+        for _ in 0..app.last_total_lines {
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::PageUp,
+                KeyModifiers::NONE,
+            )));
+        }
+        let top = draw(&mut app, 80, 12);
+        assert_eq!(app.last_top_line, 0);
+        assert!(top.contains("Answer"), "{top}");
+        for _ in 0..app.last_total_lines {
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::PageDown,
+                KeyModifiers::NONE,
+            )));
+        }
+        assert_eq!(app.scroll_from_bottom, 0);
+        assert!(draw(&mut app, 80, 12).contains("ZZZZZ: ZZZZZ"));
+    }
+
     #[tokio::test]
     async fn chat_prompts_have_a_distinct_background_while_idle_and_working_in_every_theme() {
         use crate::sessions::Sessions;
