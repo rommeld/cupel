@@ -1,7 +1,7 @@
 //! Plain mode, a line based REPL on a TTY, or one prompt from piped stdin.
 //!
-//! Used when stdout is not a terminal (pipes, CI) or with plain mode. It
-//! prints unstyled text with no screen management so it can be captured.
+//! Used when stdout is not a terminal (pipes, CI) or with plain mode. Output
+//! is unstyled and can be captured; `/clear` only affects an interactive terminal.
 
 use std::io::{IsTerminal as _, Write as _};
 
@@ -65,6 +65,7 @@ fn output(args: std::fmt::Arguments<'_>) -> Result<(), PlainError> {
 enum PlainCommand {
     Quit,
     Help,
+    Clear,
     Undo(crate::undo::UndoCommand),
     TuiOnly,
     Prompt,
@@ -74,6 +75,7 @@ fn plain_command(name: &str) -> PlainCommand {
     match name {
         "quit" | "exit" => PlainCommand::Quit,
         "help" => PlainCommand::Help,
+        "clear" => PlainCommand::Clear,
         "changes" => PlainCommand::Undo(crate::undo::UndoCommand::Changes),
         "undo" => PlainCommand::Undo(crate::undo::UndoCommand::Undo),
         _ if crate::commands::BUILTIN_COMMANDS
@@ -244,13 +246,24 @@ async fn run_session(
         // retain their usual behavior.
         let mut prompt = input.to_string();
         if let Some(rest) = input.strip_prefix('/') {
-            let name = rest
+            let (name, args) = rest
                 .split_once(char::is_whitespace)
-                .map_or(rest, |(n, _)| n);
+                .map_or((rest, ""), |(name, args)| (name, args.trim()));
             match plain_command(name) {
                 PlainCommand::Quit => break,
+                PlainCommand::Clear => {
+                    if !args.is_empty() {
+                        output(format_args!("usage: /clear (no arguments)\n"))?;
+                    } else if !piped && std::io::stdout().is_terminal() {
+                        // Erase the viewport and move home, leaving scrollback alone.
+                        output(format_args!("\x1b[2J\x1b[H"))?;
+                    } else {
+                        output(format_args!("/clear requires an interactive terminal\n"))?;
+                    }
+                    continue;
+                }
                 PlainCommand::Undo(command) => {
-                    if rest[name.len()..].trim().is_empty() {
+                    if args.is_empty() {
                         let result = crate::undo::execute_command(command, agent, recorder).await;
                         output(format_args!("{}\n", result.unwrap_or_else(|error| error)))?;
                     } else {
@@ -596,7 +609,10 @@ mod tests {
             .filter(|command| plain_command(command.name) != PlainCommand::TuiOnly)
             .map(|command| command.name)
             .collect();
-        assert_eq!(supported, ["help", "changes", "undo", "quit", "exit"]);
+        assert_eq!(
+            supported,
+            ["help", "clear", "changes", "undo", "quit", "exit"]
+        );
         for name in [
             "new",
             "model",

@@ -3,6 +3,11 @@
 Releases up to v0.1.15-beta used patch bumps for feature releases;
 from v0.2.0-beta, minor = features, patch = fixes.
 
+## Unreleased
+
+- TUI: Press `Esc` twice within 500 ms to discard the unsent prompt without changing prompt history. The first `Esc` can still dismiss a popup, cancel login, or stop a run; the second clears only if the prompt is idle. Another keypress or a paste breaks the sequence.
+- TUI and plain mode: Use `/clear` between turns to clear displayed output without resetting the session or dropping conversation history. `/new` still starts a fresh session in the TUI.
+
 ## [v0.39.0] - 2026-11-17
 
 - feat(catalog): add GPT-6.2 Sol and Astra to OpenAI and OpenAI Codex with flat full-window pricing
