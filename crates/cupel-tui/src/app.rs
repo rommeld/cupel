@@ -106,7 +106,7 @@ pub struct InputScroll {
     pub cursor: usize,
 }
 
-/// A content position held in place while reasoning visibility changes.
+/// A transcript position to place at a particular row on the next draw.
 pub struct TranscriptAnchor {
     pub cell: usize,
     pub offset: usize,
@@ -1850,6 +1850,24 @@ impl App {
             || !self.steering.is_empty()
     }
 
+    /// Drop the rendered conversation and its hit-test state, not the session history.
+    fn clear_output(&mut self) {
+        self.transcript.cells.clear();
+        self.thinking_cells.clear();
+        self.scroll_from_bottom = 0;
+        self.transcript_anchor = None;
+        self.selected_cell = None;
+        self.text_selection = None;
+        self.last_transcript_lines.clear();
+        self.last_line_cells.clear();
+        self.last_total_lines = 0;
+        self.last_top_line = 0;
+        self.last_transcript_height = 0;
+        self.last_transcript_inner = Rect::ZERO;
+        self.last_scrollbar_area = Rect::ZERO;
+        self.scrollbar_dragging = false;
+    }
+
     /// Handle a built in `/command`. Returns false when the name isn't a
     /// built in (the caller then tries prompt templates).
     fn handle_builtin(&mut self, rest: &str) -> bool {
@@ -1887,6 +1905,12 @@ impl App {
                     "  Modified Enter keys require a terminal with keyboard enhancement support."
                         .to_string(),
                 ]);
+                // Start at the command list, not the keyboard tips at the end.
+                self.transcript_anchor = Some(TranscriptAnchor {
+                    cell: self.transcript.cells.len(),
+                    offset: 0,
+                    row: 0,
+                });
                 self.notice(lines.join("\n"));
             }
             "undo" | "changes" => {
@@ -1945,9 +1969,22 @@ impl App {
                     exclude,
                 ));
             }
+            "clear" => {
+                if !args.is_empty() {
+                    self.notice("usage: /clear (no arguments)");
+                } else if self.is_running() {
+                    self.notice(
+                        "cannot clear output while the agent is working; try again when it finishes",
+                    );
+                } else {
+                    self.clear_output();
+                }
+            }
             "new" => {
                 if self.is_running() {
-                    self.notice("cannot clear while the agent is working (esc to abort first)");
+                    self.notice(
+                        "cannot start a new session while the agent is working (esc to abort first)",
+                    );
                 } else {
                     // Ending hooks and rebuilding the recorder require async
                     // work, the event loop handles this like /hot reload.

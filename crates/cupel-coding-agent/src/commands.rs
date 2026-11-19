@@ -2,7 +2,7 @@
 //!
 //! Two kinds, dispatched in this order by the frontends,
 //!
-//! 1. **Built ins** (`/help`, `/new`, `/model`, ...), intercepted by the UI
+//! 1. **Built ins** (`/help`, `/clear`, `/new`, ...), intercepted by the UI
 //!    and never sent to the model.
 //! 2. **Prompt templates**, markdown files in `<root>/prompts/*.md` (same
 //!    resource roots as AGENTS.md, cupel home, project `.cupel/`, project
@@ -242,8 +242,12 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         description: "List all commands and prompt templates",
     },
     BuiltinCommand {
+        name: "clear",
+        description: "Clear displayed output without resetting the session",
+    },
+    BuiltinCommand {
         name: "new",
-        description: "Clear the conversation and start fresh",
+        description: "Start a new session with no conversation history",
     },
     BuiltinCommand {
         name: "changes",
