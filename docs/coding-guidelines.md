@@ -1,18 +1,5 @@
 # Rust Coding Guide
 
-Source: [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html).
-This document summarizes that page only; linked documents have not been incorporated.
-
-Platform-specific infrastructure rules are omitted. Project rules retained from the former
-`AGENTS.md` coding guidelines are explicitly labeled.
-
-
-Panics are permitted only in tests, not in application code. Source recommendations that
-permit application-code panics are omitted.
-
-Examples are excerpts from the source. Some are schematic: `...` denotes omitted code.
-Code labeled **Avoid** illustrates a pattern not to follow.
-
 ## Goals and scope
 
 - Prioritize readability and maintainability over ease of writing: code is expected to
@@ -270,6 +257,10 @@ fn open_file(path: &Path) -> Result<File, io::Error> { ... }
   silent success.
 - Validation checks should return `Option<Finding>` rather than a boolean when returning a
   finding is appropriate: `if let Some(f) = check(...) { findings.push(f) }`.
+- Panics are permitted only in tests, not in application code. Source recommendations that
+  permit application-code panics are omitted.
+- Examples are excerpts from the source. Some are schematic: `...` denotes omitted code.
+  Code labeled **Avoid** illustrates a pattern not to follow.
 
 ## Types
 

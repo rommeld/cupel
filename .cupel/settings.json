@@ -5,12 +5,17 @@
   "model": {
     "default": {
       "provider": "openai-codex",
-      "model": "codex/gpt-6.1-sol",
+      "model": "codex/gpt-6.2-sol",
       "thinkingLevel": "high"
     },
     "implement": {
       "provider": "openai-codex",
       "model": "codex/gpt-6.1-terra",
+      "thinkingLevel": "high"
+    },
+    "think": {
+      "provider": "openai-codex",
+      "model": "codex/gpt-6.2-astra",
       "thinkingLevel": "medium"
     }
   }
