@@ -2,7 +2,7 @@
 
 Notable user-facing changes by release.
 
-## [Unreleased]
+## [v0.40.0] - 2026-11-20
 
 - Add on-demand skills from `$CUPEL_HOME/skills/<skill>/SKILL.md` and `.cupel/skills/<skill>/SKILL.md`. Project skills override home skills with the same name. The agent loads instructions only when it uses a skill.
 - TUI: Press `Esc` twice within 500 ms to clear an idle, unsent prompt without changing prompt history.
