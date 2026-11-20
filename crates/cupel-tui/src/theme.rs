@@ -359,7 +359,6 @@ pub(crate) fn example_themes() -> Vec<Arc<Theme>> {
     let home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (files, warnings) = cupel_coding_agent::themes::load_theme_files(Some(&home));
     assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(files.len(), 5);
     registry(&files)
 }
 
@@ -402,6 +401,7 @@ mod tests {
         let themes = example_themes();
         assert_eq!(from_settings(&themes, None).unwrap().id, "cupel");
         for (id, appearance) in [
+            ("arcade-light", Appearance::Light),
             ("ayu-dark", Appearance::Dark),
             ("ayu-light", Appearance::Light),
             ("dawnfox", Appearance::Light),

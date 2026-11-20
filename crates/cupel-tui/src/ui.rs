@@ -5810,17 +5810,18 @@ pub(crate) mod tests {
         let (rows, _) = app.autocomplete.visible().expect("theme rows");
         let values: Vec<&str> = rows.iter().map(|row| row.value.as_str()).collect();
         assert_eq!(
-            values[..6],
+            values,
             [
                 "cupel",
+                "arcade-light",
                 "ayu-dark",
                 "ayu-light",
                 "dawnfox",
                 "duskfox",
-                "nightfox"
+                "nightfox",
             ]
         );
-        assert!(rows[5].display.contains("Nightfox - opaque (dark)"));
+        assert_eq!(rows[1].display, "arcade-light  - Arcade Light (light)");
     }
 
     /// Style of the first ASCII occurrence, using the event loop's render path.
