@@ -40,3 +40,6 @@
 !/themes
 !/themes/**.json
 !/themes/README.md
+
+!/docs/
+!/docs/coding-guidelines.md
