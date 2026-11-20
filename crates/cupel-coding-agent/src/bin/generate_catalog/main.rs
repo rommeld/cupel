@@ -413,10 +413,11 @@ fn to_model(
         // https://aistudio.google.com/docs/models/gemini-4-carbon
         // https://aistudio.google.com/docs/models/gemini-4-argon
         // https://aistudio.google.com/docs/models/gemini-4-hydrogen
+        // https://aistudio.google.com/docs/models/gemini-4-neon
         max_tokens: match (row.api, row.id) {
             (
                 Api::GOOGLE_GENERATIVE_AI,
-                "gemini-4-argon" | "gemini-4-carbon" | "gemini-4-hydrogen",
+                "gemini-4-argon" | "gemini-4-carbon" | "gemini-4-hydrogen" | "gemini-4-neon",
             ) => 1_048_576,
             _ => entry.limit.output,
         },
@@ -613,7 +614,7 @@ mod tests {
             assert_eq!(model.base_url, curation::GOOGLE_BASE_URL);
             if matches!(
                 model.id.as_str(),
-                "gemini-4-argon" | "gemini-4-carbon" | "gemini-4-hydrogen"
+                "gemini-4-argon" | "gemini-4-carbon" | "gemini-4-hydrogen" | "gemini-4-neon"
             ) {
                 // Override the single-hop cap with the full long decode window.
                 assert_eq!(model.max_tokens, 1_048_576, "{}", model.id);
