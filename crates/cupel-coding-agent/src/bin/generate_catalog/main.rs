@@ -633,6 +633,7 @@ mod tests {
             "google/gemini-4-argon",
             "google/gemini-4-carbon",
             "google/gemini-4-hydrogen",
+            "google/gemini-4-neon",
         ] {
             let model = models.iter().find(|model| model.id == id).expect(id);
             assert_eq!(model.provider.as_str(), Provider::OPENROUTER);

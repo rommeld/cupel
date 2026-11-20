@@ -2952,6 +2952,43 @@
         ],
         "temperature": true
       },
+      "google/gemini-4-neon": {
+        "cost": {
+          "cache_read": 0.15,
+          "cache_write": 0.083333,
+          "input": 3.0,
+          "output": 15.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ]
+        },
+        "name": "Gemini 4 Neon",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "google/gemma-4-26b-a4b-it": {
         "cost": {
           "cache_read": 0.05,
@@ -3181,6 +3218,61 @@
           ]
         },
         "name": "Ling 3.1 Flash",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "temperature": true
+      },
+      "inclusionai/ling-3.2-flash:free": {
+        "cost": {
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "input": 0.0,
+          "output": 0.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 262144
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Ling 3.2 Flash (free)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "temperature": true
+      },
+      "kt/midm-k-3.0-pro": {
+        "cost": {
+          "cache_read": 0.04,
+          "cache_write": 0.0,
+          "input": 0.2,
+          "output": 0.8,
+          "tiers": []
+        },
+        "limit": {
+          "context": 261795,
+          "input": null,
+          "output": 235615
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "Mi:dm K 3.0 Pro",
         "reasoning": true,
         "reasoning_options": [
           {
@@ -3812,6 +3904,33 @@
               "high",
               "max"
             ]
+          }
+        ],
+        "temperature": true
+      },
+      "motif-technologies/motif-3": {
+        "cost": {
+          "cache_read": 0.06,
+          "cache_write": 0.0,
+          "input": 0.3,
+          "output": 1.2,
+          "tiers": []
+        },
+        "limit": {
+          "context": 262144,
+          "input": null,
+          "output": 235929
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "Motif 3",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
           }
         ],
         "temperature": true
@@ -4546,6 +4665,190 @@
           ]
         },
         "name": "GPT-6.1 Terra Pro",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "openai/gpt-6.2-astra": {
+        "cost": {
+          "cache_read": 0.4,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0,
+          "tiers": [
+            {
+              "cache_read": 0.8,
+              "cache_write": 20.0,
+              "input": 16.0,
+              "output": 60.0,
+              "tier": {
+                "size": 272000
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "GPT-6.2 Astra",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "openai/gpt-6.2-astra-pro": {
+        "cost": {
+          "cache_read": 0.4,
+          "cache_write": 10.0,
+          "input": 8.0,
+          "output": 40.0,
+          "tiers": [
+            {
+              "cache_read": 0.8,
+              "cache_write": 20.0,
+              "input": 16.0,
+              "output": 60.0,
+              "tier": {
+                "size": 272000
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "pdf",
+            "image",
+            "text"
+          ]
+        },
+        "name": "GPT-6.2 Astra Pro",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "openai/gpt-6.2-sol": {
+        "cost": {
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": 922000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ]
+        },
+        "name": "GPT-6.2 Sol",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "openai/gpt-6.2-sol-pro": {
+        "cost": {
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1050000,
+          "input": null,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "pdf",
+            "image",
+            "text"
+          ]
+        },
+        "name": "GPT-6.2 Sol Pro",
         "reasoning": true,
         "reasoning_options": [
           {
@@ -5327,6 +5630,34 @@
         ],
         "temperature": true
       },
+      "tencent/hy4-flash": {
+        "cost": {
+          "cache_read": 0.0015,
+          "cache_write": 0.0,
+          "input": 0.035,
+          "output": 0.1405,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": 983040,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Hy4 flash",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          }
+        ],
+        "temperature": true
+      },
       "tencent/hy4-preview": {
         "cost": {
           "cache_read": 0.042,
@@ -5386,6 +5717,41 @@
             "type": "effort",
             "values": [
               "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "thinkingmachines/inkling-2-small": {
+        "cost": {
+          "cache_read": 0.03,
+          "cache_write": 0.0,
+          "input": 0.3,
+          "output": 1.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Inkling 2 Small",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
               "minimal",
               "low",
               "medium",
