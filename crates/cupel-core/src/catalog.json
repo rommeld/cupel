@@ -621,6 +621,34 @@
     }
   },
   {
+    "id": "gemini-4-neon",
+    "name": "Gemini 4 Neon",
+    "api": "google-generative-ai",
+    "provider": "google",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3.0,
+      "output": 15.0,
+      "cachedRead": 0.15,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 1048576,
+    "compat": {
+      "supportsTemperature": false
+    }
+  },
+  {
     "id": "gemini-3.8-flash",
     "name": "Gemini 3.8 Flash",
     "api": "google-generative-ai",

@@ -170,7 +170,7 @@ const fn openai(id: &'static str, rename: Option<&'static str>) -> Curated {
 
 /// Google deprecated sampling parameters for these models. Thinking effort
 /// comes from models.dev: low/medium/high, plus minimal for Flash-Lite
-/// and xhigh for Hydrogen.
+/// and xhigh for Hydrogen and Neon.
 const fn google(id: &'static str) -> Curated {
     Curated {
         id,
@@ -317,12 +317,14 @@ pub const PROVIDERS: &[CuratedProvider] = &[
         models: &[
             // Argon is the interactive coding default; Carbon spends more
             // thinking tokens on difficult tasks. Introductory Gemini 4
-            // pricing expires November 30, 2026; refresh the snapshot then.
+            // pricing for Argon, Carbon, and Hydrogen expires November 30,
+            // 2026; refresh the snapshot then.
             // Sources: https://aistudio.google.com/docs/whats-new-gemini-4-carbon
             // and https://aistudio.google.com/docs/pricing.
             google("gemini-4-argon"),
             google("gemini-4-carbon"),
             google("gemini-4-hydrogen"),
+            google("gemini-4-neon"),
             // Flash introductory pricing expires December 31, 2026.
             google("gemini-3.8-flash"),
             google("gemini-3.5-flash-lite"),

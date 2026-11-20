@@ -97,7 +97,7 @@ async fn run(
         .unwrap_or(model.max_tokens);
     let long_decode = matches!(
         model.id.strip_prefix("models/").unwrap_or(&model.id),
-        "gemini-4-argon" | "gemini-4-carbon" | "gemini-4-hydrogen"
+        "gemini-4-argon" | "gemini-4-carbon" | "gemini-4-hydrogen" | "gemini-4-neon"
     ) && output_limit > 65_536;
     let url = format!(
         "{}/models/{}:streamGenerateContent?alt=sse",
