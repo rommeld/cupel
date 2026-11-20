@@ -4488,7 +4488,10 @@ pub(crate) mod tests {
             .hot_reload(ReloadTarget::Resume("cupel-old".into()))
             .await;
         let prompt = app.agent.state().system_prompt;
-        assert!(prompt.starts_with("You are an expert coding assistant"));
+        assert!(
+            !app.meta.base_system_prompt.is_empty(),
+            "resuming must rebuild the base prompt"
+        );
         assert_eq!(
             prompt.strip_suffix("\n\nPRESET RULES"),
             Some(app.meta.base_system_prompt.as_str())

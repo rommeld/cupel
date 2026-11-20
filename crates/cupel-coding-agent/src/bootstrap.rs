@@ -27,26 +27,6 @@ use crate::tools::{
     read::ReadTool,
 };
 
-/// Name + one line snippet per tool for the system prompt (full
-/// descriptions travel in the tool schemas).
-pub const TOOL_SUMMARIES: &[(&str, &str)] = &[
-    ("read", "Read file contents"),
-    ("bash", "Execute bash commands (ls, find, cargo, etc.)"),
-    (
-        "apply_patch",
-        "Create, delete, rename, and patch files with one *** Begin Patch / *** End Patch \
-        envelope",
-    ),
-    (
-        "grep",
-        "Search file contents for patterns (respects .gitignore)",
-    ),
-    (
-        "ask_user",
-        "Ask the user to decide a design question: two or more options, one recommended",
-    ),
-];
-
 /// Which frontend a session runs in. Only the TUI can answer a question while a run
 /// waits for it, so only the TUI gets the `ask_user` tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,15 +112,11 @@ pub async fn load(
         }
         Frontend::Plain => None,
     };
-    // The prompt lists the tools this session has, and no others.
-    let summaries: Vec<(&str, &str)> = TOOL_SUMMARIES
-        .iter()
-        .copied()
-        .filter(|(name, _)| tools.iter().any(|tool| tool.name() == *name))
-        .collect();
+    // Full descriptions travel in the tool schemas.
+    let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
 
     Ingredients {
-        system_prompt: build_system_prompt(cwd, &summaries, &context_files),
+        system_prompt: build_system_prompt(cwd, &tool_names, &context_files),
         context_files,
         tools,
         templates,
@@ -374,13 +350,8 @@ mod tests {
         let tui = load(&cwd, Some(home.clone()), &registry, Frontend::Tui).await;
         assert!(tui.tools.iter().any(|tool| tool.name() == "ask_user"));
         assert!(tui.questions.is_some());
-        assert!(tui.system_prompt.contains("- ask_user: Ask the user"));
-        // The whole guideline, so a line break from a wrapped literal shows.
-        assert!(tui.system_prompt.contains(
-            "- Use ask_user when a design decision is the user's to make and several options \
-             are reasonable, and recommend one of them; don't ask what the code, the project \
-             instructions, or an earlier answer already tells you.\n"
-        ));
+        assert!(tui.system_prompt.contains("\n- ask_user\n\nGuidelines:"));
+        assert!(tui.system_prompt.contains("\n- Use ask_user "));
 
         let plain = load(&cwd, Some(home), &registry, Frontend::Plain).await;
         assert!(plain.tools.iter().all(|tool| tool.name() != "ask_user"));

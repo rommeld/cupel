@@ -5,88 +5,60 @@ use std::path::Path;
 use crate::resources::ContextFile;
 
 #[must_use]
-pub fn build_system_prompt(
-    cwd: &Path,
-    tools: &[(&str, &str)],
-    context_files: &[ContextFile],
-) -> String {
+pub fn build_system_prompt(cwd: &Path, tools: &[&str], context_files: &[ContextFile]) -> String {
     let tools_list = if tools.is_empty() {
         "(none)".to_string()
     } else {
         tools
             .iter()
-            .map(|(name, snippet)| format!("- {name}: {snippet}"))
+            .map(|name| format!("- {name}"))
             .collect::<Vec<_>>()
             .join("\n")
     };
 
-    let has = |tool: &str| tools.iter().any(|(name, _)| *name == tool);
-    let mut guidelines: Vec<&str> = Vec::new();
-    guidelines.push("Establish the repository layout before guessing source directories.");
-    if has("grep") {
-        guidelines.push("Use grep to locate code before answering questions about it");
-        guidelines.push(
-            "Use grep outputMode=files to find which files define or use a name before reading them",
-        );
+    let mut guidelines = vec![
+        "For review or advice, inspect and explain without editing. For implementation, make \
+        the smallest change that meets the goal.",
+    ];
+    if tools.contains(&"read") {
+        guidelines.push("Use read directly when you know the file path.");
     }
-    if has("read") {
-        guidelines.push("Use read to examine files instead of cat or sed");
-        guidelines.push(
-            "Read headers identify the observed source bytes and actual returned range. \
-            Partial views are not complete code units; search locations are navigation hints, \
-            not source revisions. Do not skip required policy text or necessary rereads.",
-        );
+    if tools.contains(&"grep") {
+        guidelines.push("Use grep when the location or relevant callers are unknown.");
     }
-    if has("apply_patch") {
-        guidelines.push(
-            "Use apply_patch for all file changes: create, delete, or rename files and to \
-            change several files at once; give every hunk 3 lines of context so it is \
-            unique in the file",
-        );
-        guidelines.push(
-            "Use distinctive named @@ anchors for nontrivial patches, repeated blocks, and large \
-            files. Ambiguous targets are rejected. Re-establish the current target text after \
-            formatting or other relevant mutations; do not guess context or loosen matching.",
-        );
-        if has("read") {
+    guidelines.push(
+        "Search hits and partial reads are not complete evidence. Read applicable project \
+        instructions in full.",
+    );
+    guidelines.push(
+        "Before a nontrivial edit, identify what should change, what must stay true, and what \
+        check would catch a mistake.",
+    );
+    if tools.contains(&"apply_patch") {
+        guidelines.push("Use apply_patch for file changes.");
+        if tools.contains(&"read") {
             guidelines.push(
-                "For edits that depend on inspected source, pass read observation ids in \
-                apply_patch expectedObservations. These optional whole-file preconditions \
-                reject stale bytes, including unrelated edits; unavailable ids require a new read.",
+                "For edits based on inspected source, pass expectedObservations. After a stale \
+                or ambiguous match, reread and retarget rather than weakening the patch.",
             );
         }
+    }
+    guidelines.push("Parallelize only independent work.");
+    if tools.contains(&"bash") {
         guidelines.push(
-            "Before a nontrivial edit, briefly state the intended behavior change, what must \
-            remain unchanged, and what evidence would expose a mistake. This is reasoning, \
-            not runtime proof or a mandatory approval step.",
+            "Preserve check exit statuses. Confirm the intended tests ran against the final \
+            change; zero tests is not a pass.",
         );
     }
-    if has("bash") {
+    if tools.contains(&"ask_user") {
         guidelines.push(
-            "Preserve validation command exit statuses: avoid piping checks through tail/head \
-            without pipefail or explicitly capturing the original status. Confirm the intended \
-            tests actually ran; exit zero or an empty test selection is not proof of correctness.",
-        );
-        guidelines.push(
-            "Parallelize independent work, not competing builds on the same Cargo target or \
-            reads that race with formatting/edits. Do not assume larger batches are faster.",
+            "Use ask_user for consequential choices the request and repository don't resolve; \
+            recommend an option.",
         );
     }
-    if has("ask_user") {
-        guidelines.push(
-            "Use ask_user when a design decision is the user's to make and several options \
-            are reasonable, and recommend one of them; don't ask what the code, the project \
-            instructions, or an earlier answer already tells you.",
-        );
-    }
-    guidelines.push("Be concise in your responses");
-    guidelines.push("Explain non-obvious decisions and risks; skip routine status updates.");
-    guidelines.push("Never apologize; acknowledge mistakes directly.");
-    guidelines.push("Show file paths clearly when working with files");
     guidelines.push(
-        "In the final answer distinguish applied changes, observed check outcomes, and \
-        requirement-level conclusions. Keep missing results, stale evidence, ambiguous targets, \
-        and unverified cases explicit; earlier checks may no longer apply after later edits.",
+        "Lead with the result. Cite relevant paths, explain non-obvious decisions, and \
+        distinguish what you observed from what remains unverified.",
     );
     let guidelines = guidelines
         .iter()
@@ -99,8 +71,7 @@ pub fn build_system_prompt(
     let date = current_date();
 
     let mut prompt = format!(
-        "You are an expert coding assistant operating inside cupel, a coding agent harness. \
-You help users by reading files, executing commands, editing code, and writing new files.
+        "You are a coding assistant in cupel.
 
 Available tools:
 {tools_list}
@@ -170,21 +141,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn includes_tools_and_cwd() {
+    fn base_prompt_is_short_with_all_tools_enabled() {
         let prompt = build_system_prompt(
             Path::new("/tmp/project"),
-            &[("grep", "Search file contents for patterns")],
+            &["read", "bash", "apply_patch", "grep", "ask_user"],
             &[],
         );
-        assert!(prompt.contains("- grep: Search file contents for patterns"));
+        let words = prompt.split_whitespace().count();
+        assert!(words < 250, "base prompt grew to {words} words");
         assert!(prompt.contains("Current working directory: /tmp/project"));
-        assert!(
-            prompt.contains(
-                "- Explain non-obvious decisions and risks; skip routine status updates."
-            )
-        );
-        assert!(prompt.contains("- Never apologize; acknowledge mistakes directly."));
-        // Empty inputs add no empty sections.
         assert!(!prompt.contains("<project_context>"));
     }
 
@@ -192,45 +157,40 @@ mod tests {
     fn context_files_are_embedded_eagerly() {
         let prompt = build_system_prompt(
             Path::new("/tmp/project"),
-            &[("read", "Read files")],
+            &["read"],
             &[ContextFile {
                 path: "/tmp/project/AGENTS.md".into(),
-                content: "Always run cargo clippy.".to_string(),
+                content: "Always run cargo clippy.\n\n- Preserve existing behavior.\n".into(),
             }],
         );
-        assert!(prompt.contains("<project_instructions path=\"/tmp/project/AGENTS.md\">"));
-        assert!(prompt.contains("Always run cargo clippy."));
+        assert!(prompt.contains(concat!(
+            "<project_instructions path=\"/tmp/project/AGENTS.md\">\n",
+            "Always run cargo clippy.\n\n- Preserve existing behavior.\n",
+            "</project_instructions>"
+        )));
     }
 
     #[test]
-    fn coding_guidance_connects_navigation_observations_edits_and_checks() {
-        let prompt = build_system_prompt(
-            Path::new("/project"),
-            &[
-                ("read", "Read files"),
-                ("grep", "Search"),
-                ("apply_patch", "Patch"),
-                ("bash", "Shell"),
-            ],
-            &[],
-        );
-        for instruction in [
-            "Establish the repository layout",
-            "distinctive named @@ anchors",
-            "Ambiguous targets are rejected",
-            "expectedObservations",
-            "formatting or other relevant mutations",
-            "not runtime proof",
-            "pipefail",
-            "Confirm the intended tests actually ran",
-            "Parallelize independent work",
-            "unverified cases explicit",
-        ] {
-            assert!(prompt.contains(instruction), "missing: {instruction}");
-        }
-        let no_tools = build_system_prompt(Path::new("/project"), &[], &[]);
+    fn tool_guidance_respects_availability() {
+        let cwd = Path::new("/project");
+        let no_tools = build_system_prompt(cwd, &[], &[]);
+        assert!(no_tools.contains("Available tools:\n(none)\n"));
         assert!(!no_tools.contains("expectedObservations"));
-        assert!(!no_tools.contains("pipefail"));
+        for (tool, guidance) in [
+            ("read", "Use read "),
+            ("grep", "Use grep "),
+            ("apply_patch", "Use apply_patch "),
+            ("bash", "Preserve check exit statuses"),
+            ("ask_user", "Use ask_user "),
+        ] {
+            assert!(!no_tools.contains(guidance), "{tool} is unavailable");
+            let prompt = build_system_prompt(cwd, &[tool], &[]);
+            assert!(prompt.contains(&format!("Available tools:\n- {tool}\n\n")));
+            assert!(prompt.contains(guidance), "{tool} is available");
+            assert!(!prompt.contains("expectedObservations"));
+        }
+        let edit_prompt = build_system_prompt(cwd, &["read", "apply_patch"], &[]);
+        assert!(edit_prompt.contains("expectedObservations"));
     }
 
     #[test]

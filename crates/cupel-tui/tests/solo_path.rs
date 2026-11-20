@@ -172,9 +172,11 @@ finally:
             path: cwd.join("AGENTS.md"),
             content: "CONTEXT_FILE_MARKER: preserve the fixture's public API.\n".into(),
         }];
+        let tools = bootstrap::coding_tools(&cwd);
+        let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
         let base = cupel_coding_agent::system_prompt::build_system_prompt(
             &cwd,
-            bootstrap::TOOL_SUMMARIES,
+            &tool_names,
             &context_files,
         );
         let mut options = AgentOptions::new(model.clone(), registry);
@@ -184,7 +186,7 @@ finally:
         options.temperature = Some(0.25);
         options.max_tokens = Some(1024);
         options.system_prompt = base.clone();
-        options.tools = bootstrap::coding_tools(&cwd);
+        options.tools = tools;
         options.messages = messages;
         options.retry.max_retries = 0;
         let meta = SessionMeta {
