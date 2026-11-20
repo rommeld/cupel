@@ -2,6 +2,10 @@
 
 Notable user-facing changes by release.
 
+## [v0.50.1] - 2026-11-20
+
+- Add 10 OpenRouter models, including Gemini 4 Neon and GPT-6.2 Sol and Astra (standard and Pro). Fireworks and provider defaults are unchanged.
+
 ## [v0.50.0] - 2026-11-20
 
 - On Unix, start background Bash commands and use the `jobs` tool to check their exit status, read recent output, or stop them. Jobs are tied to the session and stop on reload or exit.
