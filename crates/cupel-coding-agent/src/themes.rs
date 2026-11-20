@@ -38,8 +38,8 @@ impl TryFrom<String> for Rgb {
     }
 }
 
-/// The 15 colors of a theme file's `"palette"`, matching cupel tui's `Palette`.
-/// Every color is required, an unknown name is an error, not a silent typo.
+/// The colors of a theme file's `"palette"`. An unknown name is an error,
+/// not a silent typo. Colors are required unless marked optional.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilePalette {
@@ -58,6 +58,8 @@ pub struct FilePalette {
     pub heading: Rgb,
     pub emphasis: Rgb,
     pub link: Rgb,
+    /// Optional foreground for the Reasoning headline, separate from the body.
+    pub reasoning_header: Option<Rgb>,
 }
 
 /// Which background a theme file is made for. A file theme always paints
