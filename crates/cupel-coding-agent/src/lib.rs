@@ -20,6 +20,7 @@ pub mod resources;
 pub mod search;
 pub mod session;
 pub mod settings;
+pub mod skills;
 pub mod source_observations;
 pub mod spinoff;
 pub mod startup;

@@ -200,6 +200,7 @@ finally:
             startup_warning: None,
             warnings: Vec::new(),
             context_files,
+            skills: Vec::new(),
             base_system_prompt: base,
         };
         (

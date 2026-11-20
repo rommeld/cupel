@@ -12,7 +12,7 @@ members = [
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/rommeld/cupel"
-version = "0.39.0"
+version = "0.40.0"
 
 [workspace.dependencies]
 cupel-core = { path = "crates/cupel-core" }
@@ -46,6 +46,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1"
 unicode-width = "0.2"
+yaml_serde = "0.10"
 
 [profile.release]
 lto = "thin"

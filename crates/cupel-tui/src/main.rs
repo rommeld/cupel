@@ -337,7 +337,7 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
 
     let mut options = AgentOptions::new(model.clone(), registry);
     options.system_prompt = cupel_coding_agent::system_prompt::with_preset_prompt(
-        &ingredients.system_prompt,
+        &ingredients.system_prompt(),
         preset.and_then(|preset| preset.prompt.as_deref()),
     );
     options.tools = ingredients.tools;
@@ -362,7 +362,8 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
         startup_warning,
         warnings: ingredients.warnings,
         context_files: ingredients.context_files,
-        base_system_prompt: ingredients.system_prompt,
+        skills: ingredients.skills,
+        base_system_prompt: ingredients.base_system_prompt,
     };
 
     // The TUI takes over the whole screen, that only makes sense on a real

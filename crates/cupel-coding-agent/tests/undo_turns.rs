@@ -123,7 +123,7 @@ async fn build(
         bootstrap::load(&cwd, Some(project.home()), &registry, Frontend::Plain).await;
     ingredients.bind_session(&recorder, &cwd);
     let mut options = AgentOptions::new(model.clone(), registry);
-    options.system_prompt = ingredients.system_prompt;
+    options.system_prompt = ingredients.system_prompt();
     options.tools = ingredients.tools;
     options.hooks = Arc::new(ingredients.hooks);
     options.api_key = Some("test".to_string());

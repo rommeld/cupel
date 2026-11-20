@@ -17,8 +17,9 @@ use crate::guard::BashGuard;
 use crate::loop_killer::LoopKiller;
 use crate::search::GrepSearch;
 use crate::settings::Settings;
+use crate::skills::{self, Skill};
 use crate::source_observations::SourceObservations;
-use crate::system_prompt::build_system_prompt;
+use crate::system_prompt;
 use crate::tools::{
     apply_patch::ApplyPatchTool,
     ask_user::{AskUserTool, QuestionReceiver},
@@ -38,7 +39,8 @@ pub enum Frontend {
 /// The reloadable parts of a session, all derived from `~/.cupel` +
 /// `<cwd>/.cupel` + the cwd itself.
 pub struct Ingredients {
-    pub system_prompt: String,
+    pub base_system_prompt: String,
+    pub skills: Vec<Skill>,
     pub tools: Vec<Arc<dyn AgentTool>>,
     pub templates: Vec<PromptTemplate>,
     pub models: Vec<Model>,
@@ -50,6 +52,12 @@ pub struct Ingredients {
 }
 
 impl Ingredients {
+    /// The startup prompt, including skill metadata but not skill instructions.
+    #[must_use]
+    pub fn system_prompt(&self) -> String {
+        system_prompt::with_skill_catalog(&self.base_system_prompt, &self.skills)
+    }
+
     /// Startup and reload bind tools to the recorder's journal and live source
     /// observations. Unbound tools remain useful for standalone callers/tests.
     pub fn bind_session(&mut self, recorder: &crate::session::SessionRecorder, cwd: &Path) {
@@ -87,7 +95,9 @@ pub async fn load(
     let roots = crate::resources::roots_for(home.clone(), cwd);
     let context_files = crate::resources::load_context_files(&roots);
     let templates = crate::commands::load_prompt_templates(&roots);
+    let (skills, skill_warnings) = skills::discover(home.as_deref(), cwd);
     let (home_settings, mut warnings) = crate::settings::load_home_settings(home.as_deref());
+    warnings.extend(skill_warnings);
     let (project_settings, project_warnings) = crate::settings::load_project_settings(cwd);
     warnings.extend(project_warnings);
     warnings.extend(crate::settings::project_settings_warning(cwd));
@@ -116,7 +126,8 @@ pub async fn load(
     let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
 
     Ingredients {
-        system_prompt: build_system_prompt(cwd, &tool_names, &context_files),
+        base_system_prompt: system_prompt::build_system_prompt(cwd, &tool_names, &context_files),
+        skills,
         context_files,
         tools,
         templates,
@@ -259,7 +270,7 @@ mod tests {
             .unwrap();
         let ingredients = load(&cwd, Some(home), &registry, Frontend::Plain).await;
 
-        assert!(ingredients.system_prompt.contains("ALWAYS SAY PING"));
+        assert!(ingredients.system_prompt().contains("ALWAYS SAY PING"));
         assert!(ingredients.templates.iter().any(|t| t.name == "greet"));
         assert!(ingredients.models.iter().any(|m| m.id == "local-test"));
         assert_eq!(ingredients.tools.len(), 4);
@@ -350,13 +361,93 @@ mod tests {
         let tui = load(&cwd, Some(home.clone()), &registry, Frontend::Tui).await;
         assert!(tui.tools.iter().any(|tool| tool.name() == "ask_user"));
         assert!(tui.questions.is_some());
-        assert!(tui.system_prompt.contains("\n- ask_user\n\nGuidelines:"));
-        assert!(tui.system_prompt.contains("\n- Use ask_user "));
+        assert!(tui.system_prompt().contains("\n- ask_user\n\nGuidelines:"));
+        assert!(tui.system_prompt().contains("\n- Use ask_user "));
 
         let plain = load(&cwd, Some(home), &registry, Frontend::Plain).await;
         assert!(plain.tools.iter().all(|tool| tool.name() != "ask_user"));
         assert!(plain.questions.is_none());
-        assert!(!plain.system_prompt.contains("ask_user"));
+        assert!(!plain.system_prompt().contains("ask_user"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn skills_are_discovered_as_metadata_and_read_on_demand() {
+        use cupel_core::types::ToolResultContent;
+        use tokio_util::sync::CancellationToken;
+
+        let root =
+            std::env::temp_dir().join(format!("cupel-bootstrap-skills-{}", std::process::id()));
+        let (home, cwd) = (root.join("home"), root.join("proj"));
+        let fixtures: [(&Path, &str, &[u8]); 7] = [
+            (&home, "skills/review/SKILL.md", b"---\nname: review-pr\ndescription: Global review\n---\nGlobal body"),
+            (&home, "skills/format/SKILL.md", b"---\nname: format\ndescription: Global formatting\n---\n\xff"),
+            (&cwd, ".cupel/skills/local-review/SKILL.md", b"---\r\nname: review-pr\r\ndescription: >\r\n  Review for regressions\r\n  and missing tests.\r\n---\r\nProject review body"),
+            (&cwd, ".cupel/skills/broken-format/SKILL.md", b"---\nname: format\ndescription: [invalid\n---\n"),
+            (&cwd, ".cupel/skills/unfinished/SKILL.md", b"---\nname: unfinished\ndescription: Unfinished header\n---not-a-fence\n"),
+            (&cwd, ".cupel/skills/blank/SKILL.md", b"---\nname: blank\ndescription: '  '\n---\n"),
+            (&cwd, "skills/not-a-root/SKILL.md", b"---\nname: not-a-root\ndescription: Not a skill root\n---\n"),
+        ];
+        for (base, relative_path, content) in fixtures {
+            let path = base.join(relative_path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+
+        let registry = cupel_core::default_registry();
+        let ingredients = load(&cwd, Some(home), &registry, Frontend::Plain).await;
+        assert_eq!(ingredients.skills.len(), 2);
+        let prompt = ingredients.system_prompt();
+        assert!(
+            prompt.contains("Global formatting"),
+            "the invalid project override must not hide the home skill"
+        );
+        assert!(prompt.contains("Review for regressions and missing tests."));
+        for excluded in [
+            "Global review",
+            "Global body",
+            "Project review body",
+            "not-a-root",
+        ] {
+            assert!(
+                !prompt.contains(excluded),
+                "unexpected in startup prompt: {excluded}"
+            );
+        }
+        assert_eq!(ingredients.warnings.len(), 3, "{:?}", ingredients.warnings);
+        for invalid in ["broken-format", "unfinished", "blank"] {
+            assert!(
+                ingredients
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.contains(invalid))
+            );
+        }
+
+        let selected = prompt
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|entry| entry["name"] == "review-pr")
+            .unwrap();
+        let path = selected["path"].as_str().unwrap();
+        assert!(Path::new(path).is_absolute());
+        let reader = ingredients
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "read")
+            .unwrap();
+        let result = reader
+            .execute(
+                "read-skill",
+                serde_json::json!({"path": path}),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(&result.content[0], ToolResultContent::Text(text) if text.text.contains("Project review body"))
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

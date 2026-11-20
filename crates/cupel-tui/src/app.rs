@@ -384,6 +384,11 @@ impl App {
         for warning in theme_warnings {
             app.notice(warning);
         }
+        app.transcript
+            .cells
+            .extend(app.meta.skills.iter().map(|skill| Cell::Notice {
+                text: format!("The skill was successfully loaded. {}", skill.name),
+            }));
         // A startup condition (e.g. keyless start) also appears as a notice
         // instead of blocking the session.
         if let Some(warning) = app.meta.startup_warning.take() {
@@ -953,8 +958,8 @@ impl App {
 
     /// Bare hot reload, the running session continues same id, same
     /// history, same transcript file, and no session end hook (the session
-    /// is not ending). Fresh templates, models, bash deny rules, and tools
-    /// are swapped in. Context files (AGENTS.md/CLAUDE.md) get delta
+    /// is not ending). Fresh templates, models, skills, bash deny rules, and
+    /// tools are swapped in. Context files (AGENTS.md/CLAUDE.md) get delta
     /// treatment, the system prompt keeps the text embedded at session
     /// start, and only a unified diff of what changed on disk is appended
     /// to the conversation the full file is never sent twice.
@@ -989,9 +994,20 @@ impl App {
 
         let session_id = self.recorder.session_id().to_string();
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
-        // Deliberately the old system prompt, the original context stays
-        // embedded once, updates travel as the (small) delta message.
-        options.system_prompt = state.system_prompt.clone();
+        // Keep the original embedded context and the active preset. Only
+        // replace the skill catalog; context changes travel as a delta.
+        options.system_prompt = if let Some(preset) = state
+            .system_prompt
+            .strip_prefix(self.meta.system_prompt().as_str())
+        {
+            let base = cupel_coding_agent::system_prompt::with_skill_catalog(
+                &self.meta.base_system_prompt,
+                &ingredients.skills,
+            );
+            format!("{base}{preset}")
+        } else {
+            state.system_prompt
+        };
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
         let provider = state.model.provider.as_str();
@@ -1014,6 +1030,7 @@ impl App {
             startup_warning: None,
             warnings: ingredients.warnings,
             context_files: ingredients.context_files,
+            skills: ingredients.skills,
             base_system_prompt: self.meta.base_system_prompt.clone(),
         };
 
@@ -1099,7 +1116,7 @@ impl App {
         let state = self.agent.state();
         let preset_prompt = state
             .system_prompt
-            .strip_prefix(self.meta.base_system_prompt.as_str())
+            .strip_prefix(self.meta.system_prompt().as_str())
             .unwrap_or_default()
             .to_string();
         Carry {
@@ -1134,7 +1151,7 @@ impl App {
         ingredients.bind_session(&recorder, cwd);
 
         let mut options = cupel_agent::AgentOptions::new(carry.model.clone(), registry);
-        options.system_prompt = format!("{}{}", ingredients.system_prompt, carry.preset_prompt);
+        options.system_prompt = format!("{}{}", ingredients.system_prompt(), carry.preset_prompt);
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
         // Session entered keys still win, but the settings tier must come from the
@@ -1161,7 +1178,8 @@ impl App {
             startup_warning: None,
             warnings: ingredients.warnings,
             context_files: ingredients.context_files,
-            base_system_prompt: ingredients.system_prompt,
+            skills: ingredients.skills,
+            base_system_prompt: ingredients.base_system_prompt,
         };
 
         let mut app = Self::new(cupel_agent::Agent::new(options), meta, recorder);
@@ -1827,7 +1845,7 @@ impl App {
         self.agent.set_thinking_level(preset.thinking_level.level());
         self.agent
             .set_system_prompt(cupel_coding_agent::system_prompt::with_preset_prompt(
-                &self.meta.base_system_prompt,
+                &self.meta.system_prompt(),
                 preset.prompt.as_deref(),
             ));
         self.notice(format!(

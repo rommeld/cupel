@@ -138,6 +138,7 @@ mod tests {
             startup_warning: None,
             warnings: Vec::new(),
             context_files: Vec::new(),
+            skills: Vec::new(),
             base_system_prompt: String::new(),
         };
         if pipe_mode == "startup" {
