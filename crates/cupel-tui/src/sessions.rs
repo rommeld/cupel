@@ -528,6 +528,9 @@ impl Sessions {
                 origin.label
             )));
         }
+        origin.app.recorder.jobs().require_idle().map_err(|error| {
+            SpinoffError::Blocked(format!("cannot merge into {}: {error}", origin.label))
+        })?;
         let task = self.first_prompt(&spinoff);
         let leftovers = format!("spinoff {name}: {task}");
         match spinoff::merge(&group, &spinoff, &leftovers, message)? {
@@ -582,13 +585,16 @@ impl Sessions {
             .ok_or_else(|| {
                 SpinoffError::Blocked(format!("no spinoff named {name} - /spinoff lists them"))
             })?;
-        if self
-            .index_of(&spinoff)
-            .is_some_and(|index| self.list[index].app.is_running())
-        {
-            return Err(SpinoffError::Blocked(format!(
-                "{name} is still working - wait for it, or stop it in its session"
-            )));
+        if let Some(index) = self.index_of(&spinoff) {
+            let app = &self.list[index].app;
+            if app.is_running() {
+                return Err(SpinoffError::Blocked(format!(
+                    "{name} is still working - wait for it, or stop it in its session"
+                )));
+            }
+            app.recorder.jobs().require_idle().map_err(|error| {
+                SpinoffError::Blocked(format!("cannot merge or drop {name}: {error}"))
+            })?;
         }
         Ok((group, spinoff))
     }

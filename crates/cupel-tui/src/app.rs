@@ -963,7 +963,8 @@ impl App {
     /// treatment, the system prompt keeps the text embedded at session
     /// start, and only a unified diff of what changed on disk is appended
     /// to the conversation the full file is never sent twice.
-    async fn reload_in_place(self, cwd: &std::path::Path) -> Self {
+    async fn reload_in_place(mut self, cwd: &std::path::Path) -> Self {
+        self.recorder.reset_jobs().await;
         let state = self.agent.state();
         let registry = self.agent.registry();
         let mut ingredients = cupel_coding_agent::bootstrap::load(

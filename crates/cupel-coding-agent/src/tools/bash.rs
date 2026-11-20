@@ -21,6 +21,7 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -31,6 +32,7 @@ use tokio_util::sync::CancellationToken;
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::now_ms;
 
+use crate::jobs::Jobs;
 use crate::process::{EXIT_STDIO_GRACE, OutputChunk, kill_process_group, output_chunks};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, TruncationResult,
@@ -44,6 +46,8 @@ const UPDATE_THROTTLE: Duration = Duration::from_millis(100);
 struct BashArgs {
     command: String,
     timeout: Option<f64>,
+    #[serde(default)]
+    background: bool,
 }
 
 /// Streaming output tracker with bounded memory (see module docs).
@@ -191,6 +195,8 @@ impl OutputAccumulator {
 pub struct BashTool {
     cwd: PathBuf,
     description: String,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    jobs: Option<Arc<Jobs>>,
 }
 
 impl BashTool {
@@ -205,7 +211,14 @@ impl BashTool {
                  Optionally provide a timeout in seconds.",
                 DEFAULT_MAX_BYTES / 1024
             ),
+            jobs: None,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_jobs(mut self, jobs: Arc<Jobs>) -> Self {
+        self.jobs = Some(jobs);
+        self
     }
 }
 
@@ -282,6 +295,10 @@ impl AgentTool for BashTool {
                 "timeout": {
                     "type": "number",
                     "description": "Timeout in seconds (optional, no default timeout)"
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Start a managed session job (Unix only). Returns a job ID, not the exit status or readiness. Use jobs to inspect or stop it. Optional timeout up to 4 hours."
                 }
             },
             "required": ["command"]
@@ -294,6 +311,12 @@ impl AgentTool for BashTool {
         let Some(command) = args.get("command").and_then(Value::as_str) else {
             return self.name().to_string();
         };
+        if args.get("background").and_then(Value::as_bool) == Some(true) {
+            return match args.get("timeout").and_then(Value::as_f64) {
+                Some(timeout) => format!("$ {command} (background, timeout {timeout}s)"),
+                None => format!("$ {command} (background)"),
+            };
+        }
         match args.get("timeout").and_then(Value::as_f64) {
             Some(timeout) => format!("$ {command} (timeout {timeout}s)"),
             None => format!("$ {command}"),
@@ -323,6 +346,10 @@ impl AgentTool for BashTool {
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
+        #[cfg(not(unix))]
+        if args.background {
+            return Err("Managed background jobs are supported only on Unix".into());
+        }
 
         // Commands are written for bash, regardless of the user's login shell.
         let shell = resolve_shell(Path::new("/bin/bash"), std::env::var_os("PATH").as_deref());
@@ -334,6 +361,32 @@ impl AgentTool for BashTool {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+
+        #[cfg(unix)]
+        if args.background {
+            const MAX_TIMEOUT_SECONDS: f64 = 14_400.0;
+            if args.timeout.is_some_and(|secs| secs > MAX_TIMEOUT_SECONDS) {
+                return Err("Background timeout cannot exceed 4 hours (14400 seconds)".into());
+            }
+            let jobs = self
+                .jobs
+                .as_ref()
+                .ok_or("No managed job session is bound")?;
+            let id = jobs
+                .start(
+                    command,
+                    &args.command,
+                    args.timeout.map(Duration::from_secs_f64),
+                    &cancel,
+                )
+                .await?;
+            let mut result = AgentToolResult::text(format!(
+                "Started managed job {id}. This confirms spawn only; use jobs for status or output."
+            ));
+            result.details = Some(json!({"id": id}));
+            return Ok(result);
+        }
+
         // A fresh process group so abort/timeout can kill the whole tree.
         #[cfg(unix)]
         command.process_group(0);

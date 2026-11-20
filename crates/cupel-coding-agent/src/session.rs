@@ -321,10 +321,8 @@ pub fn load_transcript(path: &Path) -> Result<(TranscriptHeader, Vec<AgentMessag
     Ok((header, messages))
 }
 
-/// Owns one session's transcript file and hook dispatch. Constructed
-/// unconditionally by `main` and threaded into the frontends, with no
-/// resolvable cupel home it degrades to a no op (hooks still run, since they
-/// only need directories, not the home).
+/// Owns one session's transcript file, hook dispatch, and live tool state.
+/// With no resolvable cupel home, only transcript persistence is disabled.
 pub struct SessionRecorder {
     header: TranscriptHeader,
     path: Option<PathBuf>,
@@ -334,6 +332,7 @@ pub struct SessionRecorder {
     started: bool,
     undo: std::sync::Arc<crate::undo::UndoJournal>,
     source_observations: std::sync::Arc<crate::source_observations::SourceObservations>,
+    jobs: std::sync::Arc<crate::jobs::Jobs>,
 }
 
 impl SessionRecorder {
@@ -365,6 +364,7 @@ impl SessionRecorder {
             source_observations: std::sync::Arc::new(
                 crate::source_observations::SourceObservations::new(),
             ),
+            jobs: std::sync::Arc::new(crate::jobs::Jobs::default()),
             path,
             file: None,
             persistence_error: None,
@@ -404,6 +404,18 @@ impl SessionRecorder {
         &self,
     ) -> std::sync::Arc<crate::source_observations::SourceObservations> {
         std::sync::Arc::clone(&self.source_observations)
+    }
+
+    /// The managed jobs owned by this live session.
+    #[must_use]
+    pub fn jobs(&self) -> std::sync::Arc<crate::jobs::Jobs> {
+        std::sync::Arc::clone(&self.jobs)
+    }
+
+    /// Stop the old jobs and replace their namespace before rebinding tools.
+    pub async fn reset_jobs(&mut self) {
+        self.jobs.shutdown().await;
+        self.jobs = std::sync::Arc::default();
     }
 
     /// Let stop hooks finish before inspecting or restoring the workspace.
@@ -499,11 +511,12 @@ impl SessionRecorder {
         self.hooks.fire_background(HookEvent::Stop);
     }
 
-    /// End the session, drain its hooks, and remove its undo snapshots.
+    /// End the session, stop its jobs, drain its hooks, and remove its undo snapshots.
     /// Used for session replacement as well as normal frontend shutdown.
     /// (A killed process skips this, but the transcript is still intact thanks
     /// to per message flushing.)
     pub async fn end_session(&mut self) {
+        self.jobs.shutdown().await;
         // Only a session that actually started (had a prompt) announces an
         // end. Launch+quit stays completely silent.
         if self.started {
@@ -555,6 +568,12 @@ impl SessionRecorder {
                 self.path = None;
             }
         }
+    }
+}
+
+impl Drop for SessionRecorder {
+    fn drop(&mut self) {
+        self.jobs.close();
     }
 }
 

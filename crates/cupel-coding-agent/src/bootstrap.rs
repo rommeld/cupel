@@ -14,6 +14,7 @@ use cupel_core::types::{AssistantMessage, Model, ToolCall};
 
 use crate::commands::PromptTemplate;
 use crate::guard::BashGuard;
+use crate::jobs::Jobs;
 use crate::loop_killer::LoopKiller;
 use crate::search::GrepSearch;
 use crate::settings::Settings;
@@ -25,6 +26,7 @@ use crate::tools::{
     ask_user::{AskUserTool, QuestionReceiver},
     bash::BashTool,
     grep::GrepTool,
+    jobs::JobsTool,
     read::ReadTool,
 };
 
@@ -63,6 +65,7 @@ impl Ingredients {
     pub fn bind_session(&mut self, recorder: &crate::session::SessionRecorder, cwd: &Path) {
         let undo = recorder.undo();
         let observations = recorder.source_observations();
+        let jobs = recorder.jobs();
         for tool in &mut self.tools {
             match tool.name() {
                 "apply_patch" => {
@@ -76,6 +79,8 @@ impl Ingredients {
                     *tool =
                         Arc::new(ReadTool::new(cwd).with_observations(Arc::clone(&observations)));
                 }
+                "bash" => *tool = Arc::new(BashTool::new(cwd).with_jobs(Arc::clone(&jobs))),
+                "jobs" => *tool = Arc::new(JobsTool::new(Arc::clone(&jobs))),
                 _ => {}
             }
         }
@@ -144,11 +149,13 @@ pub async fn load(
 pub fn coding_tools(cwd: &Path) -> Vec<Arc<dyn AgentTool>> {
     let backend = Arc::new(GrepSearch::new(cwd));
     let observations = Arc::new(SourceObservations::new());
+    let jobs = Arc::new(Jobs::default());
     vec![
         Arc::new(ReadTool::new(cwd).with_observations(Arc::clone(&observations))),
-        Arc::new(BashTool::new(cwd)),
+        Arc::new(BashTool::new(cwd).with_jobs(Arc::clone(&jobs))),
         Arc::new(ApplyPatchTool::new(cwd).with_observations(observations)),
         Arc::new(GrepTool::new(cwd, backend)),
+        Arc::new(JobsTool::new(jobs)),
     ]
 }
 
@@ -273,7 +280,7 @@ mod tests {
         assert!(ingredients.system_prompt().contains("ALWAYS SAY PING"));
         assert!(ingredients.templates.iter().any(|t| t.name == "greet"));
         assert!(ingredients.models.iter().any(|m| m.id == "local-test"));
-        assert_eq!(ingredients.tools.len(), 4);
+        assert_eq!(ingredients.tools.len(), 5);
         assert!(ingredients.warnings.is_empty());
         assert_eq!(ingredients.settings.api_key("test-local"), Some("k-1"));
         assert_eq!(ingredients.settings.loop_killer_max_repeats(), Some(2));
@@ -369,6 +376,104 @@ mod tests {
         assert!(plain.questions.is_none());
         assert!(!plain.system_prompt().contains("ask_user"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_jobs_report_exit_and_output_and_reset_without_a_transcript() {
+        use std::time::Duration;
+
+        use serde_json::json;
+        use tokio_util::sync::CancellationToken;
+
+        async fn call(
+            tool: &dyn AgentTool,
+            args: serde_json::Value,
+        ) -> cupel_agent::AgentToolResult {
+            tool.execute("test", args, CancellationToken::new(), None)
+                .await
+                .unwrap()
+        }
+
+        let cwd = std::env::temp_dir().join(format!("cupel-bootstrap-jobs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cwd);
+        std::fs::create_dir_all(&cwd).unwrap();
+        let registry = cupel_core::default_registry();
+        let mut ingredients = load(&cwd, None, &registry, Frontend::Plain).await;
+        let mut recorder = crate::session::SessionRecorder::new(None, &cwd, "test-jobs", "mock");
+        ingredients.bind_session(&recorder, &cwd);
+        let bash = ingredients
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "bash")
+            .unwrap();
+        let jobs = ingredients
+            .tools
+            .iter()
+            .find(|tool| tool.name() == "jobs")
+            .unwrap();
+
+        let start = tokio::time::timeout(Duration::from_secs(5), call(bash.as_ref(), json!({
+            "command": "while [ ! -f release ]; do sleep 0.05; done; printf stdout; printf stderr >&2; exit 7",
+            "background": true,
+            "timeout": 20,
+        }))).await.unwrap();
+        let details = start.details.unwrap();
+        let id = details["id"].as_str().unwrap();
+        assert!(
+            recorder.jobs().require_idle().is_err(),
+            "job must outlive its start call"
+        );
+        call(bash.as_ref(), json!({"command": ": > release"})).await;
+
+        let output = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let result = call(jobs.as_ref(), json!({"action":"output", "id":id})).await;
+                match result.details.as_ref().unwrap()["state"].as_str() {
+                    Some("running" | "stopping") => {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    _ => break result,
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let status = output.details.unwrap();
+        assert_eq!(status["state"], "exited");
+        assert_eq!(status["exit"]["exitCode"], 7);
+        assert!(
+            matches!(&output.content[0], cupel_core::types::ToolResultContent::Text(text)
+            if text.text.contains("stdout") && text.text.contains("stderr"))
+        );
+
+        let start = call(
+            bash.as_ref(),
+            json!({"command":"sleep 30", "background":true}),
+        )
+        .await;
+        let details = start.details.unwrap();
+        let live_id = details["id"].as_str().unwrap();
+        let old_jobs = recorder.jobs();
+        tokio::time::timeout(Duration::from_secs(5), recorder.reset_jobs())
+            .await
+            .unwrap();
+        assert!(
+            old_jobs.require_idle().is_ok(),
+            "reset waits for the running process to stop"
+        );
+        for id in [live_id, id] {
+            let result = jobs
+                .execute(
+                    "old-job",
+                    json!({"action":"status", "id":id}),
+                    CancellationToken::new(),
+                    None,
+                )
+                .await;
+            assert!(result.is_err(), "reset invalidated {id}");
+        }
+        std::fs::remove_dir_all(cwd).unwrap();
     }
 
     #[tokio::test]

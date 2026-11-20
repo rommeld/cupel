@@ -7,6 +7,7 @@
 //!   ([`patch_parser`] reads it, [`patch_update`] applies update hunks to text,
 //!   [`text_diff`] normalizes line endings and renders the transcript diff)
 //! * [`bash`], shell commands with bounded, tail truncated output
+//! * `jobs`, inspect and stop session-local background commands
 //!
 //! The mutating tool (`apply_patch`) serializes per file through
 //! [`file_queue`] because the agent loop runs tool batches in parallel.
@@ -26,6 +27,7 @@ pub mod bash;
 pub mod file_queue;
 pub mod grep;
 pub mod grep_rank;
+pub(crate) mod jobs;
 pub mod patch_parser;
 pub mod patch_update;
 pub mod read;

@@ -51,6 +51,14 @@ pub fn build_system_prompt(cwd: &Path, tools: &[&str], context_files: &[ContextF
             change; zero tests is not a pass.",
         );
     }
+    if tools.contains(&"jobs") {
+        guidelines.push(
+            "On Unix, use bash with background: true for managed long-running commands, not shell \
+            &. Use jobs to check output and exit status or to stop a job. Spawn is not readiness \
+            or success, and a test started before an edit does not validate that edit. Shell \
+            side effects cannot be undone.",
+        );
+    }
     if tools.contains(&"ask_user") {
         guidelines.push(
             "Use ask_user for consequential choices the request and repository don't resolve; \
@@ -166,7 +174,7 @@ mod tests {
     fn base_prompt_is_short_with_all_tools_enabled() {
         let prompt = build_system_prompt(
             Path::new("/tmp/project"),
-            &["read", "bash", "apply_patch", "grep", "ask_user"],
+            &["read", "bash", "apply_patch", "grep", "jobs", "ask_user"],
             &[],
         );
         let words = prompt.split_whitespace().count();
