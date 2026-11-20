@@ -199,7 +199,7 @@ async fn run_session(
         meta.model_name, meta.provider
     ))?;
     output(format_args!(
-        "tools: read, grep, apply_patch, bash | cwd: {} | 'exit' to quit\n\n",
+        "tools: read, grep, apply_patch, bash, jobs | cwd: {} | 'exit' to quit\n\n",
         meta.cwd
     ))?;
     // Non empty history at startup = a resumed session (seeded via

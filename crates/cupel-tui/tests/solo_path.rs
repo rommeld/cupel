@@ -343,7 +343,7 @@ finally:
                 .iter()
                 .map(|tool| tool["name"].as_str().unwrap())
                 .collect::<Vec<_>>();
-            assert_eq!(tools, ["read", "bash", "apply_patch", "grep"]);
+            assert_eq!(tools, ["read", "bash", "apply_patch", "grep", "jobs"]);
             if case != "fresh" {
                 assert!(request_text.contains("PRIVATE_HISTORY_MARKER"));
             }
@@ -370,7 +370,7 @@ finally:
                 .iter()
                 .map(|tool| tool["name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            ["read", "bash", "apply_patch", "grep"]
+            ["read", "bash", "apply_patch", "grep", "jobs"]
         );
         json!({"overlap": overlap})
     }

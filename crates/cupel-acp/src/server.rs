@@ -187,6 +187,18 @@ impl Server {
                     "another session is already working in this directory",
                 ));
             }
+            for (other_id, other) in &state.sessions {
+                if *other_id != id
+                    && other.cwd() == cwd
+                    && let Slot::Idle(other) = other
+                {
+                    other.recorder.jobs().require_idle().map_err(|error| {
+                        invalid(format!(
+                            "another session ({other_id}) owns jobs in this directory: {error}"
+                        ))
+                    })?;
+                }
+            }
             let previous = state.sessions.insert(
                 id.clone(),
                 Slot::Running {

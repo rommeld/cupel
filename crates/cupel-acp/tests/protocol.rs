@@ -239,18 +239,30 @@ mod tests {
             )
             .await;
         let final_tool = messages.last().unwrap()["role"] == "tool";
-        let (delta, reason) = if matches!(task, "read" | "bad-read" | "guard" | "sleep")
+        let tool = match task {
+            "read" => Some(("read", json!({"path":"marker.txt"}))),
+            "bad-read" => Some(("read", json!({"path":"absent.txt"}))),
+            "guard" => Some(("bash", json!({"command":"git push --force"}))),
+            "guard-background" => Some((
+                "bash",
+                json!({"command":"git push --force", "background":true}),
+            )),
+            "sleep" => Some((
+                "bash",
+                json!({"command":"sleep 30 & child=$!; echo $child > child.pid; wait"}),
+            )),
+            "start-managed" => Some((
+                "bash",
+                json!({"command":"echo $$ > job.pid; exec sleep 30", "background":true}),
+            )),
+            task => task.split_once(' ').and_then(|(action, id)| {
+                matches!(action, "status" | "stop")
+                    .then(|| ("jobs", json!({"action":action, "id":id})))
+            }),
+        };
+        let (delta, reason) = if let Some((name, args)) = tool
             && !final_tool
         {
-            let (name, args) = match task {
-                "read" => ("read", json!({"path":"marker.txt"})),
-                "bad-read" => ("read", json!({"path":"absent.txt"})),
-                "guard" => ("bash", json!({"command":"git push --force"})),
-                _ => (
-                    "bash",
-                    json!({"command":"sleep 30 & child=$!; echo $child > child.pid; wait"}),
-                ),
-            };
             (
                 json!({"role":"assistant","tool_calls":[{"index":0,"id":format!("call_{call}"),"type":"function","function":{"name":name,"arguments":args.to_string()}}]}),
                 "tool_calls",
@@ -429,8 +441,13 @@ mod tests {
         let fixture = Fixture::new().await;
         let mut client = fixture.start();
         client.init().await;
+        std::fs::write(
+            fixture.root.join("home/bash-deny"),
+            "git\\s+push\\s+--force\n",
+        )
+        .unwrap();
         let id = client.new_session(&fixture.cwd()).await;
-        for (n, task) in [(3, "bad-read"), (4, "guard")] {
+        for (n, task) in [(3, "bad-read"), (4, "guard"), (7, "guard-background")] {
             let result = client.prompt(&id, n, task).await;
             assert!(
                 result
@@ -438,6 +455,9 @@ mod tests {
                     .any(|m| m["params"]["update"]["status"] == "failed"),
                 "{result:?}"
             );
+            if task.starts_with("guard") {
+                assert!(text(&result).contains("blocked by cupel's bash denylist"));
+            }
         }
         let result = client.prompt(&id, 5, "fail").await;
         assert_eq!(result.last().unwrap()["error"]["code"], -32603);
@@ -512,6 +532,68 @@ mod tests {
             "reply:after;users=1"
         );
         client.close().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_jobs_admit_owner_prompts_block_peers_and_stop_on_idle_eof() {
+        let fixture = Fixture::new().await;
+        let mut client = fixture.start();
+        client.init().await;
+        let owner = client.new_session(&fixture.cwd()).await;
+        let peer = client.new_session(&fixture.cwd()).await;
+        let started = text(&client.prompt(&owner, 3, "start-managed").await);
+        let job = started
+            .strip_prefix("Started managed job ")
+            .unwrap()
+            .split_once('.')
+            .unwrap()
+            .0;
+        let blocked = client.prompt(&peer, 4, "read").await;
+        let error = blocked.last().unwrap()["error"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(error.contains(job), "{blocked:?}");
+        let status = text(&client.prompt(&owner, 5, &format!("status {job}")).await);
+        assert_eq!(
+            serde_json::from_str::<Value>(&status).unwrap()["state"],
+            "running"
+        );
+        let stopped = text(&client.prompt(&owner, 6, &format!("stop {job}")).await);
+        assert!(stopped.contains("no longer running"), "{stopped}");
+        let foreign = text(&client.prompt(&peer, 7, &format!("status {job}")).await);
+        assert!(foreign.contains("unknown or expired"), "{foreign}");
+
+        // The next job belongs to an idle session when the connection closes.
+        let pid_file = fixture.cwd().join("job.pid");
+        let _ = std::fs::remove_file(&pid_file);
+        assert!(
+            text(&client.prompt(&owner, 8, "start-managed").await).contains("Started managed job")
+        );
+        let pid = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(pid) = std::fs::read_to_string(&pid_file)
+                    && !pid.trim().is_empty()
+                {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        client.close().await;
+        let survived = Command::new("/bin/kill")
+            .args(["-0", pid.trim()])
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .unwrap()
+            .success();
+        assert!(
+            !survived,
+            "managed job {pid} survived ACP EOF in an idle session"
+        );
     }
 
     #[tokio::test]

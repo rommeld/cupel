@@ -6622,6 +6622,83 @@ pub(crate) mod tests {
         assert!(repo.join(".cupel/worktrees/auth").is_dir());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spinoff_operations_respect_live_jobs_in_each_checkout() {
+        use cupel_coding_agent::bootstrap::{self, Frontend};
+        use serde_json::json;
+        use tokio_util::sync::CancellationToken;
+
+        use crate::sessions::Sessions;
+
+        async fn start_job(app: &App) -> String {
+            let cwd = std::path::Path::new(&app.meta.cwd);
+            let registry = app.agent.registry();
+            let mut ingredients = bootstrap::load(cwd, None, &registry, Frontend::Tui).await;
+            ingredients.bind_session(&app.recorder, cwd);
+            let bash = ingredients
+                .tools
+                .iter()
+                .find(|tool| tool.name() == "bash")
+                .unwrap();
+            let result = bash
+                .execute(
+                    "start",
+                    json!({"command":"exec sleep 30", "background":true}),
+                    CancellationToken::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+            result.details.unwrap()["id"].as_str().unwrap().to_string()
+        }
+
+        let repo = git_repo("merge-jobs");
+        let mut sessions = Sessions::new(test_app_in(repo.to_str().unwrap()));
+        run_spinoff(&mut sessions, "auth").await;
+        sessions.active = 0;
+        let auth_job = start_job(&sessions.list[1].app).await;
+        let origin_job = start_job(sessions.active()).await;
+        let head = git_output(&repo, &["rev-parse", "HEAD"]);
+        let worktree = repo.join(".cupel/worktrees/auth");
+        set_line(&worktree, 4, "4 auth");
+        let auth_head = git_output(&worktree, &["rev-parse", "HEAD"]);
+
+        run_spinoff(&mut sessions, "drop auth").await;
+        assert!(has_notice(sessions.active(), &auth_job));
+        run_spinoff(&mut sessions, "merge auth").await;
+        assert_eq!(git_output(&worktree, &["rev-parse", "HEAD"]), auth_head);
+
+        let old_jobs = sessions.list[1].app.recorder.jobs();
+        sessions.active = 1;
+        run_command(sessions.active_mut(), "/clear");
+        assert!(old_jobs.require_idle().unwrap_err().contains(&auth_job));
+        sessions
+            .active_mut()
+            .run_undo_command(cupel_coding_agent::undo::UndoCommand::Undo)
+            .await;
+        assert!(has_notice(sessions.active(), "Cannot /undo: managed jobs"));
+        sessions.reload(crate::app::ReloadTarget::Current).await;
+        assert!(
+            old_jobs.require_idle().is_ok(),
+            "reload must await old jobs"
+        );
+        sessions.active = 0;
+        run_spinoff(&mut sessions, "merge auth").await;
+        assert!(has_notice(sessions.active(), &origin_job));
+        assert_eq!(git_output(&repo, &["rev-parse", "HEAD"]), head);
+        assert_eq!(git_output(&worktree, &["rev-parse", "HEAD"]), auth_head);
+
+        // An origin job doesn't prevent dropping a different checkout.
+        run_spinoff(&mut sessions, "drop auth").await;
+        assert!(!worktree.exists());
+        start_job(sessions.active()).await;
+        run_spinoff(&mut sessions, "docs").await;
+        assert_eq!(sessions.active, 1);
+        sessions.shutdown().await;
+        assert!(sessions.list[0].app.recorder.jobs().require_idle().is_ok());
+    }
+
     #[tokio::test]
     async fn inside_a_worktree_spinoff_commands_point_to_the_main_checkout() {
         use crate::sessions::Sessions;

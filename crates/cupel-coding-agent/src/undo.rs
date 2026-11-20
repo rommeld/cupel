@@ -764,6 +764,12 @@ pub async fn execute_command(
                 .to_string(),
         );
     }
+    if command == UndoCommand::Undo {
+        recorder
+            .jobs()
+            .require_idle()
+            .map_err(|error| format!("Cannot /undo: {error}"))?;
+    }
     recorder.settle_hooks().await;
     let journal = recorder.undo();
     if command == UndoCommand::Changes {
