@@ -2,6 +2,11 @@
 
 Notable user-facing changes by release.
 
+## [v0.50.0] - 2026-11-20
+
+- On Unix, start background Bash commands and use the `jobs` tool to check their exit status, read recent output, or stop them. Jobs are tied to the session and stop on reload or exit.
+- While jobs are running, Cupel blocks conflicting undo and spinoff operations and prevents another ACP session from prompting in the same directory.
+
 ## [v0.40.0] - 2026-11-20
 
 - Add on-demand skills from `$CUPEL_HOME/skills/<skill>/SKILL.md` and `.cupel/skills/<skill>/SKILL.md`. Project skills override home skills with the same name. The agent loads instructions only when it uses a skill.
