@@ -64,5 +64,14 @@ pub struct SessionMeta {
     pub startup_warning: Option<String>,
     pub warnings: Vec<String>,
     pub context_files: Vec<crate::resources::ContextFile>,
+    pub skills: Vec<crate::skills::Skill>,
     pub base_system_prompt: String,
+}
+
+impl SessionMeta {
+    /// The session's base instructions with the current skill catalog.
+    #[must_use]
+    pub fn system_prompt(&self) -> String {
+        crate::system_prompt::with_skill_catalog(&self.base_system_prompt, &self.skills)
+    }
 }

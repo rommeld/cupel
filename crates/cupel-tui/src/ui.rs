@@ -781,6 +781,7 @@ pub(crate) mod tests {
                 startup_warning: None,
                 warnings: Vec::new(),
                 context_files: Vec::new(),
+                skills: Vec::new(),
                 base_system_prompt: String::new(),
             },
             recorder,
@@ -1214,6 +1215,7 @@ pub(crate) mod tests {
                 ),
                 warnings: Vec::new(),
                 context_files: Vec::new(),
+                skills: Vec::new(),
                 base_system_prompt: String::new(),
             },
             recorder,
@@ -1509,6 +1511,7 @@ pub(crate) mod tests {
                 startup_warning: None,
                 warnings: Vec::new(),
                 context_files: Vec::new(),
+                skills: Vec::new(),
                 base_system_prompt: String::new(),
             },
             recorder,
@@ -1604,6 +1607,7 @@ pub(crate) mod tests {
                 startup_warning: None,
                 warnings: Vec::new(),
                 context_files: Vec::new(),
+                skills: Vec::new(),
                 base_system_prompt: String::new(),
             },
             recorder,
@@ -2110,6 +2114,61 @@ pub(crate) mod tests {
             c,
             Cell::Notice { text } if text.contains("no context file changes")
         )));
+    }
+
+    #[tokio::test]
+    async fn skills_refresh_on_new_session_and_hot_reload_with_tui_notices() {
+        use crate::app::ReloadTarget;
+
+        let root = std::env::temp_dir().join(format!("cupel-ui-skills-{}", std::process::id()));
+        let app = test_app_with_home(&root, "cupel-current");
+        let first = root.join("home/skills/first/SKILL.md");
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        std::fs::write(
+            &first,
+            "---\nname: first\ndescription: First skill\n---\nFirst instructions",
+        )
+        .unwrap();
+        app.agent.set_system_prompt("\n\nPRESET RULES".into());
+
+        let app = app.hot_reload(ReloadTarget::New).await;
+        assert!(app.agent.state().system_prompt.contains("First skill"));
+        assert!(app.transcript.cells.iter().any(|cell| matches!(
+            cell,
+            Cell::Notice { text } if text == "The skill was successfully loaded. first"
+        )));
+        let session_id = app.recorder.session_id().to_string();
+
+        std::fs::write(&first, "no frontmatter").unwrap();
+        let second = root.join("proj/.cupel/skills/second/SKILL.md");
+        std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+        std::fs::write(
+            second,
+            "---\nname: second\ndescription: Second skill\n---\nSecond instructions",
+        )
+        .unwrap();
+
+        let app = app.hot_reload(ReloadTarget::Current).await;
+        assert_eq!(app.recorder.session_id(), session_id);
+        let state = app.agent.state();
+        assert!(state.system_prompt.contains("Second skill"));
+        assert!(!state.system_prompt.contains("First skill"));
+        assert!(!state.system_prompt.contains("Second instructions"));
+        assert!(state.system_prompt.ends_with("\n\nPRESET RULES"));
+        assert!(state.messages.is_empty(), "notices are not model messages");
+        for notice in [
+            "The skill was successfully loaded. second",
+            "It was not possible to load the skill.",
+        ] {
+            assert!(
+                app.transcript.cells.iter().any(|cell| matches!(
+                    cell,
+                    Cell::Notice { text } if text.starts_with(notice)
+                )),
+                "missing notice: {notice}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -2927,6 +2986,7 @@ pub(crate) mod tests {
                 startup_warning: None,
                 warnings: Vec::new(),
                 context_files: Vec::new(),
+                skills: Vec::new(),
                 base_system_prompt: String::new(),
             },
             recorder,
@@ -3445,6 +3505,7 @@ pub(crate) mod tests {
                 startup_warning: None,
                 warnings: Vec::new(),
                 context_files: Vec::new(),
+                skills: Vec::new(),
                 base_system_prompt: String::new(),
             },
             recorder,
@@ -3831,6 +3892,7 @@ pub(crate) mod tests {
                 startup_warning: None,
                 warnings: Vec::new(),
                 context_files: Vec::new(),
+                skills: Vec::new(),
                 base_system_prompt: String::new(),
             },
             recorder,

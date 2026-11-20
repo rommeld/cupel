@@ -124,7 +124,7 @@ impl Runtime {
         let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
         let mut options = AgentOptions::new(model.clone(), registry);
         options.system_prompt = cupel_coding_agent::system_prompt::with_preset_prompt(
-            &ingredients.system_prompt,
+            &ingredients.system_prompt(),
             preset.and_then(|p| p.prompt.as_deref()),
         );
         options.thinking_level = startup::thinking_level(config.thinking, &model, preset);

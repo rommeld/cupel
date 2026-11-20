@@ -132,6 +132,7 @@ mod tests {
             startup_warning: None,
             warnings: Vec::new(),
             context_files: Vec::new(),
+            skills: Vec::new(),
             base_system_prompt: String::new(),
         };
         if std::env::var("CUPEL_STATUS_FRONTEND").as_deref() == Ok("plain") {

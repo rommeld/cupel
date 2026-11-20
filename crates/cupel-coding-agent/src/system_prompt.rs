@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::resources::ContextFile;
+use crate::skills::Skill;
 
 #[must_use]
 pub fn build_system_prompt(cwd: &Path, tools: &[&str], context_files: &[ContextFile]) -> String {
@@ -95,6 +96,27 @@ Guidelines:
     prompt.push_str(&format!(
         "\n\nCurrent date: {date}\nCurrent working directory: {prompt_cwd}"
     ));
+    prompt
+}
+
+/// Append only skill metadata. Skill instructions are retrieved through `read` on demand.
+#[must_use]
+pub fn with_skill_catalog(base: &str, skills: &[Skill]) -> String {
+    let mut prompt = base.to_string();
+    if !skills.is_empty() {
+        prompt.push_str(
+            "\n\nAvailable skills:\n\
+             If the user requests an available skill by name, use it. Otherwise, select a skill \
+             by its description only if it fits the task, or proceed without one. \
+             Use read with the selected skill's path to load its instructions. Resolve file \
+             references relative to the directory containing its SKILL.md and read them only as \
+             needed. Loading a skill does not run its scripts; normal tool rules still apply.",
+        );
+        for skill in skills {
+            prompt.push('\n');
+            prompt.push_str(&serde_json::json!(skill).to_string());
+        }
+    }
     prompt
 }
 
