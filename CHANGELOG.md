@@ -2,6 +2,10 @@
 
 Notable user-facing changes by release.
 
+## [Unreleased]
+
+- TUI: Highlight Reasoning headlines in green without changing the body text. Customize the headline with `palette.reasoning_header` (a `#rrggbb` color) in your theme JSON.
+
 ## [v0.50.1] - 2026-11-20
 
 - Add 10 OpenRouter models, including Gemini 4 Neon and GPT-6.2 Sol and Astra (standard and Pro). Fireworks and provider defaults are unchanged.

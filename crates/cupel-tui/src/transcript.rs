@@ -366,15 +366,10 @@ fn reasoning_lines(text: &str, collapsed: bool, width: usize, theme: &Theme) -> 
         |title| format!("{marker} Reasoning · {title}"),
     );
     // Keep the disclosure row a single physical line, even for long headings.
-    let header = crate::markdown::render(
-        &label,
-        width,
-        theme.reasoning.add_modifier(Modifier::BOLD),
-        theme,
-    )
-    .into_iter()
-    .next()
-    .unwrap_or_default();
+    let header = crate::markdown::render(&label, width, theme.reasoning_header, theme)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
     let mut lines = vec![header];
     if !collapsed {
         let body = if title.is_some() {
@@ -1438,7 +1433,7 @@ mod tests {
         );
         let title = &rendered.lines[0].spans[0];
         assert!(!title.style.add_modifier.contains(Modifier::ITALIC));
-        assert_eq!(title.style.fg, CUPEL.reasoning.fg);
+        assert_eq!(title.style.fg, CUPEL.reasoning_header.fg);
     }
 
     #[test]

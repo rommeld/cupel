@@ -6086,9 +6086,24 @@ pub(crate) mod tests {
         );
 
         // The App that /hot reload builds reads the files again.
-        std::fs::write(&file, gruvbox.replace("BG", "#1d2021")).unwrap();
+        let edited = gruvbox
+            .replace("BG", "#1d2021")
+            .replace("\"link\":", r##""reasoning_header": "#ffa366", "link":"##);
+        std::fs::write(&file, edited).unwrap();
         sessions.reload(ReloadTarget::Current).await;
         assert_eq!(sessions.theme.base.bg, Some(Color::Rgb(0x1d, 0x20, 0x21)));
+        sessions
+            .active_mut()
+            .transcript
+            .append_thinking("body text");
+        assert_eq!(
+            sessions_style_of(&mut sessions, "Reasoning").fg,
+            Some(Color::Rgb(0xff, 0xa3, 0x66))
+        );
+        assert_eq!(
+            sessions_style_of(&mut sessions, "body text").fg,
+            sessions.theme.reasoning.fg
+        );
 
         // The saved file theme is also available after a restart.
         let mut app = test_app_with_home(&root, "cupel-theme-files-restart");

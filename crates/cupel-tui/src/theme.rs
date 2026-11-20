@@ -43,6 +43,7 @@ pub struct Theme {
     pub assistant: Style,
     pub answer: Style,
     pub answer_label: Style,
+    pub reasoning_header: Style,
     pub reasoning: Style,
     pub tool_header: Style,
     pub detail: Style,
@@ -93,8 +94,9 @@ impl core::fmt::Display for Appearance {
     }
 }
 
-/// cupel's own look, the terminal's 16 named colors plus two gray surfaces from the
-/// xtrem 256 palette.
+const NEON_GREEN: Color = Color::Rgb(0x39, 0xff, 0x14);
+
+/// Cupel's own look: terminal colors, gray surfaces, and a neon reasoning accent.
 pub const CUPEL: Theme = Theme {
     id: Cow::Borrowed("cupel"),
     name: Cow::Borrowed("Cupel"),
@@ -107,6 +109,11 @@ pub const CUPEL: Theme = Theme {
     assistant: Style::new(),
     answer: Style::new().fg(Color::Magenta),
     answer_label: Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+    // Give neon text a dark surface even on light terminal backgrounds.
+    reasoning_header: Style::new()
+        .fg(NEON_GREEN)
+        .bg(Color::Indexed(235))
+        .add_modifier(Modifier::BOLD),
     // #767676 stays readable against both black and white terminal backgrounds.
     reasoning: Style::new().fg(Color::Indexed(243)),
     tool_header: Style::new().fg(Color::Cyan),
@@ -210,6 +217,12 @@ impl Theme {
             assistant: Style::new().fg(fg),
             answer: Style::new().fg(magenta),
             answer_label: Style::new().fg(magenta).add_modifier(Modifier::BOLD),
+            reasoning_header: Style::new()
+                .fg(match appearance {
+                    Appearance::Light => Color::Rgb(0x00, 0x75, 0x20),
+                    Appearance::Dark | Appearance::Terminal => NEON_GREEN,
+                })
+                .add_modifier(Modifier::BOLD),
             reasoning: Style::new().fg(reasoning_color(fg, muted)),
             tool_header: Style::new().fg(cyan),
             detail: Style::new(),
@@ -274,12 +287,16 @@ impl Theme {
             FileAppearance::Dark => Appearance::Dark,
             FileAppearance::Light => Appearance::Light,
         };
-        Self {
+        let mut theme = Self {
             id: Cow::Owned(file.id.clone()),
             name: Cow::Owned(file.name.clone()),
             file: Some(file.path.clone()),
             ..Self::from_palette("", "", appearance, palette)
+        };
+        if let Some(header) = colors.reasoning_header {
+            theme.reasoning_header = theme.reasoning_header.fg(color(header));
         }
+        theme
     }
 }
 
@@ -438,6 +455,7 @@ mod tests {
             heading: Rgb(0xb8, 0xbb, 0x26),
             emphasis: light,
             link: light,
+            reasoning_header: None,
         };
         let file = |id: &str, name: &str| ThemeFile {
             id: id.to_string(),
@@ -517,6 +535,10 @@ mod tests {
             for (surface, ratio) in [
                 ("background", contrast(theme.base.fg, theme.base.bg)),
                 ("reasoning", contrast(theme.reasoning.fg, theme.base.bg)),
+                (
+                    "reasoning headline",
+                    contrast(theme.reasoning_header.fg, theme.base.bg),
+                ),
                 ("user message", contrast(theme.task.fg, theme.task.bg)),
                 (
                     "code block",
