@@ -484,10 +484,13 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("cupel-bootstrap-skills-{}", std::process::id()));
         let (home, cwd) = (root.join("home"), root.join("proj"));
-        let fixtures: [(&Path, &str, &[u8]); 7] = [
+        let fixtures: [(&Path, &str, &[u8]); 10] = [
             (&home, "skills/review/SKILL.md", b"---\nname: review-pr\ndescription: Global review\n---\nGlobal body"),
             (&home, "skills/format/SKILL.md", b"---\nname: format\ndescription: Global formatting\n---\n\xff"),
-            (&cwd, ".cupel/skills/local-review/SKILL.md", b"---\r\nname: review-pr\r\ndescription: >\r\n  Review for regressions\r\n  and missing tests.\r\n---\r\nProject review body"),
+            (&home, "skills/optional/SKILL.md", b"---\nname: extra-checks\ndescription: Global extra checks\n---\n"),
+            (&cwd, ".cupel/skills/skip-extra/SKILL.md", b"---\nname: extra-checks\ndescription: Project extra checks\ndisable: true\n---\n"),
+            (&cwd, ".cupel/skills/local-review/SKILL.md", b"---\r\nname: review-pr\r\ndescription: >\r\n  Review for regressions\r\n  and missing tests.\r\ndisable: false\r\n---\r\nProject review body"),
+            (&cwd, ".cupel/skills/bad-disable/SKILL.md", b"---\nname: bad-disable\ndescription: Invalid flag\ndisable: 'true'\n---\n"),
             (&cwd, ".cupel/skills/broken-format/SKILL.md", b"---\nname: format\ndescription: [invalid\n---\n"),
             (&cwd, ".cupel/skills/unfinished/SKILL.md", b"---\nname: unfinished\ndescription: Unfinished header\n---not-a-fence\n"),
             (&cwd, ".cupel/skills/blank/SKILL.md", b"---\nname: blank\ndescription: '  '\n---\n"),
@@ -512,6 +515,10 @@ mod tests {
             "Global review",
             "Global body",
             "Project review body",
+            "extra-checks",
+            "skip-extra",
+            "extra checks",
+            "bad-disable",
             "not-a-root",
         ] {
             assert!(
@@ -519,8 +526,13 @@ mod tests {
                 "unexpected in startup prompt: {excluded}"
             );
         }
-        assert_eq!(ingredients.warnings.len(), 3, "{:?}", ingredients.warnings);
-        for invalid in ["broken-format", "unfinished", "blank"] {
+        assert_eq!(ingredients.warnings.len(), 4, "{:?}", ingredients.warnings);
+        for invalid in [
+            "broken-format",
+            "unfinished",
+            "blank",
+            "expected a boolean for disable",
+        ] {
             assert!(
                 ingredients
                     .warnings
