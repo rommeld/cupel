@@ -1614,27 +1614,57 @@ pub(crate) mod tests {
         )
     }
 
-    #[test]
-    fn hot_reload_command_sets_the_pending_target() {
-        let mut app = test_app();
-        type_text(&mut app, "/hot-reload");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-        assert_eq!(app.pending_reload, Some(crate::app::ReloadTarget::Current));
+    #[tokio::test]
+    async fn hot_reload_command_resumes_the_latest_without_selecting_a_suggestion() {
+        use crate::app::ReloadTarget;
+        use cupel_coding_agent::session::SessionRecorder;
+        use std::time::{Duration, SystemTime};
 
-        let mut app = test_app();
-        type_text(&mut app, "/hot-reload cupel-42");
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        let root = std::env::temp_dir().join("cupel-ui-hotreload-latest");
+        let _ = std::fs::remove_dir_all(&root);
+        let mut app = test_app_with_home(&root, "cupel-current");
+        app.recorder
+            .record(&cupel_agent::AgentMessage::user_text("current prompt"));
+
+        let mut latest = SessionRecorder::new(
+            app.meta.home.clone(),
+            std::path::Path::new(&app.meta.cwd),
+            "cupel-latest",
+            "test-model",
+        );
+        latest.record(&cupel_agent::AgentMessage::user_text("latest prompt"));
+        std::fs::File::options()
+            .write(true)
+            .open(latest.transcript().unwrap())
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(10))
+            .unwrap();
+        drop(latest);
+
+        type_text(&mut app, "/hot-reload");
+        assert!(app.autocomplete.visible().is_some());
         app.on_terminal_event(Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
+        let target = app.pending_reload.take().expect("Enter requested a reload");
+        assert_eq!(target, ReloadTarget::Latest);
+        let mut app = app.hot_reload(target).await;
+        assert_eq!(app.recorder.session_id(), "cupel-latest");
+        assert!(app.transcript.cells.iter().any(|cell| matches!(
+            cell,
+            Cell::User { text } if text == "latest prompt"
+        )));
+
+        // Once the latest is open, bare reload must be in place.
+        app.session_work_time = Duration::from_secs(3);
+        let mut app = app.hot_reload(ReloadTarget::Latest).await;
+        assert_eq!(app.session_work_time, Duration::from_secs(3));
+
+        run_command(&mut app, "/hot-reload current prompt");
         assert_eq!(
             app.pending_reload,
-            Some(crate::app::ReloadTarget::Resume("cupel-42".into()))
+            Some(ReloadTarget::Resume("current prompt".into()))
         );
     }
 
@@ -4440,7 +4470,9 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let app = app.hot_reload(ReloadTarget::Current).await;
+        // With no saved session, bare hot reload still reloads settings in place.
+        let app = app.hot_reload(ReloadTarget::Latest).await;
+        assert_eq!(app.recorder.session_id(), "cupel-reload-settings");
         assert_eq!(app.agent.api_key(), Some("from-disk"));
         assert_eq!(app.meta.settings.api_key("acme"), Some("from-disk"));
     }

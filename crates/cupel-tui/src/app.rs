@@ -192,6 +192,7 @@ pub enum AppEvent {
 pub enum ReloadTarget {
     New,
     Current,
+    Latest,
     Resume(String),
 }
 
@@ -723,7 +724,10 @@ impl App {
         // Visible but  not merely open, a session with zero matches renders
         // nothing, and an invisible popup swallowing Enter would make a
         // typo'd `/model xyz` un submittable.
-        if self.autocomplete.visible().is_some() {
+        // A fully typed `/hot-reload` runs on Enter. Tab or a space still
+        // opens the opening-prompt suggestions for an explicit resume.
+        let bare_reload = key.code == KeyCode::Enter && self.input.text() == "/hot-reload";
+        if self.autocomplete.visible().is_some() && !bare_reload {
             match (key.code, ctrl, alt) {
                 // Esc closes the popup it does not abort the run. A second
                 // Esc (popup now closed) aborts as usual.
@@ -931,7 +935,19 @@ impl App {
         match target {
             ReloadTarget::New => self.reload_new(&cwd).await,
             ReloadTarget::Current => self.reload_in_place(&cwd).await,
-            ReloadTarget::Resume(id) => self.reload_resume(&cwd, &id).await,
+            ReloadTarget::Latest => {
+                let latest =
+                    cupel_coding_agent::session::find_latest(self.meta.home.as_deref(), &cwd);
+                match latest {
+                    Some(path) if self.recorder.transcript() != Some(path.as_path()) => {
+                        self.reload_transcript(&cwd, &path).await
+                    }
+                    // Keep live state when the newest transcript is already open
+                    // or there is no saved session to resume.
+                    _ => self.reload_in_place(&cwd).await,
+                }
+            }
+            ReloadTarget::Resume(query) => self.reload_resume(&cwd, &query).await,
         }
     }
 
@@ -956,7 +972,7 @@ impl App {
         app
     }
 
-    /// Bare hot reload, the running session continues same id, same
+    /// In-place hot reload, the running session continues same id, same
     /// history, same transcript file, and no session end hook (the session
     /// is not ending). Fresh templates, models, skills, bash deny rules, and
     /// tools are swapped in. Context files (AGENTS.md/CLAUDE.md) get delta
@@ -1075,10 +1091,14 @@ impl App {
                 return self;
             }
         };
-        let (session_id, seeded) = match cupel_coding_agent::session::load_transcript(&path) {
+        self.reload_transcript(cwd, &path).await
+    }
+
+    async fn reload_transcript(mut self, cwd: &std::path::Path, path: &std::path::Path) -> Self {
+        let (session_id, seeded) = match cupel_coding_agent::session::load_transcript(path) {
             Ok((header, messages)) => (header.session_id, messages),
             Err(e) => {
-                self.notice(format!("cannot resume {query:?}: {e}"));
+                self.notice(format!("cannot resume {}: {e}", path.display()));
                 return self;
             }
         };
@@ -1088,7 +1108,7 @@ impl App {
         app
     }
 
-    /// Full session rebuild shared by `/new` and hot reload with a session id.
+    /// Full session rebuild shared by `/new` and hot reload into a saved session.
     async fn reload_session(
         mut self,
         cwd: &std::path::Path,
@@ -1947,7 +1967,7 @@ impl App {
             }
             "sessions" => {
                 let mut lines = vec![
-                    "saved sessions (resume with /hot-reload <prompt search> or cupel --resume \"prompt search\"):".to_string()
+                    "saved sessions (/hot-reload resumes the latest; use /hot-reload <prompt search> or cupel --resume \"prompt search\" to choose):".to_string()
                 ];
                 match self.recorder.sessions_dir() {
                     None => lines.push(
@@ -2041,7 +2061,7 @@ impl App {
                     // The event loop picks this up and rebuilds the session
                     // (async work), see hot_reload.
                     self.pending_reload = Some(if args.is_empty() {
-                        ReloadTarget::Current
+                        ReloadTarget::Latest
                     } else {
                         ReloadTarget::Resume(args.to_string())
                     });
