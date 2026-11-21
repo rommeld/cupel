@@ -8,6 +8,8 @@
 //! transform layer already downgrades them to a text placeholder for models
 //! without vision, so the tool doesn't need to know the active model.
 
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,6 +23,7 @@ use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{ImageContent, TextContent, ToolResultContent};
 
 use crate::search::resolve_to_root;
+use crate::skills::Skill;
 use crate::source_observations::{SourceObservations, SourceRange};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, format_size,
@@ -81,6 +84,7 @@ pub struct ReadTool {
     cwd: PathBuf,
     description: String,
     observations: Arc<SourceObservations>,
+    skill_names: BTreeMap<PathBuf, String>,
 }
 
 impl ReadTool {
@@ -89,6 +93,7 @@ impl ReadTool {
         Self {
             cwd: cwd.into(),
             observations: Arc::new(SourceObservations::new()),
+            skill_names: BTreeMap::new(),
             description: format!(
                 "Read the contents of a file. Supports text files and images (jpg, png, gif, \
                  webp). Images up to 4 MiB with matching file signatures are sent as \
@@ -108,6 +113,15 @@ impl ReadTool {
     #[must_use]
     pub fn with_observations(mut self, observations: Arc<SourceObservations>) -> Self {
         self.observations = observations;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_skills(mut self, skills: &[Skill]) -> Self {
+        self.skill_names = skills
+            .iter()
+            .filter_map(|skill| Some((fs::canonicalize(&skill.path).ok()?, skill.name.clone())))
+            .collect();
         self
     }
 }
@@ -336,20 +350,26 @@ impl AgentTool for ReadTool {
             truncation.content
         };
 
+        let mut details = json!({
+            "observation": observation.id,
+            "checkout": observation.checkout,
+            "path": observation.path,
+            "revision": observation.revision,
+            "range": range.map(|range| json!({"start": range.start, "end": range.end})),
+            "totalLines": total_file_lines,
+            "truncated": truncation.truncated,
+        });
+        if range.is_some()
+            && let Some(name) = self.skill_names.get(&source_path)
+        {
+            details["skill"] = json!(name);
+        }
         Ok(AgentToolResult {
             content: vec![ToolResultContent::Text(TextContent::plain(format!(
                 "{}\n\n{output}",
                 observation.header()
             )))],
-            details: Some(json!({
-                "observation": observation.id,
-                "checkout": observation.checkout,
-                "path": observation.path,
-                "revision": observation.revision,
-                "range": range.map(|range| json!({"start": range.start, "end": range.end})),
-                "totalLines": total_file_lines,
-                "truncated": truncation.truncated,
-            })),
+            details: Some(details),
             terminate: false,
         })
     }

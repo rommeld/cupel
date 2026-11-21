@@ -1,7 +1,7 @@
-use cupel_agent::{Agent, AgentEvent, AgentOptions};
+use cupel_agent::{Agent, AgentEvent, AgentMessage, AgentOptions, AgentToolResult};
 use cupel_core::types::{
-    AssistantContent, AssistantMessage, AssistantMessageEvent, Message, StopReason,
-    ThinkingContent, Usage,
+    AssistantContent, AssistantMessage, AssistantMessageEvent, Message, StopReason, TextContent,
+    ThinkingContent, ToolCall, ToolResultContent, ToolResultMessage, Usage,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -528,4 +528,83 @@ fn replayed_reasoning_starts_expanded() {
     assert!(screen.contains("Replayed body"));
     toggle_all(&mut app);
     assert!(!draw(&mut app, 80, 24).contains("Replayed body"));
+}
+
+#[tokio::test]
+async fn skill_name_stays_beside_the_tool_when_collapsed_and_replayed() {
+    let mut app = test_app();
+    let name = "review_*pr*";
+    let tool_call = ToolCall {
+        id: "skill-read".into(),
+        name: "read".into(),
+        arguments: serde_json::json!({"path": "SKILL.md"}),
+        thought_signature: None,
+    };
+    let result = ToolResultMessage {
+        tool_call_id: tool_call.id.clone(),
+        tool_name: tool_call.name.clone(),
+        content: vec![ToolResultContent::Text(TextContent::plain(
+            "skill instructions",
+        ))],
+        details: Some(serde_json::json!({"skill": name})),
+        is_error: false,
+        timestamp: 0,
+    };
+    message_update(
+        &mut app,
+        AssistantMessageEvent::ToolCallEnd {
+            content_index: 0,
+            tool_call: tool_call.clone(),
+        },
+    )
+    .await;
+    assert!(!text(&app.transcript).contains(name));
+    app.on_agent_event(Some(AgentEvent::ToolExecutionEnd {
+        tool_call_id: result.tool_call_id.clone(),
+        tool_name: result.tool_name.clone(),
+        result: AgentToolResult {
+            content: result.content.clone(),
+            details: result.details.clone(),
+            terminate: false,
+        },
+        is_error: false,
+    }))
+    .await;
+
+    let model = app.agent.state().model;
+    let mut options = AgentOptions::new(model.clone(), app.agent.registry());
+    options.messages = vec![
+        AgentMessage::Llm(Message::Assistant(AssistantMessage {
+            content: vec![AssistantContent::ToolCall(tool_call)],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            response_model: None,
+            response_id: None,
+            usage: Usage::default(),
+            stop_reason: StopReason::ToolUse,
+            error_message: None,
+            error_kind: None,
+            timestamp: 0,
+        })),
+        AgentMessage::Llm(Message::ToolResult(result)),
+    ];
+
+    for mut transcript in [
+        app.transcript,
+        App::new(Agent::new(options), app.meta, app.recorder).transcript,
+    ] {
+        transcript.set_all_tools_display(ToolDisplay::Collapsed);
+        let output = text(&transcript);
+        assert!(output.contains(&format!("{name}\nread\n")), "{output}");
+        assert!(!output.contains("skill instructions"), "{output}");
+        let rendered = transcript.to_lines(80, None, &CUPEL);
+        let label = rendered
+            .lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .find(|span| span.content == name)
+            .unwrap();
+        assert_eq!(label.style, CUPEL.reasoning_header);
+    }
 }

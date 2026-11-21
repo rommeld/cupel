@@ -76,8 +76,11 @@ impl Ingredients {
                     );
                 }
                 "read" => {
-                    *tool =
-                        Arc::new(ReadTool::new(cwd).with_observations(Arc::clone(&observations)));
+                    *tool = Arc::new(
+                        ReadTool::new(cwd)
+                            .with_observations(Arc::clone(&observations))
+                            .with_skills(&self.skills),
+                    );
                 }
                 "bash" => *tool = Arc::new(BashTool::new(cwd).with_jobs(Arc::clone(&jobs))),
                 "jobs" => *tool = Arc::new(JobsTool::new(Arc::clone(&jobs))),
@@ -503,7 +506,9 @@ mod tests {
         }
 
         let registry = cupel_core::default_registry();
-        let ingredients = load(&cwd, Some(home), &registry, Frontend::Plain).await;
+        let mut ingredients = load(&cwd, Some(home), &registry, Frontend::Tui).await;
+        let recorder = crate::session::SessionRecorder::new(None, &cwd, "skills", "mock");
+        ingredients.bind_session(&recorder, &cwd);
         assert_eq!(ingredients.skills.len(), 2);
         let prompt = ingredients.system_prompt();
         assert!(
@@ -565,6 +570,19 @@ mod tests {
         assert!(
             matches!(&result.content[0], ToolResultContent::Text(text) if text.text.contains("Project review body"))
         );
+        assert_eq!(result.details.unwrap()["skill"], "review-pr");
+
+        for args in [
+            serde_json::json!({"path": ".cupel/skills/skip-extra/SKILL.md"}),
+            serde_json::json!({"path": "skills/not-a-root/SKILL.md"}),
+            serde_json::json!({"path": path, "limit": 0}),
+        ] {
+            let result = reader
+                .execute("not-a-skill-load", args, CancellationToken::new(), None)
+                .await
+                .unwrap();
+            assert!(result.details.unwrap().get("skill").is_none());
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -295,7 +295,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "hot-reload",
-        description: "Reload .cupel config, or resume by opening prompt: /hot-reload [prompt search]",
+        description: "Reload .cupel config and resume the latest saved session, or choose one: /hot-reload [prompt search]",
     },
     BuiltinCommand {
         name: "usage",

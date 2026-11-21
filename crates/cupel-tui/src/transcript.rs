@@ -87,6 +87,7 @@ pub struct ToolOutcome {
     pub text: String,
     pub is_error: bool,
     pub diff: Option<String>,
+    pub skill: Option<String>,
     pub took: Option<Duration>,
 }
 
@@ -453,21 +454,13 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         return Vec::new();
     };
     let mut out: Vec<Line<'static>> = Vec::new();
+    if let Some(skill) = result.as_ref().and_then(|outcome| outcome.skill.as_deref()) {
+        out.push(plain_header(skill, width, theme.reasoning_header));
+    }
     let has_diff = matches!(result, Some(ToolOutcome { diff: Some(_), .. }));
     if *display == ToolDisplay::Collapsed && !has_diff {
-        // Truncate rather than wrap so even multiline or long calls occupy one
-        // physical row. Sanitize before taking the first line (OSC can span rows).
-        let call = sanitize(call);
-        let header = call.lines().next().unwrap_or_default();
-        let mut columns = 0;
-        let header: String = header
-            .chars()
-            .take_while(|c| {
-                columns += c.width().unwrap_or(0);
-                columns <= width
-            })
-            .collect();
-        return vec![Line::from(Span::styled(header, theme.tool_header))];
+        out.push(plain_header(call, width, theme.tool_header));
+        return out;
     }
     push_wrapped(&mut out, call, width, theme.tool_header);
     match result {
@@ -542,6 +535,23 @@ fn tool_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         }
     }
     out
+}
+
+/// Keep a header on one row. Sanitize before taking the first line (OSC can span rows).
+fn plain_header(text: &str, width: usize, style: Style) -> Line<'static> {
+    let text = sanitize(text);
+    let mut columns = 0;
+    let header: String = text
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take_while(|c| {
+            columns += c.width().unwrap_or(0);
+            columns <= width
+        })
+        .collect();
+    Line::from(Span::styled(header, style))
 }
 
 fn format_seconds(duration: Duration) -> String {
@@ -1044,6 +1054,7 @@ mod tests {
                 text: "hit".into(),
                 is_error: false,
                 diff: None,
+                skill: None,
                 took: None,
             },
         );
@@ -1073,6 +1084,7 @@ mod tests {
                     .join("\n"),
                 is_error: false,
                 diff: None,
+                skill: None,
                 took: None,
             }),
         }
@@ -1116,6 +1128,7 @@ mod tests {
                             text: output.into(),
                             is_error: false,
                             diff: None,
+                            skill: None,
                             took: Some(Duration::from_secs(1)),
                         }),
                     ),
@@ -1126,6 +1139,7 @@ mod tests {
                             text: String::new(),
                             is_error: false,
                             diff: Some(format!("+1 {output}")),
+                            skill: None,
                             took: None,
                         }),
                     ),
@@ -1185,6 +1199,7 @@ mod tests {
                 text: "g".into(),
                 is_error: false,
                 diff: None,
+                skill: None,
                 took: None,
             },
         );
@@ -1254,6 +1269,7 @@ mod tests {
                 text: "Success. Updated the following files:\nM a.rs".into(),
                 is_error: false,
                 diff: Some(" 1 fn main() {\n-2     old();\n+2     new();\n 3 }".into()),
+                skill: None,
                 took: None,
             }),
         };
@@ -1312,6 +1328,7 @@ mod tests {
                 text: "failure output".into(),
                 is_error: true,
                 diff: None,
+                skill: None,
                 took: Some(Duration::from_secs(1)),
             }),
         ] {
@@ -1530,6 +1547,7 @@ mod tests {
                         text: raw.into(),
                         is_error: false,
                         diff: None,
+                        skill: None,
                         took: None,
                     }),
                 };
@@ -1608,6 +1626,7 @@ mod tests {
                 text: raw.into(),
                 is_error: true,
                 diff: None,
+                skill: None,
                 took: None,
             },
         );
@@ -1684,6 +1703,7 @@ mod tests {
             text: "\tgo build ./...\n\x1b[31mred\x1b[0m\x1b]52;c;c3RvbGVu\x07\u{009d}52;c;c3RvbGVu\u{009c}".into(),
             is_error: false,
             diff: None,
+            skill: None,
             took: None,
         });
         let mut bytes = Vec::new();
