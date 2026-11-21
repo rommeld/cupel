@@ -14,7 +14,7 @@ use yaml_serde::Value;
 const MAX_FRONTMATTER_BYTES: u64 = 16 * 1024;
 
 /// A catalog entry; `path` is absolute and can be passed to `read`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Skill {
     pub name: String,
     pub description: String,

@@ -8,12 +8,15 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
+
 use cupel_agent::AgentHooks;
 use cupel_agent::types::{AgentTool, BeforeToolCallResult};
 use cupel_core::types::{AssistantMessage, Model, ToolCall};
 
 use crate::commands::PromptTemplate;
 use crate::guard::BashGuard;
+use crate::instruction_cache::InstructionCache;
 use crate::jobs::Jobs;
 use crate::loop_killer::LoopKiller;
 use crate::search::GrepSearch;
@@ -40,6 +43,10 @@ pub enum Frontend {
 
 /// The reloadable parts of a session, all derived from `~/.cupel` +
 /// `<cwd>/.cupel` + the cwd itself.
+#[allow(
+    clippy::partial_pub_fields,
+    reason = "The cache is internal to tool binding"
+)]
 pub struct Ingredients {
     pub base_system_prompt: String,
     pub skills: Vec<Skill>,
@@ -51,6 +58,7 @@ pub struct Ingredients {
     pub context_files: Vec<crate::resources::ContextFile>,
     pub warnings: Vec<String>,
     pub questions: Option<QuestionReceiver>,
+    instructions: Arc<Mutex<InstructionCache>>,
 }
 
 impl Ingredients {
@@ -79,7 +87,7 @@ impl Ingredients {
                     *tool = Arc::new(
                         ReadTool::new(cwd)
                             .with_observations(Arc::clone(&observations))
-                            .with_skills(&self.skills),
+                            .with_instructions(Arc::clone(&self.instructions)),
                     );
                 }
                 "bash" => *tool = Arc::new(BashTool::new(cwd).with_jobs(Arc::clone(&jobs))),
@@ -101,11 +109,14 @@ pub async fn load(
     frontend: Frontend,
 ) -> Ingredients {
     let roots = crate::resources::roots_for(home.clone(), cwd);
-    let context_files = crate::resources::load_context_files(&roots);
     let templates = crate::commands::load_prompt_templates(&roots);
     let (skills, skill_warnings) = skills::discover(home.as_deref(), cwd);
+    let (instructions, context_files, guide_warnings) =
+        InstructionCache::load(&roots, &skills).await;
+    let instructions = Arc::new(Mutex::new(instructions));
     let (home_settings, mut warnings) = crate::settings::load_home_settings(home.as_deref());
     warnings.extend(skill_warnings);
+    warnings.extend(guide_warnings);
     let (project_settings, project_warnings) = crate::settings::load_project_settings(cwd);
     warnings.extend(project_warnings);
     warnings.extend(crate::settings::project_settings_warning(cwd));
@@ -121,7 +132,10 @@ pub async fn load(
         home.clone(),
     );
 
-    let mut tools = coding_tools(cwd);
+    let mut tools = coding_tools_with_reader(
+        cwd,
+        ReadTool::new(cwd).with_instructions(Arc::clone(&instructions)),
+    );
     let questions = match frontend {
         Frontend::Tui => {
             let (tool, questions) = AskUserTool::new();
@@ -144,17 +158,22 @@ pub async fn load(
         settings,
         warnings,
         questions,
+        instructions,
     }
 }
 
 /// The coding tools available to a session.
 #[must_use]
 pub fn coding_tools(cwd: &Path) -> Vec<Arc<dyn AgentTool>> {
+    coding_tools_with_reader(cwd, ReadTool::new(cwd))
+}
+
+fn coding_tools_with_reader(cwd: &Path, reader: ReadTool) -> Vec<Arc<dyn AgentTool>> {
     let backend = Arc::new(GrepSearch::new(cwd));
     let observations = Arc::new(SourceObservations::new());
     let jobs = Arc::new(Jobs::default());
     vec![
-        Arc::new(ReadTool::new(cwd).with_observations(Arc::clone(&observations))),
+        Arc::new(reader.with_observations(Arc::clone(&observations))),
         Arc::new(BashTool::new(cwd).with_jobs(Arc::clone(&jobs))),
         Arc::new(ApplyPatchTool::new(cwd).with_observations(observations)),
         Arc::new(GrepTool::new(cwd, backend)),

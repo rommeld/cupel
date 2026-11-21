@@ -8,6 +8,7 @@ pub mod bootstrap;
 pub mod commands;
 pub mod guard;
 pub mod hooks;
+mod instruction_cache;
 pub mod jobs;
 pub mod loop_killer;
 pub mod models;

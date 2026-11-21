@@ -2219,6 +2219,93 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn instruction_cache_preloads_project_guides_and_loads_skill_guides_on_first_use() {
+        use cupel_core::types::ToolResultContent;
+        use tokio_util::sync::CancellationToken;
+
+        async fn read(app: &App, path: &str, expected: &str) {
+            let reader = app
+                .agent
+                .tools()
+                .iter()
+                .find(|tool| tool.name() == "read")
+                .unwrap();
+            let result = reader
+                .execute(
+                    "read-instruction",
+                    serde_json::json!({"path": path}),
+                    CancellationToken::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+            let ToolResultContent::Text(text) = &result.content[0] else {
+                panic!("expected text for {path}");
+            };
+            assert!(text.text.ends_with(expected), "{path}: {}", text.text);
+        }
+
+        let root =
+            std::env::temp_dir().join(format!("cupel-ui-instructions-{}", std::process::id()));
+        let mut app = test_app_with_home(&root, "cupel-current");
+        let project = root.join("proj");
+        let agents = project.join("AGENTS.md");
+        let project_guide = "docs/project guide.md";
+        let skill = ".cupel/skills/check/SKILL.md";
+        let skill_guide = ".cupel/skills/check/guide.md";
+        let agents_text =
+            "Use the [project guide][guide].\n\n[guide]: docs/project%20guide.md#overview\n";
+        let skill_text =
+            "---\nname: check\ndescription: A check\n---\nUse the [skill guide](guide.md).\n";
+        std::fs::create_dir_all(project.join("docs")).unwrap();
+        std::fs::create_dir_all(project.join(skill).parent().unwrap()).unwrap();
+        std::fs::write(&agents, agents_text).unwrap();
+        std::fs::write(project.join(project_guide), "at startup").unwrap();
+        std::fs::write(project.join(skill), skill_text).unwrap();
+        std::fs::write(project.join(skill_guide), "before activation").unwrap();
+
+        run_command(&mut app, "/new");
+        let target = app.pending_reload.take().unwrap();
+        let mut app = app.hot_reload(target).await;
+        let prompt = app.agent.state().system_prompt;
+        assert!(prompt.contains("A check"));
+        assert!(!prompt.contains("Use the [skill guide]"));
+        assert!(!prompt.contains("at startup"));
+
+        let activated_body = format!("{skill_text}Activated body");
+        std::fs::write(&agents, format!("{agents_text}Updated project rule")).unwrap();
+        std::fs::write(project.join(project_guide), "after startup").unwrap();
+        std::fs::write(project.join(skill), &activated_body).unwrap();
+        std::fs::write(project.join(skill_guide), "at activation").unwrap();
+        read(&app, "AGENTS.md", agents_text).await;
+        read(&app, project_guide, "at startup").await;
+        read(&app, skill, &activated_body).await;
+
+        std::fs::write(project.join(skill), format!("{skill_text}Next body")).unwrap();
+        std::fs::write(project.join(skill_guide), "after activation").unwrap();
+        run_command(&mut app, "/clear");
+        read(&app, project_guide, "at startup").await;
+        read(&app, skill, &activated_body).await;
+        read(&app, skill_guide, "at activation").await;
+
+        run_command(&mut app, "/hot-reload");
+        let target = app.pending_reload.take().unwrap();
+        let mut app = app.hot_reload(target).await;
+        std::fs::write(project.join(skill_guide), "after reload").unwrap();
+        read(&app, "AGENTS.md", "Updated project rule").await;
+        read(&app, project_guide, "after startup").await;
+        read(&app, skill, "Next body").await;
+        read(&app, skill_guide, "after reload").await;
+
+        std::fs::write(project.join(project_guide), "new session").unwrap();
+        run_command(&mut app, "/new");
+        let target = app.pending_reload.take().unwrap();
+        let app = app.hot_reload(target).await;
+        read(&app, project_guide, "new session").await;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn hot_reload_resumes_by_opening_prompt_and_rejects_unknown_searches() {
         use crate::app::ReloadTarget;
 
