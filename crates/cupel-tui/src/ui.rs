@@ -2165,7 +2165,7 @@ pub(crate) mod tests {
         assert!(app.agent.state().system_prompt.contains("First skill"));
         assert!(app.transcript.cells.iter().any(|cell| matches!(
             cell,
-            Cell::Notice { text } if text == "The skill was successfully loaded. first"
+            Cell::Notice { text } if text == "Loaded skills\n  first [First skill]"
         )));
         let session_id = app.recorder.session_id().to_string();
 
@@ -2177,13 +2177,18 @@ pub(crate) mod tests {
         let broken = root.join("home/skills/broken/SKILL.md");
         std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
         std::fs::write(broken, "no frontmatter").unwrap();
-        let second = root.join("proj/.cupel/skills/second/SKILL.md");
-        std::fs::create_dir_all(second.parent().unwrap()).unwrap();
-        std::fs::write(
-            second,
-            "---\nname: second\ndescription: Second skill\n---\nSecond instructions",
-        )
-        .unwrap();
+        for (name, description, instructions) in [
+            ("second", "Second skill", "Second instructions"),
+            ("third", "Third skill", "Third instructions"),
+        ] {
+            let path = root.join(format!("proj/.cupel/skills/{name}/SKILL.md"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                path,
+                format!("---\nname: {name}\ndescription: {description}\n---\n{instructions}"),
+            )
+            .unwrap();
+        }
 
         let app = app.hot_reload(ReloadTarget::Current).await;
         assert_eq!(app.recorder.session_id(), session_id);
@@ -2193,22 +2198,23 @@ pub(crate) mod tests {
         assert!(!state.system_prompt.contains("Second instructions"));
         assert!(state.system_prompt.ends_with("\n\nPRESET RULES"));
         assert!(state.messages.is_empty(), "notices are not model messages");
-        assert!(!app.transcript.cells.iter().any(|cell| matches!(
+        let loaded: Vec<_> = app
+            .transcript
+            .cells
+            .iter()
+            .filter_map(|cell| match cell {
+                Cell::Notice { text } if text.starts_with("Loaded skills") => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            loaded,
+            ["Loaded skills\n  second [Second skill]\n  third [Third skill]"]
+        );
+        assert!(app.transcript.cells.iter().any(|cell| matches!(
             cell,
-            Cell::Notice { text } if text == "The skill was successfully loaded. first"
+            Cell::Notice { text } if text.starts_with("It was not possible to load the skill.")
         )));
-        for notice in [
-            "The skill was successfully loaded. second",
-            "It was not possible to load the skill.",
-        ] {
-            assert!(
-                app.transcript.cells.iter().any(|cell| matches!(
-                    cell,
-                    Cell::Notice { text } if text.starts_with(notice)
-                )),
-                "missing notice: {notice}"
-            );
-        }
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -385,11 +385,13 @@ impl App {
         for warning in theme_warnings {
             app.notice(warning);
         }
-        app.transcript
-            .cells
-            .extend(app.meta.skills.iter().map(|skill| Cell::Notice {
-                text: format!("The skill was successfully loaded. {}", skill.name),
-            }));
+        if !app.meta.skills.is_empty() {
+            let mut lines = vec!["Loaded skills".to_string()];
+            for skill in &app.meta.skills {
+                lines.push(format!("  {} [{}]", skill.name, skill.description));
+            }
+            app.notice(lines.join("\n"));
+        }
         // A startup condition (e.g. keyless start) also appears as a notice
         // instead of blocking the session.
         if let Some(warning) = app.meta.startup_warning.take() {
