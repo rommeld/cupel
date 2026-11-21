@@ -2139,7 +2139,14 @@ pub(crate) mod tests {
         )));
         let session_id = app.recorder.session_id().to_string();
 
-        std::fs::write(&first, "no frontmatter").unwrap();
+        std::fs::write(
+            &first,
+            "---\nname: first\ndescription: First skill\ndisable: true\n---\nFirst instructions",
+        )
+        .unwrap();
+        let broken = root.join("home/skills/broken/SKILL.md");
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::fs::write(broken, "no frontmatter").unwrap();
         let second = root.join("proj/.cupel/skills/second/SKILL.md");
         std::fs::create_dir_all(second.parent().unwrap()).unwrap();
         std::fs::write(
@@ -2156,6 +2163,10 @@ pub(crate) mod tests {
         assert!(!state.system_prompt.contains("Second instructions"));
         assert!(state.system_prompt.ends_with("\n\nPRESET RULES"));
         assert!(state.messages.is_empty(), "notices are not model messages");
+        assert!(!app.transcript.cells.iter().any(|cell| matches!(
+            cell,
+            Cell::Notice { text } if text == "The skill was successfully loaded. first"
+        )));
         for notice in [
             "The skill was successfully loaded. second",
             "It was not possible to load the skill.",

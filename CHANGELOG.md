@@ -4,6 +4,7 @@ Notable user-facing changes by release.
 
 ## [Unreleased]
 
+- Set `disable: true` in a `SKILL.md` YAML header to omit that skill from the model's catalog. Omit the field or set it to `false` to keep the skill enabled. A disabled project skill also hides a same-named home skill. New sessions and TUI hot reload refresh the catalog without removing content already in the conversation.
 - TUI: Highlight Reasoning headlines in green without changing the body text. Customize the headline with `palette.reasoning_header` (a `#rrggbb` color) in your theme JSON.
 
 ## [v0.50.1] - 2026-11-20
