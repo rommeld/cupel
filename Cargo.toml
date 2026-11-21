@@ -32,6 +32,8 @@ grep-matcher = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
+percent-encoding = "2"
+pulldown-cmark = { version = "0.13", default-features = false }
 ratatui = "0.30.2"
 reqwest = { version = "0.13", features = ["form", "json", "stream"] }
 semver = "1"

@@ -115,11 +115,18 @@ const CONTEXT_FILE_CANDIDATES: &[&str] = &["AGENTS.md", "AGENTS.MD", "CLAUDE.md"
 /// Eagerly load the context file (if any) from each root.
 #[must_use]
 pub fn load_context_files(roots: &[PathBuf]) -> Vec<ContextFile> {
+    load_context_files_with(roots, |path| std::fs::read_to_string(path))
+}
+
+pub(crate) fn load_context_files_with(
+    roots: &[PathBuf],
+    mut read: impl FnMut(&Path) -> std::io::Result<String>,
+) -> Vec<ContextFile> {
     let mut files = Vec::new();
     for root in roots {
         for candidate in CONTEXT_FILE_CANDIDATES {
             let path = root.join(candidate);
-            if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(content) = read(&path) {
                 if !content.trim().is_empty() {
                     tracing::debug!(path = %path.display(), bytes = content.len(), "context file loaded");
                     files.push(ContextFile { path, content });

@@ -8,8 +8,6 @@
 //! transform layer already downgrades them to a text placeholder for models
 //! without vision, so the tool doesn't need to know the active model.
 
-use std::collections::BTreeMap;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,13 +15,14 @@ use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt as _;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{ImageContent, TextContent, ToolResultContent};
 
+use crate::instruction_cache::InstructionCache;
 use crate::search::resolve_to_root;
-use crate::skills::Skill;
 use crate::source_observations::{SourceObservations, SourceRange};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, format_size,
@@ -84,7 +83,7 @@ pub struct ReadTool {
     cwd: PathBuf,
     description: String,
     observations: Arc<SourceObservations>,
-    skill_names: BTreeMap<PathBuf, String>,
+    instructions: Option<Arc<Mutex<InstructionCache>>>,
 }
 
 impl ReadTool {
@@ -93,7 +92,7 @@ impl ReadTool {
         Self {
             cwd: cwd.into(),
             observations: Arc::new(SourceObservations::new()),
-            skill_names: BTreeMap::new(),
+            instructions: None,
             description: format!(
                 "Read the contents of a file. Supports text files and images (jpg, png, gif, \
                  webp). Images up to 4 MiB with matching file signatures are sent as \
@@ -117,11 +116,8 @@ impl ReadTool {
     }
 
     #[must_use]
-    pub(crate) fn with_skills(mut self, skills: &[Skill]) -> Self {
-        self.skill_names = skills
-            .iter()
-            .filter_map(|skill| Some((fs::canonicalize(&skill.path).ok()?, skill.name.clone())))
-            .collect();
+    pub(crate) fn with_instructions(mut self, instructions: Arc<Mutex<InstructionCache>>) -> Self {
+        self.instructions = Some(instructions);
         self
     }
 }
@@ -249,12 +245,35 @@ impl AgentTool for ReadTool {
                 self.cwd.display()
             )
         })?;
-        let source_path = tokio::fs::canonicalize(resolve_to_root(&args.path, &checkout))
-            .await
-            .map_err(|error| format!("Could not read file: {} ({error})", args.path))?;
-        let content = tokio::fs::read_to_string(&source_path)
-            .await
-            .map_err(|e| format!("Could not read file: {} ({e})", args.path))?;
+        let read_error = |error| format!("Could not read file: {} ({error})", args.path);
+        let cached_path = match &self.instructions {
+            Some(cache) => cache.lock().await.source_path(&absolute_path),
+            None => None,
+        };
+        let source_path = match cached_path {
+            Some(path) => path,
+            None => tokio::fs::canonicalize(resolve_to_root(&args.path, &checkout))
+                .await
+                .map_err(read_error)?,
+        };
+        let instruction = match &self.instructions {
+            Some(cache) => cache
+                .lock()
+                .await
+                .read(&source_path)
+                .await
+                .map_err(read_error)?,
+            None => None,
+        };
+        let live_content;
+        let content = if let Some(instruction) = &instruction {
+            instruction.content.as_ref()
+        } else {
+            live_content = tokio::fs::read_to_string(&source_path)
+                .await
+                .map_err(read_error)?;
+            &live_content
+        };
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
@@ -263,7 +282,7 @@ impl AgentTool for ReadTool {
         // for an empty file, consistent with the offset=1 fallback.
         let all_lines: Vec<&str> = content
             .strip_suffix('\n')
-            .unwrap_or(&content)
+            .unwrap_or(content)
             .split('\n')
             .collect();
         let total_file_lines = all_lines.len();
@@ -359,16 +378,27 @@ impl AgentTool for ReadTool {
             "totalLines": total_file_lines,
             "truncated": truncation.truncated,
         });
-        if range.is_some()
-            && let Some(name) = self.skill_names.get(&source_path)
-        {
-            details["skill"] = json!(name);
+        let mut content = vec![ToolResultContent::Text(TextContent::plain(format!(
+            "{}\n\n{output}",
+            observation.header()
+        )))];
+        if let Some(instruction) = instruction {
+            if range.is_some()
+                && let Some(name) = instruction.skill_name
+            {
+                details["skill"] = json!(name);
+            }
+            let mut notice =
+                "[Session instruction snapshot. Use /hot-reload to refresh it from disk.]"
+                    .to_string();
+            for warning in instruction.warnings {
+                notice.push('\n');
+                notice.push_str(&warning);
+            }
+            content.push(ToolResultContent::Text(TextContent::plain(notice)));
         }
         Ok(AgentToolResult {
-            content: vec![ToolResultContent::Text(TextContent::plain(format!(
-                "{}\n\n{output}",
-                observation.header()
-            )))],
+            content,
             details: Some(details),
             terminate: false,
         })

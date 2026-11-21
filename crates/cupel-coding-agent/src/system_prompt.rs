@@ -90,7 +90,11 @@ Guidelines:
     );
 
     if !context_files.is_empty() {
-        prompt.push_str("\n\n<project_context>\n\nProject-specific instructions and guidelines:\n");
+        prompt.push_str(
+            "\n\n<project_context>\n\nProject-specific instructions and guidelines. These files \
+             are already loaded; do not reread them unless editing them. Use read for needed \
+             guides linked from these instructions.\n",
+        );
         for file in context_files {
             prompt.push_str(&format!(
                 "\n<project_instructions path=\"{}\">\n{}\n</project_instructions>\n",
@@ -116,9 +120,10 @@ pub fn with_skill_catalog(base: &str, skills: &[Skill]) -> String {
             "\n\nAvailable skills:\n\
              If the user requests an available skill by name, use it. Otherwise, select a skill \
              by its description only if it fits the task, or proceed without one. \
-             Use read with the selected skill's path to load its instructions. Resolve file \
-             references relative to the directory containing its SKILL.md and read them only as \
-             needed. Loading a skill does not run its scripts; normal tool rules still apply.",
+             Use read with the selected skill's path to load its instructions if they are not \
+             already available in context. Resolve file references relative to the directory \
+             containing its SKILL.md and read them only as needed. Loading a skill does not run \
+             its scripts; normal tool rules still apply.",
         );
         for skill in skills {
             prompt.push('\n');
