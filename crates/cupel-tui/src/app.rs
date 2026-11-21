@@ -2606,10 +2606,16 @@ fn tool_outcome(
         .and_then(|d| d.get("diff"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+    let skill = details
+        .filter(|_| !is_error)
+        .and_then(|d| d.get("skill"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     ToolOutcome {
         text,
         is_error,
         diff,
+        skill,
         took: None,
     }
 }

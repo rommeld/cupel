@@ -2250,6 +2250,7 @@ pub(crate) mod tests {
                 text: "src/main.rs:1: bug".into(),
                 is_error: false,
                 diff: None,
+                skill: None,
                 took: None,
             }),
         });
@@ -3045,6 +3046,7 @@ pub(crate) mod tests {
                         .join("\n"),
                     is_error: false,
                     diff: None,
+                    skill: None,
                     took: None,
                 }),
             });
@@ -3060,6 +3062,7 @@ pub(crate) mod tests {
                 text: "Success".into(),
                 is_error: false,
                 diff: Some("-1 old();\n+1 new();".into()),
+                skill: None,
                 took: None,
             }),
         });
