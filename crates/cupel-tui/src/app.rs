@@ -707,20 +707,6 @@ impl App {
             }
         }
 
-        // History is separate from cursor motion and popup/question selection.
-        // Close completion rather than opening it for a recalled prompt.
-        if key.modifiers == KeyModifiers::SHIFT {
-            match key.code {
-                KeyCode::Up => self.input.history_prev(),
-                KeyCode::Down => self.input.history_next(),
-                _ => {}
-            }
-            if matches!(key.code, KeyCode::Up | KeyCode::Down) {
-                self.autocomplete.close();
-                return;
-            }
-        }
-
         // It consumes only the keys it needs, everything else (Ctrl C
         // included) falls through so session control never changes meaning.
         // Visible but  not merely open, a session with zero matches renders
@@ -886,15 +872,13 @@ impl App {
                     self.notice("no queued messages to restore");
                 }
             }
-            (KeyCode::Up, ..) => {
-                self.input
-                    .move_vertical(-1, usize::from(self.last_input_inner.width.max(1)));
-                self.refresh_autocomplete_if_open();
+            (KeyCode::Up, false, false) if key.modifiers.is_empty() => {
+                self.input.history_prev();
+                self.autocomplete.close();
             }
-            (KeyCode::Down, ..) => {
-                self.input
-                    .move_vertical(1, usize::from(self.last_input_inner.width.max(1)));
-                self.refresh_autocomplete_if_open();
+            (KeyCode::Down, false, false) if key.modifiers.is_empty() => {
+                self.input.history_next();
+                self.autocomplete.close();
             }
             (KeyCode::Char(c), false, false) => {
                 self.input.insert(c);
@@ -1939,9 +1923,8 @@ impl App {
                     "  Esc twice    - clear the unsent prompt when idle (within 500 ms)"
                         .to_string(),
                     "  Ctrl/Alt+Left/Right - jump by word".to_string(),
-                    "  Up/Down      - move between wrapped input rows (select in popups/questions)"
+                    "  Up/Down      - browse prompt history (select in popups/questions)"
                         .to_string(),
-                    "  Shift+Up/Down - browse prompt history".to_string(),
                     "  Click input  - place the cursor (outside selection mode)".to_string(),
                     "  Modified Enter keys require a terminal with keyboard enhancement support."
                         .to_string(),

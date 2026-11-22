@@ -245,7 +245,7 @@ impl InputState {
         text
     }
 
-    /// Shift+Up, step back through history. The in progress input is stashed
+    /// Step back through history. The in progress input is stashed
     /// on the first step so it isn't lost.
     pub fn history_prev(&mut self) {
         self.preferred_column = None;
@@ -265,7 +265,7 @@ impl InputState {
         self.cursor = self.buffer.chars().count();
     }
 
-    /// Shift+Down, step forward, past the newest entry restores the stash.
+    /// Step forward through history; past the newest entry restores the stash.
     pub fn history_next(&mut self) {
         self.preferred_column = None;
         let Some(index) = self.history_index else {
