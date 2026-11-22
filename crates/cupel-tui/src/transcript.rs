@@ -75,6 +75,9 @@ pub enum Cell {
     Notice {
         text: String,
     },
+    LoadedSkills {
+        text: String,
+    },
     Usage {
         text: String,
     },
@@ -219,7 +222,7 @@ impl Transcript {
     pub fn promote_final_answer(&mut self) {
         for cell in self.cells.iter_mut().rev() {
             match cell {
-                Cell::Usage { .. } | Cell::Notice { .. } => {}
+                Cell::Usage { .. } | Cell::Notice { .. } | Cell::LoadedSkills { .. } => {}
                 Cell::Assistant { text } => {
                     // take() moves the String out (leaving an empty one
                     // behind) so the cell can be replaced without cloning
@@ -308,6 +311,7 @@ impl Transcript {
             | Cell::Thinking { text, .. }
             | Cell::Error { text }
             | Cell::Notice { text }
+            | Cell::LoadedSkills { text }
             | Cell::Usage { text }
             | Cell::Summary { text } => Some(text),
             Cell::Tool { .. } => None,
@@ -340,6 +344,27 @@ fn cell_lines(cell: &Cell, width: usize, theme: &Theme) -> Vec<Line<'static>> {
         }
         Cell::Notice { text } => {
             push_wrapped(&mut out, text, width, theme.notice);
+        }
+        Cell::LoadedSkills { text } => {
+            let (heading, items) = text.split_once('\n').unwrap_or((text, ""));
+            push_wrapped(
+                &mut out,
+                heading,
+                width,
+                theme.notice.add_modifier(Modifier::BOLD),
+            );
+            // Skill metadata is single-line, so sanitize each entry separately.
+            for item in items.lines() {
+                let item = sanitize(item.strip_prefix("* ").unwrap_or(item));
+                let chunks = wrap_line(&item, width.saturating_sub(2));
+                for (index, chunk) in chunks.into_iter().enumerate() {
+                    let prefix = if index == 0 { "* " } else { "  " };
+                    out.push(Line::from(Span::styled(
+                        format!("{prefix}{chunk}"),
+                        theme.notice,
+                    )));
+                }
+            }
         }
         Cell::Usage { text } => {
             push_wrapped(&mut out, text, width, theme.detail);
