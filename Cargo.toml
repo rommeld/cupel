@@ -62,7 +62,7 @@ unsafe_code = "forbid"
 pedantic = { level = "warn", priority = -1 }
 restriction = { level = "warn", priority = -1 }
 
-absolute-paths = "allow"
+absolute_paths = "allow"
 
 arbitrary_source_item_ordering = "allow"
 
@@ -73,6 +73,7 @@ arithmetic_side_effects = "allow"
 
 as_conversions = "allow"
 
+assert_is_empty = "allow"
 assertions_on_result_states = "allow"
 
 cast_possible_truncation = "allow"
@@ -137,9 +138,9 @@ unused_result_ok = "allow"
 
 map_unwrap_or = "allow"
 
-manual-let-else = "allow"
+manual_let_else = "allow"
 
-min-ident-chars = "allow"
+min_ident_chars = "allow"
 
 missing_docs_in_private_items = "allow"
 missing_errors_doc = "allow"
@@ -161,6 +162,8 @@ pub_with_shorthand = "allow"
 pub_without_shorthand = "allow"
 
 question_mark_used = "allow"
+
+rest_pattern_accessible_field = "allow"
 
 self_named_module_files = "allow"
 
@@ -184,7 +187,7 @@ single_match_else = "allow"
 std_instead_of_alloc = "allow"
 std_instead_of_core = "allow"
 
-str-to-string = "allow"
+str_to_string = "allow"
 
 too_many_lines = "allow"
 
@@ -196,4 +199,4 @@ unwrap_in_result = "allow"
 
 unused_trait_names = "allow"
 
-wildcard-enum-match-arm = "allow"
+wildcard_enum_match_arm = "allow"

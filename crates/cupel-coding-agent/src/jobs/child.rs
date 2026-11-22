@@ -87,7 +87,7 @@ impl ManagedChild {
             },
             never = async {
                 pipes.drain(&capture).await;
-                std::future::pending::<std::convert::Infallible>().await
+                std::future::pending::<!>().await
             } => match never {},
         };
         stop.cancel(); // Keep the job live (stopping) until cleanup and capture end.
