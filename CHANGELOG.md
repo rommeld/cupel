@@ -4,6 +4,11 @@ Notable user-facing changes by release.
 
 ## [Unreleased]
 
+## [v0.51.1] - 2026-11-22
+
+- TUI: Browse prompt history with Up and Down, while preserving arrow-key navigation in autocomplete and question menus.
+- Update `url` to resolve RUSTSEC-2026-0592.
+
 ## [v0.51.0] - 2026-11-21
 
 - Cache project instructions and their linked local Markdown guides at startup. Load each skill and its guides on first use. `/new` and `/hot-reload` rebuild the cache, while `/clear` keeps it.
