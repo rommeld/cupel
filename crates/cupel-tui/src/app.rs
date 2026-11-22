@@ -388,9 +388,11 @@ impl App {
         if !app.meta.skills.is_empty() {
             let mut lines = vec!["Loaded skills".to_string()];
             for skill in &app.meta.skills {
-                lines.push(format!("  {} [{}]", skill.name, skill.description));
+                lines.push(format!("* {} [{}]", skill.name, skill.description));
             }
-            app.notice(lines.join("\n"));
+            app.transcript.cells.push(Cell::LoadedSkills {
+                text: lines.join("\n"),
+            });
         }
         // A startup condition (e.g. keyless start) also appears as a notice
         // instead of blocking the session.

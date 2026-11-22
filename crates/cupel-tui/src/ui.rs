@@ -2165,7 +2165,7 @@ pub(crate) mod tests {
         assert!(app.agent.state().system_prompt.contains("First skill"));
         assert!(app.transcript.cells.iter().any(|cell| matches!(
             cell,
-            Cell::Notice { text } if text == "Loaded skills\n  first [First skill]"
+            Cell::LoadedSkills { text } if text == "Loaded skills\n* first [First skill]"
         )));
         let session_id = app.recorder.session_id().to_string();
 
@@ -2202,14 +2202,42 @@ pub(crate) mod tests {
             .transcript
             .cells
             .iter()
-            .filter_map(|cell| match cell {
-                Cell::Notice { text } if text.starts_with("Loaded skills") => Some(text.as_str()),
-                _ => None,
-            })
+            .enumerate()
+            .filter_map(|(index, cell)| matches!(cell, Cell::LoadedSkills { .. }).then_some(index))
             .collect();
+        let [index] = loaded.as_slice() else {
+            panic!("expected one loaded skills notice, found {loaded:?}");
+        };
         assert_eq!(
-            loaded,
-            ["Loaded skills\n  second [Second skill]\n  third [Third skill]"]
+            app.transcript.copy_text(*index),
+            Some("Loaded skills\n* second [Second skill]\n* third [Third skill]")
+        );
+
+        let rendered = app.transcript.to_lines(16, None, &CUPEL);
+        let lines: Vec<_> = rendered
+            .lines
+            .iter()
+            .zip(&rendered.cell_at)
+            .filter_map(|(line, cell)| (*cell == Some(*index)).then_some(line))
+            .collect();
+        let text: Vec<_> = lines.iter().map(ToString::to_string).collect();
+        let rows: Vec<_> = text.iter().map(|line| line.trim_end()).collect();
+        assert_eq!(
+            rows,
+            [
+                "Loaded skills",
+                "* second",
+                "  [Second skill]",
+                "* third [Third",
+                "  skill]",
+            ]
+        );
+        assert!(
+            lines[0].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD),
+            "the loaded skills heading should be bold"
         );
         assert!(app.transcript.cells.iter().any(|cell| matches!(
             cell,
