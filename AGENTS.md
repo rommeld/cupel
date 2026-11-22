@@ -6,14 +6,11 @@
 
 1. Think before Code: Don't assume. Don't hide confusion. Always Verfiy.
 2. Simplicity First: Minimum code that solves the problem. Never speculate.
-3. Never asume, always verify.
-4. Only test what you are really working on. Never exceed the scope.
+3. Only test what you are really working on. Never exceed the scope.
 3. Surgical Changes: Touch only what you must. Clean up only your own mess.
 4. Define Success Criteria: Transform tasks into verifiable goals.
 
 Before you make code changes, read the Rust coding guidelines [coding-guidelines.md](docs/coding-guidelines.md).
-
-Do not change the README.md, as this is my job.
 
 ## Commit and Pull Request Guidelines
 
