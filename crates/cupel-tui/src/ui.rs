@@ -2624,7 +2624,7 @@ pub(crate) mod tests {
             .expect("expected prompt key help");
         assert!(keys.contains("Shift+Enter  - insert a newline"));
         assert!(keys.contains("Ctrl+Enter   - steer"));
-        assert!(keys.contains("Shift+Up/Down - browse prompt history"));
+        assert!(keys.contains("Up/Down      - browse prompt history"));
         assert!(keys.contains("Ctrl/Alt+Left/Right - jump by word"));
         assert!(!keys.contains("Alt+Enter"));
 
@@ -2920,27 +2920,32 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn up_down_move_visually_and_shift_arrows_recall_history_and_restore_draft() {
+    fn up_down_recall_history_and_restore_multiline_or_wrapped_drafts() {
+        for draft in ["hello world", "hello\nworld"] {
+            let mut app = test_app();
+            app.input.insert_str("old prompt");
+            let _ = app.input.submit();
+            app.input.insert_str(draft);
+            let _ = draw(&mut app, 12, 20);
+            for key in [KeyCode::Up, KeyCode::Down] {
+                app.on_terminal_event(Event::Key(KeyEvent::new(key, KeyModifiers::SHIFT)));
+                assert_eq!(app.input.text(), draft);
+            }
+            press(&mut app, KeyCode::Up);
+            assert_eq!(app.input.text(), "old prompt");
+            press(&mut app, KeyCode::Down);
+            assert_eq!(app.input.text(), draft);
+            assert!(!app.autocomplete.is_open());
+            assert!(app.pending_prompt.is_none());
+        }
         let mut app = test_app();
-        app.input.insert_str("old prompt");
-        let _ = app.input.submit();
-        app.input.insert_str("hello world");
-        let _ = draw(&mut app, 12, 20); // ten display columns in the editor
-        press(&mut app, KeyCode::Up);
-        assert_eq!(app.input.text(), "hello world");
-        assert_eq!(app.input.cursor(), 5);
-        press(&mut app, KeyCode::Down);
-        assert_eq!(app.input.cursor(), 11);
-
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)));
-        assert_eq!(app.input.text(), "old prompt");
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::SHIFT,
-        )));
-        assert_eq!(app.input.text(), "hello world");
-        assert!(!app.autocomplete.is_open());
-        assert!(app.pending_prompt.is_none());
+        app.input.insert_str("one\ntwo");
+        let cursor = app.input.cursor();
+        for key in [KeyCode::Up, KeyCode::Down] {
+            press(&mut app, key);
+            assert_eq!(app.input.text(), "one\ntwo");
+            assert_eq!(app.input.cursor(), cursor);
+        }
     }
 
     #[test]
@@ -2994,10 +2999,10 @@ pub(crate) mod tests {
         type_text(&mut app, "X");
         assert!(app.input.text().contains("日X本語"));
 
-        for _ in 0..3 {
-            press(&mut app, KeyCode::Up);
-            let _ = draw(&mut app, 80, 24);
+        while app.input.cursor() > 0 {
+            press(&mut app, KeyCode::Left);
         }
+        let _ = draw(&mut app, 80, 24);
         assert_eq!(app.last_input_scroll, 0);
         assert!(draw(&mut app, 80, 24).contains("zero"));
     }
@@ -3031,7 +3036,7 @@ pub(crate) mod tests {
         ));
         assert_eq!(app.input.cursor(), 8);
         press(&mut app, KeyCode::Up);
-        assert_eq!(app.input.cursor(), 8, "resized input has only one row");
+        assert_eq!(app.input.cursor(), 8, "empty history preserves cursor");
     }
 
     #[test]
@@ -4366,30 +4371,31 @@ pub(crate) mod tests {
         // tasks, which needs a tokio runtime this sync test doesn't have).
         app.input.insert_str("old prompt");
         let _ = app.input.submit();
+        let _answer = open_question(&mut app);
+        let question_selection = app.question.as_ref().unwrap().selected;
         type_text(&mut app, "@");
-        assert!(app.autocomplete.is_open());
+        assert!(app.autocomplete.visible().unwrap().0.len() > 1);
         let buffer_before = app.input.text().to_string();
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)));
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
-        assert_eq!(app.input.text(), buffer_before, "history must not fire");
-        assert!(app.autocomplete.is_open());
+        for (key, selected) in [(KeyCode::Down, 1), (KeyCode::Up, 0)] {
+            press(&mut app, key);
+            assert_eq!(app.autocomplete.visible().unwrap().1, selected);
+            assert_eq!(app.input.text(), buffer_before, "history must not fire");
+            assert_eq!(app.question.as_ref().unwrap().selected, question_selection);
+        }
     }
 
     #[test]
-    fn shift_up_down_bypass_completion_and_restore_the_draft_without_reopening() {
+    fn invisible_completion_allows_history_and_does_not_reopen() {
         let mut app = test_app_in(&autocomplete_cwd("shift-nav"));
         app.input.insert_str("old prompt");
         let _ = app.input.submit();
-        type_text(&mut app, "@");
-        assert!(app.autocomplete.visible().is_some());
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)));
+        type_text(&mut app, "@no-such-match-xyz");
+        assert!(app.autocomplete.visible().is_none());
+        press(&mut app, KeyCode::Up);
         assert_eq!(app.input.text(), "old prompt");
         assert!(!app.autocomplete.is_open());
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::SHIFT,
-        )));
-        assert_eq!(app.input.text(), "@");
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.input.text(), "@no-such-match-xyz");
         assert!(!app.autocomplete.is_open());
     }
 
@@ -7133,22 +7139,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn shift_arrows_recall_history_without_changing_the_question_selection() {
+    fn question_arrows_change_selection_without_recalling_history() {
         let mut app = test_app();
         app.input.insert_str("old prompt");
         let _ = app.input.submit();
         let _answer = open_question(&mut app);
         type_text(&mut app, "my answer");
-        let selected = app.question.as_ref().unwrap().selected;
-        app.on_terminal_event(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT)));
-        assert_eq!(app.input.text(), "old prompt");
-        assert_eq!(app.question.as_ref().unwrap().selected, selected);
-        app.on_terminal_event(Event::Key(KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::SHIFT,
-        )));
-        assert_eq!(app.input.text(), "my answer");
-        assert_eq!(app.question.as_ref().unwrap().selected, selected);
+        for (key, selected) in [(KeyCode::Up, 0), (KeyCode::Down, 1)] {
+            press(&mut app, key);
+            assert_eq!(app.input.text(), "my answer");
+            assert_eq!(app.question.as_ref().unwrap().selected, selected);
+        }
     }
 
     #[test]
