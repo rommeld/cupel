@@ -43,3 +43,6 @@
 
 !/docs/
 !/docs/coding-guidelines.md
+
+!/.cupel/skills/
+!/.cupel/skills/**
