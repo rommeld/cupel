@@ -2,11 +2,15 @@
 
 Notable user-facing changes by release.
 
-## [Unreleased]
+## [v0.52.0] - 2026-11-23
 
-- Add DaisyRose 27B and Inkling 2 Mini on OpenRouter, plus seven Fireworks `-latest` routers for GLM, Qwen, Kimi, and MiniMax. Provider defaults are unchanged.
-- Use `jobs wait` instead of polling for background Bash jobs. It returns the status and output when the job finishes or the wait expires (30 seconds by default, up to 60 seconds). Expiring or canceling the wait leaves the job running.
-- On Unix, set `yield_after_ms` on a Bash call to get a normal Bash result (including errors and full-log recovery) if it finishes before yielding, or a job ID and an output tail if it keeps running. Use `jobs wait` for the final result. The command's original timeout still applies after it yields.
+- Use `jobs wait` to get a Bash job's status and output when it finishes or the wait expires. The default wait is 30 seconds, with a maximum of 60 seconds. Canceling the wait or letting it expire leaves the job running.
+- On Unix, set `yield_after_ms` to get a job ID and recent output if a Bash command is still running after that many milliseconds. If it finishes sooner, Cupel returns the usual Bash result, including any error and a path to the full log if the output was truncated. Use `jobs wait` to get the final result. The original command timeout still applies.
+- Cupel adds DaisyRose 27B and Inkling 2 Mini to its OpenRouter catalog. It adds seven Fireworks `-latest` model aliases for GLM, Qwen, Kimi, and MiniMax. Provider defaults are unchanged.
+- The terminal interface shows loaded skills in a bulleted list and wraps long descriptions. The Arcade Light theme uses a cream background and orange accents.
+- The README covers all built-in commands and providers. It also explains how to use skills, undo patch edits, run Git worktree sessions, and set up hooks.
+- The pull request checks warn about new or rewritten Rust comments without blocking merges. Documentation comments do not count.
+- Update `aws-config` to 1.13.3, `aws-sdk-bedrockruntime` to 1.156.0, and `agent-client-protocol` to 5.4.0.
 
 ## [v0.51.1] - 2026-11-22
 
