@@ -298,7 +298,7 @@ impl AgentTool for BashTool {
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Start a managed session job (Unix only). Returns a job ID, not the exit status or readiness. Use jobs to inspect or stop it. Optional timeout up to 4 hours."
+                    "description": "Start a managed session job (Unix only). Returns a job ID, not the exit status or readiness. Use jobs to wait for, inspect, or stop it. Optional timeout up to 4 hours."
                 }
             },
             "required": ["command"]
@@ -381,7 +381,7 @@ impl AgentTool for BashTool {
                 )
                 .await?;
             let mut result = AgentToolResult::text(format!(
-                "Started managed job {id}. This confirms spawn only; use jobs for status or output."
+                "Started managed job {id}. This confirms spawn only; use jobs wait for completion or jobs output for the current tail."
             ));
             result.details = Some(json!({"id": id}));
             return Ok(result);

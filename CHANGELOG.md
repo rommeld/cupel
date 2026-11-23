@@ -5,6 +5,7 @@ Notable user-facing changes by release.
 ## [Unreleased]
 
 - Add DaisyRose 27B and Inkling 2 Mini on OpenRouter, plus seven Fireworks `-latest` routers for GLM, Qwen, Kimi, and MiniMax. Provider defaults are unchanged.
+- Use `jobs wait` instead of polling for background Bash jobs. It returns the status and output when the job finishes or the wait expires (30 seconds by default, up to 60 seconds). Expiring or canceling the wait leaves the job running.
 
 ## [v0.51.1] - 2026-11-22
 

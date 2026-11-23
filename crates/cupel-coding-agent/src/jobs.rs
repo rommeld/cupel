@@ -5,6 +5,7 @@ mod child;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -318,6 +319,33 @@ impl Jobs {
             String::from_utf8_lossy(&bytes).into_owned()
         });
         Ok((serde_json::json!(summary), output))
+    }
+
+    /// Waits for completion or returns the current output snapshot at the deadline.
+    pub(crate) async fn wait(
+        &self,
+        id: &str,
+        duration: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<(serde_json::Value, Option<String>), String> {
+        let finished = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|error| format!("Job state unavailable: {error}"))?;
+            state.live_job(id).map(|job| job.finished.clone())
+        };
+        if let Some(finished) = finished
+            && !duration.is_zero()
+        {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return Err("Operation aborted".to_string()),
+                () = finished.cancelled() => {},
+                () = tokio::time::sleep(duration) => {},
+            }
+        }
+        self.inspect(id, true)
     }
 
     /// Requests cleanup before awaiting it. Dropping the caller cannot undo the stop.

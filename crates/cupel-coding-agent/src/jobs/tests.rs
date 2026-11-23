@@ -86,6 +86,48 @@ async fn noisy_jobs_keep_a_bounded_tail_after_turn_cancellation() {
 }
 
 #[tokio::test]
+async fn wait_expiry_returns_output_without_stopping_the_job() {
+    let jobs = Jobs::default();
+    let id = start(&jobs, "printf ready; exec sleep 30").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while jobs.inspect(&id, true).unwrap().1.as_deref() != Some("ready") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("job did not produce its initial output");
+
+    tokio::time::pause();
+    let before = tokio::time::Instant::now();
+    let duration = Duration::from_millis(20);
+    let cancel = CancellationToken::new();
+    let (status, output) =
+        tokio::time::timeout(Duration::from_secs(5), jobs.wait(&id, duration, &cancel))
+            .await
+            .expect("wait ignored its deadline")
+            .unwrap();
+    assert!(
+        before.elapsed() >= duration,
+        "wait returned before its deadline"
+    );
+    assert_eq!(status["state"], "running");
+    assert!(status["exit"].is_null());
+    assert_eq!(output.as_deref(), Some("ready"));
+
+    tokio::time::resume();
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(jobs.wait(&id, Duration::from_secs(30), &cancel), async {
+            jobs.stop(&id).await.unwrap();
+        })
+    })
+    .await
+    .expect("stop should also finish an active wait");
+    let (status, _) = result.unwrap();
+    assert_eq!(status["state"], "stopped");
+    assert_eq!(status["exit"]["signal"], 9);
+}
+
+#[tokio::test]
 async fn jobs_reject_excess_live_starts_and_evict_by_completion_order() {
     let jobs = Jobs::default();
     let first = start(&jobs, "exec sleep 30").await;
@@ -111,7 +153,10 @@ async fn jobs_reject_excess_live_starts_and_evict_by_completion_order() {
         )
         .await
         .unwrap();
-    let (status, _) = completed(&jobs, &timed).await;
+    let (status, _) = jobs
+        .wait(&timed, Duration::from_secs(5), &cancel)
+        .await
+        .unwrap();
     assert_eq!(
         status["state"], "timedOut",
         "closed pipes must not disable the deadline"
