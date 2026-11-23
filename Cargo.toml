@@ -6,6 +6,7 @@ members = [
     "crates/cupel-coding-agent",
     "crates/cupel-tui",
     "crates/cupel-acp",
+    "tools/no-new-comments",
 ]
 
 [workspace.package]

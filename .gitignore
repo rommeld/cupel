@@ -6,6 +6,12 @@
 /crates/cupel-acp/examples
 /crates/.DS_Store
 
+!/tools/
+!/tools/no-new-comments/
+!/tools/no-new-comments/**/
+!/tools/no-new-comments/**/*.rs
+!/tools/no-new-comments/Cargo.toml
+
 !.gitignore
 
 !Cargo.toml
