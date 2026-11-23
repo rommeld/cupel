@@ -1592,6 +1592,29 @@ mod tests {
     }
 
     #[test]
+    fn fireworks_kimi_latest_routers_send_explicit_off() {
+        let models = crate::catalog::builtin_models();
+        for id in [
+            "accounts/fireworks/routers/kimi-latest",
+            "accounts/fireworks/routers/kimi-fast-latest",
+        ] {
+            let model = models.iter().find(|model| model.id == id).expect(id);
+            let compat = completions_compat(model);
+            for (reasoning, effort) in [(None, "none"), (Some(ThinkingLevel::Max), "max")] {
+                let options = StreamOptions {
+                    reasoning,
+                    temperature: Some(0.2),
+                    ..StreamOptions::default()
+                };
+                let body = build_request_body(model, &empty_context(), &options, &compat);
+                assert_eq!(body["model"], id);
+                assert_eq!(body["reasoning_effort"], effort, "{id}");
+                assert!(body.get("temperature").is_none(), "{id}: {body}");
+            }
+        }
+    }
+
+    #[test]
     fn openrouter_fable_52_uses_native_effort_without_temperature() {
         let model = crate::catalog::builtin_models()
             .into_iter()

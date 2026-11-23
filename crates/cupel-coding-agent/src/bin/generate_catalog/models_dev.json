@@ -1346,6 +1346,140 @@
         ],
         "temperature": true
       },
+      "accounts/fireworks/routers/glm-fast-latest": {
+        "cost": {
+          "cache_read": 0.39,
+          "cache_write": 0.0,
+          "input": 2.1,
+          "output": 6.6,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048572,
+          "input": null,
+          "output": 262144
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "GLM 5.3 Fast (Latest)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "accounts/fireworks/routers/glm-flash-latest": {
+        "cost": {
+          "cache_read": 0.03,
+          "cache_write": 0.0,
+          "input": 0.15,
+          "output": 0.5,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048573,
+          "input": null,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "GLM Flash Latest (GLM 5.3 Flash)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "accounts/fireworks/routers/glm-latest": {
+        "cost": {
+          "cache_read": 0.26,
+          "cache_write": 0.0,
+          "input": 1.4,
+          "output": 4.4,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048573,
+          "input": null,
+          "output": 262144
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "GLM Latest",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "accounts/fireworks/routers/kimi-fast-latest": {
+        "cost": {
+          "cache_read": 0.45,
+          "cache_write": 0.0,
+          "input": 4.5,
+          "output": 22.5,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 1048576
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Kimi Fast Latest",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
       "accounts/fireworks/routers/kimi-k3-fast": {
         "cost": {
           "cache_read": 0.45,
@@ -1425,6 +1559,109 @@
           }
         ],
         "temperature": false
+      },
+      "accounts/fireworks/routers/kimi-latest": {
+        "cost": {
+          "cache_read": 0.2,
+          "cache_write": 0.0,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 1048576
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Kimi Latest",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": false
+      },
+      "accounts/fireworks/routers/minimax-latest": {
+        "cost": {
+          "cache_read": 0.06,
+          "cache_write": 0.0,
+          "input": 0.3,
+          "output": 1.2,
+          "tiers": []
+        },
+        "limit": {
+          "context": 512000,
+          "input": null,
+          "output": 512000
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ]
+        },
+        "name": "MiniMax Latest",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "accounts/fireworks/routers/qwen-max-latest": {
+        "cost": {
+          "cache_read": 0.25,
+          "cache_write": 0.0,
+          "input": 2.0,
+          "output": 6.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 262144,
+          "input": null,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Qwen Max Latest (Qwen3.8 Max)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        ],
+        "temperature": true
       }
     }
   },
@@ -5299,6 +5536,40 @@
         ],
         "temperature": true
       },
+      "radixark/daisyrose-27b": {
+        "cost": {
+          "cache_read": 0.0375,
+          "cache_write": 0.0,
+          "input": 0.15,
+          "output": 1.875,
+          "tiers": []
+        },
+        "limit": {
+          "context": 262144,
+          "input": null,
+          "output": 235929
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "DaisyRose 27B",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "recursive/flint-v1.0:free": {
         "cost": {
           "cache_read": 0.0,
@@ -5711,6 +5982,42 @@
           ]
         },
         "name": "Inkling",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "thinkingmachines/inkling-2-mini": {
+        "cost": {
+          "cache_read": 0.015,
+          "cache_write": 0.0,
+          "input": 0.075,
+          "output": 0.3,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Inkling 2 Mini",
         "reasoning": true,
         "reasoning_options": [
           {
