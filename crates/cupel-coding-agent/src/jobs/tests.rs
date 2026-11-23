@@ -53,7 +53,7 @@ async fn pending_output(jobs: &Jobs) -> String {
                 .unwrap()
                 .live
                 .iter()
-                .find(|job| matches!(job.visibility, Visibility::Pending(_)))
+                .find(|job| matches!(job.visibility, Visibility::Pending { .. }))
                 .map(|job| job.record.capture.output());
             if let Some(output) = output
                 && output.ends_with('\n')
@@ -75,26 +75,55 @@ fn text(result: &AgentToolResult) -> &str {
 }
 
 #[tokio::test]
-async fn bash_yield_returns_inline_exit_and_output_if_already_done() {
+async fn bash_yield_inline_failure_preserves_full_log() {
     let jobs = Arc::new(Jobs::default());
     let bash = BashTool::new(std::env::temp_dir()).with_jobs(Arc::clone(&jobs));
-    let result = tokio::time::timeout(
+    let error = tokio::time::timeout(
         Duration::from_secs(5),
         bash.execute(
             "quick",
-            json!({"command": "printf 'quick-result\\n'; exit 7", "yield_after_ms": 10_000}),
+            json!({
+                "command": "printf 'head-marker\\n'; seq 1 30000; printf 'tail-marker\\n'; exit 7",
+                "yield_after_ms": 10_000
+            }),
             CancellationToken::new(),
             None,
         ),
     )
     .await
     .expect("a completed job should not wait for the yield deadline")
-    .unwrap();
-    let details = result.details.as_ref().unwrap();
-    assert_eq!(details["state"], "exited");
-    assert_eq!(details["exit"]["exitCode"], 7);
-    assert!(details.get("id").is_none(), "no handoff occurred");
-    assert!(text(&result).ends_with("\n\nquick-result\n"));
+    .unwrap_err()
+    .to_string();
+    assert!(error.ends_with("Command exited with code 7"));
+    assert!(error.contains("tail-marker\n"));
+    assert!(!error.contains("head-marker"));
+    let (_, spill) = error
+        .split_once("Full output: ")
+        .expect("missing full log path");
+    let (spill, _) = spill
+        .split_once("]\n\n")
+        .expect("missing end of spill notice");
+    let full_log = std::fs::read_to_string(spill).unwrap();
+    std::fs::remove_file(spill).unwrap();
+    assert!(full_log.starts_with("head-marker\n"));
+    assert!(full_log.ends_with("tail-marker\n"));
+    assert_eq!(jobs.list().unwrap(), json!({"jobs": []}));
+}
+
+#[tokio::test]
+async fn bash_yield_inline_timeout_is_a_bash_error_not_a_job_result() {
+    let jobs = Arc::new(Jobs::default());
+    let bash = BashTool::new(std::env::temp_dir()).with_jobs(Arc::clone(&jobs));
+    let error = bash
+        .execute(
+            "quick-timeout",
+            json!({"command": "exec sleep 30", "timeout": 0.1, "yield_after_ms": 10_000}),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "Command timed out after 0.1 seconds");
     assert_eq!(jobs.list().unwrap(), json!({"jobs": []}));
 }
 
@@ -121,6 +150,10 @@ async fn bash_yield_hands_off_once_without_resetting_the_timeout() {
     ));
     assert!(futures_util::poll!(call.as_mut()).is_pending());
     assert_eq!(pending_output(&jobs).await, "progress\n");
+    let private_output = match &jobs.state.lock().unwrap().live[0].visibility {
+        Visibility::Pending { output, .. } => Arc::clone(output),
+        _ => panic!("job must remain private until the yield deadline"),
+    };
 
     // Advance only after the OS has started the child and its output has been captured.
     tokio::time::pause();
@@ -132,6 +165,10 @@ async fn bash_yield_hands_off_once_without_resetting_the_timeout() {
     let id = details["id"].as_str().unwrap();
     assert!(text(&result).contains("jobs wait"));
     assert!(text(&result).ends_with("\n\nprogress\n"));
+    assert!(
+        private_output.lock().unwrap().is_none(),
+        "foreground capture must not survive handoff"
+    );
     cancel.cancel(); // The Bash call no longer owns the job.
 
     tokio::time::advance(Duration::from_secs(10)).await;

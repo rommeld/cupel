@@ -14,6 +14,9 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(unix)]
+use crate::tools::bash::{OutputAccumulator, RunOutcome};
+
 const MAX_LIVE: usize = 2;
 const MAX_COMPLETED: usize = 8;
 const TAIL_BYTES: usize = 64 * 1024;
@@ -43,10 +46,16 @@ struct Live {
 enum Visibility {
     Published,
     #[cfg(unix)]
-    Pending(oneshot::Sender<Completed>),
+    Pending {
+        completion: oneshot::Sender<Completed>,
+        output: PendingOutput,
+    },
     #[cfg(unix)]
     Discarded,
 }
+
+#[cfg(unix)]
+type PendingOutput = Arc<Mutex<Option<Box<OutputAccumulator>>>>;
 
 #[cfg(unix)]
 struct Spawned {
@@ -59,7 +68,10 @@ struct Spawned {
 
 #[cfg(unix)]
 pub(crate) enum YieldOutcome {
-    Finished(JobSnapshot),
+    Finished {
+        outcome: RunOutcome,
+        output: Box<OutputAccumulator>,
+    },
     Yielded(JobSnapshot),
 }
 
@@ -189,10 +201,22 @@ impl Completed {
     }
 
     #[cfg(unix)]
-    fn inline_result(&self) -> YieldOutcome {
-        let mut summary = self.summary();
-        summary.id = None; // An inline result never had a public job ID.
-        YieldOutcome::Finished(JobSnapshot::new(summary, &self.record.capture))
+    fn inline_result(&self, output: &PendingOutput) -> Result<YieldOutcome, String> {
+        let outcome = match self.phase {
+            Phase::Exited => RunOutcome::Exited(self.exit.exit_code),
+            Phase::TimedOut => RunOutcome::TimedOut,
+            Phase::Stopped | Phase::Stopping => RunOutcome::Aborted,
+            Phase::Running | Phase::Failed => RunOutcome::Failed,
+        };
+        let mut output = output
+            .lock()
+            .map_err(|error| format!("Inline output unavailable: {error}"))?
+            .take()
+            .ok_or("Missing inline output")?;
+        if self.record.capture.incomplete {
+            output.mark_incomplete();
+        }
+        Ok(YieldOutcome::Finished { outcome, output })
     }
 }
 
@@ -278,10 +302,14 @@ impl Jobs {
         cancel: &CancellationToken,
     ) -> Result<YieldOutcome, String> {
         let (sender, mut completion) = oneshot::channel();
+        let output = Arc::new(Mutex::new(Some(Box::new(OutputAccumulator::new()))));
         let started = self.spawn(
             display_command,
             timeout,
-            Visibility::Pending(sender),
+            Visibility::Pending {
+                completion: sender,
+                output: Arc::clone(&output),
+            },
             cancel,
             || child::ManagedChild::spawn(command),
         )?;
@@ -295,8 +323,9 @@ impl Jobs {
             biased;
             () = cancel.cancelled() => {},
             result = &mut completion => {
-                return result.map(|job| job.inline_result())
-                    .map_err(|error| format!("Command ended without an inline result: {error}"));
+                return result
+                    .map_err(|error| format!("Command ended without an inline result: {error}"))?
+                    .inline_result(&output);
             }
             () = tokio::time::sleep_until(yield_at) => {
                 let mut state = self.state.lock()
@@ -309,11 +338,18 @@ impl Jobs {
                         job.visibility = Visibility::Published;
                         stop_on_drop.disarm();
                         let snapshot = JobSnapshot::new(job.summary(), &job.record.capture);
+                        drop(state);
+                        // Dispose of the private spill without holding the registry lock.
+                        if let Ok(mut output) = output.lock() {
+                            output.take();
+                        }
                         return Ok(YieldOutcome::Yielded(snapshot));
                     }
                     // Completion removes the private job and sends its result under this same lock.
-                    return completion.try_recv().map(|job| job.inline_result())
-                        .map_err(|error| format!("Could not retrieve command result at handoff: {error}"));
+                    drop(state);
+                    return completion.try_recv()
+                        .map_err(|error| format!("Could not retrieve command result at handoff: {error}"))?
+                        .inline_result(&output);
                 }
             }
         }
@@ -378,9 +414,20 @@ impl Jobs {
         let worker_id = id.clone();
         let done = finished.clone().drop_guard();
         let worker_stop = stop.clone();
+        let pending_output = match &visibility {
+            Visibility::Pending { output, .. } if !interrupted => Some(Arc::clone(output)),
+            _ => None,
+        };
         tokio::spawn(async move {
             let _done = done;
             let capture = |update: child::CaptureUpdate<'_>| {
+                if let child::CaptureUpdate::Bytes(bytes) = update
+                    && let Some(output) = &pending_output
+                    && let Ok(mut output) = output.lock()
+                    && let Some(output) = output.as_mut()
+                {
+                    output.append(bytes);
+                }
                 if let Ok(mut state) = shared.lock()
                     && let Some(job) = state.live.iter_mut().find(|job| job.record.id == worker_id)
                 {
@@ -532,8 +579,8 @@ impl State {
         };
         match job.visibility {
             Visibility::Published => self.retain(completed),
-            Visibility::Pending(sender) => {
-                let _ = sender.send(completed);
+            Visibility::Pending { completion, .. } => {
+                let _ = completion.send(completed);
             }
             Visibility::Discarded => {}
         }
