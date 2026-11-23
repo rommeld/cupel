@@ -108,6 +108,10 @@ pub struct CuratedProvider {
 /// Kimi K2.7 Code on OpenRouter is always thinking.
 const KIMI_K27_CODE_OPENROUTER_THINKING: &[(&str, Option<&str>)] = &[("off", None)];
 
+/// Fireworks' Kimi routers default to thinking when effort is omitted.
+const KIMI_LATEST_FIREWORKS_THINKING: &[(&str, Option<&str>)] =
+    &[("off", Some("none")), ("minimal", None), ("xhigh", None)];
+
 /// Claude Sonnet 5.5 answers `thinking` with `type` set to `disabled` with a 400.
 /// Its lowest setting is the thinking type `between_tools`, no extended
 /// thinking, only short progress notes between tool calls. models.dev
@@ -461,6 +465,35 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
                 Thinking::FromEffort,
             ),
+            // Track the provider's current model in each family by router ID.
+            fireworks_completions(
+                "accounts/fireworks/routers/glm-latest",
+                Thinking::FromEffort,
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/glm-fast-latest",
+                Thinking::FromEffort,
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/glm-flash-latest",
+                Thinking::FromEffort,
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/qwen-max-latest",
+                Thinking::FromEffort,
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/kimi-latest",
+                Thinking::Explicit(KIMI_LATEST_FIREWORKS_THINKING),
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/kimi-fast-latest",
+                Thinking::Explicit(KIMI_LATEST_FIREWORKS_THINKING),
+            ),
+            fireworks_completions(
+                "accounts/fireworks/routers/minimax-latest",
+                Thinking::FromEffort,
+            ),
         ],
     },
     CuratedProvider {
@@ -614,6 +647,8 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("google/gemini-4-carbon", Thinking::FromEffort),
             openrouter("kt/midm-k-3.0-pro", Thinking::FromEffort),
             openrouter("motif-technologies/motif-3", Thinking::FromEffort),
+            openrouter("radixark/daisyrose-27b", Thinking::FromEffort),
+            openrouter("thinkingmachines/inkling-2-mini", Thinking::FromEffort),
         ],
     },
 ];

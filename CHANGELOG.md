@@ -4,6 +4,8 @@ Notable user-facing changes by release.
 
 ## [Unreleased]
 
+- Add DaisyRose 27B and Inkling 2 Mini on OpenRouter, plus seven Fireworks `-latest` routers for GLM, Qwen, Kimi, and MiniMax. Provider defaults are unchanged.
+
 ## [v0.51.1] - 2026-11-22
 
 - TUI: Browse prompt history with Up and Down, while preserving arrow-key navigation in autocomplete and question menus.
