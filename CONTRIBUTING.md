@@ -47,6 +47,24 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
+### Advisory Rust comment check
+
+Pull requests get a warning for each new or rewritten ordinary Rust comment.
+Rust doc comments are excluded, and warnings do not fail CI. Keep comments
+that document a verified constraint or satisfy a legal or toolchain requirement.
+Use the [no-comments skill](.cupel/skills/no-comments/SKILL.md) as the review guide.
+
+To run the same comparison locally, fetch your target branch and pass it along
+with the committed head you want to check:
+
+```sh
+git fetch origin main
+cargo run --locked -p no-new-comments -- --base origin/main --head HEAD
+```
+
+The tool compares the merge base with the committed head. It ignores staged
+and unstaged edits and reports line numbers from the head commit.
+
 ## Issues and pull requests
 
 For bugs, include your cupel version, operating system, reproduction steps,

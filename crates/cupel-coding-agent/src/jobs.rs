@@ -152,7 +152,8 @@ struct Exit {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Summary<'a> {
-    id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<&'a str>,
     command_preview: &'a str,
     state: Phase,
     exit: Option<&'a Exit>,
@@ -165,7 +166,7 @@ pub(crate) struct Summary<'a> {
 impl Record {
     fn summary(&self, phase: Phase) -> Summary<'_> {
         Summary {
-            id: &self.id,
+            id: Some(&self.id),
             command_preview: &self.command,
             state: phase,
             exit: None,
