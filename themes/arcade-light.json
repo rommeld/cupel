@@ -4,18 +4,18 @@
   "palette": {
     "bg": "#fff8ee",
     "fg": "#2b2040",
-    "surface": "#f2e4ff",
-    "raised": "#ffe2d4",
-    "selection": "#93ffe8",
-    "border": "#9b2fed",
+    "surface": "#fee7f2",
+    "raised": "#ff9347",
+    "selection": "#ffdcbf",
+    "border": "#c239c5",
     "muted": "#65507e",
-    "red": "#c01b47",
+    "red": "#a84047",
     "green": "#00713f",
-    "yellow": "#9d4200",
-    "magenta": "#c50079",
+    "yellow": "#984c19",
+    "magenta": "#ac2f78",
     "cyan": "#006686",
-    "heading": "#6800d8",
-    "emphasis": "#a70097",
-    "link": "#003bdd"
+    "heading": "#7541c3",
+    "emphasis": "#922998",
+    "link": "#335dce"
   }
 }
