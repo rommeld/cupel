@@ -30,9 +30,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
-use cupel_core::types::now_ms;
 
 use crate::jobs::Jobs;
+#[cfg(unix)]
+use crate::jobs::YieldOutcome;
 use crate::process::{EXIT_STDIO_GRACE, OutputChunk, kill_process_group, output_chunks};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, TruncationResult,
@@ -48,10 +49,11 @@ struct BashArgs {
     timeout: Option<f64>,
     #[serde(default)]
     background: bool,
+    yield_after_ms: Option<u64>,
 }
 
 /// Streaming output tracker with bounded memory (see module docs).
-struct OutputAccumulator {
+pub(crate) struct OutputAccumulator {
     max_lines: usize,
     max_bytes: usize,
     tail: Vec<u8>,
@@ -62,10 +64,11 @@ struct OutputAccumulator {
     current_line_bytes: usize,
     pending: Vec<u8>,
     temp: Option<(PathBuf, std::fs::File)>,
+    incomplete: bool,
 }
 
 impl OutputAccumulator {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             max_lines: DEFAULT_MAX_LINES,
             max_bytes: DEFAULT_MAX_BYTES,
@@ -77,14 +80,21 @@ impl OutputAccumulator {
             current_line_bytes: 0,
             pending: Vec::new(),
             temp: None,
+            incomplete: false,
         }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn mark_incomplete(&mut self) {
+        self.incomplete = true;
     }
 
     fn total_lines(&self) -> usize {
         self.completed_lines + usize::from(self.has_open_line)
     }
 
-    fn append(&mut self, data: &[u8]) {
+    pub(crate) fn append(&mut self, data: &[u8]) {
+        let was_over_limits = self.over_limits();
         self.total_bytes += data.len();
 
         // Line accounting, count newlines, track the open last line's size
@@ -127,10 +137,11 @@ impl OutputAccumulator {
         if let Some((_, file)) = &mut self.temp {
             use std::io::Write as _;
             let _ = file.write_all(data);
-        } else {
+        } else if !was_over_limits {
             self.pending.extend_from_slice(data);
             if self.over_limits() {
                 self.open_temp_file();
+                self.pending = Vec::new();
             }
         }
     }
@@ -140,25 +151,34 @@ impl OutputAccumulator {
     }
 
     fn open_temp_file(&mut self) {
-        if self.temp.is_some() {
+        let Ok(nonce) = getrandom::u64() else {
             return;
-        }
+        };
         let path = std::env::temp_dir().join(format!(
-            "cupel-bash-{}-{}.log",
-            std::process::id(),
-            now_ms()
+            "cupel-bash-{}-{nonce:016x}.log",
+            std::process::id()
         ));
-        if let Ok(mut file) = std::fs::File::create(&path) {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        if let Ok(mut file) = options.open(&path) {
             use std::io::Write as _;
-            let _ = file.write_all(&self.pending);
-            self.pending = Vec::new();
-            self.temp = Some((path, file));
+            if file.write_all(&self.pending).is_ok() {
+                self.temp = Some((path, file));
+            } else {
+                drop(file);
+                let _ = std::fs::remove_file(path);
+            }
         }
     }
 
     /// Current display view, tail truncated text plus truncation metadata
     /// with true totals (the tail alone under counts what scrolled past).
-    fn snapshot(&self) -> (String, TruncationResult, Option<PathBuf>) {
+    fn snapshot(&self) -> (String, TruncationResult) {
         let mut text = String::from_utf8_lossy(&self.tail).into_owned();
         if !self.tail_at_line_boundary
             && let Some(newline) = text.find('\n')
@@ -184,11 +204,16 @@ impl OutputAccumulator {
             });
         }
         let content = truncation.content.clone();
-        (
-            content,
-            truncation,
-            self.temp.as_ref().map(|(p, _)| p.clone()),
-        )
+        (content, truncation)
+    }
+}
+
+impl Drop for OutputAccumulator {
+    fn drop(&mut self) {
+        if let Some((path, file)) = self.temp.take() {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -205,10 +230,12 @@ impl BashTool {
         Self {
             cwd: cwd.into(),
             description: format!(
-                "Execute a bash command in the current working directory. Returns stdout and \
-                 stderr. Output is truncated to last {DEFAULT_MAX_LINES} lines or {}KB \
-                 (whichever is hit first). If truncated, full output is saved to a temp file. \
-                 Optionally provide a timeout in seconds.",
+                "Execute a bash command in the current working directory. Foreground output is \
+                 truncated to the last {DEFAULT_MAX_LINES} lines or {}KB (whichever is hit first). \
+                 If truncated, full foreground output is saved to a temp file. On Unix, set \
+                 yield_after_ms to wait briefly and get a job ID if the command is still running. \
+                 Use jobs wait when you need the result. Published jobs capture a 64 KiB combined \
+                 stdout/stderr tail.",
                 DEFAULT_MAX_BYTES / 1024
             ),
             jobs: None,
@@ -268,10 +295,12 @@ async fn next_output_chunk(
     }
 }
 
-enum RunOutcome {
+pub(crate) enum RunOutcome {
     Exited(Option<i32>),
     Aborted,
     TimedOut,
+    #[cfg(unix)]
+    Failed,
 }
 
 #[async_trait::async_trait]
@@ -294,11 +323,16 @@ impl AgentTool for BashTool {
                 },
                 "timeout": {
                     "type": "number",
-                    "description": "Timeout in seconds (optional, no default timeout)"
+                    "description": "Stop the command this many seconds after spawn, even if it yielded (optional, no default; up to 4 hours for managed jobs)"
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Start a managed session job (Unix only). Returns a job ID, not the exit status or readiness. Use jobs to inspect or stop it. Optional timeout up to 4 hours."
+                    "description": "Start a managed session job and return its ID immediately (Unix only). The ID does not indicate readiness. Use jobs wait for the result. Cannot be combined with yield_after_ms."
+                },
+                "yield_after_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Wait up to this many milliseconds for a normal Bash result (Unix only, no default). If still running, return the job ID and output tail; use jobs wait for the result. Cannot be combined with background: true."
                 }
             },
             "required": ["command"]
@@ -336,6 +370,9 @@ impl AgentTool for BashTool {
         {
             return Err("Invalid timeout: must be a finite number of seconds".into());
         }
+        if args.background && args.yield_after_ms.is_some() {
+            return Err("Cannot combine background: true with yield_after_ms".into());
+        }
         if !self.cwd.exists() {
             return Err(format!(
                 "Working directory does not exist: {}\nCannot execute bash commands.",
@@ -346,9 +383,10 @@ impl AgentTool for BashTool {
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
+        let managed = args.background || args.yield_after_ms.is_some();
         #[cfg(not(unix))]
-        if args.background {
-            return Err("Managed background jobs are supported only on Unix".into());
+        if managed {
+            return Err("Managed jobs are supported only on Unix".into());
         }
 
         // Commands are written for bash, regardless of the user's login shell.
@@ -363,25 +401,47 @@ impl AgentTool for BashTool {
             .stderr(std::process::Stdio::piped());
 
         #[cfg(unix)]
-        if args.background {
+        if managed {
             const MAX_TIMEOUT_SECONDS: f64 = 14_400.0;
             if args.timeout.is_some_and(|secs| secs > MAX_TIMEOUT_SECONDS) {
-                return Err("Background timeout cannot exceed 4 hours (14400 seconds)".into());
+                return Err("Managed job timeout cannot exceed 4 hours (14400 seconds)".into());
             }
             let jobs = self
                 .jobs
                 .as_ref()
                 .ok_or("No managed job session is bound")?;
-            let id = jobs
-                .start(
-                    command,
-                    &args.command,
-                    args.timeout.map(Duration::from_secs_f64),
-                    &cancel,
-                )
-                .await?;
+            let timeout = args.timeout.map(Duration::from_secs_f64);
+            if let Some(wait_ms) = args.yield_after_ms {
+                let outcome = jobs
+                    .start_yielding(
+                        command,
+                        &args.command,
+                        timeout,
+                        Duration::from_millis(wait_ms),
+                        &cancel,
+                    )
+                    .await?;
+                let snapshot = match outcome {
+                    YieldOutcome::Finished { outcome, output } => {
+                        return finish_output(*output, outcome, args.timeout);
+                    }
+                    YieldOutcome::Yielded(snapshot) => snapshot,
+                };
+                let output = if snapshot.output.is_empty() {
+                    "(no output captured)"
+                } else {
+                    &snapshot.output
+                };
+                let mut result = AgentToolResult::text(format!(
+                    "{}\nUse jobs wait when you need the result.\n\n{output}",
+                    snapshot.details
+                ));
+                result.details = Some(snapshot.details);
+                return Ok(result);
+            }
+            let id = jobs.start(command, &args.command, timeout, &cancel).await?;
             let mut result = AgentToolResult::text(format!(
-                "Started managed job {id}. This confirms spawn only; use jobs for status or output."
+                "Started managed job {id}. This confirms spawn only; use jobs wait for completion or jobs output for the current tail."
             ));
             result.details = Some(json!({"id": id}));
             return Ok(result);
@@ -450,7 +510,7 @@ impl AgentTool for BashTool {
                                 && last_update.elapsed() >= UPDATE_THROTTLE
                             {
                                 last_update = std::time::Instant::now();
-                                let (content, _, _) = output.snapshot();
+                                let (content, _) = output.snapshot();
                                 on_update(AgentToolResult::text(content));
                             }
                         }
@@ -487,85 +547,101 @@ impl AgentTool for BashTool {
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         }
 
-        let (content, truncation, full_output_path) = output.snapshot();
-        let mut text = if content.is_empty() {
-            String::new()
-        } else {
-            content
-        };
-        let mut details: Option<Value> = None;
+        let outcome = outcome.ok_or("Shell finished without an outcome")?;
+        finish_output(output, outcome, args.timeout)
+    }
+}
 
-        if truncation.truncated {
-            let start_line = truncation.total_lines - truncation.output_lines + 1;
-            let end_line = truncation.total_lines;
-            let path_note = full_output_path
-                .as_ref()
-                .map_or_else(String::new, |p| format!(" Full output: {}", p.display()));
-            let notice = if truncation.last_line_partial {
-                format!(
-                    "[Showing last {} of line {end_line} (line is {}).{path_note}]",
-                    format_size(truncation.output_bytes),
-                    format_size(output.current_line_bytes),
-                )
-            } else if truncation.truncated_by == Some(TruncatedBy::Lines) {
-                format!(
-                    "[Showing lines {start_line}-{end_line} of {}.{path_note}]",
-                    truncation.total_lines
-                )
-            } else {
-                format!(
-                    "[Showing lines {start_line}-{end_line} of {} ({} limit).{path_note}]",
-                    truncation.total_lines,
-                    format_size(DEFAULT_MAX_BYTES),
-                )
-            };
-            text = if text.is_empty() {
-                notice
-            } else {
-                format!("{text}\n\n{notice}")
-            };
-            details = Some(json!({
-                "truncated": true,
-                "totalLines": truncation.total_lines,
-                "fullOutputPath": full_output_path.map(|p| p.display().to_string()),
-            }));
-        }
+fn finish_output(
+    mut output: OutputAccumulator,
+    outcome: RunOutcome,
+    timeout_seconds: Option<f64>,
+) -> Result<AgentToolResult, ToolError> {
+    let (content, truncation) = output.snapshot();
+    // A path returned to the caller outlives the accumulator. An undisclosed
+    // spill (for example, when a command yields) is deleted on drop.
+    let full_output_path = output.temp.take().map(|(path, _)| path);
+    let mut text = if content.is_empty() {
+        String::new()
+    } else {
+        content
+    };
+    let mut details: Option<Value> = None;
 
-        // Failure paths return Err so the loop marks the result as an error.
-        let append_status = |text: &str, status: &str| {
-            if text.is_empty() {
-                status.to_string()
-            } else {
-                format!("{text}\n\n{status}")
-            }
-        };
-        match outcome {
-            Some(RunOutcome::Aborted) => Err(append_status(&text, "Command aborted").into()),
-            Some(RunOutcome::TimedOut) => Err(append_status(
-                &text,
-                &format!(
-                    "Command timed out after {} seconds",
-                    args.timeout.unwrap_or(0.0)
-                ),
+    if truncation.truncated {
+        let start_line = truncation.total_lines - truncation.output_lines + 1;
+        let end_line = truncation.total_lines;
+        let path_note = full_output_path
+            .as_ref()
+            .map_or_else(String::new, |p| format!(" Full output: {}", p.display()));
+        let notice = if truncation.last_line_partial {
+            format!(
+                "[Showing last {} of line {end_line} (line is {}).{path_note}]",
+                format_size(truncation.output_bytes),
+                format_size(output.current_line_bytes),
             )
-            .into()),
-            Some(RunOutcome::Exited(code)) if code != Some(0) => {
-                let code_text =
-                    code.map_or_else(|| "killed by signal".to_string(), |c| c.to_string());
-                Err(append_status(&text, &format!("Command exited with code {code_text}")).into())
-            }
-            _ => Ok(AgentToolResult {
-                content: vec![cupel_core::types::ToolResultContent::Text(
-                    cupel_core::types::TextContent::plain(if text.is_empty() {
-                        "(no output)".to_string()
-                    } else {
-                        text
-                    }),
-                )],
-                details,
-                terminate: false,
-            }),
+        } else if truncation.truncated_by == Some(TruncatedBy::Lines) {
+            format!(
+                "[Showing lines {start_line}-{end_line} of {}.{path_note}]",
+                truncation.total_lines
+            )
+        } else {
+            format!(
+                "[Showing lines {start_line}-{end_line} of {} ({} limit).{path_note}]",
+                truncation.total_lines,
+                format_size(DEFAULT_MAX_BYTES),
+            )
+        };
+        text = if text.is_empty() {
+            notice
+        } else {
+            format!("{text}\n\n{notice}")
+        };
+        details = Some(json!({
+            "truncated": true,
+            "totalLines": truncation.total_lines,
+            "fullOutputPath": full_output_path.map(|p| p.display().to_string()),
+        }));
+    }
+
+    // Failure paths return Err so the loop marks the result as an error.
+    let append_status = |text: &str, status: &str| {
+        if text.is_empty() {
+            status.to_string()
+        } else {
+            format!("{text}\n\n{status}")
         }
+    };
+    if output.incomplete {
+        text = append_status(&text, "[Output capture was incomplete]");
+    }
+    match outcome {
+        RunOutcome::Aborted => Err(append_status(&text, "Command aborted").into()),
+        RunOutcome::TimedOut => Err(append_status(
+            &text,
+            &format!(
+                "Command timed out after {} seconds",
+                timeout_seconds.unwrap_or(0.0)
+            ),
+        )
+        .into()),
+        #[cfg(unix)]
+        RunOutcome::Failed => Err(append_status(&text, "Failed to supervise shell").into()),
+        RunOutcome::Exited(code) if code != Some(0) => {
+            let code_text = code.map_or_else(|| "killed by signal".to_string(), |c| c.to_string());
+            Err(append_status(&text, &format!("Command exited with code {code_text}")).into())
+        }
+        _ => Ok(AgentToolResult {
+            content: vec![cupel_core::types::ToolResultContent::Text(
+                cupel_core::types::TextContent::plain(if text.is_empty() {
+                    "(no output)".to_string()
+                } else {
+                    text
+                }),
+            )],
+            details,
+            terminate: false,
+        }),
     }
 }
 
@@ -573,6 +649,8 @@ impl AgentTool for BashTool {
 mod tests {
     use super::*;
     use cupel_core::types::ToolResultContent;
+    #[cfg(unix)]
+    use cupel_core::types::now_ms;
 
     fn tool() -> BashTool {
         BashTool::new(std::env::temp_dir())
@@ -788,5 +866,15 @@ mod tests {
         assert!(!err_or_ok.contains("\n1\n"), "head should be gone");
         assert!(err_or_ok.contains("Full output:"), "got: {err_or_ok}");
         assert!(err_or_ok.contains("of 3000"), "got: {err_or_ok}");
+    }
+
+    #[test]
+    fn undisclosed_spill_is_removed_on_drop() {
+        let mut output = OutputAccumulator::new();
+        output.append(&vec![b'x'; DEFAULT_MAX_BYTES + 1]);
+        let path = output.temp.as_ref().unwrap().0.clone();
+        assert!(path.is_file());
+        drop(output);
+        assert!(!path.exists());
     }
 }

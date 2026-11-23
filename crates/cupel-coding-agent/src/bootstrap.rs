@@ -403,6 +403,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn managed_jobs_report_exit_and_output_and_reset_without_a_transcript() {
+        use std::pin::pin;
         use std::time::Duration;
 
         use serde_json::json;
@@ -446,21 +447,27 @@ mod tests {
             recorder.jobs().require_idle().is_err(),
             "job must outlive its start call"
         );
-        call(bash.as_ref(), json!({"command": ": > release"})).await;
 
-        let output = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let result = call(jobs.as_ref(), json!({"action":"output", "id":id})).await;
-                match result.details.as_ref().unwrap()["state"].as_str() {
-                    Some("running" | "stopping") => {
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
-                    _ => break result,
-                }
-            }
-        })
-        .await
-        .unwrap();
+        let args = json!({"action":"wait", "id":id});
+        let cancel = CancellationToken::new();
+        let mut waiting = pin!(jobs.execute("wait", args.clone(), cancel.clone(), None));
+        assert!(futures_util::poll!(waiting.as_mut()).is_pending());
+        cancel.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("canceling an active wait should return promptly")
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Operation aborted");
+
+        let mut waiting = pin!(call(jobs.as_ref(), args.clone()));
+        assert!(
+            futures_util::poll!(waiting.as_mut()).is_pending(),
+            "canceling the first wait must leave the command running until release"
+        );
+        call(bash.as_ref(), json!({"command": ": > release"})).await;
+        let output = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("an active wait should return when the job finishes");
         let status = output.details.unwrap();
         assert_eq!(status["state"], "exited");
         assert_eq!(status["exit"]["exitCode"], 7);
@@ -468,6 +475,8 @@ mod tests {
             matches!(&output.content[0], cupel_core::types::ToolResultContent::Text(text)
             if text.text.contains("stdout") && text.text.contains("stderr"))
         );
+        let mut finished = pin!(call(jobs.as_ref(), args));
+        assert!(futures_util::poll!(finished.as_mut()).is_ready());
 
         let start = call(
             bash.as_ref(),
