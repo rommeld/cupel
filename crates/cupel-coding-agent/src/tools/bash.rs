@@ -33,6 +33,8 @@ use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::now_ms;
 
 use crate::jobs::Jobs;
+#[cfg(unix)]
+use crate::jobs::YieldOutcome;
 use crate::process::{EXIT_STDIO_GRACE, OutputChunk, kill_process_group, output_chunks};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, TruncationResult,
@@ -48,6 +50,7 @@ struct BashArgs {
     timeout: Option<f64>,
     #[serde(default)]
     background: bool,
+    yield_after_ms: Option<u64>,
 }
 
 /// Streaming output tracker with bounded memory (see module docs).
@@ -205,10 +208,12 @@ impl BashTool {
         Self {
             cwd: cwd.into(),
             description: format!(
-                "Execute a bash command in the current working directory. Returns stdout and \
-                 stderr. Output is truncated to last {DEFAULT_MAX_LINES} lines or {}KB \
-                 (whichever is hit first). If truncated, full output is saved to a temp file. \
-                 Optionally provide a timeout in seconds.",
+                "Execute a bash command in the current working directory. Foreground output is \
+                 truncated to the last {DEFAULT_MAX_LINES} lines or {}KB (whichever is hit first). \
+                 If truncated, full foreground output is saved to a temp file. On Unix, set \
+                 yield_after_ms to wait briefly and get a job ID if the command is still running. \
+                 Use jobs wait when you need the result. Managed jobs capture a 64 KiB combined \
+                 stdout/stderr tail.",
                 DEFAULT_MAX_BYTES / 1024
             ),
             jobs: None,
@@ -294,11 +299,16 @@ impl AgentTool for BashTool {
                 },
                 "timeout": {
                     "type": "number",
-                    "description": "Timeout in seconds (optional, no default timeout)"
+                    "description": "Stop the command this many seconds after spawn, even if it yielded (optional, no default; up to 4 hours for managed jobs)"
                 },
                 "background": {
                     "type": "boolean",
-                    "description": "Start a managed session job (Unix only). Returns a job ID, not the exit status or readiness. Use jobs to wait for, inspect, or stop it. Optional timeout up to 4 hours."
+                    "description": "Start a managed session job and return its ID immediately (Unix only). The ID does not indicate readiness. Use jobs wait for the result. Cannot be combined with yield_after_ms."
+                },
+                "yield_after_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Opt in to a managed job (Unix only, no default). Wait this many milliseconds after spawn for the exit status and output. If still running, return the job ID and output so far; use jobs wait for the result. Cannot be combined with background: true."
                 }
             },
             "required": ["command"]
@@ -336,6 +346,9 @@ impl AgentTool for BashTool {
         {
             return Err("Invalid timeout: must be a finite number of seconds".into());
         }
+        if args.background && args.yield_after_ms.is_some() {
+            return Err("Cannot combine background: true with yield_after_ms".into());
+        }
         if !self.cwd.exists() {
             return Err(format!(
                 "Working directory does not exist: {}\nCannot execute bash commands.",
@@ -346,9 +359,10 @@ impl AgentTool for BashTool {
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
+        let managed = args.background || args.yield_after_ms.is_some();
         #[cfg(not(unix))]
-        if args.background {
-            return Err("Managed background jobs are supported only on Unix".into());
+        if managed {
+            return Err("Managed jobs are supported only on Unix".into());
         }
 
         // Commands are written for bash, regardless of the user's login shell.
@@ -363,23 +377,43 @@ impl AgentTool for BashTool {
             .stderr(std::process::Stdio::piped());
 
         #[cfg(unix)]
-        if args.background {
+        if managed {
             const MAX_TIMEOUT_SECONDS: f64 = 14_400.0;
             if args.timeout.is_some_and(|secs| secs > MAX_TIMEOUT_SECONDS) {
-                return Err("Background timeout cannot exceed 4 hours (14400 seconds)".into());
+                return Err("Managed job timeout cannot exceed 4 hours (14400 seconds)".into());
             }
             let jobs = self
                 .jobs
                 .as_ref()
                 .ok_or("No managed job session is bound")?;
-            let id = jobs
-                .start(
-                    command,
-                    &args.command,
-                    args.timeout.map(Duration::from_secs_f64),
-                    &cancel,
-                )
-                .await?;
+            let timeout = args.timeout.map(Duration::from_secs_f64);
+            if let Some(wait_ms) = args.yield_after_ms {
+                let outcome = jobs
+                    .start_yielding(
+                        command,
+                        &args.command,
+                        timeout,
+                        Duration::from_millis(wait_ms),
+                        &cancel,
+                    )
+                    .await?;
+                let (snapshot, guidance) = match outcome {
+                    YieldOutcome::Finished(snapshot) => (snapshot, ""),
+                    YieldOutcome::Yielded(snapshot) => {
+                        (snapshot, "\nUse jobs wait when you need the result.")
+                    }
+                };
+                let output = if snapshot.output.is_empty() {
+                    "(no output captured)"
+                } else {
+                    &snapshot.output
+                };
+                let mut result =
+                    AgentToolResult::text(format!("{}{guidance}\n\n{output}", snapshot.details));
+                result.details = Some(snapshot.details);
+                return Ok(result);
+            }
+            let id = jobs.start(command, &args.command, timeout, &cancel).await?;
             let mut result = AgentToolResult::text(format!(
                 "Started managed job {id}. This confirms spawn only; use jobs wait for completion or jobs output for the current tail."
             ));

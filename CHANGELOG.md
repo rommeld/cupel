@@ -6,6 +6,7 @@ Notable user-facing changes by release.
 
 - Add DaisyRose 27B and Inkling 2 Mini on OpenRouter, plus seven Fireworks `-latest` routers for GLM, Qwen, Kimi, and MiniMax. Provider defaults are unchanged.
 - Use `jobs wait` instead of polling for background Bash jobs. It returns the status and output when the job finishes or the wait expires (30 seconds by default, up to 60 seconds). Expiring or canceling the wait leaves the job running.
+- On Unix, set `yield_after_ms` on a Bash call to get the result if it finishes promptly, or a job ID and the output so far if it keeps running. Use `jobs wait` for the final result. The command's original timeout still applies after it yields.
 
 ## [v0.51.1] - 2026-11-22
 

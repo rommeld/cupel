@@ -1,12 +1,19 @@
+use std::pin::pin;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
+use cupel_agent::types::{AgentTool, AgentToolResult};
+use cupel_core::types::{ToolResultContent, now_ms};
+
 use crate::jobs::child::ManagedChild;
-use crate::jobs::{Jobs, MAX_COMPLETED, TAIL_BYTES};
+use crate::jobs::{Jobs, MAX_COMPLETED, TAIL_BYTES, Visibility};
+use crate::tools::bash::BashTool;
+use crate::tools::jobs::JobsTool;
 
 fn shell(script: &str) -> Command {
     let mut cmd = Command::new("/bin/bash");
@@ -37,21 +44,197 @@ async fn completed(jobs: &Jobs, id: &str) -> (Value, String) {
     .expect("job did not finish")
 }
 
+async fn pending_output(jobs: &Jobs) -> String {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let output = jobs
+                .state
+                .lock()
+                .unwrap()
+                .live
+                .iter()
+                .find(|job| matches!(job.visibility, Visibility::Pending(_)))
+                .map(|job| job.record.capture.output());
+            if let Some(output) = output
+                && output.ends_with('\n')
+            {
+                return output;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("private job did not produce output")
+}
+
+fn text(result: &AgentToolResult) -> &str {
+    let ToolResultContent::Text(text) = &result.content[0] else {
+        panic!("expected text output");
+    };
+    &text.text
+}
+
+#[tokio::test]
+async fn bash_yield_returns_inline_exit_and_output_if_already_done() {
+    let jobs = Arc::new(Jobs::default());
+    let bash = BashTool::new(std::env::temp_dir()).with_jobs(Arc::clone(&jobs));
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        bash.execute(
+            "quick",
+            json!({"command": "printf 'quick-result\\n'; exit 7", "yield_after_ms": 10_000}),
+            CancellationToken::new(),
+            None,
+        ),
+    )
+    .await
+    .expect("a completed job should not wait for the yield deadline")
+    .unwrap();
+    let details = result.details.as_ref().unwrap();
+    assert_eq!(details["state"], "exited");
+    assert_eq!(details["exit"]["exitCode"], 7);
+    assert!(details.get("id").is_none(), "no handoff occurred");
+    assert!(text(&result).ends_with("\n\nquick-result\n"));
+    assert_eq!(jobs.list().unwrap(), json!({"jobs": []}));
+}
+
+#[tokio::test]
+async fn bash_yield_hands_off_once_without_resetting_the_timeout() {
+    let cwd = std::env::temp_dir().join(format!(
+        "cupel-bash-yield-{}-{}",
+        std::process::id(),
+        now_ms()
+    ));
+    std::fs::create_dir_all(&cwd).unwrap();
+    let jobs = Arc::new(Jobs::default());
+    let bash = BashTool::new(&cwd).with_jobs(Arc::clone(&jobs));
+    let cancel = CancellationToken::new();
+    let mut call = pin!(bash.execute(
+        "slow",
+        json!({
+            "command": "printf x >> count; printf 'progress\\n'; exec sleep 60",
+            "yield_after_ms": 10_000,
+            "timeout": 20,
+        }),
+        cancel.clone(),
+        None,
+    ));
+    assert!(futures_util::poll!(call.as_mut()).is_pending());
+    assert_eq!(pending_output(&jobs).await, "progress\n");
+
+    // Advance only after the OS has started the child and its output has been captured.
+    tokio::time::pause();
+    assert!(futures_util::poll!(call.as_mut()).is_pending());
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let result = call.await.unwrap();
+    let details = result.details.as_ref().unwrap();
+    assert_eq!(details["state"], "running");
+    let id = details["id"].as_str().unwrap();
+    assert!(text(&result).contains("jobs wait"));
+    assert!(text(&result).ends_with("\n\nprogress\n"));
+    cancel.cancel(); // The Bash call no longer owns the job.
+
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::time::resume();
+    let tool = JobsTool::new(jobs);
+    let result = tool
+        .execute(
+            "final",
+            json!({"action": "wait", "id": id, "wait_ms": 2000}),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    let details = result.details.as_ref().unwrap();
+    assert_eq!(
+        details["state"], "timedOut",
+        "the spawn-time deadline still applies"
+    );
+    assert_eq!(details["exit"]["signal"], 9);
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("count")).unwrap(),
+        "x",
+        "the command must spawn once"
+    );
+    std::fs::remove_dir_all(cwd).unwrap();
+}
+
+#[tokio::test]
+async fn bash_yield_cancellation_or_drop_before_handoff_reaps_the_private_job() {
+    let jobs = Arc::new(Jobs::default());
+    let bash = BashTool::new(std::env::temp_dir()).with_jobs(Arc::clone(&jobs));
+    for cancel_explicitly in [true, false] {
+        let cancel = CancellationToken::new();
+        let mut call = bash.execute(
+            "cancel",
+            json!({"command": "printf '%s\\n' \"$$\"; exec sleep 60", "yield_after_ms": 60_000}),
+            cancel.clone(),
+            None,
+        );
+        assert!(futures_util::poll!(call.as_mut()).is_pending());
+        let raw_pid = pending_output(&jobs).await.trim().parse().unwrap();
+        let pid = rustix::process::Pid::from_raw(raw_pid).unwrap();
+        let finished = jobs.state.lock().unwrap().live[0].finished.clone();
+        assert_eq!(
+            jobs.list().unwrap(),
+            json!({"jobs": []}),
+            "the job hasn't yielded yet"
+        );
+        if cancel_explicitly {
+            cancel.cancel();
+            let error = tokio::time::timeout(Duration::from_secs(5), call)
+                .await
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.to_string(), "Operation aborted");
+            assert!(finished.is_cancelled(), "cancel must await cleanup");
+        } else {
+            drop(call);
+            tokio::time::timeout(Duration::from_secs(5), finished.cancelled())
+                .await
+                .unwrap();
+        }
+        assert!(jobs.require_idle().is_ok());
+        assert_eq!(jobs.list().unwrap(), json!({"jobs": []}));
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+    }
+}
+
+#[tokio::test]
+async fn bash_yield_and_background_cannot_be_combined() {
+    let bash = BashTool::new(std::env::temp_dir()).with_jobs(Arc::new(Jobs::default()));
+    let error = bash
+        .execute(
+            "invalid",
+            json!({"command": ":", "background": true, "yield_after_ms": 0}),
+            CancellationToken::new(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Cannot combine"));
+}
+
 #[tokio::test]
 async fn job_start_interrupted_during_spawn_is_never_published_and_is_reaped() {
     let jobs = Jobs::default();
     let cancel = CancellationToken::new();
     let mut pid = None;
-    let (id, interrupted) = jobs
-        .spawn("sleep", None, &cancel, || {
+    let started = jobs
+        .spawn("sleep", None, Visibility::Published, &cancel, || {
             let child = ManagedChild::spawn(shell("exec sleep 30"))?;
             pid = child.group();
             cancel.cancel();
             Ok(child)
         })
         .unwrap();
-    assert!(jobs.inspect(&id, false).is_err());
-    tokio::time::timeout(Duration::from_secs(5), interrupted.unwrap().cancelled())
+    assert!(started.interrupted);
+    assert!(jobs.inspect(&started.id, false).is_err());
+    tokio::time::timeout(Duration::from_secs(5), started.finished.cancelled())
         .await
         .unwrap();
     assert!(jobs.require_idle().is_ok());
