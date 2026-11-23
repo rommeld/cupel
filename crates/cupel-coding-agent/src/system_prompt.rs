@@ -53,10 +53,10 @@ pub fn build_system_prompt(cwd: &Path, tools: &[&str], context_files: &[ContextF
     }
     if tools.contains(&"jobs") {
         guidelines.push(
-            "On Unix, use bash with background: true for managed long-running commands, not shell \
-            &. Use jobs to check output and exit status or to stop a job. Spawn is not readiness \
-            or success, and a test started before an edit does not validate that edit. Shell \
-            side effects cannot be undone.",
+            "On Unix, use bash with yield_after_ms to wait briefly or background: true to return \
+            immediately, not shell &. Use jobs wait when you need the result. A job ID is not \
+            readiness or success, and a test started before an edit does not validate that edit. \
+            Shell side effects cannot be undone.",
         );
     }
     if tools.contains(&"ask_user") {
@@ -216,6 +216,7 @@ mod tests {
             ("grep", "Use grep "),
             ("apply_patch", "Use apply_patch "),
             ("bash", "Preserve check exit statuses"),
+            ("jobs", "Use jobs wait"),
             ("ask_user", "Use ask_user "),
         ] {
             assert!(!no_tools.contains(guidance), "{tool} is unavailable");

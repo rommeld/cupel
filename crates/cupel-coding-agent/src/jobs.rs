@@ -8,6 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
+#[cfg(unix)]
+use tokio::sync::oneshot;
+#[cfg(unix)]
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 const MAX_LIVE: usize = 2;
@@ -33,7 +37,46 @@ struct Live {
     record: Record,
     stop: CancellationToken,
     finished: CancellationToken,
-    published: bool,
+    visibility: Visibility,
+}
+
+enum Visibility {
+    Published,
+    #[cfg(unix)]
+    Pending(oneshot::Sender<Completed>),
+    #[cfg(unix)]
+    Discarded,
+}
+
+#[cfg(unix)]
+struct Spawned {
+    id: String,
+    stop: CancellationToken,
+    finished: CancellationToken,
+    started_at: Instant,
+    interrupted: bool,
+}
+
+#[cfg(unix)]
+pub(crate) enum YieldOutcome {
+    Finished(JobSnapshot),
+    Yielded(JobSnapshot),
+}
+
+#[cfg(unix)]
+pub(crate) struct JobSnapshot {
+    pub details: serde_json::Value,
+    pub output: String,
+}
+
+#[cfg(unix)]
+impl JobSnapshot {
+    fn new(summary: Summary<'_>, capture: &Capture) -> Self {
+        Self {
+            details: serde_json::json!(summary),
+            output: capture.output(),
+        }
+    }
 }
 
 struct Completed {
@@ -65,6 +108,11 @@ impl Capture {
         self.tail
             .extend(&bytes[bytes.len().saturating_sub(TAIL_BYTES)..]);
     }
+
+    fn output(&self) -> String {
+        let bytes: Vec<u8> = self.tail.iter().copied().collect();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -92,7 +140,8 @@ struct Exit {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Summary<'a> {
-    id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<&'a str>,
     command_preview: &'a str,
     state: Phase,
     exit: Option<&'a Exit>,
@@ -105,7 +154,7 @@ pub(crate) struct Summary<'a> {
 impl Record {
     fn summary(&self, phase: Phase) -> Summary<'_> {
         Summary {
-            id: &self.id,
+            id: Some(&self.id),
             command_preview: &self.command,
             state: phase,
             exit: None,
@@ -117,6 +166,10 @@ impl Record {
 }
 
 impl Live {
+    fn is_published(&self) -> bool {
+        matches!(self.visibility, Visibility::Published)
+    }
+
     fn summary(&self) -> Summary<'_> {
         self.record.summary(if self.stop.is_cancelled() {
             Phase::Stopping
@@ -134,6 +187,13 @@ impl Completed {
             ..self.record.summary(self.phase)
         }
     }
+
+    #[cfg(unix)]
+    fn inline_result(&self) -> YieldOutcome {
+        let mut summary = self.summary();
+        summary.id = None; // An inline result never had a public job ID.
+        YieldOutcome::Finished(JobSnapshot::new(summary, &self.record.capture))
+    }
 }
 
 impl Jobs {
@@ -150,7 +210,7 @@ impl Jobs {
         let ids: Vec<&str> = state
             .live
             .iter()
-            .filter(|job| job.published)
+            .filter(|job| job.is_published())
             .map(|job| job.record.id.as_str())
             .collect();
         let ids = if ids.is_empty() {
@@ -190,27 +250,88 @@ impl Jobs {
         &self,
         command: tokio::process::Command,
         display_command: &str,
-        timeout: Option<std::time::Duration>,
+        timeout: Option<Duration>,
         cancel: &CancellationToken,
     ) -> Result<String, String> {
-        let (id, interrupted) = self.spawn(display_command, timeout, cancel, || {
-            child::ManagedChild::spawn(command)
-        })?;
-        if let Some(finished) = interrupted {
-            finished.cancelled().await;
+        let started = self.spawn(
+            display_command,
+            timeout,
+            Visibility::Published,
+            cancel,
+            || child::ManagedChild::spawn(command),
+        )?;
+        if started.interrupted {
+            started.finished.cancelled().await;
             return Err("Operation aborted during background start".to_string());
         }
-        Ok(id)
+        Ok(started.id)
+    }
+
+    /// Keep the job private and stop it if the caller goes away before handoff.
+    #[cfg(unix)]
+    pub(crate) async fn start_yielding(
+        &self,
+        command: tokio::process::Command,
+        display_command: &str,
+        timeout: Option<Duration>,
+        yield_after: Duration,
+        cancel: &CancellationToken,
+    ) -> Result<YieldOutcome, String> {
+        let (sender, mut completion) = oneshot::channel();
+        let started = self.spawn(
+            display_command,
+            timeout,
+            Visibility::Pending(sender),
+            cancel,
+            || child::ManagedChild::spawn(command),
+        )?;
+        let stop_on_drop = started.stop.drop_guard();
+        let yield_at = started
+            .started_at
+            .checked_add(yield_after)
+            .ok_or("yield_after_ms is too large")?;
+
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {},
+            result = &mut completion => {
+                return result.map(|job| job.inline_result())
+                    .map_err(|error| format!("Command ended without an inline result: {error}"));
+            }
+            () = tokio::time::sleep_until(yield_at) => {
+                let mut state = self.state.lock()
+                    .map_err(|error| format!("Job state unavailable: {error}"))?;
+                if !cancel.is_cancelled() {
+                    if state.closed {
+                        return Err("This job session has ended".to_string());
+                    }
+                    if let Some(job) = state.live.iter_mut().find(|job| job.record.id == started.id) {
+                        job.visibility = Visibility::Published;
+                        stop_on_drop.disarm();
+                        let snapshot = JobSnapshot::new(job.summary(), &job.record.capture);
+                        return Ok(YieldOutcome::Yielded(snapshot));
+                    }
+                    // Completion removes the private job and sends its result under this same lock.
+                    return completion.try_recv().map(|job| job.inline_result())
+                        .map_err(|error| format!("Could not retrieve command result at handoff: {error}"));
+                }
+            }
+        }
+
+        drop(stop_on_drop);
+        started.finished.cancelled().await;
+        Err("Operation aborted".to_string())
     }
 
     #[cfg(unix)]
     fn spawn(
         &self,
         display_command: &str,
-        timeout: Option<std::time::Duration>,
+        timeout: Option<Duration>,
+        visibility: Visibility,
         cancel: &CancellationToken,
         spawn_child: impl FnOnce() -> Result<child::ManagedChild, String>,
-    ) -> Result<(String, Option<CancellationToken>), String> {
+    ) -> Result<Spawned, String> {
         use std::fmt::Write as _;
 
         let mut state = self
@@ -245,9 +366,10 @@ impl Jobs {
             return Err("Operation aborted".to_string());
         }
         let child = spawn_child()?;
-        let deadline = timeout.map(|timeout| tokio::time::Instant::now() + timeout);
-        // No suspension between spawn and publishing the handle. If cancellation
-        // won during spawn, the worker still owns the child but no handle is exposed.
+        let started_at = Instant::now();
+        let deadline = timeout.map(|timeout| started_at + timeout);
+        // If cancellation won during spawn, the worker still reaps the child
+        // but no handle is exposed.
         let interrupted = cancel.is_cancelled();
         if interrupted {
             stop.cancel();
@@ -276,11 +398,21 @@ impl Jobs {
         });
         state.live.push(Live {
             record,
-            stop,
+            stop: stop.clone(),
             finished: finished.clone(),
-            published: !interrupted,
+            visibility: if interrupted {
+                Visibility::Discarded
+            } else {
+                visibility
+            },
         });
-        Ok((id, interrupted.then_some(finished)))
+        Ok(Spawned {
+            id,
+            stop,
+            finished,
+            started_at,
+            interrupted,
+        })
     }
 
     pub(crate) fn list(&self) -> Result<serde_json::Value, String> {
@@ -291,7 +423,7 @@ impl Jobs {
         let live = state
             .live
             .iter()
-            .filter(|job| job.published)
+            .filter(|job| job.is_published())
             .map(Live::summary);
         let completed = state.completed.iter().map(Completed::summary);
         let jobs: Vec<_> = live.chain(completed).collect();
@@ -314,10 +446,7 @@ impl Jobs {
         } else {
             return Err(unknown_job());
         };
-        let output = include_output.then(|| {
-            let bytes: Vec<u8> = record.capture.tail.iter().copied().collect();
-            String::from_utf8_lossy(&bytes).into_owned()
-        });
+        let output = include_output.then(|| record.capture.output());
         Ok((serde_json::json!(summary), output))
     }
 
@@ -379,7 +508,7 @@ impl State {
     fn live_job(&self, id: &str) -> Option<&Live> {
         self.live
             .iter()
-            .find(|job| job.published && job.record.id == id)
+            .find(|job| job.is_published() && job.record.id == id)
     }
 
     fn completed_job(&self, id: &str) -> Option<&Completed> {
@@ -392,20 +521,33 @@ impl State {
             return;
         };
         let job = self.live.remove(index);
-        if self.closed || !job.published {
+        if self.closed {
             return;
         }
+        let completed = Completed {
+            record: job.record,
+            phase,
+            exit,
+            evicted_job_id: None,
+        };
+        match job.visibility {
+            Visibility::Published => self.retain(completed),
+            Visibility::Pending(sender) => {
+                let _ = sender.send(completed);
+            }
+            Visibility::Discarded => {}
+        }
+    }
+
+    #[cfg(unix)]
+    fn retain(&mut self, mut completed: Completed) {
         let evicted = if self.completed.len() == MAX_COMPLETED {
             self.completed.pop_front().map(|job| job.record.id)
         } else {
             None
         };
-        self.completed.push_back(Completed {
-            record: job.record,
-            phase,
-            exit,
-            evicted_job_id: evicted,
-        });
+        completed.evicted_job_id = evicted;
+        self.completed.push_back(completed);
     }
 }
 
