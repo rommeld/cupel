@@ -92,8 +92,7 @@
     "baseUrl": "https://api.anthropic.com",
     "reasoning": true,
     "thinkingLevelMap": {
-      "minimal": null,
-      "off": null
+      "minimal": null
     },
     "input": [
       "text",
@@ -1561,12 +1560,41 @@
       "image"
     ],
     "cost": {
-      "input": 2.4,
-      "output": 9.6,
-      "cachedRead": 0.048,
+      "input": 1.2,
+      "output": 4.8,
+      "cachedRead": 0.024,
       "cachedWrite": 0.0
     },
     "contextWindow": 1000000,
+    "maxTokens": 384000,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "supportsStore": false
+    }
+  },
+  {
+    "id": "accounts/fireworks/routers/deepseek-v4p1-flash-1017-flex",
+    "name": "DeepSeek V4.1 Flash 1017 Flex",
+    "api": "openai-completions",
+    "provider": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "medium": null,
+      "minimal": null,
+      "xhigh": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.6,
+      "cachedRead": 0.003,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
     "maxTokens": 384000,
     "compat": {
       "supportsDeveloperRole": false,
@@ -2018,13 +2046,13 @@
       "image"
     ],
     "cost": {
-      "input": 1.5,
-      "output": 4.5,
-      "cachedRead": 0.075,
-      "cachedWrite": 1.875
+      "input": 1.425,
+      "output": 4.275,
+      "cachedRead": 0.07125,
+      "cachedWrite": 1.78125
     },
     "contextWindow": 1000000,
-    "maxTokens": 393216,
+    "maxTokens": 131072,
     "compat": {
       "supportsDeveloperRole": false,
       "thinkingFormat": "openrouter"
@@ -5310,6 +5338,33 @@
       "input": 0.05,
       "output": 0.5,
       "cachedRead": 0.003,
+      "cachedWrite": 0.0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "particle-ai/particle-1:free",
+    "name": "Particle-1 (free)",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "off": "none"
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cachedRead": 0.0,
       "cachedWrite": 0.0
     },
     "contextWindow": 1048576,

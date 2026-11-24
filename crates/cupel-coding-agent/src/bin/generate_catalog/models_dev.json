@@ -565,6 +565,9 @@
         "reasoning": true,
         "reasoning_options": [
           {
+            "type": "toggle"
+          },
+          {
             "type": "effort",
             "values": [
               "low",
@@ -1174,6 +1177,42 @@
         ],
         "temperature": true
       },
+      "accounts/fireworks/routers/deepseek-v4p1-flash-1017-flex": {
+        "cost": {
+          "cache_read": 0.003,
+          "cache_write": 0.0,
+          "input": 0.15,
+          "output": 0.6,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 384000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "DeepSeek V4.1 Flash 1017 Flex",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "accounts/fireworks/routers/deepseek-v4p1-flash-1017-spot": {
         "cost": {
           "cache_read": 0.0042,
@@ -1212,10 +1251,10 @@
       },
       "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast": {
         "cost": {
-          "cache_read": 0.048,
+          "cache_read": 0.024,
           "cache_write": 0.0,
-          "input": 2.4,
-          "output": 9.6,
+          "input": 1.2,
+          "output": 4.8,
           "tiers": []
         },
         "limit": {
@@ -5138,6 +5177,43 @@
         ],
         "temperature": true
       },
+      "particle-ai/particle-1:free": {
+        "cost": {
+          "cache_read": 0.0,
+          "cache_write": 0.0,
+          "input": 0.0,
+          "output": 0.0,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Particle-1 (free)",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "temperature": true
+      },
       "perceptron/perceptron-mk1.5": {
         "cost": {
           "cache_read": 0.0,
@@ -5503,16 +5579,16 @@
       },
       "qwen/qwen4-max": {
         "cost": {
-          "cache_read": 0.075,
-          "cache_write": 1.875,
-          "input": 1.5,
-          "output": 4.5,
+          "cache_read": 0.07125,
+          "cache_write": 1.78125,
+          "input": 1.425,
+          "output": 4.275,
           "tiers": []
         },
         "limit": {
           "context": 1000000,
           "input": null,
-          "output": 393216
+          "output": 131072
         },
         "modalities": {
           "input": [

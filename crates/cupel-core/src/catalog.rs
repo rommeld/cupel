@@ -291,13 +291,9 @@ mod tests {
     #[test]
     fn sonnet5_and_opus5_rows_are_adaptive() {
         // Both models answer `budget_tokens` with a 400, like Opus 5.5,
-        // both rows take the adaptive path (effort, no temperature).
-        // "off" is where they differ. models.dev lists a toggle for
-        // Sonnet 5, so "off" gets no entry and the provider sends
-        // `disabled`, which Sonnet 5 accepts. Opus 5 has no toggle,
-        // off → null, and the provider leaves `thinking` out.
+        // but both accept an explicit `disabled` when thinking is off.
         let models = builtin_models();
-        for (id, off) in [("claude-sonnet-5", None), ("claude-opus-5", Some(&None))] {
+        for id in ["claude-sonnet-5", "claude-opus-5"] {
             let model = models.iter().find(|m| m.id == id).expect("row in catalog");
             assert_eq!(
                 model.compat,
@@ -308,7 +304,7 @@ mod tests {
                 "{id}"
             );
             let map = model.thinking_level_map.as_ref().expect("map");
-            assert_eq!(map.get("off"), off, "{id}");
+            assert!(!map.contains_key("off"), "{id}");
             assert_eq!(map.get("minimal"), Some(&None), "{id}");
             assert!(
                 !map.contains_key("xhigh"),
