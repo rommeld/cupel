@@ -465,6 +465,10 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 "accounts/fireworks/routers/deepseek-v4p1-flash-1017-ultrafast",
                 Thinking::FromEffort,
             ),
+            fireworks_completions(
+                "accounts/fireworks/routers/deepseek-v4p1-flash-1017-flex",
+                Thinking::FromEffort,
+            ),
             // Track the provider's current model in each family by router ID.
             fireworks_completions(
                 "accounts/fireworks/routers/glm-latest",
@@ -634,6 +638,7 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter_tiered("bytedance-seed/seed-2.0-mini"),
             openrouter("perceptron/perceptron-mk1.5", Thinking::FromEffort),
             openrouter("particle-ai/particle-1", Thinking::FromEffort),
+            openrouter("particle-ai/particle-1:free", Thinking::FromEffort),
             openrouter("baidu/ernie-light-dt-1.0-intl", Thinking::FromEffort),
             openrouter("baidu/ernie-5.5-flash-preview:free", Thinking::FromEffort),
             openrouter("meta/muse-ember", Thinking::FromEffort),

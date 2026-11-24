@@ -1390,27 +1390,18 @@ mod tests {
 
     #[test]
     fn sonnet5_and_opus5_off_never_send_temperature() {
-        // `/thinking off` with a temperature set. Sonnet 5 has no "off"
-        // entry in its map (models.dev lists a toggle), so it gets the
-        // explicit `disabled` that it accepts. Opus 5 has "off", null
-        // and gets no `thinking` at all, the API then thinks adaptively
-        // at its default effort, high. Neither may carry `temperature`,
-        // a non default value is a 400 on both.
+        // Omitting `thinking` would leave thinking on. Opus 5 rejects
+        // `disabled` with xhigh/max effort, so don't attach an effort here.
         let options = StreamOptions {
             temperature: Some(0.2),
             ..StreamOptions::default()
         };
-        let sonnet = catalog_model("claude-sonnet-5");
-        let body = body_for(&sonnet, &options);
-        assert_eq!(body["thinking"], json!({"type": "disabled"}));
-        assert!(body.get("output_config").is_none(), "{body}");
-        assert!(body.get("temperature").is_none(), "{body}");
-
-        let opus = catalog_model("claude-opus-5");
-        let body = body_for(&opus, &options);
-        assert!(body.get("thinking").is_none(), "{body}");
-        assert!(body.get("output_config").is_none(), "{body}");
-        assert!(body.get("temperature").is_none(), "{body}");
+        for id in ["claude-sonnet-5", "claude-opus-5"] {
+            let body = body_for(&catalog_model(id), &options);
+            assert_eq!(body["thinking"], json!({"type": "disabled"}), "{id}");
+            assert!(body.get("output_config").is_none(), "{id}: {body}");
+            assert!(body.get("temperature").is_none(), "{id}: {body}");
+        }
     }
 
     #[test]

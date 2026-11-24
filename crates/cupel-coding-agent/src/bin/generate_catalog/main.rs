@@ -22,19 +22,30 @@ use crate::curation::{
 };
 use crate::models_dev::ProviderEntry;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Command {
+const USAGE: &str = "usage: generate-catalog [--fetch | --fetch-only MODEL_ID ...]";
+
+#[derive(Debug, PartialEq, Eq)]
+enum Command<'a> {
     Generate,
     Fetch,
+    FetchOnly(&'a [String]),
     Help,
 }
 
-fn parse_command(args: &[String]) -> Result<Command, String> {
+fn parse_command(args: &[String]) -> Result<Command<'_>, String> {
     match args {
         [] => Ok(Command::Generate),
         [flag] if flag == "--fetch" => Ok(Command::Fetch),
+        [flag, ids @ ..] if flag == "--fetch-only" && !ids.is_empty() => {
+            for id in ids {
+                if !PROVIDERS.iter().flat_map(|p| p.models).any(|m| m.id == id) {
+                    return Err(format!("not a curated models.dev ID: {id}"));
+                }
+            }
+            Ok(Command::FetchOnly(ids))
+        }
         [flag] if flag == "--help" || flag == "-h" => Ok(Command::Help),
-        _ => Err("usage: generate-catalog [--fetch]".to_string()),
+        _ => Err(USAGE.to_string()),
     }
 }
 
@@ -50,23 +61,27 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run() -> Result<(), String> {
-    let use_fetch = match parse_command(&std::env::args().skip(1).collect::<Vec<_>>())? {
-        Command::Generate => false,
-        Command::Fetch => true,
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let command = parse_command(&args)?;
+    let use_fetch = matches!(command, Command::Fetch | Command::FetchOnly(_));
+    let snapshot_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/generate_catalog/models_dev.json");
+    let read_snapshot = || {
+        std::fs::read_to_string(&snapshot_path)
+            .map_err(|error| format!("read {}: {error}", snapshot_path.display()))
+    };
+    let raw = match command {
+        Command::Generate => read_snapshot()?,
+        Command::Fetch => curated_snapshot(&fetch(MODELS_DEV_URL).await?)?,
+        Command::FetchOnly(ids) => {
+            selected_snapshot(&read_snapshot()?, &fetch(MODELS_DEV_URL).await?, ids)?
+        }
         Command::Help => {
             println!(
-                "usage: generate-catalog [--fetch]\n\nWithout --fetch, uses the checked-in models_dev.json snapshot."
+                "{USAGE}\n\nWithout a flag, use the checked-in snapshot. --fetch refreshes all routes; --fetch-only refreshes the named routes."
             );
             return Ok(());
         }
-    };
-    let snapshot_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/generate_catalog/models_dev.json");
-    let raw = if use_fetch {
-        curated_snapshot(&fetch(MODELS_DEV_URL).await?)?
-    } else {
-        std::fs::read_to_string(&snapshot_path)
-            .map_err(|error| format!("read {}: {error}", snapshot_path.display()))?
     };
     // Offline, "models.dev no longer lists ..." means the checked in snapshot
     // lacks a row that curation.rs now wants, not that models.dev dropped it.
@@ -125,6 +140,34 @@ fn generate(raw: &str) -> Result<(Vec<Model>, String), String> {
 fn curated_snapshot(raw: &str) -> Result<String, String> {
     let wanted: Vec<&str> = PROVIDERS.iter().map(|p| p.models_dev_id).collect();
     let catalog = models_dev::parse_wanted(raw, &wanted)?;
+    normalize_snapshot(&catalog)
+}
+
+fn selected_snapshot(local: &str, live: &str, ids: &[String]) -> Result<String, String> {
+    let wanted: Vec<&str> = PROVIDERS.iter().map(|p| p.models_dev_id).collect();
+    let mut catalog = models_dev::parse_wanted(local, &wanted)?;
+    let upstream = models_dev::parse_wanted(live, &wanted)?;
+    for provider in PROVIDERS {
+        let key = provider.models_dev_id;
+        let entry = catalog
+            .get_mut(key)
+            .ok_or_else(|| format!("snapshot missing {key}"))?;
+        for row in provider
+            .models
+            .iter()
+            .filter(|r| ids.iter().any(|id| id == r.id))
+        {
+            let value = upstream[key]
+                .models
+                .get(row.id)
+                .ok_or_else(|| format!("models.dev no longer lists {key}/{}", row.id))?;
+            entry.models.insert(row.id.to_string(), value.clone());
+        }
+    }
+    normalize_snapshot(&catalog)
+}
+
+fn normalize_snapshot(catalog: &BTreeMap<String, ProviderEntry>) -> Result<String, String> {
     let mut snapshot = BTreeMap::new();
     for provider in PROVIDERS {
         let entry = catalog
@@ -714,6 +757,31 @@ mod tests {
     }
 
     #[test]
+    fn selective_fetch_requires_selected_routes_and_preserves_unselected_routes() {
+        let source = include_str!("models_dev.json");
+        let id = "claude-opus-5";
+        let ids = [id.to_owned()];
+        let mut live: serde_json::Value = serde_json::from_str(source).unwrap();
+        live["anthropic"]["models"][id]["name"] = "Updated".into();
+        let mut expected = live.clone();
+        live["openrouter"]["models"] = serde_json::json!({});
+        let selected = selected_snapshot(source, &live.to_string(), &ids).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&selected).unwrap(),
+            expected
+        );
+        expected["anthropic"]["models"]
+            .as_object_mut()
+            .unwrap()
+            .remove(id);
+        assert!(
+            selected_snapshot(source, &expected.to_string(), &ids)
+                .unwrap_err()
+                .contains(id)
+        );
+    }
+
+    #[test]
     fn fetch_is_explicit_and_unknown_arguments_are_rejected() {
         assert_eq!(parse_command(&[]).unwrap(), Command::Generate);
         assert_eq!(
@@ -725,6 +793,8 @@ mod tests {
             Command::Help
         );
         assert!(parse_command(&["--offline".to_string()]).is_err());
+        assert!(parse_command(&["--fetch-only".into()]).is_err());
+        assert!(parse_command(&["--fetch-only".into(), "unknown".into()]).is_err());
         assert!(parse_command(&["--fetch".to_string(), "extra".to_string()]).is_err());
     }
 
