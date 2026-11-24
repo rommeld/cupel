@@ -1,6 +1,4 @@
 //! Discover skill metadata without loading instructions or running bundled scripts.
-//! Set `disable: true` in `SKILL.md` frontmatter to omit the skill from the
-//! session catalog. Missing `disable` and `disable: false` keep it enabled.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -21,13 +19,8 @@ pub struct Skill {
     pub path: String,
 }
 
-struct SkillEntry {
-    skill: Skill,
-    disabled: bool,
-}
-
-/// Scan the home and project skill directories in precedence order. Disabled
-/// project entries mask home entries; malformed project entries do not.
+/// Scan the home and project skill directories in precedence order. Valid
+/// project entries override same-named home entries; malformed entries do not.
 pub(crate) fn discover(home: Option<&Path>, cwd: &Path) -> (Vec<Skill>, Vec<String>) {
     let project = cwd.join(".cupel");
     let mut roots = Vec::new();
@@ -45,14 +38,10 @@ pub(crate) fn discover(home: Option<&Path>, cwd: &Path) -> (Vec<Skill>, Vec<Stri
     for root in roots {
         catalog.extend(load_root(&root, &mut warnings));
     }
-    let enabled = catalog
-        .into_values()
-        .filter_map(|entry| (!entry.disabled).then_some(entry.skill))
-        .collect();
-    (enabled, warnings)
+    (catalog.into_values().collect(), warnings)
 }
 
-fn load_root(root: &Path, warnings: &mut Vec<String>) -> BTreeMap<String, SkillEntry> {
+fn load_root(root: &Path, warnings: &mut Vec<String>) -> BTreeMap<String, Skill> {
     let mut skills = BTreeMap::new();
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
@@ -94,12 +83,12 @@ fn load_root(root: &Path, warnings: &mut Vec<String>) -> BTreeMap<String, SkillE
         }
 
         match load_skill(&path) {
-            Ok(entry) if !skills.contains_key(&entry.skill.name) => {
-                skills.insert(entry.skill.name.clone(), entry);
+            Ok(skill) if !skills.contains_key(&skill.name) => {
+                skills.insert(skill.name.clone(), skill);
             }
-            Ok(entry) => warnings.push(load_failure(
+            Ok(skill) => warnings.push(load_failure(
                 &path,
-                &invalid_data(format!("duplicate skill name {:?}", entry.skill.name)),
+                &invalid_data(format!("duplicate skill name {:?}", skill.name)),
             )),
             Err(error) => warnings.push(load_failure(&path, &error)),
         }
@@ -107,7 +96,7 @@ fn load_root(root: &Path, warnings: &mut Vec<String>) -> BTreeMap<String, SkillE
     skills
 }
 
-fn load_skill(path: &Path) -> io::Result<SkillEntry> {
+fn load_skill(path: &Path) -> io::Result<Skill> {
     let path_text = path
         .to_str()
         .ok_or_else(|| invalid_data("path is not valid UTF-8"))?;
@@ -141,21 +130,14 @@ fn load_skill(path: &Path) -> io::Result<SkillEntry> {
     if name.chars().any(char::is_control) {
         return Err(invalid_data("skill name contains a control character"));
     }
-    let disabled = match metadata.get("disable") {
-        None => false,
-        Some(value) => value
-            .as_bool()
-            .ok_or_else(|| invalid_data("expected a boolean for disable"))?,
-    };
-    let skill = Skill {
+    Ok(Skill {
         name: name.to_string(),
         description: required_string(&metadata, "description")?
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" "),
         path: path_text.to_string(),
-    };
-    Ok(SkillEntry { skill, disabled })
+    })
 }
 
 fn required_string<'a>(metadata: &'a Value, key: &str) -> io::Result<&'a str> {

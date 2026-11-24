@@ -1,7 +1,6 @@
 ---
 name: no-comments
 description: "Write code without explanatory comments and put the rationale in its final response, then check the diff before finishing."
-disable: false
 ---
 
 # No unnecessary code comments
