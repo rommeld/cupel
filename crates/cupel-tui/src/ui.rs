@@ -2169,11 +2169,7 @@ pub(crate) mod tests {
         )));
         let session_id = app.recorder.session_id().to_string();
 
-        std::fs::write(
-            &first,
-            "---\nname: first\ndescription: First skill\ndisable: true\n---\nFirst instructions",
-        )
-        .unwrap();
+        std::fs::remove_file(&first).unwrap();
         let broken = root.join("home/skills/broken/SKILL.md");
         std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
         std::fs::write(broken, "no frontmatter").unwrap();

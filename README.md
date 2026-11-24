@@ -113,8 +113,8 @@ Put a `SKILL.md` file in `.cupel/skills/<name>/` or `~/.cupel/skills/<name>/`. G
 `description` in its YAML header. Cupel shows the agent the available skill descriptions and reads
 the instructions only when the agent uses the skill.
 
-A project skill overrides a home skill with the same name. Set `disable: true` in the header to hide
-the skill. A disabled project skill also hides the matching home skill. Start a new session or run
+A project skill overrides a home skill with the same name. Cupel ignores the old `disable` field;
+to hide a skill, move its `SKILL.md` out of the skill directories. Start a new session or run
 `/hot-reload` to refresh the list. Cupel caches local Markdown guides linked from instructions or
 skills when it loads the file that links to them.
 

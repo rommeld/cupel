@@ -519,9 +519,9 @@ mod tests {
             (&home, "skills/review/SKILL.md", b"---\nname: review-pr\ndescription: Global review\n---\nGlobal body"),
             (&home, "skills/format/SKILL.md", b"---\nname: format\ndescription: Global formatting\n---\n\xff"),
             (&home, "skills/optional/SKILL.md", b"---\nname: extra-checks\ndescription: Global extra checks\n---\n"),
-            (&cwd, ".cupel/skills/skip-extra/SKILL.md", b"---\nname: extra-checks\ndescription: Project extra checks\ndisable: true\n---\n"),
-            (&cwd, ".cupel/skills/local-review/SKILL.md", b"---\r\nname: review-pr\r\ndescription: >\r\n  Review for regressions\r\n  and missing tests.\r\ndisable: false\r\n---\r\nProject review body"),
-            (&cwd, ".cupel/skills/bad-disable/SKILL.md", b"---\nname: bad-disable\ndescription: Invalid flag\ndisable: 'true'\n---\n"),
+            (&cwd, ".cupel/skills/local-extra/SKILL.md", b"---\nname: extra-checks\ndescription: Project extra checks\ndisable: true\n---\n"),
+            (&cwd, ".cupel/skills/local-review/SKILL.md", b"---\r\nname: review-pr\r\ndescription: >\r\n  Review for regressions\r\n  and missing tests.\r\n---\r\nProject review body"),
+            (&cwd, ".cupel/skills/legacy/SKILL.md", b"---\nname: legacy\ndescription: Legacy skill\ndisable: 'true'\n---\n"),
             (&cwd, ".cupel/skills/broken-format/SKILL.md", b"---\nname: format\ndescription: [invalid\n---\n"),
             (&cwd, ".cupel/skills/unfinished/SKILL.md", b"---\nname: unfinished\ndescription: Unfinished header\n---not-a-fence\n"),
             (&cwd, ".cupel/skills/blank/SKILL.md", b"---\nname: blank\ndescription: '  '\n---\n"),
@@ -537,21 +537,20 @@ mod tests {
         let mut ingredients = load(&cwd, Some(home), &registry, Frontend::Tui).await;
         let recorder = crate::session::SessionRecorder::new(None, &cwd, "skills", "mock");
         ingredients.bind_session(&recorder, &cwd);
-        assert_eq!(ingredients.skills.len(), 2);
+        assert_eq!(ingredients.skills.len(), 4);
         let prompt = ingredients.system_prompt();
         assert!(
             prompt.contains("Global formatting"),
             "the invalid project override must not hide the home skill"
         );
+        assert!(prompt.contains("Project extra checks"));
+        assert!(prompt.contains("Legacy skill"));
         assert!(prompt.contains("Review for regressions and missing tests."));
         for excluded in [
             "Global review",
             "Global body",
             "Project review body",
-            "extra-checks",
-            "skip-extra",
-            "extra checks",
-            "bad-disable",
+            "Global extra checks",
             "not-a-root",
         ] {
             assert!(
@@ -559,13 +558,8 @@ mod tests {
                 "unexpected in startup prompt: {excluded}"
             );
         }
-        assert_eq!(ingredients.warnings.len(), 4, "{:?}", ingredients.warnings);
-        for invalid in [
-            "broken-format",
-            "unfinished",
-            "blank",
-            "expected a boolean for disable",
-        ] {
+        assert_eq!(ingredients.warnings.len(), 3, "{:?}", ingredients.warnings);
+        for invalid in ["broken-format", "unfinished", "blank"] {
             assert!(
                 ingredients
                     .warnings
@@ -601,7 +595,6 @@ mod tests {
         assert_eq!(result.details.unwrap()["skill"], "review-pr");
 
         for args in [
-            serde_json::json!({"path": ".cupel/skills/skip-extra/SKILL.md"}),
             serde_json::json!({"path": "skills/not-a-root/SKILL.md"}),
             serde_json::json!({"path": path, "limit": 0}),
         ] {

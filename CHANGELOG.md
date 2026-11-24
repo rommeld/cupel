@@ -2,6 +2,10 @@
 
 Notable user-facing changes by release.
 
+## [Unreleased]
+
+- Cupel no longer checks the `disable` field in `SKILL.md`. Move the file out of the skill directories to hide it. A project skill still overrides a home skill with the same name.
+
 ## [v0.52.0] - 2026-11-23
 
 - Use `jobs wait` to get a Bash job's status and output when it finishes or the wait expires. The default wait is 30 seconds, with a maximum of 60 seconds. Canceling the wait or letting it expire leaves the job running.
