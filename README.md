@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="300" height="330" alt="image" src="https://github.com/user-attachments/assets/a4174b06-a4b7-438e-bbcb-4a38ed98bd4f" />
+  <img width="300" height="300" alt="Cupel mascot sitting cross-legged with a Bembel and an apple wine glass" src=".github/cupel-logo.png" />
 </p>
 
 # cupel
