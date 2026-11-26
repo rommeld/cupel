@@ -1061,6 +1061,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupel-macos-process"
+version = "0.52.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "cupel-tui"
 version = "0.52.0"
 dependencies = [
