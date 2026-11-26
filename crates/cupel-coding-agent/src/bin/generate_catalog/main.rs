@@ -670,8 +670,9 @@ mod tests {
                 Some(&serde_json::json!(false))
             );
         }
-        // OpenRouter handles continuation itself; do not apply the native
-        // output-limit override or native API compat to its Gemini rows.
+        // OpenRouter uses its own output limits and API compat.
+        let snapshot = models_dev::parse_wanted(include_str!("models_dev.json"), &["openrouter"])
+            .expect("OpenRouter snapshot");
         for id in [
             "google/gemini-4-argon",
             "google/gemini-4-carbon",
@@ -681,7 +682,8 @@ mod tests {
             let model = models.iter().find(|model| model.id == id).expect(id);
             assert_eq!(model.provider.as_str(), Provider::OPENROUTER);
             assert_eq!(model.api.as_str(), Api::OPENAI_COMPLETIONS);
-            assert_eq!(model.max_tokens, 943_718, "{id}");
+            let upstream = snapshot["openrouter"].model("openrouter", id).expect(id);
+            assert_eq!(model.max_tokens, upstream.limit.output, "{id}");
             assert_eq!(model.base_url, curation::OPENROUTER_COMPLETIONS_BASE_URL);
             assert_eq!(
                 model.compat.as_ref().unwrap()["thinkingFormat"],
