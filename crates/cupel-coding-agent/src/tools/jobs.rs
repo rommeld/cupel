@@ -42,8 +42,8 @@ impl AgentTool for JobsTool {
         "List, inspect, wait for, or stop this session's managed bash jobs. Wait returns the status \
          and output on completion or expiry. Expiring or canceling a wait does not stop the job. \
          Output is a combined stdout/stderr tail (64 KiB), with truncation and incomplete capture \
-         reported separately. Completed jobs can be evicted; handles do not survive session reset, \
-         reload, or restart."
+         reported separately. The result includes cleanupError if Cupel could not complete cleanup. \
+         Completed jobs can be evicted; handles do not survive session reset, reload, or restart."
     }
 
     fn parameters(&self) -> Value {
