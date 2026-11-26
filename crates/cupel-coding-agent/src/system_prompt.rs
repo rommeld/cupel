@@ -133,17 +133,6 @@ pub fn with_skill_catalog(base: &str, skills: &[Skill]) -> String {
     prompt
 }
 
-/// Extend the system prompt with a preset's `prompt`, base, a blank line,
-/// the prompt. No prompt (or an empty one) returns `base` unchanged, which
-/// is also how a switch to a preset without a prompt drops the previous one.
-#[must_use]
-pub fn with_preset_prompt(base: &str, preset_prompt: Option<&str>) -> String {
-    match preset_prompt.filter(|prompt| !prompt.is_empty()) {
-        Some(prompt) => format!("{base}\n\n{prompt}"),
-        None => base.to_string(),
-    }
-}
-
 fn current_date() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -227,15 +216,5 @@ mod tests {
         }
         let edit_prompt = build_system_prompt(cwd, &["read", "apply_patch"], &[]);
         assert!(edit_prompt.contains("expectedObservations"));
-    }
-
-    #[test]
-    fn a_preset_prompt_is_appended_only_when_defined() {
-        assert_eq!(
-            with_preset_prompt("BASE", Some("Be brief.")),
-            "BASE\n\nBe brief."
-        );
-        assert_eq!(with_preset_prompt("BASE", None), "BASE");
-        assert_eq!(with_preset_prompt("BASE", Some("")), "BASE");
     }
 }
