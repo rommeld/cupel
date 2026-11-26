@@ -4,6 +4,7 @@ members = [
     "crates/cupel-core",
     "crates/cupel-agent",
     "crates/cupel-coding-agent",
+    "crates/cupel-macos-process",
     "crates/cupel-tui",
     "crates/cupel-acp",
     "tools/no-new-comments",
