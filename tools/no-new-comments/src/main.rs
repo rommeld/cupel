@@ -1,5 +1,6 @@
 mod compare;
 mod git;
+mod suppression;
 
 use std::env;
 use std::io;
@@ -8,8 +9,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 
+use crate::compare::{Finding, Kind};
+
 const USAGE: &str = "Usage: no-new-comments --base <ref> --head <ref> [--github-actions]";
-const MESSAGE: &str = "new or rewritten Rust comment";
 
 struct Args {
     base: String,
@@ -63,12 +65,12 @@ fn run() -> Result<()> {
         let new = git::read_blob(&change.new_blob)
             .with_context(|| format!("read head file {:?}", change.path))?;
 
-        for line in compare::added_comment_lines(old.as_deref().unwrap_or_default(), &new) {
-            writeln!(output, "{}", format.warning(&change.path, line))
-                .context("write comment warning")?;
+        for finding in compare::added_findings(old.as_deref().unwrap_or_default(), &new) {
+            writeln!(output, "{}", format.warning(&change.path, finding))
+                .context("write Rust advisory")?;
         }
     }
-    output.flush().context("flush comment warnings")
+    output.flush().context("flush Rust advisories")
 }
 
 impl Args {
@@ -102,10 +104,17 @@ impl Args {
 }
 
 impl Format {
-    fn warning(self, path: &str, line: usize) -> String {
+    fn warning(self, path: &str, Finding { line, kind }: Finding) -> String {
+        let (title, message) = match kind {
+            Kind::Comment => ("no-new-comments", "new or rewritten Rust comment"),
+            Kind::BlanketAllow => (
+                "no-blanket-lint-allows",
+                "new blanket Rust lint suppression",
+            ),
+        };
         match self {
             Self::Plain => format!(
-                "{}:{line}: warning: no-new-comments: {MESSAGE}",
+                "{}:{line}: warning: {title}: {message}",
                 path.escape_debug()
             ),
             Self::GitHubActions => {
@@ -115,7 +124,7 @@ impl Format {
                     .replace('\n', "%0A")
                     .replace(':', "%3A")
                     .replace(',', "%2C");
-                format!("::warning file={path},line={line},title=no-new-comments::{MESSAGE}")
+                format!("::warning file={path},line={line},title={title}::{message}")
             }
         }
     }

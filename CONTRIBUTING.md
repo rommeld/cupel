@@ -47,11 +47,15 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-### Advisory Rust comment check
+### Advisory Rust checks
 
-Pull requests get a warning for each new or rewritten ordinary Rust comment.
-Rust doc comments are excluded, and warnings do not fail CI. Keep comments
-that document a verified constraint or satisfy a legal or toolchain requirement.
+Pull requests get `no-new-comments` warnings for new or rewritten ordinary Rust
+comments. Rust doc comments are excluded. Keep comments that document a verified
+constraint or satisfy a legal or toolchain requirement.
+
+The same check reports new `allow(warnings)` and `allow(clippy::all)` attributes
+as `no-blanket-lint-allows` warnings. Targeted `allow` and `expect` attributes
+do not trigger this warning. Neither advisory fails CI or changes Clippy checks.
 Use the [no-comments skill](.cupel/skills/no-comments/SKILL.md) as the review guide.
 
 To run the same comparison locally, fetch your target branch and pass it along
