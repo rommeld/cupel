@@ -91,6 +91,89 @@ fn detected_rename_keeps_its_baseline_and_warns_at_the_destination() {
 }
 
 #[test]
+fn duplicated_inline_comment_is_reported_at_the_inserted_line() {
+    let repo = Repo::new();
+    let original = "fn example() -> Vec<i32> {\n    let mut items = Vec::new();\n    items.push(1); // keep\n    items\n}\n";
+    repo.write("example.rs", original);
+    let base = repo.commit("baseline");
+    let new = original.replace(
+        "    items.push(1)",
+        "    items.push(2); // keep\n    items.push(1)",
+    );
+    repo.write("example.rs", &new);
+    repo.commit("insert a line with the same comment");
+
+    assert_eq!(
+        stdout(repo.run(&["--base", &base, "--head", "HEAD", "--github-actions"])),
+        "::warning file=example.rs,line=3,title=no-new-comments::new or rewritten Rust comment\n"
+    );
+}
+
+#[test]
+fn shebang_with_or_without_bom_keeps_the_real_comment_on_line_two() {
+    let repo = Repo::new();
+    repo.write("main.rs", "fn main() {}\n");
+    let base = repo.commit("baseline");
+    let script =
+        "#!/usr/bin/env -S rust-script // interpreter argument\nfn main() {} // real comment\n";
+    repo.write("bom.rs", &format!("\u{feff}{script}"));
+    repo.write("plain.rs", script);
+    repo.commit("add scripts with shebangs");
+
+    assert_eq!(
+        stdout(repo.run(&["--base", &base, "--head", "HEAD", "--github-actions"])),
+        concat!(
+            "::warning file=bom.rs,line=2,title=no-new-comments::new or rewritten Rust comment\n",
+            "::warning file=plain.rs,line=2,title=no-new-comments::new or rewritten Rust comment\n",
+        )
+    );
+}
+
+#[test]
+fn blanket_lint_warnings_use_committed_head_and_merge_base() {
+    let repo = Repo::new();
+    let original = "fn main() {}\n";
+    repo.write("main.rs", original);
+    let retained = "#[allow(warnings)]\nfn kept() {}\n";
+    repo.write("lib.rs", retained);
+    repo.commit("common ancestor");
+
+    repo.git(&["switch", "-c", "pr"]);
+    repo.write(
+        "main.rs",
+        &format!("\u{feff}#![allow(warnings)]\n{original}"),
+    );
+    repo.write(
+        "lib.rs",
+        &format!("{retained}\n#[allow(dead_code,\n    clippy::all, reason = \"pending cleanup\",\n)]\nfn added() {{}}\n"),
+    );
+    let head = repo.commit("introduce inner and outer blanket suppressions");
+
+    repo.git(&["switch", "main"]);
+    repo.write("main.rs", &format!("#![allow(warnings)]\n{original}"));
+    let base = repo.commit("independently introduce target suppression");
+
+    repo.write("lib.rs", "#![allow(clippy::all)]\n");
+    repo.git(&["add", "lib.rs"]);
+    repo.write("main.rs", original);
+
+    assert_eq!(
+        stdout(repo.run(&["--base", &base, "--head", &head, "--github-actions"])),
+        concat!(
+            "::warning file=lib.rs,line=4,title=no-blanket-lint-allows::new blanket Rust lint suppression\n",
+            "::warning file=main.rs,line=1,title=no-blanket-lint-allows::new blanket Rust lint suppression\n",
+        )
+    );
+    assert_eq!(
+        stdout(repo.run(&["--base", &base, "--head", &head])),
+        concat!(
+            "lib.rs:4: warning: no-blanket-lint-allows: new blanket Rust lint suppression\n",
+            "main.rs:1: warning: no-blanket-lint-allows: new blanket Rust lint suppression\n",
+        )
+    );
+}
+
+#[test]
 fn missing_ref_and_unrelated_histories_fail_the_check() {
     let repo = Repo::new();
     repo.write("main.rs", "fn main() {}\n");
