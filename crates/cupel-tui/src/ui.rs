@@ -1961,7 +1961,9 @@ pub(crate) mod tests {
         app.mouse_captured = false;
         std::fs::write(
             root.join("home/settings.json"),
-            r#"{"providers": {"acme": "from-disk"}}"#,
+            r#"{"providers": {"acme": "from-disk"}, "model": {"default": {
+                "provider": "anthropic", "model": "claude-haiku-5-5",
+                "thinkingLevel": "low", "prompt": "PRESET RULES"}}}"#,
         )
         .unwrap();
         std::fs::write(root.join("home/AGENTS.md"), "FRESH CONTEXT").unwrap();
@@ -1975,11 +1977,9 @@ pub(crate) mod tests {
             state.thinking_level,
             Some(cupel_core::types::ThinkingLevel::High)
         );
-        assert_eq!(
-            state.system_prompt,
-            format!("{}\n\nPRESET RULES", app.meta.base_system_prompt)
-        );
+        assert_eq!(state.system_prompt, app.meta.system_prompt());
         assert!(state.system_prompt.contains("FRESH CONTEXT"));
+        assert!(!state.system_prompt.contains("PRESET RULES"));
         assert_eq!(app.agent.api_key(), Some("entered-key"));
         assert_eq!(
             app.session_keys.get("acme").map(String::as_str),
@@ -2159,7 +2159,6 @@ pub(crate) mod tests {
             "---\nname: first\ndescription: First skill\n---\nFirst instructions",
         )
         .unwrap();
-        app.agent.set_system_prompt("\n\nPRESET RULES".into());
 
         let app = app.hot_reload(ReloadTarget::New).await;
         assert!(app.agent.state().system_prompt.contains("First skill"));
@@ -2192,7 +2191,7 @@ pub(crate) mod tests {
         assert!(state.system_prompt.contains("Second skill"));
         assert!(!state.system_prompt.contains("First skill"));
         assert!(!state.system_prompt.contains("Second instructions"));
-        assert!(state.system_prompt.ends_with("\n\nPRESET RULES"));
+        assert_eq!(state.system_prompt, app.meta.system_prompt());
         assert!(state.messages.is_empty(), "notices are not model messages");
         let loaded: Vec<_> = app
             .transcript
@@ -4322,12 +4321,12 @@ pub(crate) mod tests {
             }}"#,
         )
         .unwrap();
-        app.meta.base_system_prompt = "BASE".into();
+        app.agent.set_system_prompt("BASE".into());
         App::new(app.agent, app.meta, app.recorder)
     }
 
     #[test]
-    fn preset_command_completes_lists_and_switches_everything_at_once() {
+    fn preset_command_completes_lists_and_switches_models_without_changing_the_prompt() {
         use cupel_core::types::ThinkingLevel;
 
         // `/preset ` offers the preset names from settings.json.
@@ -4342,23 +4341,23 @@ pub(crate) mod tests {
         run_command(&mut app, "/preset");
         assert!(has_notice(
             &app,
-            "fast  - anthropic/claude-haiku-5-5, thinking low, + prompt"
+            "fast  - anthropic/claude-haiku-5-5, thinking low"
         ));
         assert!(has_notice(
             &app,
             "deep  - anthropic/claude-sonnet-5, thinking xhigh"
         ));
+        assert!(!has_notice(&app, "+ prompt"));
 
-        // One command switches model, thinking level, and prompt.
         run_command(&mut app, "/preset fast");
         let state = app.agent.state();
         assert_eq!(state.model.id, "claude-haiku-5-5");
         assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
-        assert_eq!(state.system_prompt, "BASE\n\nAnswer in one sentence.");
+        assert_eq!(state.system_prompt, "BASE");
         assert_eq!(app.meta.provider, "anthropic");
         assert!(has_notice(&app, "preset fast activated"));
+        assert!(!has_notice(&app, "+ prompt"));
 
-        // A preset without a prompt replaces the old prompt, never stacks.
         run_command(&mut app, "/preset deep");
         let state = app.agent.state();
         assert_eq!(state.model.id, "claude-sonnet-5");
@@ -4370,12 +4369,10 @@ pub(crate) mod tests {
         assert!(has_notice(&app, "unknown preset: nope"));
         app.meta.settings.presets.insert(
             "broken".into(),
-            cupel_coding_agent::settings::Preset {
-                provider: "anthropic".into(),
-                model: "claude-nope".into(),
-                thinking_level: cupel_coding_agent::settings::ThinkingSetting::Max,
-                prompt: None,
-            },
+            serde_json::from_str(
+                r#"{"provider": "anthropic", "model": "claude-nope", "thinkingLevel": "max"}"#,
+            )
+            .unwrap(),
         );
         run_command(&mut app, "/preset broken");
         let state = app.agent.state();
@@ -4682,11 +4679,15 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_preset_prompt_survives_both_hot_reloads() {
+    async fn hot_reload_keeps_preset_model_and_thinking_but_ignores_legacy_prompt_text() {
         use crate::app::ReloadTarget;
+        use cupel_core::types::ThinkingLevel;
+
         let root = std::env::temp_dir().join("cupel-ui-preset-reload");
         let _ = std::fs::remove_dir_all(&root);
         let mut app = test_app_with_home(&root, "cupel-current");
+        app.meta.base_system_prompt = "Session's original system prompt".into();
+        app.agent.set_system_prompt(app.meta.system_prompt());
         std::fs::write(
             root.join("home/settings.json"),
             r#"{"model": {"fast": {"provider": "anthropic", "model": "claude-haiku-5-5",
@@ -4696,37 +4697,35 @@ pub(crate) mod tests {
         app.meta.settings =
             cupel_coding_agent::settings::load_settings(&root.join("home/settings.json")).unwrap();
         run_command(&mut app, "/preset fast");
-        // The test app's base prompt is empty, only the preset part is left.
-        assert_eq!(app.agent.state().system_prompt, "\n\nPRESET RULES");
-
-        // In place, the running system prompt is kept as it is.
         let app = app.hot_reload(ReloadTarget::Current).await;
-        assert_eq!(app.agent.state().system_prompt, "\n\nPRESET RULES");
+        let state = app.agent.state();
+        assert_eq!(state.system_prompt, "Session's original system prompt");
+        assert_eq!(state.model.id, "claude-haiku-5-5");
+        assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
 
-        // Resume, a fresh base prompt, the preset prompt still at its end.
         let dir = app.recorder.sessions_dir().unwrap().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(root.join("proj/AGENTS.md"), "CURRENT PROJECT INSTRUCTIONS").unwrap();
+        let old_message = cupel_agent::AgentMessage::user_text("old prompt");
         std::fs::write(
             dir.join("cupel-old.jsonl"),
             format!(
                 "{}\n{}\n",
                 serde_json::json!({"version": 1, "sessionId": "cupel-old", "cwd": "x", "model": "test-model", "startedAt": 1_000}),
-                serde_json::to_string(&cupel_agent::AgentMessage::user_text("old prompt")).unwrap(),
+                serde_json::to_string(&old_message).unwrap(),
             ),
         )
         .unwrap();
         let app = app
             .hot_reload(ReloadTarget::Resume("cupel-old".into()))
             .await;
-        let prompt = app.agent.state().system_prompt;
-        assert!(
-            !app.meta.base_system_prompt.is_empty(),
-            "resuming must rebuild the base prompt"
-        );
-        assert_eq!(
-            prompt.strip_suffix("\n\nPRESET RULES"),
-            Some(app.meta.base_system_prompt.as_str())
-        );
+        let state = app.agent.state();
+        assert_eq!(state.model.id, "claude-haiku-5-5");
+        assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
+        assert_eq!(state.messages, vec![old_message]);
+        assert_eq!(state.system_prompt, app.meta.system_prompt());
+        assert!(state.system_prompt.contains("CURRENT PROJECT INSTRUCTIONS"));
+        assert!(!state.system_prompt.contains("PRESET RULES"));
     }
 
     #[tokio::test]
@@ -6478,7 +6477,11 @@ pub(crate) mod tests {
         let state = sessions.active().agent.state();
         assert_eq!(state.model.id, "claude-haiku-5-5");
         assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
-        assert!(state.system_prompt.ends_with("\n\nAnswer in one sentence."));
+        assert!(state.system_prompt.contains(&format!(
+            "Current working directory: {}",
+            sessions.active().meta.cwd
+        )));
+        assert!(!state.system_prompt.contains("Answer in one sentence."));
     }
 
     #[tokio::test]

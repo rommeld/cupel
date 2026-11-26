@@ -336,10 +336,7 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
     let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
 
     let mut options = AgentOptions::new(model.clone(), registry);
-    options.system_prompt = cupel_coding_agent::system_prompt::with_preset_prompt(
-        &ingredients.system_prompt(),
-        preset.and_then(|preset| preset.prompt.as_deref()),
-    );
+    options.system_prompt = ingredients.system_prompt();
     options.tools = ingredients.tools;
     options.api_key = api_key;
     options.thinking_level = thinking_level(&args, &model, preset);
@@ -720,17 +717,10 @@ mod tests {
 
     /// Settings whose `default` preset names `provider`/`model`.
     fn with_default_preset(provider: &str, model: &str) -> Settings {
-        let mut settings = Settings::default();
-        settings.presets.insert(
-            DEFAULT_PRESET.into(),
-            Preset {
-                provider: provider.into(),
-                model: model.into(),
-                thinking_level: cupel_coding_agent::settings::ThinkingSetting::Off,
-                prompt: None,
-            },
-        );
-        settings
+        serde_json::from_value(serde_json::json!({
+            "model": {"default": {"provider": provider, "model": model, "thinkingLevel": "off"}}
+        }))
+        .unwrap()
     }
 
     #[test]
