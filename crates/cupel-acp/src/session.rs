@@ -123,10 +123,7 @@ impl Runtime {
         ingredients.bind_session(&recorder, &cwd);
         let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
         let mut options = AgentOptions::new(model.clone(), registry);
-        options.system_prompt = cupel_coding_agent::system_prompt::with_preset_prompt(
-            &ingredients.system_prompt(),
-            preset.and_then(|p| p.prompt.as_deref()),
-        );
+        options.system_prompt = ingredients.system_prompt();
         options.thinking_level = startup::thinking_level(config.thinking, &model, preset);
         options.api_key = key;
         options.tools = ingredients.tools;
@@ -230,5 +227,79 @@ fn account(message: &cupel_agent::AgentMessage, used: &mut u64, cost: &mut f64) 
             *used = reported;
         }
         *cost += usage.cost.total;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cupel_agent::AgentMessage;
+    use cupel_coding_agent::startup::ThinkingChoice;
+    use cupel_core::types::ThinkingLevel;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn new_and_loaded_sessions_ignore_legacy_preset_prompts() {
+        let root = std::env::temp_dir().join(format!(
+            "cupel-acp-preset-{}-{}",
+            std::process::id(),
+            cupel_core::types::now_ms()
+        ));
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let cwd = root.join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cwd = directory(&cwd).unwrap();
+        let settings = |model: &str| {
+            serde_json::json!({"model": {"default": {
+                "provider": "anthropic", "model": model, "thinkingLevel": "low",
+                "prompt": "LEGACY PRESET INSTRUCTIONS"
+            }}})
+            .to_string()
+        };
+        let settings_path = home.join("settings.json");
+        std::fs::write(&settings_path, settings("claude-haiku-5-5")).unwrap();
+        let guide = cwd.join("AGENTS.md");
+        std::fs::write(&guide, "INITIAL PROJECT INSTRUCTIONS").unwrap();
+
+        let registry = Arc::new(cupel_core::default_registry());
+        let notify: Notify = Arc::new(|_| Ok(()));
+        let mut config = Config {
+            home: Some(home),
+            ..Config::default()
+        };
+        let mut runtime = Runtime::build(
+            &config,
+            Arc::clone(&registry),
+            cwd.clone(),
+            "saved",
+            false,
+            &notify,
+        )
+        .await
+        .unwrap();
+        let state = runtime.agent.state();
+        assert_eq!(state.model.id, "claude-haiku-5-5");
+        assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
+        assert!(state.system_prompt.contains("INITIAL PROJECT INSTRUCTIONS"));
+        assert!(!state.system_prompt.contains("LEGACY PRESET INSTRUCTIONS"));
+        let old_message = AgentMessage::user_text("earlier prompt");
+        runtime.recorder.record(&old_message);
+        drop(runtime);
+
+        config.thinking = ThinkingChoice::Explicit(Some(ThinkingLevel::High));
+        std::fs::write(&settings_path, settings("claude-sonnet-5")).unwrap();
+        std::fs::write(&guide, "UPDATED PROJECT INSTRUCTIONS").unwrap();
+        let runtime = Runtime::build(&config, registry, cwd, "saved", true, &notify)
+            .await
+            .unwrap();
+        let state = runtime.agent.state();
+        assert_eq!(state.model.id, "claude-haiku-5-5", "transcript model wins");
+        assert_eq!(state.thinking_level, Some(ThinkingLevel::High));
+        assert_eq!(state.messages, vec![old_message]);
+        assert!(state.system_prompt.contains("UPDATED PROJECT INSTRUCTIONS"));
+        assert!(!state.system_prompt.contains("INITIAL PROJECT INSTRUCTIONS"));
+        assert!(!state.system_prompt.contains("LEGACY PRESET INSTRUCTIONS"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

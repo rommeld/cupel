@@ -38,14 +38,19 @@ pub const DEFAULT_PRESET: &str = "default";
 /// One named preset. `provider`, `model`, and `thinkingLevel` are
 /// required. Loading skips invalid presets individually with a warning,
 /// saving remains strict so invalid hand written entries are not erased.
+/// The legacy `prompt` field is validated and retained only for settings saves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "The legacy prompt is private to settings serialization"
+)]
 pub struct Preset {
     pub provider: String,
     pub model: String,
     pub thinking_level: ThinkingSetting,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
+    #[serde(rename = "prompt", default, skip_serializing_if = "Option::is_none")]
+    legacy_prompt: Option<String>,
 }
 
 impl Preset {
@@ -621,21 +626,27 @@ mod tests {
     }
 
     #[test]
-    fn invalid_project_preset_does_not_replace_a_valid_home_preset() {
+    fn malformed_legacy_project_prompt_does_not_replace_a_valid_home_default() {
         let root = temp_root("invalid-project-preset");
         std::fs::create_dir_all(root.join(".cupel")).unwrap();
-        std::fs::write(settings_path(&root), r#"{
+        std::fs::write(
+            settings_path(&root),
+            r#"{
             "providers": {"anthropic": "home-key"},
-            "model": {"default": {"provider": "anthropic", "model": "home-model", "thinkingLevel": "low"}}
-        }"#).unwrap();
+            "model": {"default": {"provider": "anthropic", "model": "home-model",
+                                  "thinkingLevel": "low", "prompt": "Home instructions"}}
+        }"#,
+        )
+        .unwrap();
         let project_path = project_settings_path(&root);
         std::fs::write(
             &project_path,
             r#"{
             "loopKiller": {"maxRepeats": 2},
             "model": {
-                "default": {"provider": "anthropic", "model": "bad-model", "thinkingLevel": "High"},
-                "fast": {"provider": "anthropic", "model": "project-model", "thinkingLevel": "off"}
+                "default": {"provider": "anthropic", "model": "bad-model", "thinkingLevel": "high", "prompt": 42},
+                "fast": {"provider": "openai", "model": "project-model", "thinkingLevel": "off",
+                         "prompt": "Project instructions"}
             }
         }"#,
         )
@@ -655,8 +666,14 @@ mod tests {
         assert!(merged.invalid_default_preset.is_none());
         assert_eq!(merged.api_key("anthropic"), Some("home-key"));
         assert_eq!(merged.loop_killer_max_repeats(), Some(2));
-        assert_eq!(merged.presets["default"].model, "home-model");
-        assert_eq!(merged.presets["fast"].model, "project-model");
+        let default = &merged.presets[DEFAULT_PRESET];
+        assert_eq!(default.provider, "anthropic");
+        assert_eq!(default.model, "home-model");
+        assert_eq!(default.thinking_level, ThinkingSetting::Low);
+        let fast = &merged.presets["fast"];
+        assert_eq!(fast.provider, "openai");
+        assert_eq!(fast.model, "project-model");
+        assert_eq!(fast.thinking_level, ThinkingSetting::Off);
     }
 
     #[test]
@@ -761,10 +778,17 @@ mod tests {
             "providers": {"anthropic": "sk-a"},
             "loopKiller": {"maxRepeats": 3},
             "model": {"fast": {
-                "provider": "anthropic", "model": "test", "thinkingLevel": "off"
+                "provider": "anthropic", "model": "test", "thinkingLevel": "off",
+                "prompt": "  Keep \"quotes\".\nAnd spacing.\n"
             }},
             "editor": "vim"
         });
+        let project = home.join("project");
+        std::fs::create_dir_all(project.join(".cupel")).unwrap();
+        let project_path = project_settings_path(&project);
+        let project_text = r#"{"model":{"fast":{"provider":"anthropic","model":"project",
+                                               "thinkingLevel":"low","prompt":"Project text"}}}"#;
+        std::fs::write(&project_path, project_text).unwrap();
         std::fs::write(&path, original.to_string()).unwrap();
         assert_eq!(save_theme(Some(&home), "nightfox").unwrap(), path);
         let settings = load_settings(&path).unwrap();
@@ -774,12 +798,23 @@ mod tests {
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written, expected);
+        assert_eq!(
+            std::fs::read_to_string(&project_path).unwrap(),
+            project_text
+        );
 
         // Provider saves use the same path and must keep the chosen theme.
-        save_provider_key(Some(&home), "fireworks", "fw-1").unwrap();
         assert_eq!(
-            load_settings(&path).unwrap().theme.as_deref(),
-            Some("nightfox")
+            save_provider_key(Some(&home), "fireworks", "fw-1").unwrap(),
+            path
+        );
+        expected["providers"]["fireworks"] = serde_json::json!("fw-1");
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written, expected);
+        assert_eq!(
+            std::fs::read_to_string(&project_path).unwrap(),
+            project_text
         );
         #[cfg(unix)]
         {
@@ -1096,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn presets_parse_required_fields_and_an_optional_prompt() {
+    fn presets_parse_model_and_thinking_fields_with_or_without_a_legacy_prompt() {
         let parsed: Settings = serde_json::from_str(
             r#"{"model": {
                 "default": {"provider": "openai-codex", "model": "codex/gpt-6-sol",
@@ -1109,12 +1144,9 @@ mod tests {
         let default = &parsed.presets[DEFAULT_PRESET];
         assert_eq!(default.model, "codex/gpt-6-sol");
         assert_eq!(default.thinking_level.level(), Some(ThinkingLevel::XHigh));
-        assert_eq!(default.prompt, None);
         // "off" is a real choice, not a missing value, the agent's None.
         let fast = &parsed.presets["fast"];
         assert_eq!(fast.thinking_level.level(), None);
-        assert_eq!(fast.prompt.as_deref(), Some("Answer briefly."));
-        // A known field now it must not fall into the extra map.
         assert!(parsed.extra.is_empty());
     }
 
@@ -1159,7 +1191,7 @@ mod tests {
             provider: "anthropic".into(),
             model: model.into(),
             thinking_level: ThinkingSetting::Low,
-            prompt: None,
+            legacy_prompt: None,
         };
         let mut home = Settings::default();
         home.presets
@@ -1186,7 +1218,7 @@ mod tests {
             provider: "anthropic".into(),
             model: "claude-haiku-5-5".into(),
             thinking_level: ThinkingSetting::Low,
-            prompt: None,
+            legacy_prompt: None,
         };
         let found = preset.find_model(&catalog).map(|model| model.id.as_str());
         assert_eq!(found, Some("claude-haiku-5-5"));

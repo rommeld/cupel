@@ -161,8 +161,7 @@ For a gateway such as LiteLLM, use `ANTHROPIC_BASE_URL` with `ANTHROPIC_AUTH_TOK
 
 ### Presets
 
-A preset sets the provider, model, and thinking level. It can also set a `prompt`. Define presets in
-`settings.json`:
+A preset sets the provider, model, and thinking level. Define presets in `settings.json`:
 
 ```json
 {
@@ -179,6 +178,9 @@ A preset sets the provider, model, and thinking level. It can also set a `prompt
 Cupel applies the `default` preset at startup. Run `/model` to list model IDs or `/model <id>` to
 switch models. Use `/preset <name>` to switch to a named preset. Use `/thinking <level>` to change
 the thinking level. Cupel accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+
+Cupel keeps legacy `prompt` text in settings but does not send it to the model. Put instructions
+that apply across presets in `AGENTS.md` or `CLAUDE.md`.
 
 ### Themes
 
