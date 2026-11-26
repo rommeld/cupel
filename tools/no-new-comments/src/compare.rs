@@ -95,6 +95,7 @@ fn normalize_line_endings(source: &str) -> Cow<'_, str> {
 
 impl<'source> Source<'source> {
     fn lex(source: &'source str) -> Self {
+        let source = source.strip_prefix('\u{feff}').unwrap_or(source);
         let mut code: Vec<CodeLine<'source>> = Vec::new();
         let mut comments = Vec::new();
         let mut offset = ra_ap_rustc_lexer::strip_shebang(source).unwrap_or_default();
@@ -178,10 +179,10 @@ fn anchors<'source>(
             next,
         }),
         has_neighbors.then_some(Anchor::Neighbors(previous, next)),
+        (!inline.is_empty()).then_some(Anchor::Inline(inline)),
         (!previous.is_empty() && !prefix.is_empty())
             .then_some(Anchor::PreviousAndInline(previous, prefix)),
         (!prefix.is_empty() && !next.is_empty()).then_some(Anchor::InlineAndNext(prefix, next)),
-        (!inline.is_empty()).then_some(Anchor::Inline(inline)),
         (!prefix.is_empty()).then_some(Anchor::Inline(prefix)),
         (!next.is_empty()).then_some(Anchor::Next(next)),
         (!previous.is_empty()).then_some(Anchor::Previous(previous)),
