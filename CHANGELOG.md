@@ -5,6 +5,7 @@ Notable user-facing changes by release.
 ## [Unreleased]
 
 - Cupel no longer checks the `disable` field in `SKILL.md`. Move the file out of the skill directories to hide it. A project skill still overrides a home skill with the same name.
+- Model presets still select the provider, model, and thinking level. Cupel keeps legacy preset `prompt` text in settings but no longer sends it to the model. Put instructions that apply across presets in `AGENTS.md` or `CLAUDE.md`.
 
 ## [v0.52.0] - 2026-11-23
 

@@ -395,8 +395,6 @@ impl Sessions {
                     ))
                 })?;
             carry.thinking = preset.thinking_level.level();
-            carry.preset_prompt =
-                cupel_coding_agent::system_prompt::with_preset_prompt("", preset.prompt.as_deref());
         }
         let home = requester.meta.home.clone();
         let registry = requester.agent.registry();
@@ -473,8 +471,8 @@ impl Sessions {
 
     /// A session for `spinoff` that continues its newest transcript, as the resume option
     /// does, the same session id, the history on screen and in the context. The model
-    /// is the one of the last answer, thinking level and preset prompt come from the
-    /// origin, because the transcript records neither.
+    /// is the one of the last answer. The thinking level comes from the origin because
+    /// the transcript does not record it.
     async fn reopen(&self, spinoff: &Spinoff) -> App {
         let origin = &self.list[0].app;
         let mut carry = origin.carry();

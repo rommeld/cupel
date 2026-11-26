@@ -165,12 +165,10 @@ pub enum Status {
 }
 
 /// What a new session takes over from the session that opens it. The model with its
-/// thinking level and preset prompt, the API keys entered with `/provider`, and the
-/// mouse state.
+/// thinking level, the API keys entered with `/provider`, and the mouse state.
 pub struct Carry {
     pub model: cupel_core::types::Model,
     pub thinking: Option<cupel_core::types::ThinkingLevel>,
-    pub preset_prompt: String,
     pub session_keys: std::collections::HashMap<String, String>,
     pub mouse_captured: bool,
 }
@@ -910,10 +908,8 @@ impl App {
     /// the old App and returning its replacement (the event loop rebinds).
     /// Failed resume keeps the old history and configuration.
     ///
-    /// What carries over in all modes, the current model, thinking level,
-    /// and preset prompt (runtime switches survive a reload), session entered
-    /// API keys (settings.json is re read from disk), and the mouse capture
-    /// state.
+    /// All modes keep the current model, thinking level, API keys entered with
+    /// `/provider`, and mouse capture state.
     pub async fn hot_reload(mut self, target: ReloadTarget) -> Self {
         if self.mode_change_busy() {
             self.notice("reload requires idle work and empty prompt queues; retry when idle");
@@ -999,20 +995,6 @@ impl App {
 
         let session_id = self.recorder.session_id().to_string();
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
-        // Keep the original embedded context and the active preset. Only
-        // replace the skill catalog; context changes travel as a delta.
-        options.system_prompt = if let Some(preset) = state
-            .system_prompt
-            .strip_prefix(self.meta.system_prompt().as_str())
-        {
-            let base = cupel_coding_agent::system_prompt::with_skill_catalog(
-                &self.meta.base_system_prompt,
-                &ingredients.skills,
-            );
-            format!("{base}{preset}")
-        } else {
-            state.system_prompt
-        };
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
         let provider = state.model.provider.as_str();
@@ -1038,6 +1020,7 @@ impl App {
             skills: ingredients.skills,
             base_system_prompt: self.meta.base_system_prompt.clone(),
         };
+        options.system_prompt = meta.system_prompt();
 
         // The session continues, retain its open transcript, started state,
         // and pending hook chain rather than creating a fresh recorder.
@@ -1123,15 +1106,9 @@ impl App {
     #[must_use]
     pub fn carry(&self) -> Carry {
         let state = self.agent.state();
-        let preset_prompt = state
-            .system_prompt
-            .strip_prefix(self.meta.system_prompt().as_str())
-            .unwrap_or_default()
-            .to_string();
         Carry {
             model: state.model,
             thinking: state.thinking_level,
-            preset_prompt,
             session_keys: self.session_keys.clone(),
             mouse_captured: self.mouse_captured,
         }
@@ -1160,7 +1137,7 @@ impl App {
         ingredients.bind_session(&recorder, cwd);
 
         let mut options = cupel_agent::AgentOptions::new(carry.model.clone(), registry);
-        options.system_prompt = format!("{}{}", ingredients.system_prompt(), carry.preset_prompt);
+        options.system_prompt = ingredients.system_prompt();
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
         // Session entered keys still win, but the settings tier must come from the
@@ -1819,9 +1796,7 @@ impl App {
         self.note_thinking_level();
     }
 
-    /// `/preset`, list the presets from settings.json, or switched to one,
-    /// model (with its key), thinking level, and system prompt together, each
-    /// taking effect with the next request like /model and /thinking.
+    /// List presets or switch the model and thinking level for the next request.
     fn handle_preset_command(&mut self, name: &str) {
         if name.is_empty() {
             if self.meta.settings.presets.is_empty() {
@@ -1830,17 +1805,15 @@ impl App {
                 );
                 return;
             }
-            let mut lines = vec!["presets (/presets <name>):".to_string()];
+            let mut lines = vec!["presets (/preset <name>):".to_string()];
             for (name, preset) in &self.meta.settings.presets {
                 lines.push(format!("  {name}  - {}", preset_summary(preset)));
             }
             self.notice(lines.join("\n"));
             return;
         }
-        // Cloned out of self.meta, switch_model below needs `&mut self`,
-        // which a live reference into self.meta.settings would forbid.
-        let Some(preset) = self.meta.settings.presets.get(name).cloned() else {
-            self.notice(format!("unknown preset: {name} (/preset lists them"));
+        let Some(preset) = self.meta.settings.presets.get(name) else {
+            self.notice(format!("unknown preset: {name} (/preset lists them)"));
             return;
         };
         let Some(model) = preset.find_model(&self.meta.models).cloned() else {
@@ -1850,16 +1823,12 @@ impl App {
             ));
             return;
         };
+        let thinking_level = preset.thinking_level.level();
+        let summary = preset_summary(preset);
         self.switch_model(model);
-        self.agent.set_thinking_level(preset.thinking_level.level());
-        self.agent
-            .set_system_prompt(cupel_coding_agent::system_prompt::with_preset_prompt(
-                &self.meta.system_prompt(),
-                preset.prompt.as_deref(),
-            ));
+        self.agent.set_thinking_level(thinking_level);
         self.notice(format!(
-            "preset {name} activated: {} (takes effect next request)",
-            preset_summary(&preset)
+            "preset {name} activated: {summary} (takes effect next request)"
         ));
         self.note_thinking_level();
     }
@@ -2559,16 +2528,9 @@ pub fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
-/// One line per preset for the `/preset` popup and listening, e.g.
-/// For example, Anthropic Claude Sonnet 5 with high thinking and a prompt.
 fn preset_summary(preset: &Preset) -> String {
-    let prompt = if preset.prompt.as_deref().is_some_and(|p| !p.is_empty()) {
-        ", + prompt"
-    } else {
-        ""
-    };
     format!(
-        "{}/{}, thinking {}{prompt}",
+        "{}/{}, thinking {}",
         preset.provider,
         preset.model,
         preset.thinking_level.as_str(),

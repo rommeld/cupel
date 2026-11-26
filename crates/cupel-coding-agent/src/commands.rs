@@ -263,7 +263,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "preset",
-        description: "Switch model, thinking level, and prompt to a settings.json",
+        description: "Switch provider, model, and thinking level: /preset <name> (no argument lists presets)",
     },
     BuiltinCommand {
         name: "provider",

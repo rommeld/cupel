@@ -170,10 +170,8 @@ impl Agent {
         self.state.lock().expect("agent state lock poisoned").model = model;
     }
 
-    /// Replace the system prompt for runs (the TUI's /preset
-    /// appends a preset prompt to the base prompt). Like set_model, a run
-    /// in flight keeps the prompt it started with, `prompt` copies it
-    /// into the run's context at the start.
+    /// Replace the system prompt for future runs. A run in flight keeps the
+    /// prompt it started with.
     pub fn set_system_prompt(&self, system_prompt: String) {
         self.state
             .lock()
