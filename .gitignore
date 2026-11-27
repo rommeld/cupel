@@ -51,6 +51,7 @@
 
 !/docs/
 !/docs/coding-guidelines.md
+!/docs/codemode-worker.md
 
 !/.cupel/skills/
 !/.cupel/skills/**
