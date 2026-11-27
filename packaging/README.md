@@ -5,45 +5,54 @@ release, each contains `cupel`, `cupel-acp`, `LICENSE`, `README.md`, and ACP cli
 examples under `examples/`. Archive names and the published `sha256sums.txt`
 stay unchanged, so existing Cupel installers and `/update` remain compatible.
 
-## Cutting a release
+## Automatic releases
 
-Prepare the changelog and workspace version on a branch with full git history
-and tags. The helper only edits `CHANGELOG.md`, `Cargo.toml`, and `Cargo.lock`;
-it does not commit, push, or create a tag:
+Before merging a PR from this repository's `develop` branch into `main`, post
+one of these as a standalone comment in the PR conversation:
 
-```sh
-sh packaging/prepare-release.sh v0.33.11
-```
+| PR comment | Version bump |
+| --- | --- |
+| `Changelog: added` | Minor (`0.53.0` → `0.54.0`) |
+| `Changelog: fixed` | Patch (`0.53.0` → `0.53.1`) |
+| `Changelog: refact` | Patch (`0.53.0` → `0.53.1`) |
 
-Review and commit those files in the release PR. CI runs formatting, strict
-Clippy, Rust tests, and packaging tests on Ubuntu and macOS using the pinned
-`rust-toolchain.toml`. Once that PR is green and merged, tag the merged commit:
+The workflow reads comments from repository owners, members, and collaborators
+that were last updated before or at merge time. `added` takes precedence if
+both bump types are present. Without a matching comment, no release is created.
+If a newer release already includes the merge, the workflow skips it.
 
-```sh
-git switch main && git pull --ff-only
-git tag v0.33.11 && git push origin v0.33.11
-```
+The workflow bumps from the highest stable version tag (or the workspace
+version if none exists). It commits `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md`
+on top of the merge commit and pushes only the tag. Neither branch is changed.
+If the run fails after pushing the tag, rerun it to reuse the same version.
 
-The tag must match the committed workspace version and have a changelog section;
-release builds check both. Tests run in the PR, not again for the tag.
-
-`.github/workflows/release.yml` builds both executables as macOS universal
-binaries and Linux musl binaries, and publishes a GitHub Release with the archives and a
-`sha256sums.txt`. The release is created as a FULL release (not a
-prerelease), which is what makes `releases/latest/download/` - and
-therefore `install.sh` - point at it. Users install with:
+The workflow builds both executables as macOS universal binaries and Linux musl
+binaries. It publishes the archives and `sha256sums.txt` as a full GitHub
+Release, not a prerelease. `install.sh` downloads the latest release:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/rommeld/cupel/main/install.sh | sh
 ```
 
 Release publication is retryable: an interrupted draft resumes its uploads.
-Publishing is serialized.
-The workflow never writes to `main`, opens bookkeeping PRs, or bypasses branch
-protection: metadata is already committed in the tested release PR.
+Release runs are serialized.
 
-Re-running an old release run uses that tag's original workflow definition.
-It does not pick up workflow fixes merged later.
+### Manual releases
+
+You can still push a `v*` tag to trigger a release. Choose a version above the
+latest release and prepare it in a checkout with full history and tags:
+
+```sh
+sh packaging/prepare-release.sh v0.54.1
+```
+
+If the previous version was tagged by CI, first copy its `CHANGELOG.md` into
+the checkout (`git show v0.54.0:CHANGELOG.md > CHANGELOG.md`) and pass its tag
+as the second argument to the script. Review, test, and commit the metadata,
+then run `git tag v0.54.1 && git push origin v0.54.1`. Release builds verify
+that the tag matches the committed workspace version and changelog section.
+
+Re-running a release uses the workflow definition from the original run.
 
 Both executables go into `${CUPEL_INSTALL_DIR:-${CUPEL_HOME:-$HOME/.cupel}/bin}`.
 The installer preserves compatibility with older `cupel`-only archives and

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Prepend a release section to CHANGELOG.md from git history, before tagging,
 #
-# Run this script with a version tag and an optional changelog path.
+# Run this script with a version tag, an optional changelog path and the previous tag.
 #
 # The section lists commit subjects since the previous tag through HEAD.
 # An existing tag can also be used to backfill a past release. POSIX sh + awk
@@ -17,7 +17,7 @@
 set -eu
 
 if [ $# -lt 1 ]; then
-    echo "usage: $0 <tag> [changelog.md]" >&2
+    echo "usage: $0 <tag> [changelog.md] [previous-tag]" >&2
     exit 1
 fi
 
@@ -37,7 +37,7 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     REF=$TAG
     PREVIOUS_REF="$TAG^"
 fi
-PREV="$(git describe --tags --abbrev=0 "$PREVIOUS_REF" 2>/dev/null || true)"
+PREV="${3:-$(git describe --tags --abbrev=0 "$PREVIOUS_REF" 2>/dev/null || true)}"
 RANGE="${PREV:+$PREV..}$REF"
 
 DATE="$(git log -1 --format=%cd --date=short "$REF")"
