@@ -11,6 +11,7 @@
 4. Define Success Criteria: Transform tasks into verifiable goals.
 
 Before you make code changes, read the Rust coding guidelines [coding-guidelines.md](docs/coding-guidelines.md).
+Load the `focused-testing` skill before implementing code changes, fixing bugs, refactoring, or editing tests.
 
 ## Commit and Pull Request Guidelines
 
