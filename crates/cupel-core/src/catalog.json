@@ -2723,6 +2723,75 @@
     }
   },
   {
+    "id": "~google/gemini-pro-latest",
+    "name": "Gemini Pro Latest",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    },
+    "input": [
+      "image",
+      "text"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cachedRead": 0.1,
+      "cachedWrite": 0.1875,
+      "tiers": [
+        {
+          "contextOver": 200000,
+          "input": 4.0,
+          "output": 18.0,
+          "cachedRead": 0.4,
+          "cachedWrite": 0.0
+        }
+      ]
+    },
+    "contextWindow": 200000,
+    "maxContextWindow": 1048576,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
+    "id": "~google/gemini-flash-latest",
+    "name": "Gemini Flash Latest",
+    "api": "openai-completions",
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "max": null,
+      "minimal": null,
+      "off": null
+    },
+    "input": [
+      "image",
+      "text"
+    ],
+    "cost": {
+      "input": 1.5,
+      "output": 7.5,
+      "cachedRead": 0.075,
+      "cachedWrite": 0.083333
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 943718,
+    "compat": {
+      "supportsDeveloperRole": false,
+      "thinkingFormat": "openrouter"
+    }
+  },
+  {
     "id": "google/gemma-4-31b-it",
     "name": "Gemma 4 31B IT",
     "api": "openai-completions",
