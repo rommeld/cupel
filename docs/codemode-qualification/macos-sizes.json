@@ -1,0 +1,54 @@
+{
+  "baseline": "824a52536ac8a6883394d965ee7180790429e751",
+  "candidate": "ff6cfe0408604bd77e7b247d91b0ed51132f73e2",
+  "sizes": [
+    {
+      "target": "aarch64-apple-darwin",
+      "binary": "cupel",
+      "before": 17713888,
+      "after": 27522624,
+      "delta_bytes": 9808736,
+      "delta_percent": 55.37
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "binary": "cupel-acp",
+      "before": 17343632,
+      "after": 27136144,
+      "delta_bytes": 9792512,
+      "delta_percent": 56.46
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "binary": "cupel",
+      "before": 19223040,
+      "after": 29827552,
+      "delta_bytes": 10604512,
+      "delta_percent": 55.17
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "binary": "cupel-acp",
+      "before": 18818968,
+      "after": 29407720,
+      "delta_bytes": 10588752,
+      "delta_percent": 56.27
+    },
+    {
+      "target": "universal",
+      "binary": "cupel",
+      "before": 36948704,
+      "after": 57357888,
+      "delta_bytes": 20409184,
+      "delta_percent": 55.24
+    },
+    {
+      "target": "universal",
+      "binary": "cupel-acp",
+      "before": 36168848,
+      "after": 56561808,
+      "delta_bytes": 20392960,
+      "delta_percent": 56.38
+    }
+  ]
+}

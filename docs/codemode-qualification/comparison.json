@@ -1,0 +1,186 @@
+{
+  "summary": {
+    "rank": {
+      "off": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 3,
+          "input_tokens": 18002,
+          "tool_result_bytes": 22122,
+          "wall_seconds": 22.654,
+          "callback_count": 0
+        },
+        "required_facts_pass": 3,
+        "citations_pass": 0,
+        "codemode_used": 0,
+        "failed_sessions": 0
+      },
+      "on": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 3,
+          "input_tokens": 18173,
+          "tool_result_bytes": 19724,
+          "wall_seconds": 20.281,
+          "callback_count": 0
+        },
+        "required_facts_pass": 4,
+        "citations_pass": 0,
+        "codemode_used": 0,
+        "failed_sessions": 0
+      }
+    },
+    "cache": {
+      "off": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 10,
+          "input_tokens": 160236,
+          "tool_result_bytes": 72289,
+          "wall_seconds": 57.977,
+          "callback_count": 0
+        },
+        "required_facts_pass": 2,
+        "citations_pass": 0,
+        "codemode_used": 0,
+        "failed_sessions": 1
+      },
+      "on": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 11,
+          "input_tokens": 189438,
+          "tool_result_bytes": 76489,
+          "wall_seconds": 57.456,
+          "callback_count": 0
+        },
+        "required_facts_pass": 2,
+        "citations_pass": 1,
+        "codemode_used": 0,
+        "failed_sessions": 2
+      }
+    },
+    "patch": {
+      "off": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 5,
+          "input_tokens": 47553,
+          "tool_result_bytes": 37066,
+          "wall_seconds": 31.232,
+          "callback_count": 0
+        },
+        "required_facts_pass": 5,
+        "citations_pass": 3,
+        "codemode_used": 0,
+        "failed_sessions": 0
+      },
+      "on": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 3,
+          "input_tokens": 30118,
+          "tool_result_bytes": 33591,
+          "wall_seconds": 24.657,
+          "callback_count": 0
+        },
+        "required_facts_pass": 3,
+        "citations_pass": 1,
+        "codemode_used": 0,
+        "failed_sessions": 0
+      }
+    },
+    "loop": {
+      "off": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 4,
+          "input_tokens": 46919,
+          "tool_result_bytes": 61046,
+          "wall_seconds": 20.856,
+          "callback_count": 0
+        },
+        "required_facts_pass": 0,
+        "citations_pass": 0,
+        "codemode_used": 0,
+        "failed_sessions": 0
+      },
+      "on": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 3,
+          "input_tokens": 27547,
+          "tool_result_bytes": 59044,
+          "wall_seconds": 23.649,
+          "callback_count": 0
+        },
+        "required_facts_pass": 1,
+        "citations_pass": 0,
+        "codemode_used": 0,
+        "failed_sessions": 0
+      }
+    },
+    "known": {
+      "off": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 2,
+          "input_tokens": 7835,
+          "tool_result_bytes": 1717,
+          "wall_seconds": 6.406,
+          "callback_count": 0
+        },
+        "required_facts_pass": 5,
+        "citations_pass": 0,
+        "codemode_used": 0,
+        "failed_sessions": 0
+      },
+      "on": {
+        "sessions": 5,
+        "medians": {
+          "provider_requests": 2,
+          "input_tokens": 8197,
+          "tool_result_bytes": 1717,
+          "wall_seconds": 6.04,
+          "callback_count": 0
+        },
+        "required_facts_pass": 5,
+        "citations_pass": 0,
+        "codemode_used": 0,
+        "failed_sessions": 0
+      }
+    },
+    "multi_step": {
+      "off": {
+        "sessions": 20,
+        "medians": {
+          "provider_requests": 4.0,
+          "input_tokens": 47123.0,
+          "tool_result_bytes": 59044.0,
+          "wall_seconds": 27.538,
+          "callback_count": 0.0
+        },
+        "required_facts_pass": 10,
+        "citations_pass": 3,
+        "codemode_used": 0,
+        "failed_sessions": 1
+      },
+      "on": {
+        "sessions": 20,
+        "medians": {
+          "provider_requests": 3.5,
+          "input_tokens": 27548.0,
+          "tool_result_bytes": 51855.5,
+          "wall_seconds": 24.153,
+          "callback_count": 0.0
+        },
+        "required_facts_pass": 10,
+        "citations_pass": 2,
+        "codemode_used": 0,
+        "failed_sessions": 2
+      }
+    }
+  },
+  "live_gate_pass": false,
+  "decision_changes_without": []
+}

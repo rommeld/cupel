@@ -1,0 +1,22 @@
+{
+  "baseline": "824a52536ac8a6883394d965ee7180790429e751",
+  "candidate": "ca97247e8ccd675920a8387cc2163a091575d53a",
+  "sizes": [
+    {
+      "target": "aarch64-unknown-linux-musl",
+      "binary": "cupel",
+      "before": 17340344,
+      "after": 27371512,
+      "delta_bytes": 10031168,
+      "delta_percent": 57.85
+    },
+    {
+      "target": "aarch64-unknown-linux-musl",
+      "binary": "cupel-acp",
+      "before": 16948920,
+      "after": 26980112,
+      "delta_bytes": 10031192,
+      "delta_percent": 59.18
+    }
+  ]
+}

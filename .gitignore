@@ -53,6 +53,10 @@
 !/docs/coding-guidelines.md
 !/docs/codemode-worker.md
 !/docs/codemode-preview.md
+!/docs/codemode-qualification.md
+!/docs/codemode-qualification/
+!/docs/codemode-qualification/*.json
+!/docs/codemode-qualification/*.jsonl
 
 !/.cupel/skills/
 !/.cupel/skills/**
