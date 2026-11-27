@@ -216,7 +216,7 @@ mod tests {
     use crate::ui::tests::{has_notice, run_command, test_app, test_app_with_home};
 
     fn notices(sessions: &Sessions) -> usize {
-        let cells = &sessions.active().transcript.cells;
+        let cells = sessions.active().transcript.cells();
         cells
             .iter()
             .filter(|cell| matches!(cell, Cell::Notice { .. }))
@@ -285,7 +285,7 @@ mod tests {
         run_command(&mut app, "/update");
         assert!(app.update_requested);
         assert!(app.pending_prompt.is_none());
-        assert!(app.transcript.cells.is_empty());
+        assert!(app.transcript.cells().is_empty());
     }
 
     #[tokio::test]

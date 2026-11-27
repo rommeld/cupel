@@ -22,7 +22,7 @@ fn command(app: &mut App, text: &str) {
 
 fn notices(app: &App) -> String {
     app.transcript
-        .cells
+        .cells()
         .iter()
         .filter_map(|cell| match cell {
             Cell::Notice { text } => Some(text.as_str()),
@@ -181,7 +181,7 @@ async fn undo_refuses_arguments_and_busy_agent_work() {
     app.pending_prompt = None;
     let (events, _sink) = cupel_agent::agent_loop::agent_event_channel();
     app.run_events = Some(events);
-    app.transcript.cells.clear();
+    app.transcript.clear();
     app.run_undo_command(UndoCommand::Undo).await;
     assert!(notices(&app).contains("agent is working"));
     assert_eq!(

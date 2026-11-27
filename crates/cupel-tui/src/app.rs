@@ -33,7 +33,7 @@ use crate::input::InputState;
 use crate::login;
 use crate::text_selection::{Point, TextSelection};
 use crate::theme::Theme;
-use crate::transcript::{Cell, ToolDisplay, ToolOutcome, Transcript};
+use crate::transcript::{Cell, ToolDisplay, ToolOutcome, Transcript, TranscriptCache};
 
 use crate::usage::UsagePopup;
 
@@ -43,6 +43,7 @@ pub struct App {
     pub agent: Agent,
     pub meta: SessionMeta,
     pub transcript: Transcript,
+    pub transcript_cache: TranscriptCache,
     /// Current turn's reasoning content indices mapped to transcript cells.
     pub thinking_cells: std::collections::HashMap<usize, usize>,
     pub input: InputState,
@@ -320,6 +321,7 @@ impl App {
             agent,
             meta,
             transcript: Transcript::default(),
+            transcript_cache: TranscriptCache::default(),
             thinking_cells: std::collections::HashMap::new(),
             input: InputState::default(),
             last_esc: None,
@@ -388,7 +390,7 @@ impl App {
             for skill in &app.meta.skills {
                 lines.push(format!("* {} [{}]", skill.name, skill.description));
             }
-            app.transcript.cells.push(Cell::LoadedSkills {
+            app.transcript.push(Cell::LoadedSkills {
                 text: lines.join("\n"),
             });
         }
@@ -425,7 +427,7 @@ impl App {
         if messages.is_empty() {
             return;
         }
-        self.transcript.cells.push(Cell::Notice {
+        self.transcript.push(Cell::Notice {
             text: format!(
                 "resumed session {} ({} messages)",
                 self.recorder.session_id(),
@@ -445,7 +447,7 @@ impl App {
                         },
                         None => Cell::User { text },
                     };
-                    self.transcript.cells.push(cell);
+                    self.transcript.push(cell);
                 }
                 AgentMessage::Llm(Message::Assistant(assistant)) => {
                     for content in &assistant.content {
@@ -469,7 +471,7 @@ impl App {
                                 result: None,
                             },
                         };
-                        self.transcript.cells.push(cell);
+                        self.transcript.push(cell);
                     }
                     // Same error/usage bookkeeping as the live path, so
                     // /usage stays truthful across a resume.
@@ -503,6 +505,19 @@ impl App {
     #[must_use]
     pub fn is_running(&self) -> bool {
         self.run_events.is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn has_pending_loop_action(&self) -> bool {
+        self.should_quit
+            || self.pending_copy.is_some()
+            || self.mouse_toggle_requested
+            || self.pending_reload.is_some()
+            || self.pending_spinoff.is_some()
+            || self.update_requested
+            || self.pending_theme.is_some()
+            || self.pending_undo.is_some()
+            || self.pending_prompt.is_some()
     }
 
     /// Session's state for the sidebar.
@@ -1301,14 +1316,14 @@ impl App {
         let line = self.last_top_line + (row - inner.y) as usize;
         let hit = self.last_line_cells.get(line).copied().flatten();
         if let Some(index) = hit
-            && matches!(self.transcript.cells.get(index), Some(Cell::Tool { .. }))
+            && matches!(self.transcript.cells().get(index), Some(Cell::Tool { .. }))
         {
             self.transcript.toggle_tool(index);
             return;
         }
         if let Some(index) = hit
             && matches!(
-                self.transcript.cells.get(index),
+                self.transcript.cells().get(index),
                 Some(Cell::Thinking { .. })
             )
             && (line == 0 || self.last_line_cells[line - 1] != hit)
@@ -1331,10 +1346,15 @@ impl App {
             return;
         };
         let first = self
-            .last_line_cells
-            .iter()
-            .position(|entry| *entry == Some(cell))
-            .unwrap_or(line);
+            .transcript_cache
+            .cell_range(cell)
+            .map(|(start, _)| start)
+            .unwrap_or_else(|| {
+                self.last_line_cells
+                    .iter()
+                    .position(|entry| *entry == Some(cell))
+                    .unwrap_or(line)
+            });
         self.transcript_anchor = Some(TranscriptAnchor {
             cell,
             offset: line - first,
@@ -1356,7 +1376,7 @@ impl App {
         }
         let index = self.selected_cell.or_else(|| {
             self.transcript
-                .cells
+                .cells()
                 .iter()
                 .rposition(|cell| matches!(cell, Cell::Answer { .. }))
         });
@@ -1528,14 +1548,14 @@ impl App {
     pub fn start_run(&mut self, text: &str) {
         // The task leads the turn. `start_run`is the single funnel every
         // prompt goes through (typed prompts and expanded templates).
-        self.transcript.cells.push(Cell::User {
+        self.transcript.push(Cell::User {
             text: text.to_string(),
         });
         match self.agent.prompt_text(text) {
             Ok(events) => self.begin_run(events),
             Err(err) => {
                 self.last_answer = Status::Failed;
-                self.transcript.cells.push(Cell::Error {
+                self.transcript.push(Cell::Error {
                     text: err.to_string(),
                 });
             }
@@ -1589,7 +1609,7 @@ impl App {
             StopReason::Error | StopReason::Aborted
         ) {
             self.last_answer = Status::Failed;
-            self.transcript.cells.push(Cell::Error {
+            self.transcript.push(Cell::Error {
                 text: assistant
                     .error_message
                     .clone()
@@ -1599,7 +1619,7 @@ impl App {
         }
         self.last_answer = Status::Done;
         if assistant.stop_reason == StopReason::Length {
-            self.transcript.cells.push(Cell::Error {
+            self.transcript.push(Cell::Error {
                 text: "response was truncated before completion (output token limit)".to_string(),
             });
         }
@@ -1613,7 +1633,7 @@ impl App {
             }
             _ => String::new(),
         };
-        self.transcript.cells.push(Cell::Usage {
+        self.transcript.push(Cell::Usage {
             text: format!(
                 "[{} in / {} out{reasoning} / {} cached, ${:.4}]",
                 crate::token_count::format(usage.input),
@@ -1625,9 +1645,7 @@ impl App {
     }
 
     pub fn notice(&mut self, text: impl Into<String>) {
-        self.transcript
-            .cells
-            .push(Cell::Notice { text: text.into() });
+        self.transcript.push(Cell::Notice { text: text.into() });
     }
 
     /// The API key for `provider`, a key entered this session wins, then
@@ -1848,7 +1866,8 @@ impl App {
 
     /// Drop the rendered conversation and its hit-test state, not the session history.
     fn clear_output(&mut self) {
-        self.transcript.cells.clear();
+        self.transcript.clear();
+        self.transcript_cache.clear();
         self.thinking_cells.clear();
         self.scroll_from_bottom = 0;
         self.transcript_anchor = None;
@@ -1902,7 +1921,7 @@ impl App {
                 ]);
                 // Start at the command list, not the keyboard tips at the end.
                 self.transcript_anchor = Some(TranscriptAnchor {
-                    cell: self.transcript.cells.len(),
+                    cell: self.transcript.cells().len(),
                     offset: 0,
                     row: 0,
                 });
@@ -2265,19 +2284,11 @@ impl App {
     }
 
     /// Keep a reasoning block addressable after later text or tools arrive.
-    fn thinking_text(&mut self, content_index: usize) -> Option<&mut String> {
-        let index = self.thinking_cells.entry(content_index).or_insert_with(|| {
-            let index = self.transcript.cells.len();
-            self.transcript.cells.push(Cell::Thinking {
-                text: String::new(),
-                collapsed: self.transcript.reasoning_collapsed,
-            });
-            index
-        });
-        match self.transcript.cells.get_mut(*index) {
-            Some(Cell::Thinking { text, .. }) => Some(text),
-            _ => None,
-        }
+    fn ensure_thinking_cell(&mut self, content_index: usize) -> usize {
+        *self
+            .thinking_cells
+            .entry(content_index)
+            .or_insert_with(|| self.transcript.push_thinking())
     }
 
     pub async fn on_agent_event(&mut self, event: Option<AgentEvent>) {
@@ -2297,24 +2308,22 @@ impl App {
                     self.transcript.append_assistant(&delta);
                 }
                 AssistantMessageEvent::ThinkingStart { content_index } => {
-                    let _ = self.thinking_text(content_index);
+                    let _ = self.ensure_thinking_cell(content_index);
                 }
                 AssistantMessageEvent::ThinkingDelta {
                     content_index,
                     delta,
                 } => {
                     self.activity = Activity::Thinking;
-                    if let Some(text) = self.thinking_text(content_index) {
-                        text.push_str(&delta);
-                    }
+                    let index = self.ensure_thinking_cell(content_index);
+                    self.transcript.append_thinking_at(index, &delta);
                 }
                 AssistantMessageEvent::ThinkingEnd {
                     content_index,
                     content,
                 } => {
-                    if let Some(text) = self.thinking_text(content_index) {
-                        *text = content;
-                    }
+                    let index = self.ensure_thinking_cell(content_index);
+                    self.transcript.set_thinking_at(index, content);
                 }
                 AssistantMessageEvent::ToolCallStart { .. } => {
                     self.activity = Activity::CallingTool;
@@ -2323,7 +2332,7 @@ impl App {
                     let call = self
                         .agent
                         .describe_tool_call(&tool_call.name, &tool_call.arguments);
-                    self.transcript.cells.push(Cell::Tool {
+                    self.transcript.push(Cell::Tool {
                         id: tool_call.id,
                         name: tool_call.name,
                         call,
@@ -2351,9 +2360,7 @@ impl App {
                     // so its last prose becomes its answer.
                     self.queued.remove(index);
                     self.transcript.promote_final_answer();
-                    self.transcript
-                        .cells
-                        .push(Cell::User { text: text.clone() });
+                    self.transcript.push(Cell::User { text: text.clone() });
                 } else if let AgentMessage::Llm(Message::User(user)) = &message
                     && let UserContentBody::Text(text) = &user.content
                     && let Some(index) = self.steering.iter().position(|steered| steered == text)
@@ -2362,9 +2369,7 @@ impl App {
                     // arrives mid task, so the prose before it is no final answer and
                     // stays as it is.
                     self.steering.remove(index);
-                    self.transcript
-                        .cells
-                        .push(Cell::User { text: text.clone() });
+                    self.transcript.push(Cell::User { text: text.clone() });
                 }
             }
             AgentEvent::ToolExecutionStart {
@@ -2400,7 +2405,7 @@ impl App {
                     cupel_agent::CompactionReason::Threshold => "context filling up",
                     cupel_agent::CompactionReason::Overflow => "context overflow",
                 };
-                self.transcript.cells.push(Cell::Notice {
+                self.transcript.push(Cell::Notice {
                     text: format!("compacting context ({cause})..."),
                 });
             }
@@ -2437,9 +2442,9 @@ impl App {
                     }
                     Some(error) => format!("compaction failed: {error}"),
                 };
-                self.transcript.cells.push(Cell::Notice { text });
+                self.transcript.push(Cell::Notice { text });
                 if let Some(summary) = summary {
-                    self.transcript.cells.push(Cell::Summary { text: summary });
+                    self.transcript.push(Cell::Summary { text: summary });
                 }
             }
             AgentEvent::AutoRetry {
@@ -2449,7 +2454,7 @@ impl App {
                 error_message,
             } => {
                 self.activity = Activity::Retrying;
-                self.transcript.cells.push(Cell::Notice {
+                self.transcript.push(Cell::Notice {
                     text: format!(
                         "retrying in {:.1}s (attempt {attempt}/{max_attempts}): {error_message}",
                         delay_ms as f64 / 1000.0
@@ -2476,7 +2481,7 @@ impl App {
         if let Some(started) = self.run_started.take() {
             let elapsed = started.elapsed();
             self.session_work_time += elapsed;
-            self.transcript.cells.push(Cell::Usage {
+            self.transcript.push(Cell::Usage {
                 text: format!("worked for {}", format_elapsed(elapsed)),
             });
         }
@@ -2508,7 +2513,7 @@ impl App {
                 Ok(events) => self.begin_run(events),
                 Err(err) => {
                     self.last_answer = Status::Failed;
-                    self.transcript.cells.push(Cell::Error {
+                    self.transcript.push(Cell::Error {
                         text: err.to_string(),
                     });
                 }
