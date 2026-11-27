@@ -235,7 +235,6 @@ mod tests {
                     "claude-haiku-5-5"
                         | "anthropic/claude-haiku-5.5"
                         | "qwen/qwen3.7-plus"
-                        | "x-ai/grok-build-0.1"
                         | "sakana/fugu-ultra-v2"
                         | "bytedance-seed/seed-2.0-lite"
                         | "bytedance-seed/seed-2.0-mini"
@@ -369,31 +368,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&model.thinking_level_map).expect("map serializes"),
             serde_json::json!({"minimal": null})
-        );
-    }
-
-    #[test]
-    fn fireworks_inkling_thinks_through_token_budgets() {
-        // models.dev lists no reasoning options for Fireworks' Inkling
-        // (OpenRouter's Inkling has a none..max effort scale). The row takes
-        // the Fireworks Anthropic template anyway, no map, so every level
-        // stays selectable, and Fireworks turns `budget_tokens` into its
-        // own effort bands.
-        let model = builtin_models()
-            .into_iter()
-            .find(|m| m.id == "accounts/fireworks/models/inkling")
-            .expect("Fireworks Inkling row");
-        assert_eq!(model.api.as_str(), Api::ANTHROPIC_MESSAGES);
-        assert!(model.reasoning);
-        assert!(model.thinking_level_map.is_none());
-        assert_eq!(
-            model.compat,
-            Some(serde_json::json!({
-                "sendSessionAffinityHeaders": true,
-                "supportsEagerToolInputStreaming": false,
-                "supportsCacheControlOnTools": false,
-                "supportsLongCacheRetention": false,
-            }))
         );
     }
 

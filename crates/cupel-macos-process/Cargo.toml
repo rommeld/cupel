@@ -1,0 +1,13 @@
+[package]
+name = "cupel-macos-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[lints.rust]
+unsafe_code = "deny"

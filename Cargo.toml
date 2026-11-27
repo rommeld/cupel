@@ -4,6 +4,7 @@ members = [
     "crates/cupel-core",
     "crates/cupel-agent",
     "crates/cupel-coding-agent",
+    "crates/cupel-macos-process",
     "crates/cupel-tui",
     "crates/cupel-acp",
     "tools/no-new-comments",
@@ -13,7 +14,7 @@ members = [
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/rommeld/cupel"
-version = "0.52.0"
+version = "0.53.0"
 
 [workspace.dependencies]
 cupel-core = { path = "crates/cupel-core" }
