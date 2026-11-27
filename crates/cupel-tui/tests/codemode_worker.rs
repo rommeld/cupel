@@ -3,14 +3,16 @@
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     use cupel_coding_agent::codemode::{Callback, Coordinator, Failure, Request};
     use serde_json::{Value, json};
-    use tokio::sync::Notify;
+    use tokio::sync::{Mutex, Notify, Semaphore};
     use tokio::time::{self, Instant};
     use tokio_util::sync::CancellationToken;
+
+    static SERIAL: Mutex<()> = Mutex::const_new(());
 
     fn coordinator() -> Coordinator {
         Coordinator::new(env!("CARGO_BIN_EXE_cupel").into())
@@ -28,6 +30,7 @@ mod tests {
 
     #[tokio::test]
     async fn only_explicit_callbacks_and_emits_leave_the_guest() {
+        let _serial = SERIAL.lock().await;
         let coordinator = coordinator();
         let result = coordinator
             .run(
@@ -85,6 +88,7 @@ emit({"path": path, "lines": page["text"].split("\n")[:1]})
 
     #[tokio::test]
     async fn source_and_emit_limits_count_utf8_and_json_escaping() {
+        let _serial = SERIAL.lock().await;
         let coordinator = coordinator();
         let mut source = format!("emit(1)\n#{}a", "é".repeat(8187));
         assert_eq!(source.len(), 16_384);
@@ -108,6 +112,7 @@ emit({"path": path, "lines": page["text"].split("\n")[:1]})
 
     #[tokio::test]
     async fn callback_limits_are_cumulative_and_do_not_dispatch_an_extra_call() {
+        let _serial = SERIAL.lock().await;
         let coordinator = coordinator();
         for (count, expected) in [(16, Ok(vec![json!(1)])), (17, Err(Failure::CallbackCount))] {
             let calls = Arc::new(AtomicUsize::new(0));
@@ -146,6 +151,7 @@ emit({"path": path, "lines": page["text"].split("\n")[:1]})
 
     #[tokio::test]
     async fn memory_and_time_failures_leave_the_parent_usable() {
+        let _serial = SERIAL.lock().await;
         let coordinator = coordinator();
         assert_eq!(
             pure(&coordinator, "emit(len('x' * (15 * 1024 * 1024)))")
@@ -166,6 +172,7 @@ emit({"path": path, "lines": page["text"].split("\n")[:1]})
 
     #[tokio::test]
     async fn cancellation_joins_the_active_callback_before_releasing_admission() {
+        let _serial = SERIAL.lock().await;
         let coordinator = coordinator();
         let cancel = CancellationToken::new();
         let entered = Arc::new(Notify::new());
@@ -193,7 +200,8 @@ emit({"path": path, "lines": page["text"].split("\n")[:1]})
         }
         cancel.cancel();
         cancelled.notified().await;
-        let mut later = std::pin::pin!(pure(&coordinator, "emit(2)"));
+        let independent = Coordinator::new(env!("CARGO_BIN_EXE_cupel").into());
+        let mut later = std::pin::pin!(pure(&independent, "emit(2)"));
         assert!(
             time::timeout(Duration::from_millis(50), &mut later)
                 .await
@@ -205,21 +213,112 @@ emit({"path": path, "lines": page["text"].split("\n")[:1]})
     }
 
     #[tokio::test]
-    async fn deadline_cancels_the_callback_even_while_the_guest_is_suspended() {
+    async fn deadline_includes_a_slow_callback_shutdown() {
+        let _serial = SERIAL.lock().await;
         let coordinator = coordinator();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let marked_stopped = Arc::clone(&stopped);
         let start = Instant::now();
         let result = coordinator
             .run(
                 "read('file')".into(),
                 &CancellationToken::new(),
-                |_, cancel| async move {
-                    cancel.cancelled().await;
-                    Err(Failure::Cancelled)
+                move |_, cancel| {
+                    let stopped = Arc::clone(&marked_stopped);
+                    async move {
+                        cancel.cancelled().await;
+                        time::sleep(Duration::from_millis(250)).await;
+                        stopped.store(true, Ordering::Relaxed);
+                        Err(Failure::Cancelled)
+                    }
                 },
             )
             .await;
         assert_eq!(result, Err(Failure::Deadline));
-        assert!(start.elapsed() >= Duration::from_secs(5));
+        assert!(
+            stopped.load(Ordering::Relaxed),
+            "the caller returned before the callback joined"
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "cleanup exceeded the call budget: {elapsed:?}"
+        );
+        println!(
+            "250 ms callback shutdown included in {} ms",
+            elapsed.as_millis()
+        );
         assert_eq!(pure(&coordinator, "emit(2)").await.unwrap(), [json!(2)]);
+    }
+
+    #[tokio::test]
+    async fn third_v1_call_expires_while_two_process_slots_are_occupied() {
+        let _serial = SERIAL.lock().await;
+        time::pause();
+        let clock_guard = tokio::spawn(async {
+            let watchdog = std::time::Instant::now() + Duration::from_secs(8);
+            while std::time::Instant::now() < watchdog {
+                tokio::task::yield_now().await;
+            }
+        });
+        let binary = std::path::Path::new(env!("CARGO_BIN_EXE_cupel"));
+        let first = Coordinator::for_v1_qualification(binary.to_path_buf());
+        let second = Coordinator::for_v1_qualification(binary.to_path_buf());
+        let missing = binary.with_file_name("codemode-queued-worker-must-not-spawn");
+        assert!(!missing.exists());
+        let third = Coordinator::for_v1_qualification(missing);
+        let release = CancellationToken::new();
+        let entered = Arc::new(Semaphore::new(0));
+        let mut first_run = std::pin::pin!(blocked(&first, Arc::clone(&entered), release.clone()));
+        let mut second_run =
+            std::pin::pin!(blocked(&second, Arc::clone(&entered), release.clone()));
+        tokio::select! {
+            permits = time::timeout(Duration::from_secs(3), entered.acquire_many(2)) => {
+                permits.unwrap().unwrap().forget();
+            },
+            result = &mut first_run => panic!("first worker finished before both started: {result:?}"),
+            result = &mut second_run => panic!("second worker finished before both started: {result:?}"),
+        }
+
+        let mut third_run = std::pin::pin!(pure(&third, "emit(3)"));
+        tokio::select! {
+            biased;
+            result = &mut third_run => panic!("a third worker bypassed the process limit: {result:?}"),
+            () = tokio::task::yield_now() => {},
+        }
+        time::advance(Duration::from_millis(4010)).await;
+        assert_eq!(
+            third_run.await,
+            Err(Failure::Deadline),
+            "spawning would fail with a worker error"
+        );
+        release.cancel();
+        assert_eq!(first_run.await, Err(Failure::Deadline));
+        assert_eq!(second_run.await, Err(Failure::Deadline));
+        assert_eq!(pure(&first, "emit(3)").await.unwrap(), [json!(3)]);
+        clock_guard.abort();
+    }
+
+    async fn blocked(
+        coordinator: &Coordinator,
+        entered: Arc<Semaphore>,
+        release: CancellationToken,
+    ) -> Result<Vec<Value>, Failure> {
+        coordinator
+            .run(
+                "read('file')".into(),
+                &CancellationToken::new(),
+                move |_, cancel| {
+                    let entered = Arc::clone(&entered);
+                    let release = release.clone();
+                    async move {
+                        entered.add_permits(1);
+                        cancel.cancelled().await;
+                        release.cancelled().await;
+                        Err(Failure::Cancelled)
+                    }
+                },
+            )
+            .await
     }
 }

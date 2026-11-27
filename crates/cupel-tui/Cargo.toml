@@ -34,6 +34,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 unicode-width.workspace = true
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [target.'cfg(unix)'.dev-dependencies]
 async-trait.workspace = true
 rustix = { version = "1.1", features = ["fs", "process"] }

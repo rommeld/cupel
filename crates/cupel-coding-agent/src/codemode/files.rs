@@ -5,9 +5,11 @@ use std::process::{ExitCode, Stdio};
 
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::codemode::{CALLBACK_BYTES, CLEANUP_TIME, Failure, frame};
+use crate::codemode::coordinator::{cleanup_until, stop_and_reap};
+use crate::codemode::{CALLBACK_BYTES, Failure, frame};
 use crate::read_filesystem::{LocalFiles, PageRevision, ReadFilesystem, SnapshotKind};
 use crate::search::GrepSearch;
 use crate::tools::grep::{self, GrepArgs};
@@ -84,12 +86,8 @@ impl FileWorker {
         }
     }
 
-    pub(super) async fn stop(mut self) -> Result<(), Failure> {
-        let _ = self.child.start_kill();
-        match tokio::time::timeout(CLEANUP_TIME, self.child.wait()).await {
-            Ok(Ok(_)) => Ok(()),
-            _ => Err(Failure::Cleanup),
-        }
+    pub(super) async fn stop(mut self, return_by: Instant) -> Result<(), Failure> {
+        stop_and_reap(&mut self.child, cleanup_until(return_by)).await
     }
 
     pub(super) async fn grep(

@@ -176,7 +176,7 @@ impl Broker {
             () = cancel.cancelled() => Err(Failure::Cancelled),
             result = self.run_selected(selected, &cancel, &mut worker) => result,
         };
-        worker.stop().await?;
+        worker.stop(request.return_by).await?;
         result
     }
 

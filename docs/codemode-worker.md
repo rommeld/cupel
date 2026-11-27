@@ -18,7 +18,7 @@ flag or setting.
 
 | Limit | Preview budget |
 | --- | --- |
-| Active scripts | 1 per process-owned coordinator |
+| Active scripts | 1 preview script per process; 2 total slots in v1 qualification |
 | Script source | 16 KiB of UTF-8 |
 | Guest memory | 16 MiB above Monty's allocator baseline |
 | Hard allocator ceiling | 20 MiB above the worker's initial allocator baseline |
@@ -27,7 +27,8 @@ flag or setting.
 | Callback results | 256 KiB cumulative JSON |
 | Emits | 16 KiB cumulative JSON |
 | Guest execution | 1 second, excluding worker startup and time awaiting host callbacks |
-| Call deadline | 5 seconds, including admission, worker startup, and host callbacks |
+| Call deadline | 5 seconds, including admission, startup, callbacks, and cleanup |
+| Work cutoff | 4 seconds after the call starts, including time in the queue |
 
 Only child processes arm hard allocator limits. The Monty worker's 4 MiB of
 headroom allows for conversion and framing overhead. The file worker has a
@@ -41,9 +42,11 @@ emits only after it receives success and reaps the Monty worker. Cancellation
 or a deadline starts cleanup. The coordinator holds admission until it has
 reaped both children. Callback trace entries contain only the tool name,
 outcome, and elapsed time. They are not tool results or transcript messages.
-If cleanup cannot be confirmed, the coordinator closes admission for the
-rest of the process. Cleanup can take up to one second per wait beyond the
-call deadline.
+The final second of the call budget is reserved for cleanup. A queued call
+that reaches the work cutoff does not start a child. An active call cancels
+its callback and reaps the guest concurrently. Both waits share the same
+absolute deadline. If cleanup cannot be confirmed, the call returns a bounded
+error and admission closes for the rest of the process.
 
 Run the worker and broker tests:
 
@@ -54,5 +57,7 @@ cargo test --locked -p cupel-tui --features codemode-preview --test codemode_wor
 The broker test checks cancellation during a blocked read, search walk, and
 context read. It checks both child PIDs before the next script can use the
 broker. It also checks the instruction snapshot, the observation handoff to
-direct `apply_patch`, and result privacy. These tests do not qualify a release
-build.
+direct `apply_patch`, and result privacy. The worker tests check that a
+250 ms callback shutdown fits inside the call budget and that a queued v1
+call expires without spawning while two independent coordinators hold the
+process slots. These tests do not qualify a release build.

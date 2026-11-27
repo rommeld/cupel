@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -14,11 +13,19 @@ use crate::codemode::{
     Failure, GUEST_TIME, Request, SOURCE_BYTES, WORKER_ARGUMENT, frame,
 };
 
-/// Share one coordinator across all preview calls in the process.
+static PROCESS_SLOTS: Semaphore = Semaphore::const_new(2);
+static PREVIEW_SLOT: Semaphore = Semaphore::const_new(1);
+
+#[derive(Clone, Copy)]
+enum AdmissionMode {
+    Preview,
+    V1Qualification,
+}
+
 #[derive(Clone)]
 pub struct Coordinator {
     binary: PathBuf,
-    gate: Arc<Semaphore>,
+    mode: AdmissionMode,
 }
 
 impl Coordinator {
@@ -31,7 +38,16 @@ impl Coordinator {
     pub fn new(binary: PathBuf) -> Self {
         Self {
             binary,
-            gate: Arc::new(Semaphore::new(1)),
+            mode: AdmissionMode::Preview,
+        }
+    }
+
+    /// Uses both process slots for qualification without changing the preview limit.
+    #[must_use]
+    pub fn for_v1_qualification(binary: PathBuf) -> Self {
+        Self {
+            binary,
+            mode: AdmissionMode::V1Qualification,
         }
     }
 
@@ -46,42 +62,45 @@ impl Coordinator {
     where
         F: Future<Output = Result<Value, Failure>> + Send + 'static,
     {
-        let deadline = Instant::now() + CALL_TIME;
+        let budget = Budget::starting_at(Instant::now());
         if source.len() > SOURCE_BYTES {
             return Err(Failure::Source);
         }
         let call_cancel = cancel.child_token();
         let _cancel_on_drop = call_cancel.clone().drop_guard();
         let coordinator = self.clone();
-        tokio::spawn(async move {
+        let supervisor = tokio::spawn(async move {
             coordinator
-                .supervise(source, call_cancel, deadline, broker)
+                .supervise(source, call_cancel, budget, broker)
                 .await
-        })
-        .await
-        .map_err(|_error| Failure::Cleanup)?
+        });
+        match time::timeout_at(budget.return_by, supervisor).await {
+            Ok(Ok(result)) => result,
+            _ => {
+                close_admission();
+                Err(Failure::Cleanup)
+            }
+        }
     }
 
     async fn supervise<F>(
         &self,
         source: String,
         cancel: CancellationToken,
-        deadline: Instant,
+        budget: Budget,
         broker: impl FnMut(Request, CancellationToken) -> F,
     ) -> Result<Vec<Value>, Failure>
     where
         F: Future<Output = Result<Value, Failure>>,
     {
-        let permit = until(&cancel, deadline, Failure::Deadline, async {
-            self.gate.acquire().await.map_err(|_error| Failure::Cleanup)
-        })
+        let mut admission = until(
+            &cancel,
+            budget.work_until,
+            Failure::Deadline,
+            Admission::acquire(self.mode),
+        )
         .await?;
-        let mut admission = Admission {
-            gate: &self.gate,
-            _permit: permit,
-            confirmed: false,
-        };
-        let result = self.run_admitted(source, &cancel, deadline, broker).await;
+        let result = self.run_admitted(source, &cancel, budget, broker).await;
         admission.confirmed = result != Err(Failure::Cleanup);
         result
     }
@@ -90,13 +109,13 @@ impl Coordinator {
         &self,
         source: String,
         cancel: &CancellationToken,
-        deadline: Instant,
+        budget: Budget,
         broker: impl FnMut(Request, CancellationToken) -> F,
     ) -> Result<Vec<Value>, Failure>
     where
         F: Future<Output = Result<Value, Failure>>,
     {
-        check_cancel(cancel, deadline, Failure::Deadline)?;
+        check_cancel(cancel, budget.work_until, Failure::Deadline)?;
         if !self.binary.is_absolute() {
             return Err(Failure::Worker);
         }
@@ -117,35 +136,88 @@ impl Coordinator {
                     input,
                     output,
                     cancel,
-                    deadline,
-                    execution_deadline: deadline,
+                    budget,
+                    execution_deadline: budget.work_until,
                 };
                 guest.exchange(&source, broker).await
             }
             _ => Err(Failure::Worker),
         };
         if let Err(error) = result {
-            let _ = child.start_kill();
-            if !matches!(time::timeout(CLEANUP_TIME, child.wait()).await, Ok(Ok(_))) {
-                return Err(Failure::Cleanup);
-            }
+            stop_and_reap(&mut child, cleanup_until(budget.return_by)).await?;
             return Err(error);
         }
         result
     }
 }
 
-struct Admission<'a> {
-    gate: &'a Semaphore,
-    _permit: SemaphorePermit<'a>,
+#[derive(Clone, Copy)]
+struct Budget {
+    work_until: Instant,
+    return_by: Instant,
+}
+
+impl Budget {
+    fn starting_at(started: Instant) -> Self {
+        let return_by = started + CALL_TIME;
+        Self {
+            work_until: return_by - CLEANUP_TIME,
+            return_by,
+        }
+    }
+}
+
+struct Admission {
+    _process: SemaphorePermit<'static>,
+    _preview: Option<SemaphorePermit<'static>>,
     confirmed: bool,
 }
 
-impl Drop for Admission<'_> {
+impl Admission {
+    async fn acquire(mode: AdmissionMode) -> Result<Self, Failure> {
+        let preview = match mode {
+            AdmissionMode::Preview => Some(
+                PREVIEW_SLOT
+                    .acquire()
+                    .await
+                    .map_err(|_error| Failure::Cleanup)?,
+            ),
+            AdmissionMode::V1Qualification => None,
+        };
+        let process = PROCESS_SLOTS
+            .acquire()
+            .await
+            .map_err(|_error| Failure::Cleanup)?;
+        Ok(Self {
+            _process: process,
+            _preview: preview,
+            confirmed: false,
+        })
+    }
+}
+
+impl Drop for Admission {
     fn drop(&mut self) {
         if !self.confirmed {
-            self.gate.close();
+            close_admission();
         }
+    }
+}
+
+fn close_admission() {
+    PROCESS_SLOTS.close();
+    PREVIEW_SLOT.close();
+}
+
+pub(super) fn cleanup_until(return_by: Instant) -> Instant {
+    (Instant::now() + CLEANUP_TIME).min(return_by)
+}
+
+pub(super) async fn stop_and_reap(child: &mut Child, stop_by: Instant) -> Result<(), Failure> {
+    let _ = child.start_kill();
+    match time::timeout_at(stop_by, child.wait()).await {
+        Ok(Ok(_)) => Ok(()),
+        _ => Err(Failure::Cleanup),
     }
 }
 
@@ -154,7 +226,7 @@ struct Guest<'a> {
     input: ChildStdin,
     output: ChildStdout,
     cancel: &'a CancellationToken,
-    deadline: Instant,
+    budget: Budget,
     execution_deadline: Instant,
 }
 
@@ -169,7 +241,7 @@ impl Guest<'_> {
     {
         until(
             self.cancel,
-            self.deadline,
+            self.budget.work_until,
             Failure::Deadline,
             frame::read_async(&mut self.output, |tag| match tag {
                 frame::READY => Ok(0),
@@ -224,6 +296,7 @@ impl Guest<'_> {
                     let request = Request {
                         callback,
                         arguments,
+                        return_by: self.budget.return_by,
                     };
                     let value = self.callback(request, &mut broker).await?;
                     let mut buffer = frame::Buffer::new(callback_bytes);
@@ -263,25 +336,30 @@ impl Guest<'_> {
         let result = tokio::select! {
             biased;
             () = self.cancel.cancelled() => Failure::Cancelled,
-            () = time::sleep_until(self.deadline) => Failure::Deadline,
+            () = time::sleep_until(self.budget.work_until) => Failure::Deadline,
             result = &mut active => {
                 self.execution_deadline += started.elapsed();
                 return result;
             }
         };
         cancel.cancel();
-        let _ = self.child.start_kill();
-        match time::timeout(CLEANUP_TIME, active).await {
+        let stop_by = cleanup_until(self.budget.return_by);
+        let (reaped, callback) = tokio::join!(
+            stop_and_reap(self.child, stop_by),
+            time::timeout_at(stop_by, active)
+        );
+        reaped?;
+        match callback {
             Err(_) | Ok(Err(Failure::Cleanup)) => Err(Failure::Cleanup),
             Ok(_) => Err(result),
         }
     }
 
     fn guest_limit(&self) -> (Instant, Failure) {
-        if self.execution_deadline < self.deadline {
+        if self.execution_deadline < self.budget.work_until {
             (self.execution_deadline, Failure::GuestTime)
         } else {
-            (self.deadline, Failure::Deadline)
+            (self.budget.work_until, Failure::Deadline)
         }
     }
 
@@ -338,31 +416,5 @@ async fn until<T>(
         () = cancel.cancelled() => Err(Failure::Cancelled),
         () = time::sleep_until(deadline) => Err(expired),
         result = action => result,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn expired_queue_entry_never_spawns() {
-        let coordinator = Coordinator::new(PathBuf::new());
-        let permit = coordinator.gate.acquire().await.unwrap();
-        let result = coordinator
-            .supervise(
-                String::new(),
-                CancellationToken::new(),
-                Instant::now() + std::time::Duration::from_millis(10),
-                |_, _| async { panic!("an expired call reached the broker") },
-            )
-            .await;
-        assert_eq!(
-            result,
-            Err(Failure::Deadline),
-            "the missing worker would return a different error"
-        );
-        drop(permit);
-        assert_eq!(coordinator.gate.available_permits(), 1);
     }
 }

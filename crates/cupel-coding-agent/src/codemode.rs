@@ -61,7 +61,7 @@ pub enum Failure {
     CallbackBytes,
     #[error("codemode exceeded the 16 KiB emit limit")]
     EmitBytes,
-    #[error("codemode exceeded the five-second call deadline")]
+    #[error("codemode reached the work cutoff; the five-second call budget includes cleanup")]
     Deadline,
     #[error("codemode cancelled")]
     Cancelled,
@@ -69,7 +69,7 @@ pub enum Failure {
     Callback,
     #[error("codemode worker failed")]
     Worker,
-    #[error("codemode worker cleanup could not be confirmed; preview disabled")]
+    #[error("codemode worker cleanup could not be confirmed; codemode disabled for this process")]
     Cleanup,
 }
 
@@ -78,4 +78,5 @@ pub enum Failure {
 pub struct Request {
     pub callback: Callback,
     pub arguments: Value,
+    pub return_by: tokio::time::Instant,
 }
