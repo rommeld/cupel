@@ -538,6 +538,8 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("google/gemini-4-argon", Thinking::FromEffort),
             openrouter("google/gemini-4-hydrogen", Thinking::FromEffort),
             openrouter("google/gemini-4-neon", Thinking::FromEffort),
+            openrouter_tiered("~google/gemini-pro-latest"),
+            openrouter("~google/gemini-flash-latest", Thinking::FromEffort),
             openrouter("google/gemma-4-31b-it", Thinking::FromEffort),
             openrouter("google/gemma-4-31b-it:free", Thinking::FromEffort),
             openrouter("google/gemma-4-26b-a4b-it", Thinking::FromEffort),
