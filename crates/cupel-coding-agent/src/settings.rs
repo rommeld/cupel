@@ -1,7 +1,7 @@
 //! Persistent settings definition.
 //!
 //! Saves normalize formatting (pretty printed, keys sorted), values and
-//! unknown fields are preserved. Two concurrent cupel instances saving
+//! unknown top-level fields are preserved. Two concurrent cupel instances saving
 //! at once each write a complete valid file, the last rename wins and
 //! one update can be lost. This is the same accepted caveat as concurrent
 //! the resume option in session.rs.
@@ -38,19 +38,12 @@ pub const DEFAULT_PRESET: &str = "default";
 /// One named preset. `provider`, `model`, and `thinkingLevel` are
 /// required. Loading skips invalid presets individually with a warning,
 /// saving remains strict so invalid hand written entries are not erased.
-/// The legacy `prompt` field is validated and retained only for settings saves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[expect(
-    clippy::partial_pub_fields,
-    reason = "The legacy prompt is private to settings serialization"
-)]
 pub struct Preset {
     pub provider: String,
     pub model: String,
     pub thinking_level: ThinkingSetting,
-    #[serde(rename = "prompt", default, skip_serializing_if = "Option::is_none")]
-    legacy_prompt: Option<String>,
 }
 
 impl Preset {
@@ -590,8 +583,7 @@ mod tests {
                 "default": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "low"},
                 "fast": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "off"},
                 "bad-level": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "High"},
-                "missing-level": {"provider": "anthropic", "model": "claude-haiku-5-5"},
-                "bad-prompt": {"provider": "anthropic", "model": "claude-haiku-5-5", "thinkingLevel": "low", "prompt": 42}
+                "missing-level": {"provider": "anthropic", "model": "claude-haiku-5-5"}
             }
         }"#).unwrap();
 
@@ -609,8 +601,8 @@ mod tests {
             ThinkingSetting::Off
         );
         assert_eq!(load_settings(&path).unwrap(), settings);
-        assert_eq!(warnings.len(), 3);
-        for name in ["bad-level", "missing-level", "bad-prompt"] {
+        assert_eq!(warnings.len(), 2);
+        for name in ["bad-level", "missing-level"] {
             assert!(
                 warnings.iter().any(|warning| {
                     warning.contains(name) && warning.contains(&path.display().to_string())
@@ -626,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_legacy_project_prompt_does_not_replace_a_valid_home_default() {
+    fn invalid_project_preset_does_not_replace_a_valid_home_default() {
         let root = temp_root("invalid-project-preset");
         std::fs::create_dir_all(root.join(".cupel")).unwrap();
         std::fs::write(
@@ -634,7 +626,7 @@ mod tests {
             r#"{
             "providers": {"anthropic": "home-key"},
             "model": {"default": {"provider": "anthropic", "model": "home-model",
-                                  "thinkingLevel": "low", "prompt": "Home instructions"}}
+                                  "thinkingLevel": "low"}}
         }"#,
         )
         .unwrap();
@@ -644,9 +636,8 @@ mod tests {
             r#"{
             "loopKiller": {"maxRepeats": 2},
             "model": {
-                "default": {"provider": "anthropic", "model": "bad-model", "thinkingLevel": "high", "prompt": 42},
-                "fast": {"provider": "openai", "model": "project-model", "thinkingLevel": "off",
-                         "prompt": "Project instructions"}
+                "default": {"provider": "anthropic", "model": "bad-model", "thinkingLevel": "High"},
+                "fast": {"provider": "openai", "model": "project-model", "thinkingLevel": "off"}
             }
         }"#,
         )
@@ -771,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn the_theme_saves_and_loads_without_touching_anything_else() {
+    fn saving_a_theme_discards_legacy_preset_prompts_and_preserves_other_settings() {
         let home = temp_root("save-theme");
         let path = settings_path(&home);
         let original = serde_json::json!({
@@ -795,6 +786,10 @@ mod tests {
         assert_eq!(settings.theme.as_deref(), Some("nightfox"));
         let mut expected = original;
         expected["theme"] = serde_json::json!("nightfox");
+        expected["model"]["fast"]
+            .as_object_mut()
+            .unwrap()
+            .remove("prompt");
         let written: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written, expected);
@@ -1171,12 +1166,16 @@ mod tests {
     fn save_keeps_presets_and_injects_no_empty_model_section() {
         let home = temp_root("save-presets");
         let written = r#"{"model": {"fast": {"provider": "anthropic",
-            "model": "claude-haiku-5-5", "thinkingLevel": "xhigh", "prompt": "Be brief."}}}"#;
+            "model": "claude-haiku-5-5", "thinkingLevel": "xhigh", "prompt": 42}}}"#;
         std::fs::write(home.join("settings.json"), written).unwrap();
         save_provider_key(Some(&home), "anthropic", "sk-a").unwrap();
-        let saved = load_settings(&home.join("settings.json")).unwrap();
-        let expected: Settings = serde_json::from_str(written).unwrap();
-        assert_eq!(saved.presets, expected.presets);
+        let text = std::fs::read_to_string(home.join("settings.json")).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            saved["model"],
+            serde_json::json!({"fast": {"provider": "anthropic",
+                "model": "claude-haiku-5-5", "thinkingLevel": "xhigh"}})
+        );
 
         // A file without presets gets no an empty `model` object from a key save.
         let fresh = temp_root("save-no-presets");
@@ -1191,7 +1190,6 @@ mod tests {
             provider: "anthropic".into(),
             model: model.into(),
             thinking_level: ThinkingSetting::Low,
-            legacy_prompt: None,
         };
         let mut home = Settings::default();
         home.presets
@@ -1218,7 +1216,6 @@ mod tests {
             provider: "anthropic".into(),
             model: "claude-haiku-5-5".into(),
             thinking_level: ThinkingSetting::Low,
-            legacy_prompt: None,
         };
         let found = preset.find_model(&catalog).map(|model| model.id.as_str());
         assert_eq!(found, Some("claude-haiku-5-5"));
