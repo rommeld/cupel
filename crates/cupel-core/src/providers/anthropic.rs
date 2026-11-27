@@ -1343,7 +1343,7 @@ mod tests {
             temperature: Some(0.2),
             ..StreamOptions::default()
         };
-        let budget = catalog_model("accounts/fireworks/models/inkling");
+        let budget = catalog_model("accounts/fireworks/models/deepseek-v4p1-flash");
         let body = body_for(&budget, &options);
         assert_eq!(body["thinking"], json!({"type": "disabled"}));
         assert_eq!(body["temperature"], json!(0.2));

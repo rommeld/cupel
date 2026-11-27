@@ -5,13 +5,16 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::process::Command;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use cupel_agent::types::{AgentTool, AgentToolResult};
 use cupel_core::types::{ToolResultContent, now_ms};
 
 use crate::jobs::child::ManagedChild;
-use crate::jobs::{Jobs, MAX_COMPLETED, TAIL_BYTES, Visibility};
+use crate::jobs::{
+    Capture, Exit, Jobs, Live, MAX_COMPLETED, Phase, Record, TAIL_BYTES, Termination, Visibility,
+};
 use crate::tools::bash::BashTool;
 use crate::tools::jobs::JobsTool;
 
@@ -72,6 +75,34 @@ fn text(result: &AgentToolResult) -> &str {
         panic!("expected text output");
     };
     &text.text
+}
+
+#[tokio::test]
+async fn bash_yield_inline_drains_inherited_output_like_foreground_bash() {
+    let cwd =
+        std::env::temp_dir().join(format!("cupel-inline-{}-{}", std::process::id(), now_ms()));
+    let jobs = Arc::new(Jobs::default());
+    let command = "(sleep .10; touch child-ran; printf 'child output\\n') & printf 'shell exit\\n'";
+    for (name, args) in [
+        ("foreground", json!({"command": command})),
+        (
+            "inline",
+            json!({"command": command, "yield_after_ms": 2000}),
+        ),
+    ] {
+        let dir = cwd.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = BashTool::new(&dir)
+            .with_jobs(Arc::clone(&jobs))
+            .execute(name, args, CancellationToken::new(), None)
+            .await
+            .unwrap();
+        assert_eq!(text(&result), "shell exit\nchild output\n", "{name}");
+        assert!(dir.join("child-ran").exists(), "{name} killed the child");
+        assert!(result.details.is_none(), "{name} returned job details");
+    }
+    assert_eq!(jobs.list().unwrap(), json!({"jobs": []}));
+    std::fs::remove_dir_all(cwd).unwrap();
 }
 
 #[tokio::test]
@@ -264,7 +295,7 @@ async fn job_start_interrupted_during_spawn_is_never_published_and_is_reaped() {
     let started = jobs
         .spawn("sleep", None, Visibility::Published, &cancel, || {
             let child = ManagedChild::spawn(shell("exec sleep 30"))?;
-            pid = child.group();
+            pid = child.leader();
             cancel.cancel();
             Ok(child)
         })
@@ -348,6 +379,91 @@ async fn wait_expiry_returns_output_without_stopping_the_job() {
 }
 
 #[tokio::test]
+async fn attached_wait_keeps_the_result_after_history_eviction() {
+    let jobs = Jobs::default();
+    let id = start(&jobs, "printf result; exec sleep 30").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while jobs.inspect(&id, true).unwrap().1.as_deref() != Some("result") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("job did not produce its initial output");
+
+    let cancel = CancellationToken::new();
+    let mut attached = pin!(jobs.wait(&id, Duration::from_secs(30), &cancel));
+    let mut reset = pin!(jobs.wait(&id, Duration::from_secs(30), &cancel));
+    assert!(futures_util::poll!(attached.as_mut()).is_pending());
+    assert!(futures_util::poll!(reset.as_mut()).is_pending());
+    jobs.stop(&id).await.unwrap();
+    let expected = jobs.inspect(&id, true).unwrap();
+    for _ in 0..MAX_COMPLETED {
+        let other_id = start(&jobs, ":").await;
+        completed(&jobs, &other_id).await;
+    }
+
+    assert!(jobs.wait(&id, Duration::ZERO, &cancel).await.is_err());
+    let result = attached.await.unwrap();
+    assert_eq!(result, expected);
+    let (status, output) = result;
+    assert_eq!(status["state"], "stopped");
+    assert_eq!(status["exit"]["signal"], 9);
+    assert_eq!(output.as_deref(), Some("result"));
+    jobs.shutdown().await;
+    assert!(
+        reset.await.is_err(),
+        "session reset invalidates attached waits"
+    );
+}
+
+#[tokio::test]
+async fn stop_and_retained_status_report_incomplete_cleanup() {
+    let jobs = Arc::new(Jobs::default());
+    let tool = JobsTool::new(Arc::clone(&jobs));
+    let stop = CancellationToken::new();
+    let id = "Jcleanup";
+    jobs.state.lock().unwrap().live.push(Live {
+        record: Record {
+            id: id.to_string(),
+            command: "wait".to_string(),
+            capture: Capture::default(),
+        },
+        stop: stop.clone(),
+        finished: CancellationToken::new(),
+        completion: watch::Sender::new(None),
+        visibility: Visibility::Published,
+    });
+    let mut stopping = tool.execute(
+        "stop",
+        json!({"action": "stop", "id": id}),
+        CancellationToken::new(),
+        None,
+    );
+    assert!(futures_util::poll!(stopping.as_mut()).is_pending());
+    assert!(stop.is_cancelled(), "stop did not request cleanup");
+    jobs.state.lock().unwrap().complete(
+        id,
+        Termination {
+            phase: Phase::Stopped,
+            exit: Exit {
+                exit_code: None,
+                signal: Some(9),
+            },
+            cleanup_error: Some("process scan timed out".to_string()),
+        },
+    );
+
+    let error = stopping.await.unwrap_err().to_string();
+    assert!(
+        error.contains("Job Jcleanup cleanup was incomplete: process scan timed out"),
+        "{error}"
+    );
+    assert_eq!(jobs.stop(id).await.unwrap_err(), error);
+    let (status, _) = jobs.inspect(id, false).unwrap();
+    assert_eq!(status["cleanupError"], "process scan timed out");
+}
+
+#[tokio::test]
 async fn jobs_reject_excess_live_starts_and_evict_by_completion_order() {
     let jobs = Jobs::default();
     let first = start(&jobs, "exec sleep 30").await;
@@ -407,12 +523,18 @@ async fn stop_kills_ordinary_descendants_of_the_shell() {
     .await
     .unwrap();
     jobs.stop(&id).await.unwrap();
-    // The child may briefly be a zombie while init takes ownership. It must
-    // not be alive, and the original shell must have been reaped by the job.
+    wait_for_process_exit(&pid).await;
+    let (status, _) = jobs.inspect(&id, false).unwrap();
+    assert_eq!(status["state"], "stopped");
+    assert_eq!(status["exit"]["signal"], 9);
+}
+
+async fn wait_for_process_exit(pid: &str) {
+    // An orphan can remain a zombie until its new parent reaps it.
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let output = Command::new("/bin/ps")
-                .args(["-p", &pid, "-o", "stat="])
+                .args(["-p", pid, "-o", "stat="])
                 .output()
                 .await
                 .unwrap();
@@ -423,8 +545,99 @@ async fn stop_kills_ordinary_descendants_of_the_shell() {
         }
     })
     .await
-    .expect("an ordinary descendant survived jobs stop");
-    let (status, _) = jobs.inspect(&id, false).unwrap();
-    assert_eq!(status["state"], "stopped");
-    assert_eq!(status["exit"]["signal"], 9);
+    .expect("a descendant survived job cleanup");
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[tokio::test]
+async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
+    #[derive(Clone, Copy, Debug)]
+    enum Cleanup {
+        Stop,
+        Timeout,
+        Shutdown,
+    }
+
+    let cwd = std::env::temp_dir().join(format!(
+        "cupel-job-control-{}-{}",
+        std::process::id(),
+        now_ms()
+    ));
+    let script = r#"
+        set -m
+        (touch ready; for ((i=0; i<250; i++)); do
+            if [[ -e release ]]; then touch witness; exit; fi
+            sleep .02
+        done) </dev/null >/dev/null 2>&1 &
+        printf '%s\n' "$!"
+        wait
+    "#;
+    for action in [Cleanup::Stop, Cleanup::Timeout, Cleanup::Shutdown] {
+        let jobs = Jobs::default();
+        let other_jobs = Jobs::default();
+        let dir = cwd.join(format!("{action:?}"));
+        let other_dir = dir.join("other");
+        std::fs::create_dir_all(&other_dir).unwrap();
+        let mut command = shell(script);
+        command.current_dir(&dir);
+        let mut other_command = shell(script);
+        other_command.current_dir(&other_dir);
+        let other_registry = if matches!(action, Cleanup::Shutdown) {
+            &other_jobs
+        } else {
+            &jobs
+        };
+        let cancel = CancellationToken::new();
+        let job_timeout = matches!(action, Cleanup::Timeout).then_some(Duration::from_secs(30));
+        let id = jobs
+            .start(command, script, job_timeout, &cancel)
+            .await
+            .unwrap();
+        let other_id = other_registry
+            .start(other_command, script, None, &cancel)
+            .await
+            .unwrap();
+        let pid = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let (_, output) = jobs.inspect(&id, true).unwrap();
+                if let Some((pid, _)) = output.unwrap().split_once('\n')
+                    && dir.join("ready").exists()
+                    && other_dir.join("ready").exists()
+                {
+                    break pid.to_string();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("job control children did not start");
+
+        match action {
+            Cleanup::Stop => jobs.stop(&id).await.unwrap(),
+            Cleanup::Timeout => {
+                tokio::time::pause();
+                tokio::time::advance(Duration::from_secs(30)).await;
+                tokio::time::resume();
+                let (status, _) = completed(&jobs, &id).await;
+                assert_eq!(status["state"], "timedOut");
+                assert!(status["cleanupError"].is_null(), "{status}");
+            }
+            Cleanup::Shutdown => jobs.shutdown().await,
+        }
+        std::fs::File::create(dir.join("release")).unwrap();
+        std::fs::File::create(other_dir.join("release")).unwrap();
+        completed(other_registry, &other_id).await;
+        assert!(
+            other_dir.join("witness").exists(),
+            "{action:?} killed another job's child"
+        );
+
+        wait_for_process_exit(&pid).await;
+        assert!(
+            !dir.join("witness").exists(),
+            "child wrote after {action:?}"
+        );
+        assert!(jobs.require_idle().is_ok());
+    }
+    std::fs::remove_dir_all(cwd).unwrap();
 }
