@@ -14,7 +14,7 @@ use crate::codemode::{
     Failure, GUEST_TIME, Request, SOURCE_BYTES, WORKER_ARGUMENT, frame,
 };
 
-/// Owns the preview admission gate. Share it across all calls in the process.
+/// Share one coordinator across all preview calls in the process.
 #[derive(Clone)]
 pub struct Coordinator {
     binary: PathBuf,
@@ -31,9 +31,8 @@ impl Coordinator {
         }
     }
 
-    /// Runs a fresh guest. The broker must return only after its callback has
-    /// stopped, including when the callback token is cancelled. Return
-    /// [`Failure::Cleanup`] if that cannot be confirmed.
+    /// The broker must return only after its callback has stopped, even on
+    /// cancellation. Return [`Failure::Cleanup`] if it cannot confirm that.
     pub async fn run<F>(
         &self,
         source: String,

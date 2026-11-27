@@ -16,7 +16,6 @@ use crate::codemode::{
 #[global_allocator]
 static ALLOCATOR: monty_alloc::LimitedAllocator = monty_alloc::LimitedAllocator;
 
-/// Run one script as a private stdio worker, before startup loads any configuration.
 pub fn worker_main() -> ExitCode {
     let mut output = io::stdout().lock();
     let result = monty_alloc::set_hard_limit(Some(ALLOCATOR_BYTES))
