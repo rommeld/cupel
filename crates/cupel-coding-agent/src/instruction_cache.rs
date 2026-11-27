@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use pulldown_cmark::{Event, Options, Parser, Tag};
 
+use crate::read_filesystem::{LocalFiles, ReadFilesystem, SnapshotKind};
 use crate::resources::{self, ContextFile};
 use crate::skills::Skill;
 
@@ -51,7 +52,11 @@ impl InstructionCache {
         let context = resources::load_context_files_with(roots, |path| cache.load_context(path));
         let mut warnings = Vec::new();
         for file in &context {
-            warnings.extend(cache.load_guides(&file.path, &file.content).await);
+            warnings.extend(
+                cache
+                    .load_guides(&file.path, &file.content, &mut LocalFiles)
+                    .await,
+            );
         }
         (cache, context, warnings)
     }
@@ -81,7 +86,11 @@ impl InstructionCache {
     }
 
     /// Caller holds the session cache lock so concurrent skill reads share the first load.
-    pub async fn read(&mut self, path: &Path) -> io::Result<Option<InstructionRead>> {
+    pub async fn read(
+        &mut self,
+        path: &Path,
+        files: &mut impl ReadFilesystem,
+    ) -> io::Result<Option<InstructionRead>> {
         let skill = self.skills.get(path);
         if let Some(content) = self.files.get(path) {
             return Ok(Some(InstructionRead {
@@ -93,8 +102,8 @@ impl InstructionCache {
         let Some(skill) = skill else { return Ok(None) };
         let name = skill.name.clone();
         let declared_path = PathBuf::from(&skill.path);
-        let content: Arc<str> = tokio::fs::read_to_string(path).await?.into();
-        let warnings = self.load_guides(&declared_path, &content).await;
+        let content: Arc<str> = files.snapshot(path, SnapshotKind::Skill).await?.into();
+        let warnings = self.load_guides(&declared_path, &content, files).await;
         self.files.insert(path.to_path_buf(), Arc::clone(&content));
         Ok(Some(InstructionRead {
             content,
@@ -103,7 +112,12 @@ impl InstructionCache {
         }))
     }
 
-    async fn load_guides(&mut self, declaring_path: &Path, content: &str) -> Vec<String> {
+    async fn load_guides(
+        &mut self,
+        declaring_path: &Path,
+        content: &str,
+        files: &mut impl ReadFilesystem,
+    ) -> Vec<String> {
         let paths: Vec<_> = Parser::new_ext(content, Options::ENABLE_YAML_STYLE_METADATA_BLOCKS)
             .filter_map(|event| match event {
                 Event::Start(Tag::Link { dest_url, .. }) => guide_path(declaring_path, &dest_url),
@@ -112,7 +126,7 @@ impl InstructionCache {
             .collect();
         let mut warnings = Vec::new();
         for path in paths {
-            if let Err(error) = self.load_guide(&path).await {
+            if let Err(error) = self.load_guide(&path, files).await {
                 warnings.push(format!(
                     "Could not cache instruction guide {}: {error}",
                     path.display()
@@ -122,12 +136,12 @@ impl InstructionCache {
         warnings
     }
 
-    async fn load_guide(&mut self, path: &Path) -> io::Result<()> {
+    async fn load_guide(&mut self, path: &Path, files: &mut impl ReadFilesystem) -> io::Result<()> {
         if self.source_path(path).is_some() {
             return Ok(());
         }
         let alias = path::absolute(path)?;
-        let path = tokio::fs::canonicalize(&alias).await?;
+        let path = files.canonicalize(&alias).await?;
         if !self.roots.iter().any(|root| path.starts_with(root)) {
             return Err(io::Error::other("outside the project and Cupel home"));
         }
@@ -136,20 +150,9 @@ impl InstructionCache {
             return Ok(());
         }
         if !self.files.contains_key(&path) {
-            use tokio::io::AsyncReadExt as _;
-
-            if !tokio::fs::metadata(&path).await?.is_file() {
-                return Err(io::Error::other("not a regular file"));
-            }
-            let mut content = String::new();
-            tokio::fs::File::open(&path)
-                .await?
-                .take(MAX_GUIDE_BYTES + 1)
-                .read_to_string(&mut content)
+            let content = files
+                .snapshot(&path, SnapshotKind::Guide(MAX_GUIDE_BYTES))
                 .await?;
-            if content.len() as u64 > MAX_GUIDE_BYTES {
-                return Err(io::Error::other("exceeds the 1 MiB guide limit"));
-            }
             self.files.insert(path.clone(), content.into());
         }
         self.aliases.insert(alias, path);

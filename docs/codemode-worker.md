@@ -1,10 +1,20 @@
 # Codemode preview worker
 
-The `codemode-preview` Cargo feature builds the private Monty worker into
-`cupel`. It does not register a tool or add a public flag. The worker uses the
-same executable, a cleared environment, and `/` as its working directory.
+The `codemode-preview` Cargo feature builds two private workers into `cupel`.
+The Monty worker uses a cleared environment and `/` as its working directory.
 Monty receives no filesystem mounts. The worker rejects all Monty OS calls and
 forwards only `read` and `grep` requests. It does not execute those requests.
+
+The session broker checks each callback against the same hooks as a direct
+call. Only after preflight does it start a file worker. That worker resolves
+paths, reads text, walks directories, runs searches, and reads grep context.
+It has the same file permissions as Cupel and does not confine paths to the
+checkout. The parent owns the instruction snapshot and records observations
+from the identities and digests of the bytes that supplied each view.
+
+The shared session binder can register the broker explicitly. The build
+feature alone does not register it in the shipped frontends or add a public
+flag or setting.
 
 | Limit | Preview budget |
 | --- | --- |
@@ -19,22 +29,30 @@ forwards only `read` and `grep` requests. It does not execute those requests.
 | Guest execution | 1 second, excluding worker startup and time awaiting host callbacks |
 | Call deadline | 5 seconds, including admission, worker startup, and host callbacks |
 
-Only the worker arms the hard allocator limit. The 4 MiB of headroom allows
-for conversion and framing overhead before the hard ceiling stops the process.
-The memory limits count allocator-backed live bytes, not resident set size.
-The parent bounds frames before allocating their payloads. Both processes
-count encoded bytes, including JSON escaping, as they write buffers.
+Only child processes arm hard allocator limits. The Monty worker's 4 MiB of
+headroom allows for conversion and framing overhead. The file worker has a
+128 MiB hard ceiling above its initial allocator baseline. The parent bounds
+frames before allocating their payloads. Each writer counts encoded bytes,
+including JSON escaping, while serializing. The limits count allocator-backed
+live bytes, not resident set size.
 
 The parent discards guest `print` output and raw worker stderr. It returns
-emits only after it receives success and reaps the worker. Cancellation or
-deadline starts cleanup. The coordinator does not release admission until
-the worker has exited and any active callback reports that it has stopped.
+emits only after it receives success and reaps the Monty worker. Cancellation
+or a deadline starts cleanup. The coordinator holds admission until it has
+reaped both children. Callback trace entries contain only the tool name,
+outcome, and elapsed time. They are not tool results or transcript messages.
 If cleanup cannot be confirmed, the coordinator closes admission for the
 rest of the process. Cleanup can take up to one second per wait beyond the
 call deadline.
 
-Run the worker tests with `cargo test --locked -p cupel-tui --features
-codemode-preview --test codemode_worker`. These tests start the native `cupel`
-worker with no Python on `PATH` and use fixture callbacks. Real filesystem
-cancellation and the provider and transcript checks belong to the preview
-integration. The worker tests do not qualify a release build.
+Run the worker and broker tests:
+
+```sh
+cargo test --locked -p cupel-tui --features codemode-preview --test codemode_worker --test codemode_broker
+```
+
+The broker test checks cancellation during a blocked read, search walk, and
+context read. It checks both child PIDs before the next script can use the
+broker. It also checks the instruction snapshot, the observation handoff to
+direct `apply_patch`, and result privacy. These tests do not qualify a release
+build.

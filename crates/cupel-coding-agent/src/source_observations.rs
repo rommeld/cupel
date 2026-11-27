@@ -15,6 +15,10 @@ const MAX_OBSERVATIONS: usize = 256;
 
 /// Inclusive, one-based source lines actually delivered to the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "codemode-preview",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub struct SourceRange {
     pub start: usize,
     pub end: usize,
@@ -103,7 +107,18 @@ impl SourceObservations {
         range: Option<SourceRange>,
         total_lines: usize,
     ) -> Result<SourceObservation, String> {
-        let revision = revision(bytes);
+        self.record_revision(checkout, path, revision(bytes), range, total_lines)
+            .await
+    }
+
+    pub(crate) async fn record_revision(
+        &self,
+        checkout: &Path,
+        path: &Path,
+        revision: String,
+        range: Option<SourceRange>,
+        total_lines: usize,
+    ) -> Result<SourceObservation, String> {
         let mut state = self.state.lock().await;
         if state.namespace.is_none() {
             let mut bytes = [0_u8; 16];
@@ -146,7 +161,7 @@ impl SourceObservations {
     }
 }
 
-fn revision(bytes: &[u8]) -> String {
+pub(crate) fn revision(bytes: &[u8]) -> String {
     format!("sha256:{}", hex(&Sha256::digest(bytes)))
 }
 

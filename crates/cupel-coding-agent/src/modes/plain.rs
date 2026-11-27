@@ -479,9 +479,22 @@ async fn run_session(
                         delay_ms as f64 / 1000.0
                     ))?;
                 }
+                AgentEvent::ToolExecutionUpdate {
+                    tool_name, partial, ..
+                } => {
+                    #[cfg(feature = "codemode-preview")]
+                    if tool_name == crate::codemode::NAME {
+                        for item in &partial.content {
+                            if let ToolResultContent::Text(text) = item {
+                                output(format_args!("[{}]\n", text.text))?;
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "codemode-preview"))]
+                    let _ = (tool_name, partial);
+                }
                 AgentEvent::TurnStart
                 | AgentEvent::ToolExecutionStart { .. }
-                | AgentEvent::ToolExecutionUpdate { .. }
                 | AgentEvent::ThinkingBlocksRemoved { .. } => {}
                 AgentEvent::AgentEnd { .. } => {
                     // Fire the `stop` hook without holding up the prompt

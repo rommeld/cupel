@@ -22,6 +22,10 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
+    pub(super) fn binary(&self) -> &std::path::Path {
+        &self.binary
+    }
+
     /// `binary` must be the trusted, absolute path of the Cupel executable.
     #[must_use]
     pub fn new(binary: PathBuf) -> Self {

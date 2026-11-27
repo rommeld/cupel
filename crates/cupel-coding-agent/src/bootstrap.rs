@@ -59,6 +59,8 @@ pub struct Ingredients {
     pub warnings: Vec<String>,
     pub questions: Option<QuestionReceiver>,
     instructions: Arc<Mutex<InstructionCache>>,
+    #[cfg(feature = "codemode-preview")]
+    grep: Arc<GrepTool>,
 }
 
 impl Ingredients {
@@ -71,9 +73,63 @@ impl Ingredients {
     /// Startup and reload bind tools to the recorder's journal and live source
     /// observations. Unbound tools remain useful for standalone callers/tests.
     pub fn bind_session(&mut self, recorder: &crate::session::SessionRecorder, cwd: &Path) {
+        self.bind_tools(recorder, cwd);
+    }
+
+    #[cfg(feature = "codemode-preview")]
+    pub fn bind_session_with_codemode(
+        &mut self,
+        recorder: &crate::session::SessionRecorder,
+        cwd: &Path,
+        coordinator: crate::codemode::Coordinator,
+    ) -> Result<(), crate::codemode::Failure> {
+        let read = self
+            .bind_tools(recorder, cwd)
+            .ok_or(crate::codemode::Failure::Callback)?;
+        let grep = Arc::clone(&self.grep);
+        if !self
+            .tools
+            .iter()
+            .any(|tool| std::ptr::addr_eq(tool.as_ref(), grep.as_ref()))
+        {
+            return Err(crate::codemode::Failure::Callback);
+        }
+        self.tools.push(Arc::new(crate::codemode::CodemodeTool::new(
+            coordinator,
+            cwd.to_path_buf(),
+            read,
+            grep,
+        )));
+        self.update_tool_prompt(cwd);
+        Ok(())
+    }
+
+    #[cfg(feature = "codemode-preview")]
+    fn update_tool_prompt(&mut self, cwd: &Path) {
+        let names: Vec<&str> = self.tools.iter().map(|tool| tool.name()).collect();
+        self.base_system_prompt =
+            system_prompt::build_system_prompt(cwd, &names, &self.context_files);
+    }
+
+    fn bind_tools(
+        &mut self,
+        recorder: &crate::session::SessionRecorder,
+        cwd: &Path,
+    ) -> Option<Arc<ReadTool>> {
+        #[cfg(feature = "codemode-preview")]
+        if self
+            .tools
+            .iter()
+            .any(|tool| tool.name() == crate::codemode::NAME)
+        {
+            self.tools
+                .retain(|tool| tool.name() != crate::codemode::NAME);
+            self.update_tool_prompt(cwd);
+        }
         let undo = recorder.undo();
         let observations = recorder.source_observations();
         let jobs = recorder.jobs();
+        let mut reader = None;
         for tool in &mut self.tools {
             match tool.name() {
                 "apply_patch" => {
@@ -84,11 +140,13 @@ impl Ingredients {
                     );
                 }
                 "read" => {
-                    *tool = Arc::new(
+                    let read = Arc::new(
                         ReadTool::new(cwd)
                             .with_observations(Arc::clone(&observations))
                             .with_instructions(Arc::clone(&self.instructions)),
                     );
+                    reader = Some(Arc::clone(&read));
+                    *tool = read;
                 }
                 "bash" => *tool = Arc::new(BashTool::new(cwd).with_jobs(Arc::clone(&jobs))),
                 "jobs" => *tool = Arc::new(JobsTool::new(Arc::clone(&jobs))),
@@ -96,6 +154,7 @@ impl Ingredients {
             }
         }
         self.hooks.undo = Some(undo);
+        reader
     }
 }
 
@@ -132,9 +191,11 @@ pub async fn load(
         home.clone(),
     );
 
+    let grep = Arc::new(GrepTool::new(cwd, Arc::new(GrepSearch::new(cwd))));
     let mut tools = coding_tools_with_reader(
         cwd,
         ReadTool::new(cwd).with_instructions(Arc::clone(&instructions)),
+        Arc::clone(&grep),
     );
     let questions = match frontend {
         Frontend::Tui => {
@@ -159,24 +220,30 @@ pub async fn load(
         warnings,
         questions,
         instructions,
+        #[cfg(feature = "codemode-preview")]
+        grep,
     }
 }
 
 /// The coding tools available to a session.
 #[must_use]
 pub fn coding_tools(cwd: &Path) -> Vec<Arc<dyn AgentTool>> {
-    coding_tools_with_reader(cwd, ReadTool::new(cwd))
+    let grep = Arc::new(GrepTool::new(cwd, Arc::new(GrepSearch::new(cwd))));
+    coding_tools_with_reader(cwd, ReadTool::new(cwd), grep)
 }
 
-fn coding_tools_with_reader(cwd: &Path, reader: ReadTool) -> Vec<Arc<dyn AgentTool>> {
-    let backend = Arc::new(GrepSearch::new(cwd));
+fn coding_tools_with_reader(
+    cwd: &Path,
+    reader: ReadTool,
+    grep: Arc<GrepTool>,
+) -> Vec<Arc<dyn AgentTool>> {
     let observations = Arc::new(SourceObservations::new());
     let jobs = Arc::new(Jobs::default());
     vec![
         Arc::new(reader.with_observations(Arc::clone(&observations))),
         Arc::new(BashTool::new(cwd).with_jobs(Arc::clone(&jobs))),
         Arc::new(ApplyPatchTool::new(cwd).with_observations(observations)),
-        Arc::new(GrepTool::new(cwd, backend)),
+        grep,
         Arc::new(JobsTool::new(jobs)),
     ]
 }

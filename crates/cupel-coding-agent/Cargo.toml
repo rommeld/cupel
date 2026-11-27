@@ -11,6 +11,9 @@ repository.workspace = true
 name = "generate-catalog"
 path = "src/bin/generate_catalog/main.rs"
 
+[features]
+codemode-preview = ["dep:monty", "dep:monty-alloc", "dep:monty-types"]
+
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
@@ -22,6 +25,9 @@ grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
 ignore.workspace = true
+monty = { version = "=1.7.0", optional = true }
+monty-alloc = { version = "=1.7.0", features = ["exit-code"], optional = true }
+monty-types = { version = "=1.7.0", optional = true }
 percent-encoding.workspace = true
 pulldown-cmark.workspace = true
 # For the bounded ollama /api/tags discovery probe at startup, the

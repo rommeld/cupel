@@ -22,8 +22,9 @@ use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{ImageContent, TextContent, ToolResultContent};
 
 use crate::instruction_cache::{InstructionCache, InstructionRead};
+use crate::read_filesystem::{LocalFiles, PageRevision, ReadFilesystem};
 use crate::search::resolve_to_root;
-use crate::source_observations::{SourceObservation, SourceObservations, SourceRange};
+use crate::source_observations::{self, SourceObservation, SourceObservations, SourceRange};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, format_size,
     truncate_head,
@@ -32,12 +33,13 @@ use crate::truncate::{
 // Leave headroom below providers' per image limits (Anthropic, 5 MiB).
 const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
+#[cfg_attr(feature = "codemode-preview", derive(serde::Serialize))]
 #[serde(rename_all = "camelCase")]
-struct ReadArgs {
-    path: String,
-    offset: Option<usize>,
-    limit: Option<usize>,
+pub(crate) struct ReadArgs {
+    pub path: String,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
 }
 
 /// Map a file extension to a provider supported image MIME type.
@@ -84,42 +86,6 @@ pub struct ReadTool {
     description: String,
     observations: Arc<SourceObservations>,
     instructions: Option<Arc<Mutex<InstructionCache>>>,
-}
-
-impl ReadTool {
-    #[must_use]
-    pub fn new(cwd: impl Into<PathBuf>) -> Self {
-        Self {
-            cwd: cwd.into(),
-            observations: Arc::new(SourceObservations::new()),
-            instructions: None,
-            description: format!(
-                "Read the contents of a file. Supports text files and images (jpg, png, gif, \
-                 webp). Images up to 4 MiB with matching file signatures are sent as \
-                 attachments; resize or compress larger images first. For text files, output \
-                 is truncated to \
-                 {DEFAULT_MAX_LINES} lines or {}KB (whichever is hit first). Use offset/limit \
-                 for large files. When you need the full file, continue with offset until \
-                 complete. Text results include a source observation id, checkout, path, raw-byte \
-                 revision and actual returned range. Supply the id in apply_patch's \
-                 expectedObservations for an optional whole-file stale-source check. Observations \
-                 are bounded and session-local; expired ids require a fresh read.",
-                DEFAULT_MAX_BYTES / 1024
-            ),
-        }
-    }
-
-    #[must_use]
-    pub fn with_observations(mut self, observations: Arc<SourceObservations>) -> Self {
-        self.observations = observations;
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn with_instructions(mut self, instructions: Arc<Mutex<InstructionCache>>) -> Self {
-        self.instructions = Some(instructions);
-        self
-    }
 }
 
 #[async_trait::async_trait]
@@ -236,10 +202,57 @@ impl AgentTool for ReadTool {
             });
         }
 
+        let (page, observation, instruction) =
+            self.read_text(&args, &cancel, &mut LocalFiles).await?;
+        Ok(render_text(&args, page, observation, instruction))
+    }
+}
+
+impl ReadTool {
+    #[must_use]
+    pub fn new(cwd: impl Into<PathBuf>) -> Self {
+        Self {
+            cwd: cwd.into(),
+            observations: Arc::new(SourceObservations::new()),
+            instructions: None,
+            description: format!(
+                "Read the contents of a file. Supports text files and images (jpg, png, gif, \
+                 webp). Images up to 4 MiB with matching file signatures are sent as \
+                 attachments; resize or compress larger images first. For text files, output \
+                 is truncated to \
+                 {DEFAULT_MAX_LINES} lines or {}KB (whichever is hit first). Use offset/limit \
+                 for large files. When you need the full file, continue with offset until \
+                 complete. Text results include a source observation id, checkout, path, raw-byte \
+                 revision and actual returned range. Supply the id in apply_patch's \
+                 expectedObservations for an optional whole-file stale-source check. Observations \
+                 are bounded and session-local; expired ids require a fresh read.",
+                DEFAULT_MAX_BYTES / 1024
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn with_observations(mut self, observations: Arc<SourceObservations>) -> Self {
+        self.observations = observations;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_instructions(mut self, instructions: Arc<Mutex<InstructionCache>>) -> Self {
+        self.instructions = Some(instructions);
+        self
+    }
+
+    async fn read_text(
+        &self,
+        args: &ReadArgs,
+        cancel: &CancellationToken,
+        files: &mut impl ReadFilesystem,
+    ) -> Result<(TextPage, SourceObservation, Option<InstructionRead>), ToolError> {
         // Resolve identities before reading, then hash exactly these read bytes.
         // In particular, do not canonicalize a potentially retargeted symlink
         // after reading and attach that identity to an earlier observation.
-        let checkout = tokio::fs::canonicalize(&self.cwd).await.map_err(|error| {
+        let checkout = files.canonicalize(&self.cwd).await.map_err(|error| {
             format!(
                 "Could not identify checkout {}: {error}",
                 self.cwd.display()
@@ -247,12 +260,16 @@ impl AgentTool for ReadTool {
         })?;
         let read_error = |error| format!("Could not read file: {} ({error})", args.path);
         let cached_path = match &self.instructions {
-            Some(cache) => cache.lock().await.source_path(&absolute_path),
+            Some(cache) => cache
+                .lock()
+                .await
+                .source_path(&resolve_to_root(&args.path, &self.cwd)),
             None => None,
         };
         let source_path = match cached_path {
             Some(path) => path,
-            None => tokio::fs::canonicalize(resolve_to_root(&args.path, &checkout))
+            None => files
+                .canonicalize(&resolve_to_root(&args.path, &checkout))
                 .await
                 .map_err(read_error)?,
         };
@@ -260,46 +277,90 @@ impl AgentTool for ReadTool {
             Some(cache) => cache
                 .lock()
                 .await
-                .read(&source_path)
+                .read(&source_path, files)
                 .await
                 .map_err(read_error)?,
             None => None,
         };
-        let live_content;
-        let content = if let Some(instruction) = &instruction {
-            instruction.content.as_ref()
+        let PageRevision { page, revision } = if let Some(instruction) = &instruction {
+            PageRevision {
+                page: TextPage::from_source(&instruction.content, args)?,
+                revision: source_observations::revision(instruction.content.as_bytes()),
+            }
         } else {
-            live_content = tokio::fs::read_to_string(&source_path)
-                .await
-                .map_err(read_error)?;
-            &live_content
+            files.page(&source_path, args).await?
         };
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
 
-        let page = TextPage::from_source(content, &args)?;
         let observation = self
             .observations
-            .record(
+            .record_revision(
                 &checkout,
                 &source_path,
-                content.as_bytes(),
+                revision,
                 page.range,
                 page.total_lines,
             )
             .await?;
-        Ok(render_text(&args, page, observation, instruction))
+        Ok((page, observation, instruction))
+    }
+
+    #[cfg(feature = "codemode-preview")]
+    pub(crate) fn callback_args(
+        &self,
+        arguments: Value,
+    ) -> Result<ReadArgs, crate::codemode::Failure> {
+        let args: ReadArgs = serde_json::from_value(arguments)
+            .map_err(|_error| crate::codemode::Failure::Arguments)?;
+        if image_mime_type(&resolve_to_root(&args.path, &self.cwd)).is_some() {
+            return Err(crate::codemode::Failure::Image);
+        }
+        Ok(args)
+    }
+
+    #[cfg(feature = "codemode-preview")]
+    pub(crate) async fn callback(
+        &self,
+        args: &ReadArgs,
+        cancel: &CancellationToken,
+        files: &mut impl ReadFilesystem,
+    ) -> Result<Value, ToolError> {
+        let (page, observation, instruction) = self.read_text(args, cancel, files).await?;
+        let next_offset = match page.continuation {
+            Continuation::Truncated { next_offset, .. }
+            | Continuation::UserLimit { next_offset } => Some(next_offset),
+            Continuation::FirstLineTooLarge { .. } | Continuation::End => None,
+        };
+        Ok(json!({
+            "text": page.text,
+            "path": crate::search::source_locator(&observation.path, &observation.checkout),
+            "range": page.range,
+            "observation": observation.id,
+            "totalLines": page.total_lines,
+            "nextOffset": next_offset,
+            "truncated": page.continuation.is_truncated(),
+            "notices": instruction.map_or_else(Vec::new, |read| instruction_notices(read.warnings)),
+        }))
     }
 }
 
-struct TextPage {
+#[cfg_attr(
+    feature = "codemode-preview",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+pub(crate) struct TextPage {
     text: String,
     range: Option<SourceRange>,
     total_lines: usize,
     continuation: Continuation,
 }
 
+#[cfg_attr(
+    feature = "codemode-preview",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 enum Continuation {
     FirstLineTooLarge { line: usize, bytes: usize },
     Truncated { next_offset: usize, by: TruncatedBy },
@@ -307,8 +368,17 @@ enum Continuation {
     End,
 }
 
+impl Continuation {
+    fn is_truncated(&self) -> bool {
+        matches!(
+            self,
+            Self::FirstLineTooLarge { .. } | Self::Truncated { .. }
+        )
+    }
+}
+
 impl TextPage {
-    fn from_source(content: &str, args: &ReadArgs) -> Result<Self, ToolError> {
+    pub(crate) fn from_source(content: &str, args: &ReadArgs) -> Result<Self, String> {
         // A terminal newline is not an extra source line. Keep one empty line
         // for an empty file, consistent with the offset=1 fallback.
         let all_lines: Vec<&str> = content
@@ -324,8 +394,7 @@ impl TextPage {
             return Err(format!(
                 "Offset {} is beyond end of file ({total_file_lines} lines total)",
                 args.offset.unwrap_or(0)
-            )
-            .into());
+            ));
         }
 
         // A user provided limit is honored first, truncate_head still applies
@@ -429,7 +498,7 @@ fn render_text(
         "revision": observation.revision,
         "range": range.map(|range| json!({"start": range.start, "end": range.end})),
         "totalLines": total_lines,
-        "truncated": matches!(continuation, Continuation::FirstLineTooLarge { .. } | Continuation::Truncated { .. }),
+        "truncated": continuation.is_truncated(),
     });
     let mut content = vec![ToolResultContent::Text(TextContent::plain(format!(
         "{}\n\n{output}",
@@ -441,12 +510,7 @@ fn render_text(
         {
             details["skill"] = json!(name);
         }
-        let mut notice =
-            "[Session instruction snapshot. Use /hot-reload to refresh it from disk.]".to_string();
-        for warning in instruction.warnings {
-            notice.push('\n');
-            notice.push_str(&warning);
-        }
+        let notice = instruction_notices(instruction.warnings).join("\n");
         content.push(ToolResultContent::Text(TextContent::plain(notice)));
     }
     AgentToolResult {
@@ -454,6 +518,14 @@ fn render_text(
         details: Some(details),
         terminate: false,
     }
+}
+
+fn instruction_notices(mut warnings: Vec<String>) -> Vec<String> {
+    warnings.insert(
+        0,
+        "[Session instruction snapshot. Use /hot-reload to refresh it from disk.]".into(),
+    );
+    warnings
 }
 
 #[cfg(test)]

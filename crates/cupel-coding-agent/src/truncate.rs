@@ -14,6 +14,10 @@ pub const GREP_MAX_LINE_LENGTH: usize = 500;
 
 /// Which limit cut the content off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "codemode-preview",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 pub enum TruncatedBy {
     Lines,
     Bytes,

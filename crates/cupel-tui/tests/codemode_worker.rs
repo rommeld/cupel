@@ -6,7 +6,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use cupel_tui::codemode::{Callback, Coordinator, Failure, Request};
+    use cupel_coding_agent::codemode::{Callback, Coordinator, Failure, Request};
     use serde_json::{Value, json};
     use tokio::sync::Notify;
     use tokio::time::{self, Instant};

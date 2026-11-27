@@ -12,6 +12,8 @@ pub(super) const EMIT: u8 = 5;
 pub(super) const DONE: u8 = 6;
 pub(super) const FAILURE: u8 = 7;
 pub(super) const READY: u8 = 8;
+pub(super) const FILE_REQUEST: u8 = 9;
+pub(super) const FILE_REPLY: u8 = 10;
 
 const GUEST_ERRORS: &[Failure] = &[
     Failure::Source,

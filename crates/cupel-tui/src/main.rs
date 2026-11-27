@@ -43,10 +43,15 @@ enum AppError {
 
 fn main() -> std::process::ExitCode {
     #[cfg(feature = "codemode-preview")]
-    if std::env::args_os().nth(1).as_deref()
-        == Some(std::ffi::OsStr::new(cupel_tui::codemode::WORKER_ARGUMENT))
     {
-        return cupel_tui::codemode::worker_main();
+        use cupel_coding_agent::codemode;
+        let argument = std::env::args_os().nth(1);
+        if argument.as_deref() == Some(std::ffi::OsStr::new(codemode::WORKER_ARGUMENT)) {
+            return codemode::worker_main();
+        }
+        if argument.as_deref() == Some(std::ffi::OsStr::new(codemode::FILE_WORKER_ARGUMENT)) {
+            return codemode::file_worker_main();
+        }
     }
 
     // Build the runtime explicitly instead of Tokio's main attribute. It does the same thing,

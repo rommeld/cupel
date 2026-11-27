@@ -23,8 +23,6 @@
 
 pub mod app;
 pub mod autocomplete;
-#[cfg(feature = "codemode-preview")]
-pub mod codemode;
 pub mod fuzzy;
 pub mod input;
 pub mod login;

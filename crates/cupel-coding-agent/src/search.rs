@@ -62,6 +62,11 @@ pub enum SearchError {
 /// see the module docs for why this indirection exists.
 #[async_trait::async_trait]
 pub trait CodeSearch: Send + Sync {
+    #[cfg(feature = "codemode-preview")]
+    fn worker_root(&self) -> Option<&Path> {
+        None
+    }
+
     async fn search(
         &self,
         query: SearchQuery,
@@ -129,6 +134,11 @@ impl GrepSearch {
 
 #[async_trait::async_trait]
 impl CodeSearch for GrepSearch {
+    #[cfg(feature = "codemode-preview")]
+    fn worker_root(&self) -> Option<&Path> {
+        Some(&self.root)
+    }
+
     async fn search(
         &self,
         query: SearchQuery,

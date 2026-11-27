@@ -15,7 +15,7 @@ name = "cupel"
 path = "src/main.rs"
 
 [features]
-codemode-preview = ["dep:monty", "dep:monty-alloc", "dep:monty-types", "dep:serde"]
+codemode-preview = ["cupel-coding-agent/codemode-preview"]
 
 [dependencies]
 base64.workspace = true
@@ -24,12 +24,8 @@ cupel-coding-agent.workspace = true
 cupel-core.workspace = true
 futures-util.workspace = true
 ignore.workspace = true
-monty = { version = "=1.7.0", optional = true }
-monty-alloc = { version = "=1.7.0", features = ["exit-code"], optional = true }
-monty-types = { version = "=1.7.0", optional = true }
 ratatui.workspace = true
 reqwest.workspace = true
-serde = { workspace = true, optional = true }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -37,6 +33,10 @@ tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 unicode-width.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+async-trait.workspace = true
+rustix = { version = "1.1", features = ["fs", "process"] }
 
 [lints]
 workspace = true

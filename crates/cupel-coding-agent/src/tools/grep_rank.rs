@@ -37,6 +37,11 @@ const DENSITY_CAP: usize = 10;
 /// Where a file sits in the repository. Declared worst first so the
 /// derived `Ord` doubles as the rank, `Source > Test > LowPriority`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(
+    feature = "codemode-preview",
+    derive(serde::Serialize),
+    serde(rename_all = "kebab-case")
+)]
 pub enum Bucket {
     LowPriority,
     Test,

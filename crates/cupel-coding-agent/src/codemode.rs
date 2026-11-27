@@ -1,4 +1,6 @@
+mod broker;
 mod coordinator;
+pub(crate) mod files;
 mod frame;
 mod worker;
 
@@ -7,7 +9,9 @@ use std::time::Duration;
 use serde_json::Value;
 use thiserror::Error;
 
+pub(crate) use broker::{CodemodeTool, NAME};
 pub use coordinator::Coordinator;
+pub use files::{FILE_WORKER_ARGUMENT, file_worker_main};
 pub use worker::worker_main;
 
 pub const WORKER_ARGUMENT: &str = "--internal-codemode-worker";
@@ -41,6 +45,10 @@ pub enum Failure {
     Capability,
     #[error("invalid codemode callback arguments")]
     Arguments,
+    #[error("codemode does not read images; use direct read")]
+    Image,
+    #[error("codemode callback was blocked by tool preflight")]
+    Veto,
     #[error("codemode emit requires a JSON-compatible value")]
     EmitValue,
     #[error("codemode exceeded the 16 MiB guest memory limit or worker allocation ceiling")]

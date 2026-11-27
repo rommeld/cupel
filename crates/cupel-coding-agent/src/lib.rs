@@ -5,6 +5,8 @@
 
 pub mod auth;
 pub mod bootstrap;
+#[cfg(feature = "codemode-preview")]
+pub mod codemode;
 pub mod commands;
 pub mod guard;
 pub mod hooks;
@@ -18,6 +20,7 @@ mod process;
 pub mod program_status;
 pub mod project_trust;
 pub mod providers;
+mod read_filesystem;
 pub mod resources;
 pub mod search;
 pub mod session;
