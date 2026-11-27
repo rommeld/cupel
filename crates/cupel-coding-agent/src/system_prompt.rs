@@ -5,9 +5,11 @@ use std::path::Path;
 use crate::resources::ContextFile;
 use crate::skills::Skill;
 
-#[must_use]
-pub fn build_system_prompt(cwd: &Path, tools: &[&str], context_files: &[ContextFile]) -> String {
-    let tools_list = if tools.is_empty() {
+const TOOL_HEADER: &str = "\n\nAvailable tools:\n";
+const GUIDELINES_HEADER: &str = "\n\nGuidelines:\n";
+
+fn format_tools(tools: &[&str]) -> String {
+    if tools.is_empty() {
         "(none)".to_string()
     } else {
         tools
@@ -15,7 +17,26 @@ pub fn build_system_prompt(cwd: &Path, tools: &[&str], context_files: &[ContextF
             .map(|name| format!("- {name}"))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+#[must_use]
+pub fn reload_tool_list(base: &str, tools: &[&str]) -> String {
+    let Some((prefix, rest)) = base.split_once(TOOL_HEADER) else {
+        return base.to_string();
     };
+    let Some((_, suffix)) = rest.split_once(GUIDELINES_HEADER) else {
+        return base.to_string();
+    };
+    format!(
+        "{prefix}{TOOL_HEADER}{}{GUIDELINES_HEADER}{suffix}",
+        format_tools(tools)
+    )
+}
+
+#[must_use]
+pub fn build_system_prompt(cwd: &Path, tools: &[&str], context_files: &[ContextFile]) -> String {
+    let tools_list = format_tools(tools);
 
     let mut guidelines = vec![
         "For review or advice, inspect and explain without editing. For implementation, make \
@@ -80,13 +101,7 @@ pub fn build_system_prompt(cwd: &Path, tools: &[&str], context_files: &[ContextF
     let date = current_date();
 
     let mut prompt = format!(
-        "You are a coding assistant in cupel.
-
-Available tools:
-{tools_list}
-
-Guidelines:
-{guidelines}"
+        "You are a coding assistant in cupel.{TOOL_HEADER}{tools_list}{GUIDELINES_HEADER}{guidelines}"
     );
 
     if !context_files.is_empty() {

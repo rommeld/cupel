@@ -25,6 +25,8 @@ pub struct Settings {
     pub check_for_updates: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codemode: Option<CodemodeSettings>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
     #[serde(skip)]
@@ -124,6 +126,12 @@ pub struct LoopKillerSettings {
     pub max_repeats: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodemodeSettings {
+    pub enabled: bool,
+}
+
 impl Settings {
     /// The stored key for a provider, if any.
     #[must_use]
@@ -136,6 +144,11 @@ impl Settings {
     #[must_use]
     pub fn checks_for_updates(&self) -> bool {
         self.check_for_updates.unwrap_or(true)
+    }
+
+    #[must_use]
+    pub fn codemode_enabled(&self) -> bool {
+        self.codemode.is_some_and(|settings| settings.enabled)
     }
 
     /// The effective repeat allowance, None = loop killer off. Opt in by
@@ -175,6 +188,7 @@ impl Settings {
             presets,
             check_for_updates: home.check_for_updates,
             theme: home.theme,
+            codemode: home.codemode,
             extra: home.extra,
             invalid_default_preset,
         }
@@ -194,6 +208,7 @@ impl core::fmt::Debug for Settings {
             .field("model", &self.presets.keys().collect::<Vec<_>>())
             .field("checkForUpdates", &self.check_for_updates)
             .field("theme", &self.theme)
+            .field("codemode", &self.codemode)
             .finish_non_exhaustive()
     }
 }
@@ -241,6 +256,7 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
     let loop_killer = take_section(&mut value, "loopKiller");
     let check_for_updates = take_section(&mut value, "checkForUpdates");
     let theme = take_section(&mut value, "theme");
+    let codemode = take_section(&mut value, "codemode");
     let mut settings: Settings = serde_json::from_value(value)
         .map_err(|e| format!("{} has invalid settings data: {e}", path.display()))?;
     let file = path.display();
@@ -309,6 +325,14 @@ fn load_settings_with_warnings(path: &Path) -> Result<(Settings, Vec<String>), S
         Some(_) => warnings.push(format!(
             "warning: ignoring theme in {file}: expected a theme id string"
         )),
+    }
+    if let Some(value) = codemode {
+        match serde_json::from_value(value) {
+            Ok(codemode) => settings.codemode = Some(codemode),
+            Err(_error) => warnings.push(format!(
+                "warning: ignoring codemode in {file}: expected {{\"enabled\": true}} or {{\"enabled\": false}}"
+            )),
+        }
     }
     Ok((settings, warnings))
 }

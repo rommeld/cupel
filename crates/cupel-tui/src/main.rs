@@ -43,15 +43,8 @@ enum AppError {
 
 fn main() -> std::process::ExitCode {
     #[cfg(feature = "codemode-preview")]
-    {
-        use cupel_coding_agent::codemode;
-        let argument = std::env::args_os().nth(1);
-        if argument.as_deref() == Some(std::ffi::OsStr::new(codemode::WORKER_ARGUMENT)) {
-            return codemode::worker_main();
-        }
-        if argument.as_deref() == Some(std::ffi::OsStr::new(codemode::FILE_WORKER_ARGUMENT)) {
-            return codemode::file_worker_main();
-        }
+    if let Some(status) = cupel_coding_agent::codemode::dispatch_worker() {
+        return status;
     }
 
     // Build the runtime explicitly instead of Tokio's main attribute. It does the same thing,
@@ -98,6 +91,8 @@ struct CliArgs {
     model: Option<String>,
     thinking: ThinkingChoice,
     plain: bool,
+    #[cfg(feature = "codemode-preview")]
+    codemode_preview: bool,
     resume: Option<ResumeTarget>,
 }
 
@@ -108,6 +103,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
         model: None,
         thinking: ThinkingChoice::Default,
         plain: false,
+        #[cfg(feature = "codemode-preview")]
+        codemode_preview: false,
         resume: None,
     };
     let mut iter = args.peekable();
@@ -121,6 +118,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                 parsed.thinking = value.parse()?;
             }
             "--plain" => parsed.plain = true,
+            #[cfg(feature = "codemode-preview")]
+            "--codemode-preview" => parsed.codemode_preview = true,
             // The search is optional, a bare resume option (next arg missing or
             // another flag) means "the newest session of this project".
             "--resume" | "-r" => {
@@ -157,6 +156,15 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<CliArgs, String> {
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument: {other}")),
+        }
+    }
+    #[cfg(feature = "codemode-preview")]
+    if parsed.codemode_preview {
+        if !parsed.plain {
+            return Err("--codemode-preview requires an explicit --plain".into());
+        }
+        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            return Err("--codemode-preview requires Apple Silicon macOS".into());
         }
     }
     Ok(parsed)
@@ -268,6 +276,7 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
     };
     let mut ingredients =
         cupel_coding_agent::bootstrap::load(&cwd, home.clone(), &registry, frontend).await;
+    let startup_warnings = ingredients.warnings.len();
     // Surface plain mode warnings before model selection can fail. In the
     // TUI they travel with SessionMeta, never through the alternate screen.
     if use_plain {
@@ -344,7 +353,27 @@ async fn run() -> Result<Option<cupel_tui::sessions::Restart>, AppError> {
         &session_id,
         &model.id,
     );
+    #[cfg(feature = "codemode-preview")]
+    if args.codemode_preview {
+        let binary = std::env::current_exe().map_err(|error| {
+            AppError::Session(format!(
+                "cannot locate the codemode worker executable: {error}"
+            ))
+        })?;
+        let coordinator = cupel_coding_agent::codemode::Coordinator::new(binary);
+        ingredients
+            .bind_session_with_codemode(&recorder, &cwd, coordinator)
+            .map_err(|error| AppError::Session(error.to_string()))?;
+    } else {
+        ingredients.bind_session(&recorder, &cwd);
+    }
+    #[cfg(not(feature = "codemode-preview"))]
     ingredients.bind_session(&recorder, &cwd);
+    if use_plain {
+        for warning in &ingredients.warnings[startup_warnings..] {
+            eprintln!("{warning}");
+        }
+    }
     let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
 
     let mut options = AgentOptions::new(model.clone(), registry);

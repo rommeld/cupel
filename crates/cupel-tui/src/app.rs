@@ -994,6 +994,11 @@ impl App {
         }
 
         let session_id = self.recorder.session_id().to_string();
+        let tool_names: Vec<&str> = ingredients.tools.iter().map(|tool| tool.name()).collect();
+        let base_system_prompt = cupel_coding_agent::system_prompt::reload_tool_list(
+            &self.meta.base_system_prompt,
+            &tool_names,
+        );
         let mut options = cupel_agent::AgentOptions::new(state.model.clone(), registry);
         options.tools = ingredients.tools;
         options.hooks = std::sync::Arc::new(ingredients.hooks);
@@ -1018,7 +1023,7 @@ impl App {
             warnings: ingredients.warnings,
             context_files: ingredients.context_files,
             skills: ingredients.skills,
-            base_system_prompt: self.meta.base_system_prompt.clone(),
+            base_system_prompt,
         };
         options.system_prompt = meta.system_prompt();
 

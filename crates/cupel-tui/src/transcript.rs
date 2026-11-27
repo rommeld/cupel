@@ -168,10 +168,20 @@ impl Transcript {
     /// A progress snapshot from a running tool.
     pub fn attach_tool_progress(&mut self, tool_call_id: &str, text: String) {
         if let Some(Cell::Tool {
-            live, result: None, ..
+            name,
+            live,
+            result: None,
+            ..
         }) = self.tool_mut(tool_call_id)
         {
-            *live = Some(text);
+            if name == "codemode"
+                && let Some(trace) = live
+            {
+                trace.push('\n');
+                trace.push_str(&text);
+            } else {
+                *live = Some(text);
+            }
         }
     }
 
@@ -179,6 +189,7 @@ impl Transcript {
     /// cell's clock, if it was started, becomes the outcome's `took`.
     pub fn attach_tool_result(&mut self, tool_call_id: &str, mut outcome: ToolOutcome) {
         if let Some(Cell::Tool {
+            name,
             started_at,
             live,
             result,
@@ -186,7 +197,11 @@ impl Transcript {
         }) = self.tool_mut(tool_call_id)
         {
             outcome.took = started_at.map(|started| started.elapsed());
-            *live = None;
+            if let Some(trace) = live.take()
+                && name == "codemode"
+            {
+                outcome.text = format!("{trace}\n\n{}", outcome.text);
+            }
             *result = Some(outcome);
         }
     }
@@ -1197,6 +1212,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn codemode_shows_callback_trace_after_the_outer_result() {
+        let mut transcript = Transcript::default();
+        let mut cell = bash_cell(ToolDisplay::Preview);
+        if let Cell::Tool { name, result, .. } = &mut cell {
+            *name = "codemode".into();
+            *result = None;
+        }
+        transcript.cells.push(cell);
+        transcript.attach_tool_progress("1", "grep ok (1 ms)".into());
+        transcript.attach_tool_progress("1", "read ok (2 ms)".into());
+        transcript.attach_tool_result(
+            "1",
+            ToolOutcome {
+                text: "codemode script failed".into(),
+                is_error: true,
+                diff: None,
+                skill: None,
+                took: None,
+            },
+        );
+        let [
+            Cell::Tool {
+                result: Some(result),
+                live: None,
+                ..
+            },
+        ] = transcript.cells.as_slice()
+        else {
+            panic!("expected one completed outer tool cell");
+        };
+        assert_eq!(
+            result.text,
+            "grep ok (1 ms)\nread ok (2 ms)\n\ncodemode script failed"
+        );
+        assert!(result.is_error);
     }
 
     #[test]

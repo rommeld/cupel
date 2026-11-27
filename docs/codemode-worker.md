@@ -1,6 +1,7 @@
 # Codemode preview worker
 
-The `codemode-preview` Cargo feature builds two private workers into `cupel`.
+The `codemode-preview` Cargo feature builds two private workers into `cupel`
+and `cupel-acp`. Each frontend starts its own executable as a worker.
 The Monty worker uses a cleared environment and `/` as its working directory.
 Monty receives no filesystem mounts. The worker rejects all Monty OS calls and
 forwards only `read` and `grep` requests. It does not execute those requests.
@@ -12,13 +13,12 @@ It has the same file permissions as Cupel and does not confine paths to the
 checkout. The parent owns the instruction snapshot and records observations
 from the identities and digests of the bytes that supplied each view.
 
-The shared session binder can register the broker explicitly. The build
-feature alone does not register it in the shipped frontends or add a public
-flag or setting.
+The build feature alone does not register the tool. See the
+[codemode preview guide](codemode-preview.md) for opt-in and offline checks.
 
 | Limit | Preview budget |
 | --- | --- |
-| Active scripts | 1 preview script per process; 2 total slots in v1 qualification |
+| Active scripts | 1 for the plain preview flag; 2 for home opt-in, per process |
 | Script source | 16 KiB of UTF-8 |
 | Guest memory | 16 MiB above Monty's allocator baseline |
 | Hard allocator ceiling | 20 MiB above the worker's initial allocator baseline |

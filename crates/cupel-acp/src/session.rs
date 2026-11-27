@@ -120,6 +120,7 @@ impl Runtime {
         for warning in &ingredients.warnings {
             tracing::warn!("{warning}");
         }
+        let startup_warnings = ingredients.warnings.len();
         let restored_model = restored.as_ref().map(|session| session.model.as_str());
         let (model, key) = startup::select_model(
             config.model.as_deref().or(restored_model),
@@ -130,6 +131,9 @@ impl Runtime {
         .map_err(invalid)?;
         let recorder = SessionRecorder::new(config.home.clone(), &cwd, id, &model.id);
         ingredients.bind_session(&recorder, &cwd);
+        for warning in &ingredients.warnings[startup_warnings..] {
+            tracing::warn!("{warning}");
+        }
         let preset = ingredients.settings.presets.get(DEFAULT_PRESET);
         let mut options = AgentOptions::new(model.clone(), registry);
         options.system_prompt = ingredients.system_prompt();

@@ -16,6 +16,18 @@ pub use worker::worker_main;
 
 pub const WORKER_ARGUMENT: &str = "--internal-codemode-worker";
 
+#[must_use]
+pub fn dispatch_worker() -> Option<std::process::ExitCode> {
+    let argument = std::env::args_os().nth(1)?;
+    if argument == WORKER_ARGUMENT {
+        Some(worker_main())
+    } else if argument == FILE_WORKER_ARGUMENT {
+        Some(file_worker_main())
+    } else {
+        None
+    }
+}
+
 const SOURCE_BYTES: usize = 16 * 1024;
 const GUEST_HEAP_BYTES: usize = 16 * 1024 * 1024;
 const ALLOCATOR_BYTES: usize = 20 * 1024 * 1024;

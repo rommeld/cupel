@@ -117,8 +117,16 @@ async fn run(config: config::Config) -> Result<()> {
     result
 }
 
+fn main() -> std::process::ExitCode {
+    #[cfg(feature = "codemode-preview")]
+    if let Some(status) = cupel_coding_agent::codemode::dispatch_worker() {
+        return status;
+    }
+    run_frontend()
+}
+
 #[tokio::main]
-async fn main() -> std::process::ExitCode {
+async fn run_frontend() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_writer(std::io::stderr)

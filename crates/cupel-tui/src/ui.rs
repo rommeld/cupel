@@ -4597,6 +4597,150 @@ pub(crate) mod tests {
         assert_eq!(app.meta.settings.api_key("acme"), Some("from-disk"));
     }
 
+    #[cfg(feature = "codemode-preview")]
+    #[tokio::test]
+    async fn codemode_reload_updates_tools_but_resume_creates_new_observations() {
+        use crate::app::ReloadTarget;
+        use tokio_util::sync::CancellationToken;
+
+        async fn read_guide(app: &App) -> (String, String) {
+            let read = app
+                .agent
+                .tools()
+                .iter()
+                .find(|tool| tool.name() == "read")
+                .unwrap();
+            let result = read
+                .execute(
+                    "fixture-read",
+                    serde_json::json!({"path": "guide.md"}),
+                    CancellationToken::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+            let id = result.details.unwrap()["observation"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let [cupel_core::types::ToolResultContent::Text(page), ..] = result.content.as_slice()
+            else {
+                panic!("expected a text page");
+            };
+            (id, page.text.clone())
+        }
+
+        fn schemas(app: &App) -> Vec<(&str, &str, serde_json::Value)> {
+            app.agent
+                .tools()
+                .iter()
+                .map(|tool| (tool.name(), tool.description(), tool.parameters()))
+                .collect()
+        }
+
+        let root = std::env::temp_dir().join(format!("cupel-tui-codemode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let app = test_app_with_home(&root, "cupel-bootstrap");
+        std::fs::write(
+            root.join("proj/AGENTS.md"),
+            "Original session instructions. [Guide](guide.md)\n",
+        )
+        .unwrap();
+        let guide = root.join("proj/guide.md");
+        std::fs::write(&guide, "original guide\n").unwrap();
+        let home = root.join("home/settings.json");
+        let mut app = app.hot_reload(ReloadTarget::New).await;
+        app.recorder.record(&cupel_agent::AgentMessage::user_text(
+            "codemode reload fixture",
+        ));
+        let baseline = schemas(&app)
+            .into_iter()
+            .map(|(name, description, params)| (name.to_owned(), description.to_owned(), params))
+            .collect::<Vec<_>>();
+        let prompt = app.agent.state().system_prompt;
+        let (old_id, page) = read_guide(&app).await;
+
+        std::fs::write(&guide, "updated guide\n").unwrap();
+        assert!(page.contains("original guide"));
+        assert!(
+            read_guide(&app).await.1.contains("original guide"),
+            "the live session keeps its snapshot until reload"
+        );
+        std::fs::write(&home, r#"{"codemode":{"enabled":true}}"#).unwrap();
+        let app = app.hot_reload(ReloadTarget::Current).await;
+        let enabled = schemas(&app);
+        assert_eq!(enabled.last().unwrap().0, "codemode");
+        assert!(
+            enabled[..baseline.len()]
+                .iter()
+                .zip(&baseline)
+                .all(|(a, b)| a.0 == b.0 && a.1 == b.1 && a.2 == b.2),
+            "reload must preserve direct schemas"
+        );
+        assert_eq!(enabled.len(), baseline.len() + 1);
+        assert_eq!(
+            app.agent
+                .state()
+                .system_prompt
+                .replace("\n- codemode\n", "\n"),
+            prompt
+        );
+        assert!(
+            app.recorder
+                .source_observations()
+                .get(&old_id)
+                .await
+                .is_ok()
+        );
+        let (live_id, page) = read_guide(&app).await;
+        assert!(page.contains("updated guide"));
+
+        std::fs::write(&home, r#"{"codemode":{"enabled":false}}"#).unwrap();
+        let app = app.hot_reload(ReloadTarget::Current).await;
+        assert_eq!(app.agent.state().system_prompt, prompt);
+        assert!(
+            app.agent
+                .tools()
+                .iter()
+                .all(|tool| tool.name() != "codemode")
+        );
+        assert!(
+            app.recorder
+                .source_observations()
+                .get(&live_id)
+                .await
+                .is_ok()
+        );
+
+        std::fs::write(&home, r#"{"codemode":{"enabled":true}}"#).unwrap();
+        let app = app
+            .hot_reload(ReloadTarget::Resume("codemode reload fixture".into()))
+            .await;
+        assert!(
+            app.agent
+                .tools()
+                .iter()
+                .any(|tool| tool.name() == "codemode")
+        );
+        assert!(app.agent.state().system_prompt.contains("\n- codemode\n"));
+        assert!(
+            app.recorder
+                .source_observations()
+                .get(&live_id)
+                .await
+                .is_err()
+        );
+        let (new_id, _) = read_guide(&app).await;
+        assert!(
+            app.recorder
+                .source_observations()
+                .get(&new_id)
+                .await
+                .is_ok()
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[tokio::test]
     async fn every_reload_target_shows_configuration_warnings() {
         use crate::app::ReloadTarget;

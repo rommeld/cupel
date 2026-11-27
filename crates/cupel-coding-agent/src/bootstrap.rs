@@ -73,6 +73,25 @@ impl Ingredients {
     /// Startup and reload bind tools to the recorder's journal and live source
     /// observations. Unbound tools remain useful for standalone callers/tests.
     pub fn bind_session(&mut self, recorder: &crate::session::SessionRecorder, cwd: &Path) {
+        if self.settings.codemode_enabled() {
+            #[cfg(feature = "codemode-preview")]
+            match std::env::current_exe() {
+                Ok(binary) => {
+                    let coordinator = crate::codemode::Coordinator::for_v1_qualification(binary);
+                    if let Err(error) = self.bind_session_with_codemode(recorder, cwd, coordinator)
+                    {
+                        self.warnings
+                            .push(format!("warning: codemode is disabled: {error}"));
+                    }
+                    return;
+                }
+                Err(error) => self.warnings.push(format!(
+                    "warning: codemode is disabled: cannot locate the worker executable: {error}"
+                )),
+            }
+            #[cfg(not(feature = "codemode-preview"))]
+            self.warnings.push("warning: codemode is disabled: this binary was built without the codemode-preview feature".into());
+        }
         self.bind_tools(recorder, cwd);
     }
 

@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import threading
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -30,7 +31,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload.encode())
 
 
-async def exchange(binary, home, project, *, prompt, answer, path):
+async def exchange(binary, home, project, *, prompt, answer, path, resume):
     # Do not inherit real credentials, project configuration, or proxy settings.
     process = await asyncio.create_subprocess_exec(
         str(binary), "--model", "fixture",
@@ -61,10 +62,16 @@ async def exchange(binary, home, project, *, prompt, answer, path):
     try:
         initialized, _ = await request(1, "initialize", {"protocolVersion": 1, "clientCapabilities": {}})
         assert initialized["protocolVersion"] == 1, initialized
-        session, _ = await request(2, "session/new", {"cwd": str(project), "mcpServers": []})
-        assert session["sessionId"], session
+        params = {"cwd": str(project), "mcpServers": []}
+        if resume is None:
+            session, _ = await request(2, "session/new", params)
+            session_id = session["sessionId"]
+        else:
+            await request(2, "session/load", {**params, "sessionId": resume})
+            session_id = resume
+        assert session_id
         result, notifications = await request(3, "session/prompt", {
-            "sessionId": session["sessionId"], "prompt": [{"type": "text", "text": prompt}],
+            "sessionId": session_id, "prompt": [{"type": "text", "text": prompt}],
         })
         assert result["stopReason"] == "end_turn", result
         text = "".join(
@@ -89,8 +96,8 @@ def complete(_requests):
     return {"content": "ACP release smoke"}, "stop"
 
 
-def run(binary, home, project, *, reply=complete, prompt="Release smoke",
-        answer="ACP release smoke", path=os.defpath):
+@contextmanager
+def provider(home, reply):
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
         (home / "models.json").write_text(json.dumps([{
             "id": "fixture", "name": "Fixture", "api": "openai-completions", "provider": "fixture",
@@ -103,17 +110,23 @@ def run(binary, home, project, *, reply=complete, prompt="Release smoke",
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            async def run_exchange():
-                return await asyncio.wait_for(
-                    exchange(binary, home, project, prompt=prompt, answer=answer, path=path),
-                    timeout=30,
-                )
-
-            notifications, stderr = asyncio.run(run_exchange())
-            return server.requests, notifications, stderr
+            yield server.requests
         finally:
             server.shutdown()
             thread.join()
+
+
+def run(binary, home, project, *, reply=complete, prompt="Release smoke",
+        answer="ACP release smoke", path=os.defpath, resume=None):
+    async def run_exchange():
+        return await asyncio.wait_for(
+            exchange(binary, home, project, prompt=prompt, answer=answer, path=path, resume=resume),
+            timeout=30,
+        )
+
+    with provider(home, reply) as requests:
+        notifications, stderr = asyncio.run(run_exchange())
+        return requests, notifications, stderr
 
 
 def main():

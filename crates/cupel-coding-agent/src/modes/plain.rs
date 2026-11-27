@@ -168,6 +168,19 @@ pub async fn run(
         while let Some(event) = events.next().await {
             match event {
                 AgentEvent::MessageEnd { message } => recorder.record(&message),
+                #[cfg(all(feature = "codemode-preview", unix))]
+                AgentEvent::ToolExecutionEnd {
+                    tool_name,
+                    result: tool_result,
+                    is_error: true,
+                    ..
+                } if tool_name == crate::codemode::NAME
+                    && matches!(&result, Err(PlainError::Signal(_))) =>
+                {
+                    if let [ToolResultContent::Text(text)] = tool_result.content.as_slice() {
+                        let _ = output(format_args!("error: {}\n", text.text));
+                    }
+                }
                 AgentEvent::AgentEnd { .. } => recorder.on_agent_end(),
                 _ => {}
             }
