@@ -11,7 +11,7 @@ use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::v1::schema as acp;
 use agent_client_protocol::{Agent, Client, Error, Result, Stdio};
 
-use crate::server::Server;
+use crate::server::{OpenRequest, Server};
 use crate::session::Notify;
 
 fn notifier(connection: ConnectionTo<Client>, id: acp::SessionId) -> Notify {
@@ -51,16 +51,15 @@ async fn run(config: config::Config) -> Result<()> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: acp::NewSessionRequest, responder, cx| {
+            async move |request: acp::NewSessionRequest, responder, _cx| {
                 let server = Arc::clone(&create);
                 let id = match Server::fresh_id() {
                     Ok(id) => id,
                     Err(error) => return responder.respond_with_error(error),
                 };
-                let notify = notifier(cx.clone(), acp::SessionId::new(id.clone()));
                 create.spawn(async move {
                     let result = server
-                        .create(&id, request.cwd, &request.mcp_servers, false, notify)
+                        .open(&id, request.cwd, &request.mcp_servers, OpenRequest::New)
                         .await;
                     responder.respond_with_result(result.map(|()| acp::NewSessionResponse::new(id)))
                 });
@@ -74,12 +73,11 @@ async fn run(config: config::Config) -> Result<()> {
                 let notify = notifier(cx.clone(), request.session_id.clone());
                 load.spawn(async move {
                     let result = server
-                        .create(
+                        .open(
                             &request.session_id.to_string(),
                             request.cwd,
                             &request.mcp_servers,
-                            true,
-                            notify,
+                            OpenRequest::Load(notify),
                         )
                         .await;
                     responder.respond_with_result(result.map(|()| acp::LoadSessionResponse::new()))

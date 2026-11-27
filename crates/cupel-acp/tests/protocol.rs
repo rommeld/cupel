@@ -173,6 +173,7 @@ mod tests {
             let result = self
                 .request(2, "session/new", json!({"cwd":cwd,"mcpServers":[]}))
                 .await;
+            assert_eq!(result.len(), 1, "session/new emitted updates: {result:?}");
             result.last().unwrap()["result"]["sessionId"]
                 .as_str()
                 .unwrap_or_else(|| panic!("{result:?}"))
@@ -675,6 +676,15 @@ mod tests {
                 .unwrap()
                 .contains("does not match")
         );
+        std::fs::write(&path, data).unwrap();
+        let retry = client
+            .request(
+                3,
+                "session/load",
+                json!({"sessionId":id,"cwd":fixture.cwd(),"mcpServers":[]}),
+            )
+            .await;
+        assert!(retry.last().unwrap().get("result").is_some(), "{retry:?}");
         client.close().await;
     }
 
