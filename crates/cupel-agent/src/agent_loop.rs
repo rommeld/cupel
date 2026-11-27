@@ -890,7 +890,6 @@ async fn prepare_tool_call(
     }
 }
 
-/// Check a tool against the current turn without executing it or creating a message.
 #[derive(Clone)]
 pub struct ToolPreflight {
     assistant: Arc<AssistantMessage>,
@@ -898,8 +897,7 @@ pub struct ToolPreflight {
 }
 
 impl ToolPreflight {
-    /// Use the same object validation, hooks, and cancellation check as a direct
-    /// call. The broker must select the tool and validate its fields before dispatch.
+    /// The broker must validate tool-specific fields before dispatch.
     pub async fn check_selected(
         &self,
         tool: &dyn AgentTool,

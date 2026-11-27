@@ -121,7 +121,6 @@ pub trait AgentTool: Send + Sync {
         on_update: Option<ToolUpdateFn>,
     ) -> Result<AgentToolResult, ToolError>;
 
-    /// Run with access to the current assistant and hooks for brokered callbacks.
     async fn execute_with_preflight(
         &self,
         tool_call_id: &str,
