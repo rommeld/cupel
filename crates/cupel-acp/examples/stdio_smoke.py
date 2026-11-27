@@ -17,10 +17,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.server.requests.append(body)
-        delta, finish = self.server.reply(self.server.requests)
         chunks = [
-            {"choices": [{"index": 0, "delta": {"role": "assistant", **delta}, "finish_reason": None}]},
-            {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "ACP release smoke"}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         ]
         payload = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
         self.send_response(200)
@@ -30,12 +29,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload.encode())
 
 
-async def exchange(binary, home, project, *, prompt, answer, path):
+async def exchange(binary, home, project):
     # Do not inherit real credentials, project configuration, or proxy settings.
     process = await asyncio.create_subprocess_exec(
         str(binary), "--model", "fixture",
         cwd=project,
-        env={"PATH": path, "HOME": str(home), "CUPEL_HOME": str(home),
+        env={"PATH": os.defpath, "HOME": str(home), "CUPEL_HOME": str(home),
              "OLLAMA_HOST": "http://127.0.0.1:9"},
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
@@ -64,7 +63,7 @@ async def exchange(binary, home, project, *, prompt, answer, path):
         session, _ = await request(2, "session/new", {"cwd": str(project), "mcpServers": []})
         assert session["sessionId"], session
         result, notifications = await request(3, "session/prompt", {
-            "sessionId": session["sessionId"], "prompt": [{"type": "text", "text": prompt}],
+            "sessionId": session["sessionId"], "prompt": [{"type": "text", "text": "Release smoke"}],
         })
         assert result["stopReason"] == "end_turn", result
         text = "".join(
@@ -73,47 +72,14 @@ async def exchange(binary, home, project, *, prompt, answer, path):
             if message.get("method") == "session/update"
             and (update := message["params"]["update"]).get("sessionUpdate") == "agent_message_chunk"
         )
-        assert text == answer, notifications
+        assert text == "ACP release smoke", notifications
         process.stdin.close()
         status = await asyncio.wait_for(process.wait(), timeout=10)
-        stderr = (await process.stderr.read()).decode()
-        assert status == 0, stderr
-        return notifications, stderr
+        assert status == 0, (await process.stderr.read()).decode()
     finally:
         if process.returncode is None:
             process.kill()
             await process.wait()
-
-
-def complete(_requests):
-    return {"content": "ACP release smoke"}, "stop"
-
-
-def run(binary, home, project, *, reply=complete, prompt="Release smoke",
-        answer="ACP release smoke", path=os.defpath):
-    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
-        (home / "models.json").write_text(json.dumps([{
-            "id": "fixture", "name": "Fixture", "api": "openai-completions", "provider": "fixture",
-            "baseUrl": f"http://127.0.0.1:{server.server_port}/v1", "reasoning": False, "input": ["text"],
-            "cost": {"input": 0, "output": 0, "cachedRead": 0, "cachedWrite": 0},
-            "contextWindow": 32768, "maxTokens": 1024, "compat": {"requiresApiKey": False},
-        }]))
-        server.requests = []
-        server.reply = reply
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            async def run_exchange():
-                return await asyncio.wait_for(
-                    exchange(binary, home, project, prompt=prompt, answer=answer, path=path),
-                    timeout=30,
-                )
-
-            notifications, stderr = asyncio.run(run_exchange())
-            return server.requests, notifications, stderr
-        finally:
-            server.shutdown()
-            thread.join()
 
 
 def main():
@@ -123,9 +89,27 @@ def main():
         home, project = root / "home", root / "project"
         home.mkdir()
         project.mkdir()
-        requests, _, _ = run(binary, home, project)
-        assert len(requests) == 1, requests
-        print("PASS: packaged cupel-acp initialized, created a session, and completed local inference")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.requests = []
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        (home / "models.json").write_text(json.dumps([{
+            "id": "fixture", "name": "Fixture", "api": "openai-completions", "provider": "fixture",
+            "baseUrl": f"http://127.0.0.1:{server.server_port}/v1", "reasoning": False, "input": ["text"],
+            "cost": {"input": 0, "output": 0, "cachedRead": 0, "cachedWrite": 0},
+            "contextWindow": 32768, "maxTokens": 1024, "compat": {"requiresApiKey": False},
+        }]))
+        try:
+            async def run():
+                await asyncio.wait_for(exchange(binary, home, project), timeout=30)
+
+            asyncio.run(run())
+            assert len(server.requests) == 1, server.requests
+            print("PASS: packaged cupel-acp initialized, created a session, and completed local inference")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
 
 if __name__ == "__main__":

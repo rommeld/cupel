@@ -48,21 +48,6 @@ python3 examples/stdio_smoke.py ./cupel-acp
 This checks initialize, session creation, a streamed response from local fake
 inference, and clean shutdown. It uses a temporary Cupel home without real keys.
 
-From a Cupel source checkout, run the frozen direct-tool check:
-
-```sh
-cargo build --locked -p cupel-acp && python3 crates/cupel-acp/examples/direct_tool_baseline.py target/debug/cupel-acp
-```
-
-The check uses a temporary Git checkout, a temporary Cupel home, and a local
-scripted provider. It reports checks for the prompt, ordered schemas, ranked
-search, content search, limits, and paging with a real `read` observation.
-It does not use credentials or external inference.
-
-`direct_tool_baseline.json` records the source commit that produced the prompt
-and schemas. The test substitutes the temporary checkout path and verifies the
-date against the UTC clock. It does not update expected values during a run.
-
 For a real OpenHands integration check with two turns and retained history:
 
 ```sh
