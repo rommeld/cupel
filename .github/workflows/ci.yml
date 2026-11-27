@@ -61,9 +61,5 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --workspace --locked
-      - name: Direct tool baseline
-        run: |
-          cargo build --locked -p cupel-acp
-          python3 crates/cupel-acp/examples/direct_tool_baseline.py target/debug/cupel-acp
       - name: Packaging regression tests
         run: python3 -m unittest discover -s packaging -p 'test_*.py' -v

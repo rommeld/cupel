@@ -120,17 +120,6 @@ pub trait AgentTool: Send + Sync {
         cancel: CancellationToken,
         on_update: Option<ToolUpdateFn>,
     ) -> Result<AgentToolResult, ToolError>;
-
-    async fn execute_with_preflight(
-        &self,
-        tool_call_id: &str,
-        args: Value,
-        cancel: CancellationToken,
-        on_update: Option<ToolUpdateFn>,
-        _preflight: &crate::agent_loop::ToolPreflight,
-    ) -> Result<AgentToolResult, ToolError> {
-        self.execute(tool_call_id, args, cancel, on_update).await
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

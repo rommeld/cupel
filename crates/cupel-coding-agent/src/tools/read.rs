@@ -21,9 +21,9 @@ use tokio_util::sync::CancellationToken;
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{ImageContent, TextContent, ToolResultContent};
 
-use crate::instruction_cache::{InstructionCache, InstructionRead};
+use crate::instruction_cache::InstructionCache;
 use crate::search::resolve_to_root;
-use crate::source_observations::{SourceObservation, SourceObservations, SourceRange};
+use crate::source_observations::{SourceObservations, SourceRange};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, format_size,
     truncate_head,
@@ -278,37 +278,6 @@ impl AgentTool for ReadTool {
             return Err("Operation aborted".into());
         }
 
-        let page = TextPage::from_source(content, &args)?;
-        let observation = self
-            .observations
-            .record(
-                &checkout,
-                &source_path,
-                content.as_bytes(),
-                page.range,
-                page.total_lines,
-            )
-            .await?;
-        Ok(render_text(&args, page, observation, instruction))
-    }
-}
-
-struct TextPage {
-    text: String,
-    range: Option<SourceRange>,
-    total_lines: usize,
-    continuation: Continuation,
-}
-
-enum Continuation {
-    FirstLineTooLarge { line: usize, bytes: usize },
-    Truncated { next_offset: usize, by: TruncatedBy },
-    UserLimit { next_offset: usize },
-    End,
-}
-
-impl TextPage {
-    fn from_source(content: &str, args: &ReadArgs) -> Result<Self, ToolError> {
         // A terminal newline is not an extra source line. Keep one empty line
         // for an empty file, consistent with the offset=1 fallback.
         let all_lines: Vec<&str> = content
@@ -352,107 +321,87 @@ impl TextPage {
             start: start_line_display,
             end: start_line + returned_lines,
         });
-        let continuation = if truncation.first_line_exceeds_limit {
-            Continuation::FirstLineTooLarge {
-                line: start_line_display,
-                bytes: all_lines[start_line].len(),
-            }
-        } else if let Some(by) = truncation.truncated_by {
-            Continuation::Truncated {
-                next_offset: start_line_display + returned_lines,
-                by,
-            }
-        } else if end_line < total_file_lines {
-            Continuation::UserLimit {
-                next_offset: end_line + 1,
-            }
-        } else {
-            Continuation::End
-        };
-        Ok(Self {
-            text: truncation.content,
-            range,
-            total_lines: total_file_lines,
-            continuation,
-        })
-    }
-}
-
-fn render_text(
-    args: &ReadArgs,
-    page: TextPage,
-    observation: SourceObservation,
-    instruction: Option<InstructionRead>,
-) -> AgentToolResult {
-    let TextPage {
-        text,
-        range,
-        total_lines,
-        continuation,
-    } = page;
-    let output = match continuation {
-        Continuation::FirstLineTooLarge { line, bytes } => {
-            let first_line_size = format_size(bytes);
+        let observation = self
+            .observations
+            .record(
+                &checkout,
+                &source_path,
+                content.as_bytes(),
+                range,
+                total_file_lines,
+            )
+            .await?;
+        let output = if truncation.first_line_exceeds_limit {
+            let first_line_size = format_size(all_lines[start_line].len());
             format!(
-                "[Line {line} is {first_line_size}, exceeds {} limit. Use bash: \
-                 sed -n '{line}p' {} | head -c {DEFAULT_MAX_BYTES}]",
+                "[Line {start_line_display} is {first_line_size}, exceeds {} limit. Use bash: \
+                 sed -n '{start_line_display}p' {} | head -c {DEFAULT_MAX_BYTES}]",
                 format_size(DEFAULT_MAX_BYTES),
                 args.path
             )
-        }
-        Continuation::Truncated { next_offset, by } => {
-            let start = args.offset.unwrap_or(1).max(1);
-            let end = next_offset - 1;
-            let reason = if by == TruncatedBy::Lines {
-                format!("Showing lines {start}-{end} of {total_lines}.")
+        } else if truncation.truncated {
+            let end_line_display = start_line_display + truncation.output_lines - 1;
+            let next_offset = end_line_display + 1;
+            let reason = if truncation.truncated_by == Some(TruncatedBy::Lines) {
+                format!(
+                    "Showing lines {start_line_display}-{end_line_display} of {total_file_lines}."
+                )
             } else {
                 format!(
-                    "Showing lines {start}-{end} of {total_lines} ({} limit).",
+                    "Showing lines {start_line_display}-{end_line_display} of \
+                     {total_file_lines} ({} limit).",
                     format_size(DEFAULT_MAX_BYTES)
                 )
             };
-            format!("{text}\n\n[{reason} Use offset={next_offset} to continue.]")
-        }
-        Continuation::UserLimit { next_offset } => {
-            let remaining = total_lines - (next_offset - 1);
             format!(
-                "{text}\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]"
+                "{}\n\n[{reason} Use offset={next_offset} to continue.]",
+                truncation.content
             )
-        }
-        Continuation::End => text,
-    };
+        } else if end_line < total_file_lines {
+            // The user's limit stopped early but the file continues.
+            let remaining = total_file_lines - end_line;
+            let next_offset = end_line + 1;
+            format!(
+                "{}\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]",
+                truncation.content
+            )
+        } else {
+            truncation.content
+        };
 
-    let mut details = json!({
-        "observation": observation.id,
-        "checkout": observation.checkout,
-        "path": observation.path,
-        "revision": observation.revision,
-        "range": range.map(|range| json!({"start": range.start, "end": range.end})),
-        "totalLines": total_lines,
-        "truncated": matches!(continuation, Continuation::FirstLineTooLarge { .. } | Continuation::Truncated { .. }),
-    });
-    let mut content = vec![ToolResultContent::Text(TextContent::plain(format!(
-        "{}\n\n{output}",
-        observation.header()
-    )))];
-    if let Some(instruction) = instruction {
-        if range.is_some()
-            && let Some(name) = instruction.skill_name
-        {
-            details["skill"] = json!(name);
+        let mut details = json!({
+            "observation": observation.id,
+            "checkout": observation.checkout,
+            "path": observation.path,
+            "revision": observation.revision,
+            "range": range.map(|range| json!({"start": range.start, "end": range.end})),
+            "totalLines": total_file_lines,
+            "truncated": truncation.truncated,
+        });
+        let mut content = vec![ToolResultContent::Text(TextContent::plain(format!(
+            "{}\n\n{output}",
+            observation.header()
+        )))];
+        if let Some(instruction) = instruction {
+            if range.is_some()
+                && let Some(name) = instruction.skill_name
+            {
+                details["skill"] = json!(name);
+            }
+            let mut notice =
+                "[Session instruction snapshot. Use /hot-reload to refresh it from disk.]"
+                    .to_string();
+            for warning in instruction.warnings {
+                notice.push('\n');
+                notice.push_str(&warning);
+            }
+            content.push(ToolResultContent::Text(TextContent::plain(notice)));
         }
-        let mut notice =
-            "[Session instruction snapshot. Use /hot-reload to refresh it from disk.]".to_string();
-        for warning in instruction.warnings {
-            notice.push('\n');
-            notice.push_str(&warning);
-        }
-        content.push(ToolResultContent::Text(TextContent::plain(notice)));
-    }
-    AgentToolResult {
-        content,
-        details: Some(details),
-        terminate: false,
+        Ok(AgentToolResult {
+            content,
+            details: Some(details),
+            terminate: false,
+        })
     }
 }
 

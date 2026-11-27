@@ -42,13 +42,6 @@ enum AppError {
 }
 
 fn main() -> std::process::ExitCode {
-    #[cfg(feature = "codemode-preview")]
-    if std::env::args_os().nth(1).as_deref()
-        == Some(std::ffi::OsStr::new(cupel_tui::codemode::WORKER_ARGUMENT))
-    {
-        return cupel_tui::codemode::worker_main();
-    }
-
     // Build the runtime explicitly instead of Tokio's main attribute. It does the same thing,
     // but you can see the moving part.
     let runtime = tokio::runtime::Builder::new_multi_thread()
