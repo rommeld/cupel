@@ -1,9 +1,9 @@
 """Smoke-test an installed cupel-acp with stdlib-only, local fake inference."""
 
+import argparse
 import asyncio
 import json
 import os
-import sys
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -130,13 +130,17 @@ def run(binary, home, project, *, reply=complete, prompt="Release smoke",
 
 
 def main():
-    binary = Path(sys.argv[1]).resolve()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("binary", type=Path)
+    parser.add_argument("--path", default=os.defpath)
+    args = parser.parse_args()
+    binary = args.binary.resolve()
     with tempfile.TemporaryDirectory(prefix="cupel-acp-smoke-") as root:
         root = Path(root).resolve()
         home, project = root / "home", root / "project"
         home.mkdir()
         project.mkdir()
-        requests, _, _ = run(binary, home, project)
+        requests, _, _ = run(binary, home, project, path=args.path)
         assert len(requests) == 1, requests
         print("PASS: packaged cupel-acp initialized, created a session, and completed local inference")
 

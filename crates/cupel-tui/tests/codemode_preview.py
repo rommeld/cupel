@@ -2,6 +2,7 @@ import argparse
 import errno
 import json
 import os
+import platform
 import re
 import signal
 import subprocess
@@ -129,7 +130,7 @@ def worker_pids(parent):
             ("--internal-codemode-worker", "--internal-codemode-file-worker")}
 
 
-def blocked_read(binary, home, project, cancel):
+def blocked_read(binary, home, project, cancel, *flags):
     fifo = project / "waiting.txt"
     fifo.unlink(missing_ok=True)
     os.mkfifo(fifo)
@@ -137,7 +138,7 @@ def blocked_read(binary, home, project, cancel):
     if not cancel:
         calls.append(("codemode", {"code": "emit('recovered')"}))
     with provider(home, scripted(calls)) as requests, tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        with subprocess.Popen([str(binary), "--plain", "--codemode-preview", "--model", "fixture"],
+        with subprocess.Popen([str(binary), "--plain", *flags, "--model", "fixture"],
                               cwd=project, env=environment(home), stdin=subprocess.PIPE,
                               stdout=stdout, stderr=stderr) as process:
             writer = None
@@ -264,9 +265,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="cupel-preview-") as directory:
         root = Path(directory).resolve()
         home, project = fixture(root / "preview")
-        preview(binary, home, project)
-        blocked_read(binary, home, project, cancel=False)
-        blocked_read(binary, home, project, cancel=True)
+        if platform.system() == "Darwin" and platform.machine() == "arm64":
+            preview(binary, home, project)
+            flags = ("--codemode-preview",)
+        else:
+            (home / "settings.json").write_text('{"codemode":{"enabled":true}}', encoding="utf-8")
+            flags = ()
+        blocked_read(binary, home, project, False, *flags)
+        blocked_read(binary, home, project, True, *flags)
         home_opt_in(binary, *fixture(root / "plain-home"))
         if args.acp:
             home_opt_in(args.acp.resolve(), *fixture(root / "acp-home"), acp=True)

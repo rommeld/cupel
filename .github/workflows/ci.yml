@@ -67,3 +67,52 @@ jobs:
           python3 crates/cupel-acp/examples/direct_tool_baseline.py target/debug/cupel-acp
       - name: Packaging regression tests
         run: python3 -m unittest discover -s packaging -p 'test_*.py' -v
+
+  codemode-qualification:
+    name: Codemode release qualification (${{ matrix.artifact }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: cupel-macos-universal
+            targets: aarch64-apple-darwin x86_64-apple-darwin
+          - os: ubuntu-latest
+            artifact: cupel-linux-x86_64
+            targets: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            artifact: cupel-linux-aarch64
+            targets: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: 824a52536ac8a6883394d965ee7180790429e751
+          path: pre-monty
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.13"
+      - name: Install musl toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build and smoke-test locked release archives
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+          TARGETS: ${{ matrix.targets }}
+        run: |
+          set -euo pipefail
+          read -r -a targets <<< "$TARGETS"
+          rustup target add "${targets[@]}"
+          bash packaging/build-release.sh pre-monty "$ARTIFACT" "${targets[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: codemode-${{ matrix.artifact }}
+          path: |
+            qualification/binary-sizes.json
+            qualification/candidate/*.tar.gz
+            qualification/candidate/sha256sums.txt
+          if-no-files-found: error

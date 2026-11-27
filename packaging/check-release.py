@@ -4,6 +4,7 @@ Usage: python3 packaging/check-release.py <platform.tar.gz> <sha256sums.txt>
 Requires Python 3.12+ for safe tar extraction; no Rust or external Python packages.
 """
 
+import argparse
 import hashlib
 import os
 from pathlib import Path
@@ -66,7 +67,12 @@ esac
 
 
 def main():
-    archive, checksums = (Path(arg).resolve() for arg in sys.argv[1:])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("archive", type=Path)
+    parser.add_argument("checksums", type=Path)
+    parser.add_argument("--codemode", action="store_true")
+    args = parser.parse_args()
+    archive, checksums = args.archive.resolve(), args.checksums.resolve()
     with tempfile.TemporaryDirectory(prefix="cupel-release-") as directory:
         root = Path(directory)
         extracted = root / "archive"
@@ -79,20 +85,27 @@ def main():
                 raise RuntimeError(result.stdout)
             assert (install_dir / ".cupel-installer").is_file()
             assert (cupel_home / "prompts").is_dir()
+            empty_path = root / "empty-path"
+            empty_path.mkdir(exist_ok=True)
             for name in ("cupel", "cupel-acp"):
                 binary = install_dir / name
                 assert binary.read_bytes() == (extracted / name).read_bytes(), name
                 help_result = subprocess.run(
                     [str(binary), "--help"], text=True, stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, timeout=15,
-                    env={"PATH": os.defpath, "HOME": str(cupel_home.parent), "CUPEL_HOME": str(cupel_home)},
+                    env={"PATH": str(empty_path), "HOME": str(cupel_home.parent), "CUPEL_HOME": str(cupel_home)},
                 )
                 assert help_result.returncode == 0, help_result.stdout
                 assert f"usage: {name}" in help_result.stdout, help_result.stdout
             subprocess.run(
-                [sys.executable, str(extracted / "examples/stdio_smoke.py"), str(install_dir / "cupel-acp")],
+                [sys.executable, str(extracted / "examples/stdio_smoke.py"), str(install_dir / "cupel-acp"),
+                 "--path", str(empty_path)],
                 check=True, timeout=45,
             )
+            if args.codemode and custom_directory:
+                runner = Path(__file__).resolve().parents[1] / "crates/cupel-tui/tests/codemode_preview.py"
+                subprocess.run([sys.executable, str(runner), str(install_dir / "cupel"),
+                                "--acp", str(install_dir / "cupel-acp")], check=True, timeout=180)
         print(f"PASS: {archive.name}: checksum, both executables, help, default/custom installs, ACP exchange")
 
 
