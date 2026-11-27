@@ -390,7 +390,6 @@ impl Autocomplete {
         let matches: Vec<Candidate> =
             fuzzy_filter(&query, candidates, |candidate| &candidate.value)
                 .into_iter()
-                .take(MAX_VISIBLE)
                 .cloned()
                 .collect();
         // Keep the highlighted row across keystrokes within one session.

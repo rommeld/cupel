@@ -186,7 +186,11 @@ fn render_autocomplete(
         return;
     }
 
-    let height = (rows.len() as u16).min(transcript_area.height);
+    let height = rows.len().min(crate::autocomplete::MAX_VISIBLE) as u16;
+    let height = height.min(transcript_area.height);
+    let start = (selected + 1).saturating_sub(usize::from(height));
+    let rows = &rows[start..start + usize::from(height)];
+    let selected = selected - start;
     // Anchor x to the `@` column when it's on the input's visible first
     // line, degrade gracefully to the input's left edge otherwise.
     let anchor_col = app.autocomplete.token_start().map_or(0, |start| {
@@ -4232,6 +4236,28 @@ pub(crate) mod tests {
         assert_eq!(app.input.text(), "/thinking off ");
         // The settled argument closed the popup, Enter now submits.
         assert!(!app.autocomplete.is_open());
+    }
+
+    #[test]
+    fn model_popup_can_select_openrouter_gemini_beyond_the_first_page() {
+        let mut app = test_app();
+        type_text(&mut app, "/model gemini");
+        let id = "google/gemini-4-carbon";
+        let press = |app: &mut App, key| {
+            app.on_terminal_event(Event::Key(KeyEvent::new(key, KeyModifiers::NONE)));
+        };
+        for _ in 0..app.meta.models.len() {
+            let (rows, selected) = app.autocomplete.visible().expect("Gemini matches");
+            if rows[selected].value == id {
+                break;
+            }
+            press(&mut app, KeyCode::Down);
+        }
+        assert!(draw(&mut app, 100, 24).contains(&format!("{id}  (openrouter)")));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.input.text(), format!("/model {id} "));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.agent.state().model.id, id);
     }
 
     #[test]
