@@ -58,7 +58,7 @@ when cross-reference tooling is unavailable.
 
 Do not use glob imports, except optionally for:
 
-- `use super::*` in inline modules.
+- `use super::*` in test modules.
 - `use enum::*` in enum method bodies or functions primarily handling that enum.
 - `pub use submodule::*` in non-leaf modules.
 - Merging C++ namespaces from different Rust crates into a private module. The resulting
@@ -127,7 +127,10 @@ Prefer `use regex::Regex` followed by `Regex`, not repeated `regex::Regex` paths
 - Macros and generated code where requiring imports is counterproductive.
 - Dependency-heavy code where importing everything creates a large, unhelpful import block.
 
-**Project rule:** Prefer `crate::` over `super::` for paths from the crate root.
+### Reserve `super::` paths for tests
+
+**Project rule:** Outside tests, use `crate::` instead of `super::` for paths to items in
+parent or sibling modules.
 
 ## Formatting
 
@@ -247,12 +250,18 @@ fn open_file(path: &Path) -> Result<File, io::Error> { ... }
 **Project rules:**
 
 - Categorize errors by what callers can do: retry, skip, or fail.
+- Use typed errors with matchable variants when callers need to handle failures differently.
+  Use report-oriented errors when callers only need to diagnose a failure.
 - Add meaningful context at module boundaries rather than blindly forwarding errors.
   Include the operation and relevant identifiers, such as a file path or request ID, so
   production failures can be diagnosed without reproducing them. Do not include secrets.
-  Propagate with `?`; add context with `.context()` or `.with_context()`.
+  Propagate with `?`. When adding context, preserve the original error as a source rather
+  than formatting it into a string. Use `.context()` or `.with_context()` when the error
+  type supports them.
+- Start error `Display` messages in lowercase and omit trailing punctuation. Describe the
+  immediate failure. Let the error chain explain the cause.
 - For recoverable cases, use appropriate combinators such as `.unwrap_or_default()`,
-  `.unwrap_or_else(...)`, or `.ok_or_else(...)`. Reserve `.unwrap()` for tests.
+  `.unwrap_or_else(...)`, or `.ok_or_else(...)`. Reserve `.unwrap()` and `.expect()` for tests.
   Use defaults only when they are valid behavior; do not turn unexpected failures into
   silent success.
 - Validation checks should return `Option<Finding>` rather than a boolean when returning a
@@ -434,9 +443,12 @@ tools; Markdown gives them a standard rich-text structure. Their syntax is check
 their presence in the syntax tree supports tooling and macros.
 
 - Document public APIs; consider the `missing_docs` lint.
-- Include enough examples somewhere in the documentation to demonstrate the crate's
-  functionality; not every function needs its own example.
-- Clearly document invariants of unsafe functions and traits.
+- Use doctests for public API examples that should keep compiling as the API changes.
+  Include enough examples to demonstrate the crate's main uses.
+- Use an `# Errors` section to describe when an API returns errors. Use a `# Panics`
+  section to describe when an API can panic. The no-application-panics rule still applies.
+- Use a `# Safety` section to state the invariants callers of unsafe functions or
+  implementors of unsafe traits must uphold.
 - Use capitalization and punctuation. Explain useful information, not language basics or
   what the code already says.
 - Omit trivial, repetitive documentation rather than repeating an item's name; allowing
@@ -687,6 +699,8 @@ instead of using `str::replace`.
 ## Tests
 
 Use the test framework appropriate to the codebase.
+
+Place focused unit tests in a `#[cfg(test)]` module next to the code they cover.
 
 ### Give test assertions useful context
 

@@ -422,8 +422,17 @@ impl AgentTool for BashTool {
                     )
                     .await?;
                 let snapshot = match outcome {
-                    YieldOutcome::Finished { outcome, output } => {
-                        return finish_output(*output, outcome, args.timeout);
+                    YieldOutcome::Finished {
+                        outcome,
+                        output,
+                        cleanup_error,
+                    } => {
+                        return finish_output(
+                            *output,
+                            outcome,
+                            args.timeout,
+                            cleanup_error.as_deref(),
+                        );
                     }
                     YieldOutcome::Yielded(snapshot) => snapshot,
                 };
@@ -548,7 +557,7 @@ impl AgentTool for BashTool {
         }
 
         let outcome = outcome.ok_or("Shell finished without an outcome")?;
-        finish_output(output, outcome, args.timeout)
+        finish_output(output, outcome, args.timeout, None)
     }
 }
 
@@ -556,6 +565,7 @@ fn finish_output(
     mut output: OutputAccumulator,
     outcome: RunOutcome,
     timeout_seconds: Option<f64>,
+    cleanup_error: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let (content, truncation) = output.snapshot();
     // A path returned to the caller outlives the accumulator. An undisclosed
@@ -614,6 +624,9 @@ fn finish_output(
     };
     if output.incomplete {
         text = append_status(&text, "[Output capture was incomplete]");
+    }
+    if let Some(error) = cleanup_error {
+        text = append_status(&text, &format!("[Job cleanup was incomplete: {error}]"));
     }
     match outcome {
         RunOutcome::Aborted => Err(append_status(&text, "Command aborted").into()),

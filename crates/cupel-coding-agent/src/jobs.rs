@@ -2,6 +2,8 @@
 
 #[cfg(unix)]
 mod child;
+#[cfg(unix)]
+mod process_session;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -10,6 +12,7 @@ use std::time::Duration;
 use serde::Serialize;
 #[cfg(unix)]
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 #[cfg(unix)]
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -33,13 +36,14 @@ pub struct Jobs {
 struct State {
     closed: bool,
     live: Vec<Live>,
-    completed: VecDeque<Completed>,
+    completed: VecDeque<Arc<Completed>>,
 }
 
 struct Live {
     record: Record,
     stop: CancellationToken,
     finished: CancellationToken,
+    completion: watch::Sender<Option<Arc<Completed>>>,
     visibility: Visibility,
 }
 
@@ -49,9 +53,16 @@ enum Visibility {
     Pending {
         completion: oneshot::Sender<Completed>,
         output: PendingOutput,
+        handoff: Handoff,
     },
     #[cfg(unix)]
     Discarded,
+}
+
+#[cfg(unix)]
+enum Handoff {
+    Available(CancellationToken),
+    InlineClaimed,
 }
 
 #[cfg(unix)]
@@ -71,6 +82,7 @@ pub(crate) enum YieldOutcome {
     Finished {
         outcome: RunOutcome,
         output: Box<OutputAccumulator>,
+        cleanup_error: Option<String>,
     },
     Yielded(JobSnapshot),
 }
@@ -93,9 +105,14 @@ impl JobSnapshot {
 
 struct Completed {
     record: Record,
+    termination: Termination,
+    evicted_job_id: Option<String>,
+}
+
+struct Termination {
     phase: Phase,
     exit: Exit,
-    evicted_job_id: Option<String>,
+    cleanup_error: Option<String>,
 }
 
 struct Record {
@@ -160,6 +177,8 @@ pub(crate) struct Summary<'a> {
     truncated: bool,
     capture_incomplete: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    cleanup_error: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     evicted_job_id: Option<&'a str>,
 }
 
@@ -172,6 +191,7 @@ impl Record {
             exit: None,
             truncated: self.capture.truncated,
             capture_incomplete: self.capture.incomplete,
+            cleanup_error: None,
             evicted_job_id: None,
         }
     }
@@ -194,16 +214,34 @@ impl Live {
 impl Completed {
     fn summary(&self) -> Summary<'_> {
         Summary {
-            exit: Some(&self.exit),
+            exit: Some(&self.termination.exit),
+            cleanup_error: self.termination.cleanup_error.as_deref(),
             evicted_job_id: self.evicted_job_id.as_deref(),
-            ..self.record.summary(self.phase)
+            ..self.record.summary(self.termination.phase)
         }
     }
 
+    fn output(&self) -> (serde_json::Value, Option<String>) {
+        (
+            serde_json::json!(self.summary()),
+            Some(self.record.capture.output()),
+        )
+    }
+
+    fn cleanup_result(&self) -> Result<(), String> {
+        if let Some(error) = &self.termination.cleanup_error {
+            return Err(format!(
+                "Job {} cleanup was incomplete: {error}",
+                self.record.id
+            ));
+        }
+        Ok(())
+    }
+
     #[cfg(unix)]
-    fn inline_result(&self, output: &PendingOutput) -> Result<YieldOutcome, String> {
-        let outcome = match self.phase {
-            Phase::Exited => RunOutcome::Exited(self.exit.exit_code),
+    fn inline_result(self, output: &PendingOutput) -> Result<YieldOutcome, String> {
+        let outcome = match self.termination.phase {
+            Phase::Exited => RunOutcome::Exited(self.termination.exit.exit_code),
             Phase::TimedOut => RunOutcome::TimedOut,
             Phase::Stopped | Phase::Stopping => RunOutcome::Aborted,
             Phase::Running | Phase::Failed => RunOutcome::Failed,
@@ -216,7 +254,11 @@ impl Completed {
         if self.record.capture.incomplete {
             output.mark_incomplete();
         }
-        Ok(YieldOutcome::Finished { outcome, output })
+        Ok(YieldOutcome::Finished {
+            outcome,
+            output,
+            cleanup_error: self.termination.cleanup_error,
+        })
     }
 }
 
@@ -309,6 +351,7 @@ impl Jobs {
             Visibility::Pending {
                 completion: sender,
                 output: Arc::clone(&output),
+                handoff: Handoff::Available(CancellationToken::new()),
             },
             cancel,
             || child::ManagedChild::spawn(command),
@@ -319,22 +362,30 @@ impl Jobs {
             .checked_add(yield_after)
             .ok_or("yield_after_ms is too large")?;
 
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => {},
-            result = &mut completion => {
-                return result
-                    .map_err(|error| format!("Command ended without an inline result: {error}"))?
-                    .inline_result(&output);
-            }
-            () = tokio::time::sleep_until(yield_at) => {
-                let mut state = self.state.lock()
-                    .map_err(|error| format!("Job state unavailable: {error}"))?;
-                if !cancel.is_cancelled() {
+        let mut try_handoff = true;
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                result = &mut completion => {
+                    return result
+                        .map_err(|error| format!("Command ended without an inline result: {error}"))?
+                        .inline_result(&output);
+                }
+                () = tokio::time::sleep_until(yield_at), if try_handoff => {
+                    try_handoff = false;
+                    let mut state = self.state.lock()
+                        .map_err(|error| format!("Job state unavailable: {error}"))?;
+                    if cancel.is_cancelled() {
+                        break;
+                    }
                     if state.closed {
                         return Err("This job session has ended".to_string());
                     }
-                    if let Some(job) = state.live.iter_mut().find(|job| job.record.id == started.id) {
+                    if let Some(job) = state.live.iter_mut().find(|job| job.record.id == started.id)
+                        && let Visibility::Pending { handoff: Handoff::Available(published), .. } = &job.visibility
+                    {
+                        published.cancel();
                         job.visibility = Visibility::Published;
                         stop_on_drop.disarm();
                         let snapshot = JobSnapshot::new(job.summary(), &job.record.capture);
@@ -345,11 +396,6 @@ impl Jobs {
                         }
                         return Ok(YieldOutcome::Yielded(snapshot));
                     }
-                    // Completion removes the private job and sends its result under this same lock.
-                    drop(state);
-                    return completion.try_recv()
-                        .map_err(|error| format!("Could not retrieve command result at handoff: {error}"))?
-                        .inline_result(&output);
                 }
             }
         }
@@ -414,9 +460,14 @@ impl Jobs {
         let worker_id = id.clone();
         let done = finished.clone().drop_guard();
         let worker_stop = stop.clone();
-        let pending_output = match &visibility {
-            Visibility::Pending { output, .. } if !interrupted => Some(Arc::clone(output)),
-            _ => None,
+        let caller_cancel = cancel.clone();
+        let (pending_output, handoff) = match &visibility {
+            Visibility::Pending {
+                output,
+                handoff: Handoff::Available(published),
+                ..
+            } if !interrupted => (Some(Arc::clone(output)), Some(published.clone())),
+            _ => (None, None),
         };
         tokio::spawn(async move {
             let _done = done;
@@ -438,15 +489,44 @@ impl Jobs {
                     }
                 }
             };
-            let (phase, exit) = child.run(deadline, &worker_stop, capture).await;
+            let claim_inline = || {
+                if let Ok(mut state) = shared.lock()
+                    && !state.closed
+                    && !worker_stop.is_cancelled()
+                    && let Some(job) = state.live.iter_mut().find(|job| job.record.id == worker_id)
+                    && let Visibility::Pending { handoff, .. } = &mut job.visibility
+                    && matches!(handoff, Handoff::Available(_))
+                {
+                    if caller_cancel.is_cancelled() {
+                        worker_stop.cancel();
+                        return false;
+                    }
+                    *handoff = Handoff::InlineClaimed;
+                    return true;
+                }
+                false
+            };
+            let termination = child
+                .run(
+                    deadline,
+                    &worker_stop,
+                    capture,
+                    handoff.as_ref(),
+                    claim_inline,
+                )
+                .await;
+            if let Some(error) = &termination.cleanup_error {
+                tracing::warn!(job_id = %worker_id, "Managed job cleanup was incomplete: {error}");
+            }
             if let Ok(mut state) = shared.lock() {
-                state.complete(&worker_id, phase, exit);
+                state.complete(&worker_id, termination);
             }
         });
         state.live.push(Live {
             record,
             stop: stop.clone(),
             finished: finished.clone(),
+            completion: watch::Sender::new(None),
             visibility: if interrupted {
                 Visibility::Discarded
             } else {
@@ -472,7 +552,7 @@ impl Jobs {
             .iter()
             .filter(|job| job.is_published())
             .map(Live::summary);
-        let completed = state.completed.iter().map(Completed::summary);
+        let completed = state.completed.iter().map(|job| job.summary());
         let jobs: Vec<_> = live.chain(completed).collect();
         Ok(serde_json::json!({ "jobs": jobs }))
     }
@@ -486,15 +566,7 @@ impl Jobs {
             .state
             .lock()
             .map_err(|error| format!("Job state unavailable: {error}"))?;
-        let (summary, record) = if let Some(job) = state.live_job(id) {
-            (job.summary(), &job.record)
-        } else if let Some(job) = state.completed_job(id) {
-            (job.summary(), &job.record)
-        } else {
-            return Err(unknown_job());
-        };
-        let output = include_output.then(|| record.capture.output());
-        Ok((serde_json::json!(summary), output))
+        state.inspect(id, include_output)
     }
 
     /// Waits for completion or returns the current output snapshot at the deadline.
@@ -504,44 +576,61 @@ impl Jobs {
         duration: Duration,
         cancel: &CancellationToken,
     ) -> Result<(serde_json::Value, Option<String>), String> {
-        let finished = {
+        let mut completion = {
             let state = self
                 .state
                 .lock()
                 .map_err(|error| format!("Job state unavailable: {error}"))?;
-            state.live_job(id).map(|job| job.finished.clone())
-        };
-        if let Some(finished) = finished
-            && !duration.is_zero()
-        {
-            tokio::select! {
-                biased;
-                () = cancel.cancelled() => return Err("Operation aborted".to_string()),
-                () = finished.cancelled() => {},
-                () = tokio::time::sleep(duration) => {},
+            match state.live_job(id) {
+                Some(job) if !duration.is_zero() => job.completion.subscribe(),
+                _ => return state.inspect(id, true),
             }
+        };
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err("Operation aborted".to_string()),
+            _ = completion.changed() => {},
+            () = tokio::time::sleep(duration) => {},
         }
-        self.inspect(id, true)
+        let state = self
+            .state
+            .lock()
+            .map_err(|error| format!("Job state unavailable: {error}"))?;
+        if state.closed {
+            return Err(unknown_job());
+        }
+        if let Some(completed) = completion.borrow().as_ref() {
+            return Ok(completed.output());
+        }
+        state.inspect(id, true)
     }
 
     /// Requests cleanup before awaiting it. Dropping the caller cannot undo the stop.
     pub(crate) async fn stop(&self, id: &str) -> Result<(), String> {
-        let finished = {
+        let mut completion = {
             let state = self
                 .state
                 .lock()
                 .map_err(|error| format!("Job state unavailable: {error}"))?;
             if let Some(job) = state.live_job(id) {
+                let completion = job.completion.subscribe();
                 job.stop.cancel();
-                job.finished.clone()
-            } else if state.completed_job(id).is_some() {
-                return Ok(());
+                completion
+            } else if let Some(job) = state.completed_job(id) {
+                return job.cleanup_result();
             } else {
                 return Err(unknown_job());
             }
         };
-        finished.cancelled().await;
-        Ok(())
+        completion
+            .changed()
+            .await
+            .map_err(|error| format!("Job {id} ended without a cleanup result: {error}"))?;
+        completion
+            .borrow()
+            .as_ref()
+            .ok_or_else(|| format!("Job {id} has no cleanup result"))?
+            .cleanup_result()
     }
 }
 
@@ -559,42 +648,66 @@ impl State {
     }
 
     fn completed_job(&self, id: &str) -> Option<&Completed> {
-        self.completed.iter().find(|job| job.record.id == id)
+        self.completed
+            .iter()
+            .map(Arc::as_ref)
+            .find(|job| job.record.id == id)
+    }
+
+    fn inspect(
+        &self,
+        id: &str,
+        include_output: bool,
+    ) -> Result<(serde_json::Value, Option<String>), String> {
+        let (summary, record) = if let Some(job) = self.live_job(id) {
+            (job.summary(), &job.record)
+        } else if let Some(job) = self.completed_job(id) {
+            (job.summary(), &job.record)
+        } else {
+            return Err(unknown_job());
+        };
+        let output = include_output.then(|| record.capture.output());
+        Ok((serde_json::json!(summary), output))
     }
 
     #[cfg(unix)]
-    fn complete(&mut self, id: &str, phase: Phase, exit: Exit) {
+    fn complete(&mut self, id: &str, termination: Termination) {
         let Some(index) = self.live.iter().position(|job| job.record.id == id) else {
             return;
         };
         let job = self.live.remove(index);
-        if self.closed {
-            return;
-        }
         let completed = Completed {
             record: job.record,
-            phase,
-            exit,
+            termination,
             evicted_job_id: None,
         };
         match job.visibility {
-            Visibility::Published => self.retain(completed),
-            Visibility::Pending { completion, .. } => {
+            Visibility::Published => {
+                let completed = if self.closed {
+                    Arc::new(completed)
+                } else {
+                    self.retain(completed)
+                };
+                let _ = job.completion.send(Some(completed));
+            }
+            Visibility::Pending { completion, .. } if !self.closed => {
                 let _ = completion.send(completed);
             }
-            Visibility::Discarded => {}
+            Visibility::Discarded | Visibility::Pending { .. } => {}
         }
     }
 
     #[cfg(unix)]
-    fn retain(&mut self, mut completed: Completed) {
+    fn retain(&mut self, mut completed: Completed) -> Arc<Completed> {
         let evicted = if self.completed.len() == MAX_COMPLETED {
-            self.completed.pop_front().map(|job| job.record.id)
+            self.completed.pop_front().map(|job| job.record.id.clone())
         } else {
             None
         };
         completed.evicted_job_id = evicted;
-        self.completed.push_back(completed);
+        let completed = Arc::new(completed);
+        self.completed.push_back(Arc::clone(&completed));
+        completed
     }
 }
 
