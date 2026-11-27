@@ -3,7 +3,9 @@
 !/crates/
 !/crates/**
 /crates/cupel-coding-agent/examples/
-/crates/cupel-acp/examples
+/crates/cupel-acp/examples/*
+!/crates/cupel-acp/examples/direct_tool_baseline.py
+!/crates/cupel-acp/examples/direct_tool_baseline.json
 /crates/.DS_Store
 
 !/tools/
