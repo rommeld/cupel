@@ -1,5 +1,3 @@
-//! Internal codemode preview protocol and subprocess coordinator.
-
 mod coordinator;
 mod frame;
 mod worker;
@@ -12,7 +10,6 @@ use thiserror::Error;
 pub use coordinator::Coordinator;
 pub use worker::worker_main;
 
-/// Private subprocess entry point; not a user-facing option.
 pub const WORKER_ARGUMENT: &str = "--internal-codemode-worker";
 
 const SOURCE_BYTES: usize = 16 * 1024;
@@ -26,14 +23,12 @@ const GUEST_TIME: Duration = Duration::from_secs(1);
 const CALL_TIME: Duration = Duration::from_secs(5);
 const CLEANUP_TIME: Duration = Duration::from_secs(1);
 
-/// The complete host callback allowlist.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Callback {
     Read,
     Grep,
 }
 
-/// A bounded diagnostic with no guest strings or intermediate results.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum Failure {
     #[error("codemode source exceeds 16 KiB")]
@@ -70,7 +65,7 @@ pub enum Failure {
     Cleanup,
 }
 
-/// A single validated wire callback. Tool-level validation belongs to the broker.
+/// The broker must validate the selected tool's arguments before dispatch.
 #[derive(Debug)]
 pub struct Request {
     pub callback: Callback,
