@@ -242,17 +242,37 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rendered = app
-        .transcript
-        .to_lines(inner.width, app.selected_cell, theme);
-    if app.last_transcript_inner.width != inner.width
-        || app.text_selection.as_ref().is_some_and(|selection| {
-            !selection.matches(&app.last_transcript_lines, &rendered.lines)
-        })
-    {
+    if app.last_transcript_inner.width != inner.width {
         app.text_selection = None;
     }
-    let total = rendered.lines.len();
+    let mut selection_snapshot: Option<Option<Vec<String>>> = None;
+    let changed = app.transcript.sync_rendered(
+        &mut app.transcript_cache,
+        &mut app.last_transcript_lines,
+        &mut app.last_line_cells,
+        inner.width,
+        app.selected_cell,
+        theme,
+        |earliest_line, existing_lines| {
+            if let Some(selection) = &app.text_selection
+                && earliest_line <= selection.end_row()
+            {
+                selection_snapshot = Some(selection.snapshot_prefix(existing_lines));
+            }
+        },
+    );
+    if changed
+        && let Some(snapshot) = selection_snapshot
+        && let Some(selection) = &app.text_selection
+    {
+        let valid = snapshot
+            .as_deref()
+            .is_some_and(|old| selection.matches_snapshot(old, &app.last_transcript_lines));
+        if !valid {
+            app.text_selection = None;
+        }
+    }
+    let total = app.last_transcript_lines.len();
     let height = inner.height as usize;
 
     // Keep the reader's place, the offset is measured from the bottom, and
@@ -260,15 +280,8 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     // Growing it by exactly the growth pins the visible lines, at 0
     // (follow mode) the view sticks to the tail on purpose.
     if let Some(anchor) = app.transcript_anchor.take()
-        && let Some(first) = rendered
-            .cell_at
-            .iter()
-            .position(|cell| *cell == Some(anchor.cell))
+        && let Some((first, count)) = app.transcript_cache.cell_range(anchor.cell)
     {
-        let count = rendered.cell_at[first..]
-            .iter()
-            .take_while(|cell| **cell == Some(anchor.cell))
-            .count();
         let line = first + anchor.offset.min(count.saturating_sub(1));
         let start = line
             .saturating_sub(anchor.row)
@@ -289,13 +302,14 @@ fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &T
     let start = end.saturating_sub(height);
     app.last_top_line = start;
     app.last_transcript_inner = inner;
-    app.last_line_cells = rendered.cell_at;
 
-    frame.render_widget(Paragraph::new(rendered.lines[start..end].to_vec()), inner);
+    frame.render_widget(
+        Paragraph::new(app.last_transcript_lines[start..end].to_vec()),
+        inner,
+    );
     if let Some(selection) = &app.text_selection {
         selection.highlight(frame.buffer_mut(), inner, start, theme.selected);
     }
-    app.last_transcript_lines = rendered.lines;
 
     // The scrollbar rides the frame's right edge. Rendered only when there is
     // something to scroll a permanently full bar would read as
@@ -854,14 +868,14 @@ pub(crate) mod tests {
     #[test]
     fn the_turn_hierarchy_reaches_the_screen() {
         let mut app = test_app();
-        app.transcript.cells.push(Cell::User {
+        app.transcript.push(Cell::User {
             text: "the task".into(),
         });
-        app.transcript.cells.push(Cell::Thinking {
+        app.transcript.push(Cell::Thinking {
             text: "pondering".into(),
             collapsed: false,
         });
-        app.transcript.cells.push(Cell::Answer {
+        app.transcript.push(Cell::Answer {
             text: "the answer".into(),
         });
 
@@ -879,7 +893,7 @@ pub(crate) mod tests {
     #[test]
     fn user_markdown_has_a_background_without_changing_the_editor_or_source() {
         let mut app = test_app();
-        app.transcript.cells.push(Cell::User {
+        app.transcript.push(Cell::User {
             text:
                 "# User task\nplain **bold** and *italic* with `code`\n```rust\nfn main() {}\n```"
                     .into(),
@@ -929,7 +943,7 @@ pub(crate) mod tests {
         let separator = format!("| {} |", ["-----"; 11].join(" | "));
         let source = format!("{header}\n{separator}\n{header}");
         let mut app = test_app();
-        app.transcript.cells.push(Cell::Answer {
+        app.transcript.push(Cell::Answer {
             text: source.clone(),
         });
         app.selected_cell = Some(0);
@@ -982,7 +996,7 @@ pub(crate) mod tests {
         use crate::sessions::Sessions;
 
         let mut app = test_app();
-        app.transcript.cells.push(Cell::User {
+        app.transcript.push(Cell::User {
             text: "submitted prompt".into(),
         });
         app.input.insert_str("draft input");
@@ -1120,7 +1134,7 @@ pub(crate) mod tests {
     fn only_the_prompt_has_top_and_bottom_borders_without_a_title() {
         let mut app = test_app();
         app.input.insert_str("draft");
-        app.transcript.cells.push(Cell::User {
+        app.transcript.push(Cell::User {
             text: "task".into(),
         });
         let screen = draw(&mut app, 80, 20);
@@ -1154,12 +1168,12 @@ pub(crate) mod tests {
     #[test]
     fn conversation_padding_remains_when_the_transcript_overflows() {
         let mut app = test_app();
-        app.transcript.cells = vec![Cell::Answer {
+        app.transcript = crate::transcript::Transcript::from_cells(vec![Cell::Answer {
             text: (1..=20)
                 .map(|n| format!("line {n}"))
                 .collect::<Vec<_>>()
                 .join("\n"),
-        }];
+        }]);
         let screen = draw(&mut app, 80, 20);
         assert_eq!(app.last_transcript_inner, Rect::new(1, 1, 78, 12));
         assert!(
@@ -1227,7 +1241,7 @@ pub(crate) mod tests {
         // First cell is the warning notice the session is usable, not
         // blocked.
         assert!(matches!(
-            &app.transcript.cells[0],
+            &app.transcript.cells()[0],
             Cell::Notice { text } if text.contains("no credentials found")
         ));
         let screen = draw(&mut app, 100, 20);
@@ -1259,10 +1273,10 @@ pub(crate) mod tests {
             assert!(screen.contains("ignoring settings file"), "{screen}");
             assert!(screen.contains("invalid bash-deny pattern"), "{screen}");
         }
-        assert_eq!(app.transcript.cells.len(), 2);
+        assert_eq!(app.transcript.cells().len(), 2);
         assert!(
             app.transcript
-                .cells
+                .cells()
                 .iter()
                 .all(|cell| matches!(cell, Cell::Notice { .. }))
         );
@@ -1530,7 +1544,7 @@ pub(crate) mod tests {
 
         let notice = app
             .transcript
-            .cells
+            .cells()
             .iter()
             .find_map(|c| match c {
                 Cell::Notice { text } => Some(text.clone()),
@@ -1560,7 +1574,7 @@ pub(crate) mod tests {
             recorder.record(&cupel_agent::AgentMessage::user_text(prompt));
         }
         submit_command(&mut app, "/sessions LOGIN bug");
-        let [Cell::Notice { text }] = app.transcript.cells.as_slice() else {
+        let [Cell::Notice { text }] = app.transcript.cells() else {
             panic!("expected session search results");
         };
         assert!(text.contains("sessions for this project (1)"), "{text}");
@@ -1576,7 +1590,7 @@ pub(crate) mod tests {
             let mut app = test_app();
             submit_command(&mut app, command);
 
-            let [Cell::Notice { text }] = app.transcript.cells.as_slice() else {
+            let [Cell::Notice { text }] = app.transcript.cells() else {
                 panic!("expected only a session-listing notice for {command:?}");
             };
             assert!(text.contains("/hot-reload <prompt search>"), "{text}");
@@ -1655,7 +1669,7 @@ pub(crate) mod tests {
         assert_eq!(target, ReloadTarget::Latest);
         let mut app = app.hot_reload(target).await;
         assert_eq!(app.recorder.session_id(), "cupel-latest");
-        assert!(app.transcript.cells.iter().any(|cell| matches!(
+        assert!(app.transcript.cells().iter().any(|cell| matches!(
             cell,
             Cell::User { text } if text == "latest prompt"
         )));
@@ -1685,7 +1699,7 @@ pub(crate) mod tests {
         run_command(&mut app, "/new");
         assert!(app.pending_reload.is_none());
         assert_eq!(app.recorder.session_id(), "cupel-test");
-        assert!(app.transcript.cells.iter().any(|cell| matches!(
+        assert!(app.transcript.cells().iter().any(|cell| matches!(
             cell,
             Cell::Notice { text } if text.contains("cannot start a new session while the agent is working")
         )));
@@ -1750,22 +1764,22 @@ pub(crate) mod tests {
         app.recorder.record(&old_message);
         let path = app.recorder.transcript().unwrap().to_path_buf();
         let old_contents = std::fs::read(&path).unwrap();
-        app.transcript.cells.push(Cell::User {
+        app.transcript.push(Cell::User {
             text: "remember lilac".into(),
         });
         assert!(draw(&mut app, 80, 24).contains("remember lilac"));
         app.selected_cell = Some(0);
         app.text_selection = Some(TextSelection::new(Point { row: 1, column: 1 }, 1));
-        app.transcript.reasoning_collapsed = true;
+        app.transcript.toggle_all_reasoning();
         app.context_tokens = 90;
         app.totals.input = 100;
 
         run_command(&mut app, "/clear");
 
-        assert!(app.transcript.cells.is_empty());
+        assert!(app.transcript.cells().is_empty());
         assert!(app.selected_cell.is_none() && app.text_selection.is_none());
         assert!(app.last_line_cells.is_empty() && app.last_transcript_lines.is_empty());
-        assert!(app.transcript.reasoning_collapsed);
+        assert!(app.transcript.reasoning_collapsed());
         assert_eq!(app.context_tokens, 90);
         assert_eq!(app.totals.input, 100);
         assert!(app.pending_reload.is_none() && app.pending_prompt.is_none());
@@ -1808,7 +1822,7 @@ pub(crate) mod tests {
             "cannot clear output while the agent is working"
         ));
         assert!(matches!(
-            app.transcript.cells.first(),
+            app.transcript.cells().first(),
             Some(Cell::Assistant { text }) if text == "part of a reply"
         ));
         assert!(app.is_running());
@@ -1870,7 +1884,7 @@ pub(crate) mod tests {
         assert_eq!(app.recorder.session_id(), "cupel-old");
         assert_eq!(app.queued, ["old queued prompt"]);
         assert_eq!(std::fs::read_to_string(&old_path).unwrap(), old_contents);
-        assert!(app.transcript.cells.iter().any(|cell| matches!(cell, Cell::Notice { text } if text.contains("idle work and empty prompt queues"))));
+        assert!(app.transcript.cells().iter().any(|cell| matches!(cell, Cell::Notice { text } if text.contains("idle work and empty prompt queues"))));
         // Explicit cancellation restores the accepted text before a separate idle reset.
         app.abort_run();
         assert_eq!(app.input.text(), "old queued prompt");
@@ -1892,7 +1906,7 @@ pub(crate) mod tests {
         assert_eq!(app.scroll_from_bottom, 0);
         assert!(
             !app.transcript
-                .cells
+                .cells()
                 .iter()
                 .any(|cell| matches!(cell, Cell::User { .. }))
         );
@@ -2134,7 +2148,7 @@ pub(crate) mod tests {
             "far lines must not travel: {delta}"
         );
         assert!(
-            app.transcript.cells.iter().any(|c| matches!(
+            app.transcript.cells().iter().any(|c| matches!(
                 c,
                 Cell::Notice { text } if text.contains("reloaded in place")
             )),
@@ -2144,7 +2158,7 @@ pub(crate) mod tests {
         // Reload again with no further edits, nothing new is appended.
         let app = app.hot_reload(ReloadTarget::Current).await;
         assert_eq!(app.agent.state().messages.len(), 2, "no duplicate delta");
-        assert!(app.transcript.cells.iter().any(|c| matches!(
+        assert!(app.transcript.cells().iter().any(|c| matches!(
             c,
             Cell::Notice { text } if text.contains("no context file changes")
         )));
@@ -2166,7 +2180,7 @@ pub(crate) mod tests {
 
         let app = app.hot_reload(ReloadTarget::New).await;
         assert!(app.agent.state().system_prompt.contains("First skill"));
-        assert!(app.transcript.cells.iter().any(|cell| matches!(
+        assert!(app.transcript.cells().iter().any(|cell| matches!(
             cell,
             Cell::LoadedSkills { text } if text == "Loaded skills\n* first [First skill]"
         )));
@@ -2199,7 +2213,7 @@ pub(crate) mod tests {
         assert!(state.messages.is_empty(), "notices are not model messages");
         let loaded: Vec<_> = app
             .transcript
-            .cells
+            .cells()
             .iter()
             .enumerate()
             .filter_map(|(index, cell)| matches!(cell, Cell::LoadedSkills { .. }).then_some(index))
@@ -2238,7 +2252,7 @@ pub(crate) mod tests {
                 .contains(Modifier::BOLD),
             "the loaded skills heading should be bold"
         );
-        assert!(app.transcript.cells.iter().any(|cell| matches!(
+        assert!(app.transcript.cells().iter().any(|cell| matches!(
             cell,
             Cell::Notice { text } if text.starts_with("It was not possible to load the skill.")
         )));
@@ -2357,7 +2371,7 @@ pub(crate) mod tests {
             .hot_reload(ReloadTarget::Resume("missing prompt".into()))
             .await;
         assert_eq!(app.recorder.session_id(), "cupel-current");
-        assert!(app.transcript.cells.iter().any(|c| matches!(
+        assert!(app.transcript.cells().iter().any(|c| matches!(
             c,
             Cell::Notice { text } if text.contains("no session matches")
         )));
@@ -2368,7 +2382,7 @@ pub(crate) mod tests {
             .await;
         assert_eq!(app.recorder.session_id(), "cupel-old");
         assert_eq!(app.agent.state().messages.len(), 1);
-        assert!(app.transcript.cells.iter().any(|c| matches!(
+        assert!(app.transcript.cells().iter().any(|c| matches!(
             c,
             Cell::User { text } if text == "old prompt"
         )));
@@ -2386,10 +2400,10 @@ pub(crate) mod tests {
     #[test]
     fn renders_transcript_input_and_footer() {
         let mut app = test_app();
-        app.transcript.cells.push(Cell::User {
+        app.transcript.push(Cell::User {
             text: "find the bug".into(),
         });
-        app.transcript.cells.push(Cell::Tool {
+        app.transcript.push(Cell::Tool {
             id: "call_1".into(),
             name: "grep".into(),
             call: "grep /bug/ in src".into(),
@@ -2455,7 +2469,7 @@ pub(crate) mod tests {
     fn scroll_clamps_to_content() {
         let mut app = test_app();
         for i in 0..50 {
-            app.transcript.cells.push(Cell::Assistant {
+            app.transcript.push(Cell::Assistant {
                 text: format!("line {i}"),
             });
         }
@@ -2484,7 +2498,7 @@ pub(crate) mod tests {
     fn scrolled_view_stays_pinned_while_output_grows() {
         let mut app = test_app();
         for i in 0..30 {
-            app.transcript.cells.push(Cell::Assistant {
+            app.transcript.push(Cell::Assistant {
                 text: format!("line {i}"),
             });
         }
@@ -2499,7 +2513,7 @@ pub(crate) mod tests {
 
         // The agent keeps streaming below the window.
         for i in 0..8 {
-            app.transcript.cells.push(Cell::Assistant {
+            app.transcript.push(Cell::Assistant {
                 text: format!("tail {i}"),
             });
         }
@@ -2570,7 +2584,7 @@ pub(crate) mod tests {
         // started, no user cell in the transcript).
         assert_eq!(app.input.text(), "@src/main.rs ");
         assert!(!app.is_running());
-        assert!(app.transcript.cells.is_empty());
+        assert!(app.transcript.cells().is_empty());
         // The completed file token closed the popup (trailing space).
         assert!(!app.autocomplete.is_open());
     }
@@ -2636,13 +2650,13 @@ pub(crate) mod tests {
         )));
         // Handled locally, no run started, a Notice cell lists the commands.
         assert!(!app.is_running());
-        let notice = app.transcript.cells.iter().any(|c| {
+        let notice = app.transcript.cells().iter().any(|c| {
             matches!(c, Cell::Notice { text } if text.contains("/model") && text.contains("/usage") && text.contains("/quit, /exit  - Quit cupel"))
         });
         assert!(notice, "expected /help notice");
         let keys = app
             .transcript
-            .cells
+            .cells()
             .iter()
             .find_map(|cell| match cell {
                 Cell::Notice { text } if text.contains("prompt keys:") => Some(text),
@@ -2721,7 +2735,7 @@ pub(crate) mod tests {
             assert!(app.should_quit, "{command} should quit");
             assert!(!app.is_running());
             assert!(app.pending_prompt.is_none());
-            assert!(app.transcript.cells.is_empty());
+            assert!(app.transcript.cells().is_empty());
         }
     }
 
@@ -3174,7 +3188,7 @@ pub(crate) mod tests {
         assert!(screen.contains("+1 fix();"), "diff replayed:\n{screen}");
         assert!(!screen.contains("Updated the following"), "{screen}");
         assert_eq!(app.tool_display, ToolDisplay::Preview);
-        assert!(app.transcript.cells.iter().all(|cell| !matches!(
+        assert!(app.transcript.cells().iter().all(|cell| !matches!(
             cell,
             Cell::Tool { display, .. } if *display != ToolDisplay::Preview
         )));
@@ -3187,7 +3201,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.transcript.append_thinking("looking");
         for id in ["1", "2"] {
-            app.transcript.cells.push(Cell::Tool {
+            app.transcript.push(Cell::Tool {
                 id: id.into(),
                 name: "read".into(),
                 call: format!("read file{id}.rs"),
@@ -3206,7 +3220,7 @@ pub(crate) mod tests {
                 }),
             });
         }
-        app.transcript.cells.push(Cell::Tool {
+        app.transcript.push(Cell::Tool {
             id: "patch".into(),
             name: "apply_patch".into(),
             call: "apply_patch src/main.rs".into(),
@@ -3246,14 +3260,14 @@ pub(crate) mod tests {
             modifiers: KeyModifiers::NONE,
         }));
         assert!(matches!(
-            app.transcript.cells[1],
+            app.transcript.cells()[1],
             Cell::Tool {
                 display: ToolDisplay::Full,
                 ..
             }
         ));
         assert!(matches!(
-            app.transcript.cells[2],
+            app.transcript.cells()[2],
             Cell::Tool {
                 display: ToolDisplay::Preview,
                 ..
@@ -3336,7 +3350,7 @@ pub(crate) mod tests {
                 },
             }))
             .await;
-            assert!(app.transcript.cells.iter().all(|cell| matches!(
+            assert!(app.transcript.cells().iter().all(|cell| matches!(
                 cell,
                 Cell::Tool { display, .. } if *display == expected
             )));
@@ -3387,7 +3401,7 @@ pub(crate) mod tests {
         app.on_agent_event(Some(AgentEvent::MessageEnd { message }))
             .await;
         assert!(matches!(
-            app.transcript.cells.last(),
+            app.transcript.cells().last(),
             Some(Cell::Usage { text }) if text == "[0 in / 400 out (312 reasoning) / 0 cached, $0.0000]"
         ));
     }
@@ -3429,7 +3443,7 @@ pub(crate) mod tests {
         // How many times the clamp was announced so far.
         fn clamp_notices(app: &App) -> usize {
             app.transcript
-                .cells
+                .cells()
                 .iter()
                 .filter(|cell| {
                     matches!(cell, Cell::Notice { text } if text.contains("cannot turn thinking off"))
@@ -3616,7 +3630,7 @@ pub(crate) mod tests {
         let screen = draw(&mut app, 100, 20);
         assert!(screen.contains("error: response was truncated"), "{screen}");
         assert!(
-            matches!(&app.transcript.cells[0], Cell::Assistant { .. }),
+            matches!(&app.transcript.cells()[0], Cell::Assistant { .. }),
             "a fragment is not an answer"
         );
     }
@@ -3634,7 +3648,7 @@ pub(crate) mod tests {
         }))
         .await;
         assert!(matches!(
-            app.transcript.cells.last(),
+            app.transcript.cells().last(),
             Some(Cell::Summary { .. })
         ));
         let screen = draw(&mut app, 100, 20);
@@ -3680,7 +3694,7 @@ pub(crate) mod tests {
             recorder,
         );
         assert!(
-            matches!(&app.transcript.cells[1], Cell::Summary { text } if text.starts_with("## Goal"))
+            matches!(&app.transcript.cells()[1], Cell::Summary { text } if text.starts_with("## Goal"))
         );
         let screen = draw(&mut app, 100, 20);
         assert!(screen.contains("[context summary]"), "{screen}");
@@ -3690,7 +3704,7 @@ pub(crate) mod tests {
     /// The User cells in transcript order, which prompts reached a run.
     fn user_prompts(app: &App) -> Vec<&str> {
         app.transcript
-            .cells
+            .cells()
             .iter()
             .filter_map(|cell| match cell {
                 Cell::User { text } => Some(text.as_str()),
@@ -3771,7 +3785,7 @@ pub(crate) mod tests {
         .await;
         assert!(app.queued.is_empty(), "delivered, so no longer waiting");
         assert!(matches!(
-            app.transcript.cells.as_slice(),
+            app.transcript.cells(),
             [Cell::Answer { text: answer }, Cell::User { text: prompt }]
                 if answer == "first answer" && prompt == "next"
         ));
@@ -3912,7 +3926,7 @@ pub(crate) mod tests {
         assert!(app.steering.is_empty(), "delivered, so no longer waiting");
         // The partial prose stays plain prose, it is no final answer.
         assert!(matches!(
-            app.transcript.cells.as_slice(),
+            app.transcript.cells(),
             [
                 Cell::Assistant { text: partial },
                 Cell::Notice { text: notice },
@@ -4019,7 +4033,7 @@ pub(crate) mod tests {
             app.on_event(event).await;
         }
         assert!(matches!(
-            app.transcript.cells.last(),
+            app.transcript.cells().last(),
             Some(Cell::Usage { text }) if text == "worked for 0s"
         ));
         assert!(app.run_started.is_none(), "the clock stops with the run");
@@ -4097,7 +4111,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_patch_result_renders_as_a_colored_diff() {
         let mut app = test_app();
-        app.transcript.cells.push(Cell::Tool {
+        app.transcript.push(Cell::Tool {
             id: "call_1".into(),
             name: "apply_patch".into(),
             call: "apply_patch M a.rs".into(),
@@ -4169,7 +4183,7 @@ pub(crate) mod tests {
         app.on_terminal_event(Event::Paste("line one\nline two".to_string()));
         assert_eq!(app.input.text(), "line one\nline two");
         assert!(app.pending_prompt.is_none(), "paste must not submit");
-        assert!(app.transcript.cells.is_empty());
+        assert!(app.transcript.cells().is_empty());
     }
 
     #[test]
@@ -4178,7 +4192,7 @@ pub(crate) mod tests {
 
         let mut app = test_app();
         for i in 0..50 {
-            app.transcript.cells.push(Cell::Assistant {
+            app.transcript.push(Cell::Assistant {
                 text: format!("line {i}"),
             });
         }
@@ -4279,7 +4293,7 @@ pub(crate) mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        let listing = app.transcript.cells.iter().any(|c| {
+        let listing = app.transcript.cells().iter().any(|c| {
             matches!(c, Cell::Notice { text }
                 if text.contains("anthropic") && text.contains("amazon-bedrock"))
         });
@@ -4295,7 +4309,7 @@ pub(crate) mod tests {
             KeyModifiers::NONE,
         )));
         assert_eq!(app.meta.provider, "fireworks");
-        let switched = app.transcript.cells.iter().any(|c| {
+        let switched = app.transcript.cells().iter().any(|c| {
             matches!(c, Cell::Notice { text }
                 if text.contains("provider switched to fireworks")
                     && text.contains("key entered this session")
@@ -4311,7 +4325,7 @@ pub(crate) mod tests {
         )));
         assert_eq!(app.meta.provider, "fireworks", "unchanged");
         let unknown =
-            app.transcript.cells.iter().any(
+            app.transcript.cells().iter().any(
                 |c| matches!(c, Cell::Notice { text } if text.contains("unknown provider: nope")),
             );
         assert!(unknown);
@@ -4329,7 +4343,7 @@ pub(crate) mod tests {
 
     pub(crate) fn has_notice(app: &App, needle: &str) -> bool {
         app.transcript
-            .cells
+            .cells()
             .iter()
             .any(|c| matches!(c, Cell::Notice { text } if text.contains(needle)))
     }
@@ -4469,7 +4483,7 @@ pub(crate) mod tests {
             Some("fw-secret-123")
         );
         // The notice names the file but never the secret.
-        let noticed = app.transcript.cells.iter().any(|c| {
+        let noticed = app.transcript.cells().iter().any(|c| {
             matches!(c, Cell::Notice { text }
                 if text.contains("key saved to") && !text.contains("fw-secret-123"))
         });
@@ -4505,7 +4519,7 @@ pub(crate) mod tests {
             Some("fw-secret-123")
         );
         assert_eq!(app.meta.provider, "fireworks");
-        let warned = app.transcript.cells.iter().any(|c| {
+        let warned = app.transcript.cells().iter().any(|c| {
             matches!(c, Cell::Notice { text }
                 if text.contains("key not saved") && !text.contains("fw-secret-123"))
         });
@@ -4537,7 +4551,7 @@ pub(crate) mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        let listed = app.transcript.cells.iter().any(|c| {
+        let listed = app.transcript.cells().iter().any(|c| {
             matches!(c, Cell::Notice { text }
                 if text.contains("acme") && text.contains("key in settings.json"))
         });
@@ -4562,7 +4576,7 @@ pub(crate) mod tests {
             app.session_keys.get("acme").map(String::as_str),
             Some("secret-1")
         );
-        let rejected = app.transcript.cells.iter().any(
+        let rejected = app.transcript.cells().iter().any(
             |c| matches!(c, Cell::Notice { text } if text.contains("does not take an API key")),
         );
         assert!(!rejected, "custom providers must accept keys now");
@@ -4574,7 +4588,7 @@ pub(crate) mod tests {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        let rejected = app.transcript.cells.iter().any(
+        let rejected = app.transcript.cells().iter().any(
             |c| matches!(c, Cell::Notice { text } if text.contains("does not take an API key")),
         );
         assert!(rejected, "bedrock has no key slot");
@@ -4673,7 +4687,7 @@ pub(crate) mod tests {
             ] {
                 assert_eq!(
                     app.transcript
-                        .cells
+                        .cells()
                         .iter()
                         .filter(|cell| matches!(
                             cell, Cell::Notice { text } if text.contains(needle)
@@ -4762,7 +4776,7 @@ pub(crate) mod tests {
 
         app.start_run("find the bug");
         assert!(
-            matches!(app.transcript.cells.first(), Some(Cell::User { text }) if text == "find the bug"),
+            matches!(app.transcript.cells().first(), Some(Cell::User { text }) if text == "find the bug"),
             "the task must lead the turn"
         );
         let screen = draw(&mut app, 80, 20);
@@ -4807,7 +4821,7 @@ pub(crate) mod tests {
         }))
         .await;
         assert!(
-            matches!(app.transcript.cells.last(), Some(Cell::Answer { text }) if text == "final words")
+            matches!(app.transcript.cells().last(), Some(Cell::Answer { text }) if text == "final words")
         );
     }
 
@@ -4873,11 +4887,11 @@ pub(crate) mod tests {
     #[test]
     fn the_transcript_is_one_borderless_column() {
         let mut app = test_app();
-        app.transcript.cells.push(Cell::User {
+        app.transcript.push(Cell::User {
             text: "task".into(),
         });
         app.transcript.append_thinking("let me look");
-        app.transcript.cells.push(Cell::Tool {
+        app.transcript.push(Cell::Tool {
             id: "1".into(),
             name: "read".into(),
             call: "read src/main.rs".into(),
@@ -4916,7 +4930,7 @@ pub(crate) mod tests {
             "an empty transcript needs no scrollbar:\n{screen}"
         );
         for i in 0..40 {
-            app.transcript.cells.push(Cell::Assistant {
+            app.transcript.push(Cell::Assistant {
                 text: format!("line {i}"),
             });
         }
@@ -4931,7 +4945,7 @@ pub(crate) mod tests {
     fn scrollbar_reaches_both_ends_after_scrolling_and_resizing() {
         let mut app = test_app();
         for i in 0..20 {
-            app.transcript.cells.push(Cell::Assistant {
+            app.transcript.push(Cell::Assistant {
                 text: format!("line {i}"),
             });
         }
@@ -4975,7 +4989,7 @@ pub(crate) mod tests {
     fn scrollbar_test_app() -> App {
         let mut app = test_app();
         for i in 0..30 {
-            app.transcript.cells.push(Cell::Assistant {
+            app.transcript.push(Cell::Assistant {
                 text: format!("line {i}"),
             });
         }
@@ -5160,7 +5174,7 @@ pub(crate) mod tests {
             59,
             0,
         ));
-        app.transcript.cells.clear();
+        app.transcript.clear();
         let _ = draw(&mut app, 60, 20);
         assert!(
             app.last_scrollbar_area.is_empty(),
@@ -5220,7 +5234,7 @@ pub(crate) mod tests {
         use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
         let mut app = test_app();
-        app.transcript.cells.push(Cell::User {
+        app.transcript.push(Cell::User {
             text: "the task".into(),
         });
         app.transcript.append_thinking("private reasoning");
@@ -5258,7 +5272,7 @@ pub(crate) mod tests {
         assert_eq!(app.pending_copy.as_deref(), Some("private reasoning"));
         assert!(
             app.transcript
-                .cells
+                .cells()
                 .iter()
                 .any(|c| matches!(c, Cell::Notice { text } if text.contains("clipboard")))
         );
@@ -5271,10 +5285,10 @@ pub(crate) mod tests {
     #[test]
     fn ctrl_o_with_nothing_selected_copies_the_latest_answer() {
         let mut app = test_app();
-        app.transcript.cells.push(Cell::Answer {
+        app.transcript.push(Cell::Answer {
             text: "first".into(),
         });
-        app.transcript.cells.push(Cell::Answer {
+        app.transcript.push(Cell::Answer {
             text: "final answer".into(),
         });
         app.on_terminal_event(Event::Key(KeyEvent::new(
@@ -5292,7 +5306,7 @@ pub(crate) mod tests {
         assert!(app.pending_copy.is_none());
         assert!(
             app.transcript
-                .cells
+                .cells()
                 .iter()
                 .any(|c| matches!(c, Cell::Notice { text } if text.contains("nothing to copy")))
         );
@@ -5301,7 +5315,7 @@ pub(crate) mod tests {
     #[test]
     fn markdown_reaches_the_screen_and_answer_prose_matches_the_label() {
         let mut app = test_app();
-        app.transcript.cells.push(Cell::Answer {
+        app.transcript.push(Cell::Answer {
             text: "# Fazit\nplain text with **weight**".into(),
         });
         let screen = draw(&mut app, 80, 24);
@@ -5332,7 +5346,7 @@ pub(crate) mod tests {
 
     fn last_notice(app: &App) -> String {
         app.transcript
-            .cells
+            .cells()
             .iter()
             .rev()
             .find_map(|cell| match cell {
@@ -5492,7 +5506,7 @@ pub(crate) mod tests {
         submit_command(&mut app, "/provider openai-codex sk-pasted");
         let notice = app
             .transcript
-            .cells
+            .cells()
             .iter()
             .rev()
             .filter_map(|cell| match cell {
@@ -5794,7 +5808,7 @@ pub(crate) mod tests {
         assert_eq!(sessions.active, 0, "draining never switches sessions");
         for (session, text) in sessions.list.iter().zip(&expected) {
             assert!(matches!(
-                session.app.transcript.cells.as_slice(),
+                session.app.transcript.cells(),
                 [Cell::Thinking { text: thinking, collapsed: false }, Cell::Answer { text: answer }]
                     if thinking == "planning" && answer == text
             ));
@@ -5835,7 +5849,7 @@ pub(crate) mod tests {
             .expect("draining must not wait for an open, empty stream");
             assert!(sessions.any_running());
         }
-        assert!(sessions.list[0].app.transcript.cells.is_empty());
+        assert!(sessions.list[0].app.transcript.cells().is_empty());
         assert_eq!(
             sessions.list[1].app.transcript.copy_text(0),
             Some("first second third")
@@ -5922,10 +5936,10 @@ pub(crate) mod tests {
                 app: test_app(),
             });
             let app = sessions.active_mut();
-            app.transcript.cells.push(Cell::User {
+            app.transcript.push(Cell::User {
                 text: "the task".into(),
             });
-            app.transcript.cells.push(Cell::Answer {
+            app.transcript.push(Cell::Answer {
                 text: "```rust\nfn main() {}\n```".into(),
             });
             // Exercise Clear in the command popup as well as the sidebar.
@@ -5980,7 +5994,7 @@ pub(crate) mod tests {
             assert!(!app.is_running());
             assert!(
                 !app.transcript
-                    .cells
+                    .cells()
                     .iter()
                     .any(|cell| matches!(cell, Cell::User { .. }))
             );
@@ -6047,10 +6061,10 @@ pub(crate) mod tests {
 
         for theme in crate::theme::example_themes() {
             let mut app = test_app();
-            app.transcript.cells.push(Cell::Assistant {
+            app.transcript.push(Cell::Assistant {
                 text: "intermediate prose".into(),
             });
-            app.transcript.cells.push(Cell::Answer {
+            app.transcript.push(Cell::Answer {
                 text: "# Heading\nplain prose with **bold** and *italic* and `code` and [link](https://example.com)\n```\ncode panel\n```".into(),
             });
             let mut sessions = Sessions::new(app);
@@ -6097,10 +6111,10 @@ pub(crate) mod tests {
         let app = test_app_with_example_themes();
         let nightfox = crate::theme::find(&app.themes, "nightfox").unwrap();
         let mut sessions = Sessions::new(app);
-        sessions.active_mut().transcript.cells.push(Cell::User {
+        sessions.active_mut().transcript.push(Cell::User {
             text: "the task".into(),
         });
-        sessions.active_mut().transcript.cells.push(Cell::Answer {
+        sessions.active_mut().transcript.push(Cell::Answer {
             text: "the answer with `code`\n```\ncode panel\n```".into(),
         });
         assert_eq!(
@@ -6588,9 +6602,9 @@ pub(crate) mod tests {
         assert_eq!(sessions.conflict_count(1), 1);
 
         // The same result again, no new notice.
-        let cells = sessions.list[0].app.transcript.cells.len();
+        let cells = sessions.list[0].app.transcript.cells().len();
         sessions.check_conflicts().await;
-        assert_eq!(sessions.list[0].app.transcript.cells.len(), cells);
+        assert_eq!(sessions.list[0].app.transcript.cells().len(), cells);
 
         // The spinoff takes its change back, the conflict is gone.
         std::fs::write(worktree.join("a.txt"), TEN_LINES).unwrap();
@@ -6800,7 +6814,7 @@ pub(crate) mod tests {
         let notice = sessions
             .active()
             .transcript
-            .cells
+            .cells()
             .iter()
             .find_map(|cell| match cell {
                 Cell::Notice { text } if text.contains("is dropped") => Some(text.clone()),
@@ -6931,7 +6945,7 @@ pub(crate) mod tests {
         let refusals = inside
             .active()
             .transcript
-            .cells
+            .cells()
             .iter()
             .filter(|cell| matches!(cell, Cell::Notice { text } if text.contains(refusal)))
             .count();
@@ -7011,7 +7025,7 @@ pub(crate) mod tests {
             let mut sessions = Sessions::new(test_app_in(dir.to_str().unwrap()));
             sessions.restore().await;
             assert_eq!(sessions.list.len(), 1);
-            assert!(sessions.active().transcript.cells.is_empty(), "no notice");
+            assert!(sessions.active().transcript.cells().is_empty(), "no notice");
         }
 
         // Inside a spinoff's worktree, a notice says why there is only one session.
@@ -7497,5 +7511,61 @@ pub(crate) mod tests {
             let app = app.hot_reload(target).await;
             assert!(app.questions.is_some(), "{name}");
         }
+    }
+
+    #[test]
+    fn long_session_scrolling_and_typing_reuse_the_cached_transcript_lines() {
+        let mut app = test_app();
+        for turn in 0..120 {
+            app.transcript.push(Cell::User {
+                text: format!("Question {turn} about `module_{turn}`"),
+            });
+            app.transcript.push(Cell::Thinking {
+                text: format!("**Turn {turn}**\nChecking **bold** details and `code`."),
+                collapsed: false,
+            });
+            app.transcript.push(Cell::Answer {
+                text: format!(
+                    "Answer {turn}\n\n```rust\nfn turn_{turn}() -> usize {{ {turn} }}\n```"
+                ),
+            });
+        }
+
+        let _ = draw(&mut app, 100, 28);
+        let cached_ptr = app.last_transcript_lines.as_ptr();
+        let cached_len = app.last_transcript_lines.len();
+        assert!(cached_len > 500);
+
+        for _ in 0..10 {
+            app.on_terminal_event(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 10,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            }));
+            let _ = draw(&mut app, 100, 28);
+            assert_eq!(
+                app.last_transcript_lines.as_ptr(),
+                cached_ptr,
+                "scrolling must reuse the cached transcript buffer without rebuilding"
+            );
+        }
+        assert_eq!(app.scroll_from_bottom, 30);
+
+        for ch in "follow up prompt".chars() {
+            app.on_terminal_event(Event::Key(KeyEvent::new(
+                KeyCode::Char(ch),
+                KeyModifiers::NONE,
+            )));
+            let screen = draw(&mut app, 100, 28);
+            assert_eq!(
+                app.last_transcript_lines.as_ptr(),
+                cached_ptr,
+                "typing must reuse the cached transcript buffer without rebuilding"
+            );
+            assert!(screen.contains(&ch.to_string()));
+        }
+        assert_eq!(app.input.text(), "follow up prompt");
+        assert_eq!(app.last_transcript_lines.len(), cached_len);
     }
 }

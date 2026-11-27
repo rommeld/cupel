@@ -74,7 +74,7 @@ async fn reasoning_end_replaces_partial_text_without_changing_visibility() {
     let full = format!("{heading}\n\nCheck formatting and preserve the reasoning details.");
     for collapsed in [false, true] {
         let mut app = test_app();
-        let index = app.transcript.cells.len();
+        let index = app.transcript.cells().len();
         message_update(
             &mut app,
             AssistantMessageEvent::ThinkingStart { content_index: 0 },
@@ -100,9 +100,9 @@ async fn reasoning_end_replaces_partial_text_without_changing_visibility() {
         )
         .await;
         assert_eq!(app.transcript.copy_text(index), Some(full.as_str()));
-        assert_eq!(app.transcript.cells.len(), index + 1);
+        assert_eq!(app.transcript.cells().len(), index + 1);
         assert!(
-            matches!(&app.transcript.cells[index], Cell::Thinking { collapsed: actual, .. } if *actual == collapsed)
+            matches!(&app.transcript.cells()[index], Cell::Thinking { collapsed: actual, .. } if *actual == collapsed)
         );
         let screen = draw(&mut app, 120, 25);
         assert_eq!(
@@ -116,7 +116,7 @@ async fn reasoning_end_replaces_partial_text_without_changing_visibility() {
 #[tokio::test]
 async fn reasoning_end_without_deltas_keeps_the_started_blocks_position() {
     let mut app = test_app();
-    let index = app.transcript.cells.len();
+    let index = app.transcript.cells().len();
     for event in [
         AssistantMessageEvent::ThinkingStart { content_index: 0 },
         AssistantMessageEvent::TextDelta {
@@ -131,18 +131,18 @@ async fn reasoning_end_without_deltas_keeps_the_started_blocks_position() {
         message_update(&mut app, event).await;
     }
     assert!(
-        matches!(&app.transcript.cells[index], Cell::Thinking { text, .. } if text == "reasoning supplied only at completion")
+        matches!(&app.transcript.cells()[index], Cell::Thinking { text, .. } if text == "reasoning supplied only at completion")
     );
     assert!(
-        matches!(&app.transcript.cells[index + 1], Cell::Assistant { text } if text == "visible commentary")
+        matches!(&app.transcript.cells()[index + 1], Cell::Assistant { text } if text == "visible commentary")
     );
-    assert_eq!(app.transcript.cells.len(), index + 2);
+    assert_eq!(app.transcript.cells().len(), index + 2);
 }
 
 #[tokio::test]
 async fn reasoning_ends_update_their_own_interleaved_content_blocks() {
     let mut app = test_app();
-    let index = app.transcript.cells.len();
+    let index = app.transcript.cells().len();
     for event in [
         AssistantMessageEvent::ThinkingStart { content_index: 0 },
         AssistantMessageEvent::ThinkingDelta {
@@ -175,13 +175,13 @@ async fn reasoning_ends_update_their_own_interleaved_content_blocks() {
         Some("visible commentary")
     );
     assert_eq!(app.transcript.copy_text(index + 2), Some("second complete"));
-    assert_eq!(app.transcript.cells.len(), index + 3);
+    assert_eq!(app.transcript.cells().len(), index + 3);
 }
 
 #[tokio::test]
 async fn reasoning_content_indices_are_scoped_to_each_turn() {
     let mut app = test_app();
-    let index = app.transcript.cells.len();
+    let index = app.transcript.cells().len();
     for text in ["first turn", "second turn"] {
         app.on_agent_event(Some(AgentEvent::TurnStart)).await;
         message_update(
@@ -208,7 +208,7 @@ async fn reasoning_content_indices_are_scoped_to_each_turn() {
     }
     assert_eq!(app.transcript.copy_text(index), Some("first turn"));
     assert_eq!(app.transcript.copy_text(index + 1), Some("second turn"));
-    assert_eq!(app.transcript.cells.len(), index + 2);
+    assert_eq!(app.transcript.cells().len(), index + 2);
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn reasoning_uses_only_a_complete_leading_provider_heading() {
 fn reasoning_is_readable_and_wraps_within_the_column_in_every_theme() {
     let mut transcript = Transcript::default();
     transcript.append_thinking("**Reading 日本語 and a very long heading that must not wrap onto a second disclosure row**\n\nPlain body with **bold** and *italic*.\n\n日本語の長い文章を折り返して表示します。\n\n```rust\nlet value = 42;\n```");
-    transcript.cells.push(Cell::Answer {
+    transcript.push(Cell::Answer {
         text: "Plain answer".into(),
     });
     for theme in theme::example_themes() {
@@ -356,7 +356,7 @@ fn reasoning_is_readable_and_wraps_within_the_column_in_every_theme() {
 async fn ctrl_r_toggles_all_reasoning_without_touching_tools_or_commentary() {
     let mut app = test_app();
     app.transcript.append_thinking("first thought");
-    app.transcript.cells.push(Cell::Tool {
+    app.transcript.push(Cell::Tool {
         id: "tool".into(),
         name: "bash".into(),
         call: "$ true".into(),
@@ -396,7 +396,7 @@ async fn ctrl_r_toggles_all_reasoning_without_touching_tools_or_commentary() {
     let expanded = draw(&mut app, 140, 30);
     assert!(expanded.contains("new thought continues"));
     assert!(matches!(
-        &app.transcript.cells[1],
+        &app.transcript.cells()[1],
         Cell::Tool {
             display: ToolDisplay::Preview,
             ..
@@ -407,13 +407,13 @@ async fn ctrl_r_toggles_all_reasoning_without_touching_tools_or_commentary() {
         KeyModifiers::CONTROL,
     )));
     assert!(matches!(
-        &app.transcript.cells[1],
+        &app.transcript.cells()[1],
         Cell::Tool {
             display: ToolDisplay::Collapsed,
             ..
         }
     ));
-    assert!(app.transcript.cells.iter().all(|cell| !matches!(
+    assert!(app.transcript.cells().iter().all(|cell| !matches!(
         cell,
         Cell::Thinking {
             collapsed: true,
@@ -452,7 +452,7 @@ fn disclosure_keeps_a_scrolled_reader_on_the_same_content() {
     app.transcript
         .append_thinking(&"old reasoning\n".repeat(25));
     for index in 0..25 {
-        app.transcript.cells.push(Cell::Assistant {
+        app.transcript.push(Cell::Assistant {
             text: format!("history {index}"),
         });
     }
@@ -478,7 +478,7 @@ fn a_clicked_header_stays_in_place_when_the_body_changes_height() {
     let mut app = test_app();
     app.transcript.append_thinking(&"body\n".repeat(15));
     for index in 0..25 {
-        app.transcript.cells.push(Cell::Assistant {
+        app.transcript.push(Cell::Assistant {
             text: format!("tail {index}"),
         });
     }

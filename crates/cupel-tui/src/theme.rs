@@ -31,7 +31,7 @@ use ratatui::style::{Color, Modifier, Style};
 /// Every style the TUI paints, with, one field per role. A field names what the style
 /// is for (`answer`), not how it looks (`magenta`), so each theme can pick its own
 /// look for the same role.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     pub id: Cow<'static, str>,
     pub name: Cow<'static, str>,
