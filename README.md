@@ -80,7 +80,15 @@ effects from shell commands. Undo refuses to overwrite newer file changes.
 On Unix, the agent can ask Cupel to return a job ID when it starts a Bash command or if the command
 runs past a time limit set for the wait. The agent uses the `jobs` tool to check output, wait for the
 result, or stop the job. Canceling a wait leaves the command running. Cupel stops managed jobs when
-the session reloads or ends.
+the session reloads or ends. If Bash finishes before returning a job ID, normal shell exit does not
+stop its descendants.
+
+Job cleanup is best effort. On macOS and Linux, Cupel also looks for descendants in other process
+groups within the job's Unix session. This requires `/bin/ps`, plus process file descriptors on
+Linux or Apple's private process identity API on macOS. If Cupel cannot complete cleanup, `jobs stop`
+reports an error and the retained job result includes `cleanupError`. On other Unix platforms,
+cleanup only targets the original process group. Processes that create a new Unix session are
+outside job cleanup.
 
 ### Configuration and sessions
 

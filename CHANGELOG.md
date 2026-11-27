@@ -4,8 +4,16 @@ Notable user-facing changes by release.
 
 ## [Unreleased]
 
-- Cupel no longer checks the `disable` field in `SKILL.md`. Move the file out of the skill directories to hide it. A project skill still overrides a home skill with the same name.
 - Model presets still select the provider, model, and thinking level. Cupel ignores legacy preset `prompt` fields and removes them the next time it saves home settings. Put instructions that apply across presets in `AGENTS.md` or `CLAUDE.md`.
+
+## [v0.53.0] - 2026-11-26
+
+- Model presets still select the provider, model, and thinking level. Cupel keeps legacy preset `prompt` text in settings but no longer sends it to the model. Put instructions that apply across presets in `AGENTS.md` or `CLAUDE.md`.
+- Cupel no longer checks the `disable` field in `SKILL.md`. Move the file out of the skill directories to hide it. A project skill still overrides a home skill with the same name.
+- On Linux and macOS, Cupel tries to stop managed Bash descendants in other process groups within the same Unix session. `jobs stop` reports incomplete cleanup, and the retained result includes `cleanupError`.
+- Bash commands that finish before returning a job ID keep normal foreground behavior. A pending `jobs wait` receives the final result even if Cupel has already evicted it from job history.
+- The built-in catalog adds Inkling 2 Small on Fireworks, adds Solar Mini 4.5 and LingSante 3.1 Air VL, and drops routes without serving endpoints.
+- Pull request checks report Rust comments at the correct line and warn on new `allow(warnings)` and `allow(clippy::all)` attributes. These warnings do not block merges.
 
 ## [v0.52.0] - 2026-11-23
 
