@@ -107,7 +107,7 @@ pub const CUPEL: Theme = Theme {
     task: Style::new().fg(Color::White).bg(Color::Indexed(235)),
     question: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     assistant: Style::new(),
-    answer: Style::new().fg(Color::Magenta),
+    answer: Style::new(),
     answer_label: Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     // Give neon text a dark surface even on light terminal backgrounds.
     reasoning_header: Style::new()
@@ -215,7 +215,7 @@ impl Theme {
             task: Style::new().fg(fg).bg(surface),
             question: Style::new().fg(yellow).add_modifier(Modifier::BOLD),
             assistant: Style::new().fg(fg),
-            answer: Style::new().fg(magenta),
+            answer: Style::new().fg(fg),
             answer_label: Style::new().fg(magenta).add_modifier(Modifier::BOLD),
             reasoning_header: Style::new()
                 .fg(match appearance {
