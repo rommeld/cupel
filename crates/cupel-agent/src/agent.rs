@@ -164,6 +164,24 @@ impl Agent {
             .clone()
     }
 
+    /// Borrows the message history without cloning it.
+    ///
+    /// The callback runs with the state locked and must not reenter the agent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the state lock is poisoned.
+    pub fn with_messages<T>(
+        &self,
+        read: impl FnOnce(&[AgentMessage]) -> T,
+    ) -> Result<T, &'static str> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_error| "agent state lock poisoned while reading messages")?;
+        Ok(read(&state.messages))
+    }
+
     /// Switch the model for future requests (an in flight run keeps the
     /// model it started with, the next run picks this up).
     pub fn set_model(&self, model: Model) {

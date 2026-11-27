@@ -13,7 +13,13 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::session::{Notify, Runtime, directory, failure, invalid, prompt_text};
+use crate::events;
+use crate::session::{Notify, RestoredSession, Runtime, directory, failure, invalid, prompt_text};
+
+pub enum OpenRequest {
+    New,
+    Load(Notify),
+}
 
 enum Slot {
     Loading(PathBuf),
@@ -108,13 +114,12 @@ impl Server {
         }))
     }
 
-    pub async fn create(
+    pub async fn open(
         &self,
         id: &str,
         cwd: PathBuf,
         mcp_server: &[acp::McpServer],
-        load: bool,
-        notify: Notify,
+        request: OpenRequest,
     ) -> Result<()> {
         if !mcp_server.is_empty() {
             return Err(invalid(
@@ -140,17 +145,38 @@ impl Server {
                 .sessions
                 .insert(id.to_owned(), Slot::Loading(cwd.clone()));
         }
-        let built = Runtime::build(
-            &self.config,
-            Arc::clone(&self.registry),
-            cwd,
-            id,
-            load,
-            &notify,
-        )
+        let opened = async {
+            let (restored, notify) = match request {
+                OpenRequest::New => (None, None),
+                OpenRequest::Load(notify) => (
+                    Some(RestoredSession::load(
+                        self.config.home.as_deref(),
+                        &cwd,
+                        id,
+                    )?),
+                    Some(notify),
+                ),
+            };
+            let runtime =
+                Runtime::build(&self.config, Arc::clone(&self.registry), cwd, id, restored).await?;
+            if let Some(notify) = notify {
+                runtime
+                    .agent
+                    .with_messages(|messages| -> Result<()> {
+                        for message in messages {
+                            for update in events::replay(message) {
+                                notify(update)?;
+                            }
+                        }
+                        Ok(())
+                    })
+                    .map_err(failure)??;
+            }
+            Ok(runtime)
+        }
         .await;
         let mut state = self.state.lock().expect("server state lock poisoned");
-        match built {
+        match opened {
             Ok(runtime) => {
                 state
                     .sessions

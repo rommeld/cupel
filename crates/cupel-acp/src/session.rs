@@ -5,14 +5,16 @@ use std::sync::Arc;
 
 use agent_client_protocol::v1::schema as acp;
 use agent_client_protocol::{Error, Result};
-use cupel_agent::{Agent, AgentEvent, AgentOptions};
-use cupel_coding_agent::{bootstrap, session::SessionRecorder, settings::DEFAULT_PRESET, startup};
+use cupel_agent::{Agent, AgentEvent, AgentMessage, AgentOptions};
+use cupel_coding_agent::session::{self, SessionRecorder};
+use cupel_coding_agent::settings::DEFAULT_PRESET;
+use cupel_coding_agent::{bootstrap, startup};
 use cupel_core::provider::Registry;
 use futures_util::StreamExt as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::events::{Mapper, replay};
+use crate::events::Mapper;
 
 pub type Notify = Arc<dyn Fn(acp::SessionUpdate) -> Result<()> + Send + Sync>;
 
@@ -59,6 +61,35 @@ pub fn prompt_text(blocks: &[acp::ContentBlock]) -> Result<String> {
     Ok(text)
 }
 
+pub struct RestoredSession {
+    model: String,
+    messages: Vec<AgentMessage>,
+}
+
+impl RestoredSession {
+    pub fn load(home: Option<&Path>, cwd: &Path, id: &str) -> Result<Self> {
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(invalid("invalid session id"));
+        }
+        let path = session::sessions_dir(home, cwd)
+            .ok_or_else(|| invalid("session persistence requires a Cupel home"))?
+            .join(format!("{id}.jsonl"));
+        let (header, messages) = session::load_transcript(&path).map_err(invalid)?;
+        if header.session_id != id || directory(Path::new(&header.cwd))? != cwd {
+            return Err(invalid("transcript id or working directory does not match"));
+        }
+        Ok(Self {
+            model: header.model,
+            messages,
+        })
+    }
+}
+
 pub struct Runtime {
     pub cwd: PathBuf,
     pub agent: Agent,
@@ -73,31 +104,8 @@ impl Runtime {
         registry: Arc<Registry>,
         cwd: PathBuf,
         id: &str,
-        load: bool,
-        notify: &Notify,
+        restored: Option<RestoredSession>,
     ) -> Result<Self> {
-        let (restored_model, messages) = if load {
-            if id.is_empty()
-                || id.len() > 128
-                || !id
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-            {
-                return Err(invalid("invalid session id"));
-            }
-            let path = cupel_coding_agent::session::sessions_dir(config.home.as_deref(), &cwd)
-                .ok_or_else(|| invalid("session persistence requires a Cupel home"))?
-                .join(format!("{id}.jsonl"));
-            let (header, messages) =
-                cupel_coding_agent::session::load_transcript(&path).map_err(invalid)?;
-            if header.session_id != id || directory(Path::new(&header.cwd))? != cwd {
-                return Err(invalid("transcript id or working directory does not match"));
-            }
-            (Some(header.model), messages)
-        } else {
-            (None, Vec::new())
-        };
-
         if !cupel_coding_agent::project_trust::is_trusted(config.home.as_deref(), &cwd) {
             tracing::warn!(cwd = %&cwd.display(), "prompt hooks and sesitive model rows disabled: project is not trusted");
         }
@@ -112,8 +120,9 @@ impl Runtime {
         for warning in &ingredients.warnings {
             tracing::warn!("{warning}");
         }
+        let restored_model = restored.as_ref().map(|session| session.model.as_str());
         let (model, key) = startup::select_model(
-            config.model.as_deref().or(restored_model.as_deref()),
+            config.model.as_deref().or(restored_model),
             &ingredients.models,
             &ingredients.settings,
             config.home.as_deref(),
@@ -128,17 +137,12 @@ impl Runtime {
         options.api_key = key;
         options.tools = ingredients.tools;
         options.hooks = Arc::new(ingredients.hooks);
-        for message in &messages {
-            for update in replay(message) {
-                notify(update)?;
-            }
-        }
+        options.messages = restored.map(|session| session.messages).unwrap_or_default();
         let mut used = 0;
         let mut cost = 0.0;
-        for message in &messages {
+        for message in &options.messages {
             account(message, &mut used, &mut cost);
         }
-        options.messages = messages;
         Ok(Self {
             cwd,
             agent: Agent::new(options),
@@ -213,10 +217,8 @@ impl Runtime {
     }
 }
 
-fn account(message: &cupel_agent::AgentMessage, used: &mut u64, cost: &mut f64) {
-    if let cupel_agent::AgentMessage::Llm(cupel_core::types::Message::Assistant(assistant)) =
-        message
-    {
+fn account(message: &AgentMessage, used: &mut u64, cost: &mut f64) {
+    if let AgentMessage::Llm(cupel_core::types::Message::Assistant(assistant)) = message {
         let usage = &assistant.usage;
         let reported = usage
             .input
@@ -232,7 +234,6 @@ fn account(message: &cupel_agent::AgentMessage, used: &mut u64, cost: &mut f64) 
 
 #[cfg(test)]
 mod tests {
-    use cupel_agent::AgentMessage;
     use cupel_coding_agent::startup::ThinkingChoice;
     use cupel_core::types::ThinkingLevel;
 
@@ -263,21 +264,14 @@ mod tests {
         std::fs::write(&guide, "INITIAL PROJECT INSTRUCTIONS").unwrap();
 
         let registry = Arc::new(cupel_core::default_registry());
-        let notify: Notify = Arc::new(|_| Ok(()));
         let mut config = Config {
             home: Some(home),
             ..Config::default()
         };
-        let mut runtime = Runtime::build(
-            &config,
-            Arc::clone(&registry),
-            cwd.clone(),
-            "saved",
-            false,
-            &notify,
-        )
-        .await
-        .unwrap();
+        let mut runtime =
+            Runtime::build(&config, Arc::clone(&registry), cwd.clone(), "saved", None)
+                .await
+                .unwrap();
         let state = runtime.agent.state();
         assert_eq!(state.model.id, "claude-haiku-5-5");
         assert_eq!(state.thinking_level, Some(ThinkingLevel::Low));
@@ -290,7 +284,8 @@ mod tests {
         config.thinking = ThinkingChoice::Explicit(Some(ThinkingLevel::High));
         std::fs::write(&settings_path, settings("claude-sonnet-5")).unwrap();
         std::fs::write(&guide, "UPDATED PROJECT INSTRUCTIONS").unwrap();
-        let runtime = Runtime::build(&config, registry, cwd, "saved", true, &notify)
+        let restored = RestoredSession::load(config.home.as_deref(), &cwd, "saved").unwrap();
+        let runtime = Runtime::build(&config, registry, cwd, "saved", Some(restored))
             .await
             .unwrap();
         let state = runtime.agent.state();

@@ -173,6 +173,7 @@ mod tests {
             let result = self
                 .request(2, "session/new", json!({"cwd":cwd,"mcpServers":[]}))
                 .await;
+            assert_eq!(result.len(), 1, "session/new emitted updates: {result:?}");
             result.last().unwrap()["result"]["sessionId"]
                 .as_str()
                 .unwrap_or_else(|| panic!("{result:?}"))
@@ -315,6 +316,12 @@ mod tests {
             .collect();
         assert!(statuses.contains(&"in_progress"));
         assert!(statuses.contains(&"completed"));
+        let tool_id = first
+            .iter()
+            .map(|m| &m["params"]["update"])
+            .find(|update| update["sessionUpdate"] == "tool_call")
+            .and_then(|update| update["toolCallId"].as_str())
+            .expect("the first prompt should start a tool call");
         let second = client.prompt(&id, 4, "second").await;
         assert_eq!(text(&second), "reply:second;users=2");
         client.close().await;
@@ -328,8 +335,48 @@ mod tests {
                 json!({"sessionId":id,"cwd":fixture.cwd(),"mcpServers":[]}),
             )
             .await;
-        assert!(replay.last().unwrap().get("result").is_some(), "{replay:?}");
-        assert!(text(&replay).contains("reply:second;users=2"));
+        let (response, updates) = replay.split_last().unwrap();
+        assert!(response.get("result").is_some(), "{replay:?}");
+        let mut history: Vec<(&str, String)> = Vec::new();
+        for message in updates {
+            assert_eq!(message["method"], "session/update", "{message:?}");
+            assert_eq!(message["params"]["sessionId"], id, "{message:?}");
+            let update = &message["params"]["update"];
+            let kind = update["sessionUpdate"].as_str().unwrap();
+            match kind {
+                "user_message_chunk" | "agent_message_chunk" => {
+                    let chunk = update["content"]["text"].as_str().unwrap();
+                    if let Some((previous, assembled)) = history.last_mut()
+                        && *previous == kind
+                    {
+                        assembled.push_str(chunk);
+                    } else {
+                        history.push((kind, chunk.to_owned()));
+                    }
+                }
+                "tool_call" => {
+                    assert_eq!(update["title"], "read");
+                    assert_eq!(update["rawInput"], json!({"path":"marker.txt"}));
+                    history.push((kind, update["toolCallId"].as_str().unwrap().to_owned()));
+                }
+                "tool_call_update" => {
+                    assert_eq!(update["status"], "completed");
+                    history.push((kind, update["toolCallId"].as_str().unwrap().to_owned()));
+                }
+                _ => panic!("unexpected replay update: {update:?}"),
+            }
+        }
+        assert_eq!(
+            history,
+            [
+                ("user_message_chunk", "read".to_owned()),
+                ("tool_call", tool_id.to_owned()),
+                ("tool_call_update", tool_id.to_owned()),
+                ("agent_message_chunk", text(&first)),
+                ("user_message_chunk", "second".to_owned()),
+                ("agent_message_chunk", "reply:second;users=2".to_owned()),
+            ]
+        );
         assert_eq!(std::fs::read(fixture.transcript(&id)).unwrap(), before);
         assert_eq!(
             text(&resumed.prompt(&id, 5, "third").await),
@@ -629,6 +676,15 @@ mod tests {
                 .unwrap()
                 .contains("does not match")
         );
+        std::fs::write(&path, data).unwrap();
+        let retry = client
+            .request(
+                3,
+                "session/load",
+                json!({"sessionId":id,"cwd":fixture.cwd(),"mcpServers":[]}),
+            )
+            .await;
+        assert!(retry.last().unwrap().get("result").is_some(), "{retry:?}");
         client.close().await;
     }
 
