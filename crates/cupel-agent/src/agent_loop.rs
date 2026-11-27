@@ -693,21 +693,18 @@ async fn execute_tool_calls(
             .is_some_and(|t| t.execution_mode() == Some(ToolExecutionMode::Sequential))
     });
 
-    let preflight = ToolPreflight {
-        assistant: Arc::new(assistant.clone()),
-        hooks: Arc::clone(hooks),
-    };
     if config.tool_execution == ToolExecutionMode::Sequential || has_sequential_tool {
-        execute_tool_calls_sequential(context, &preflight, tool_calls, cancel, sink).await
+        execute_tool_calls_sequential(context, assistant, tool_calls, hooks, cancel, sink).await
     } else {
-        execute_tool_calls_parallel(context, &preflight, tool_calls, cancel, sink).await
+        execute_tool_calls_parallel(context, assistant, tool_calls, hooks, cancel, sink).await
     }
 }
 
 async fn execute_tool_calls_sequential(
     context: &AgentContext,
-    preflight: &ToolPreflight,
+    assistant: &AssistantMessage,
     tool_calls: Vec<ToolCall>,
+    hooks: &Arc<dyn AgentHooks>,
     cancel: &CancellationToken,
     sink: &AgentEventSink,
 ) -> ExecutedToolCallBatch {
@@ -715,15 +712,15 @@ async fn execute_tool_calls_sequential(
     let mut messages: Vec<ToolResultMessage> = Vec::new();
 
     for tool_call in tool_calls {
-        let finalized = match prepare_tool_call(context, preflight, &tool_call, cancel).await {
+        let finalized = match prepare_tool_call(context, assistant, &tool_call, hooks, cancel).await
+        {
             Preparation::Immediate { result, is_error } => FinalizedToolCall {
                 tool_call,
                 result,
                 is_error,
             },
             Preparation::Ready { tool, args } => {
-                let executed =
-                    execute_prepared(&tool, &tool_call, args, cancel, sink, preflight).await;
+                let executed = execute_prepared(&tool, &tool_call, args, cancel, sink).await;
                 finalize_executed(tool_call, executed)
             }
         };
@@ -751,8 +748,9 @@ async fn execute_tool_calls_sequential(
 
 async fn execute_tool_calls_parallel(
     context: &AgentContext,
-    preflight: &ToolPreflight,
+    assistant: &AssistantMessage,
     tool_calls: Vec<ToolCall>,
+    hooks: &Arc<dyn AgentHooks>,
     cancel: &CancellationToken,
     sink: &AgentEventSink,
 ) -> ExecutedToolCallBatch {
@@ -770,7 +768,7 @@ async fn execute_tool_calls_parallel(
     let mut entries: Vec<Entry> = Vec::new();
 
     for tool_call in tool_calls {
-        match prepare_tool_call(context, preflight, &tool_call, cancel).await {
+        match prepare_tool_call(context, assistant, &tool_call, hooks, cancel).await {
             Preparation::Immediate { result, is_error } => {
                 // Preparation failures resolve immediately. Emit their end
                 // event right now, in order.
@@ -815,8 +813,7 @@ async fn execute_tool_calls_parallel(
                 let cancel = cancel.clone();
                 let sink = sink.clone();
                 running.push(async move {
-                    let executed =
-                        execute_prepared(&tool, &tool_call, args, &cancel, &sink, preflight).await;
+                    let executed = execute_prepared(&tool, &tool_call, args, &cancel, &sink).await;
                     let finalized = finalize_executed(tool_call, executed);
                     sink.emit(AgentEvent::ToolExecutionEnd {
                         tool_call_id: finalized.tool_call.id.clone(),
@@ -862,8 +859,9 @@ enum Preparation {
 
 async fn prepare_tool_call(
     context: &AgentContext,
-    preflight: &ToolPreflight,
+    assistant: &AssistantMessage,
     tool_call: &ToolCall,
+    hooks: &Arc<dyn AgentHooks>,
     cancel: &CancellationToken,
 ) -> Preparation {
     let error = |text: String| Preparation::Immediate {
@@ -880,63 +878,34 @@ async fn prepare_tool_call(
         return error(format!("Tool {} not found", tool_call.name));
     };
 
-    if let Err(reason) = preflight.check(tool_call, cancel).await {
-        return error(reason);
+    // Arguments must at least be a JSON object, field level validation is
+    // the tool's own serde deserialization.
+    if !tool_call.arguments.is_object() {
+        return error(format!(
+            "Tool {} arguments must be a JSON object",
+            tool_call.name
+        ));
+    }
+
+    if let Some(before) = hooks.before_tool_call(assistant, tool_call).await {
+        if cancel.is_cancelled() {
+            return error("Operation aborted".to_string());
+        }
+        if before.block {
+            return error(
+                before
+                    .reason
+                    .unwrap_or_else(|| "Tool execution was blocked".to_string()),
+            );
+        }
+    }
+    if cancel.is_cancelled() {
+        return error("Operation aborted".to_string());
     }
 
     Preparation::Ready {
         tool,
         args: tool_call.arguments.clone(),
-    }
-}
-
-#[derive(Clone)]
-pub struct ToolPreflight {
-    assistant: Arc<AssistantMessage>,
-    hooks: Arc<dyn AgentHooks>,
-}
-
-impl ToolPreflight {
-    /// The broker must validate tool-specific fields before dispatch.
-    pub async fn check_selected(
-        &self,
-        tool: &dyn AgentTool,
-        id: String,
-        arguments: Value,
-        cancel: &CancellationToken,
-    ) -> Result<Value, String> {
-        let call = ToolCall {
-            id,
-            name: tool.name().to_string(),
-            arguments,
-            thought_signature: None,
-        };
-        self.check(&call, cancel).await?;
-        Ok(call.arguments)
-    }
-
-    async fn check(&self, tool_call: &ToolCall, cancel: &CancellationToken) -> Result<(), String> {
-        if !tool_call.arguments.is_object() {
-            return Err(format!(
-                "Tool {} arguments must be a JSON object",
-                tool_call.name
-            ));
-        }
-        let before = self
-            .hooks
-            .before_tool_call(&self.assistant, tool_call)
-            .await;
-        if cancel.is_cancelled() {
-            return Err("Operation aborted".to_string());
-        }
-        if let Some(before) = before
-            && before.block
-        {
-            return Err(before
-                .reason
-                .unwrap_or_else(|| "Tool execution was blocked".to_string()));
-        }
-        Ok(())
     }
 }
 
@@ -946,7 +915,6 @@ async fn execute_prepared(
     args: Value,
     cancel: &CancellationToken,
     sink: &AgentEventSink,
-    preflight: &ToolPreflight,
 ) -> (AgentToolResult, bool) {
     sink.emit(AgentEvent::ToolExecutionStart {
         tool_call_id: tool_call.id.clone(),
@@ -972,13 +940,7 @@ async fn execute_prepared(
     let started = std::time::Instant::now();
     tracing::debug!(tool = %tool_call.name, tool_call_id = %tool_call.id, "tool execution start");
     let (result, is_error) = match tool
-        .execute_with_preflight(
-            &tool_call.id,
-            args,
-            cancel.clone(),
-            Some(on_update),
-            preflight,
-        )
+        .execute(&tool_call.id, args, cancel.clone(), Some(on_update))
         .await
     {
         Ok(result) => (result, false),

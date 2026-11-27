@@ -3,9 +3,7 @@
 !/crates/
 !/crates/**
 /crates/cupel-coding-agent/examples/
-/crates/cupel-acp/examples/*
-!/crates/cupel-acp/examples/direct_tool_baseline.py
-!/crates/cupel-acp/examples/direct_tool_baseline.json
+/crates/cupel-acp/examples
 /crates/.DS_Store
 
 !/tools/
@@ -51,7 +49,6 @@
 
 !/docs/
 !/docs/coding-guidelines.md
-!/docs/codemode-worker.md
 
 !/.cupel/skills/
 !/.cupel/skills/**
