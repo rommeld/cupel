@@ -280,3 +280,121 @@ async fn every_request_opens_with_turn_start_and_closes_with_turn_end() {
     // Two requests, the tool call, then the answer after the tool result.
     assert_eq!(turns, ["start", "reply", "end", "start", "reply", "end"]);
 }
+
+struct BrokeredEcho;
+
+#[async_trait::async_trait]
+impl AgentTool for BrokeredEcho {
+    fn name(&self) -> &str {
+        "echo"
+    }
+
+    fn description(&self) -> &str {
+        "Check a nested echo without executing it"
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        EchoTool.parameters()
+    }
+
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        _args: serde_json::Value,
+        _cancel: CancellationToken,
+        _on_update: Option<ToolUpdateFn>,
+    ) -> Result<AgentToolResult, ToolError> {
+        panic!("the agent must supply the preflight")
+    }
+
+    async fn execute_with_preflight(
+        &self,
+        tool_call_id: &str,
+        args: serde_json::Value,
+        cancel: CancellationToken,
+        _on_update: Option<ToolUpdateFn>,
+        preflight: &cupel_agent::agent_loop::ToolPreflight,
+    ) -> Result<AgentToolResult, ToolError> {
+        let veto = preflight
+            .check_selected(&EchoTool, format!("{tool_call_id}:callback"), args, &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            veto, "fixture veto",
+            "the selected call must use the same hooks"
+        );
+        Err("callback blocked".into())
+    }
+}
+
+struct VetoCallback;
+
+#[async_trait::async_trait]
+impl cupel_agent::AgentHooks for VetoCallback {
+    async fn before_tool_call(
+        &self,
+        assistant: &AssistantMessage,
+        tool_call: &ToolCall,
+    ) -> Option<cupel_agent::types::BeforeToolCallResult> {
+        (tool_call.id == "call_1:callback").then(|| {
+            let [AssistantContent::ToolCall(outer)] = assistant.content.as_slice() else {
+                panic!("preflight did not receive the real assistant turn");
+            };
+            assert_eq!(
+                outer.id, "call_1",
+                "the assistant must still contain the outer call"
+            );
+            assert_eq!(
+                outer.arguments, tool_call.arguments,
+                "the broker forwarded the echo input"
+            );
+            assert_eq!(
+                tool_call.name, "echo",
+                "the hook must see the selected tool name"
+            );
+            cupel_agent::types::BeforeToolCallResult {
+                block: true,
+                reason: Some("fixture veto".to_string()),
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn selected_tool_preflight_uses_the_real_turn_without_emitting_a_child_result() {
+    let contexts = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = Registry::new();
+    registry.register(Arc::new(ToolThenTextProvider {
+        calls: AtomicU32::new(0),
+        contexts: Arc::clone(&contexts),
+    }));
+    let mut options = AgentOptions::new(mock_model(), Arc::new(registry));
+    options.api_key = Some("test".into());
+    options.tools = vec![Arc::new(BrokeredEcho)];
+    options.hooks = Arc::new(VetoCallback);
+    let mut agent = Agent::new(options);
+    let mut events = agent.prompt_text("test the broker").unwrap();
+    let mut ends = Vec::new();
+    while let Some(event) = events.next().await {
+        if let AgentEvent::ToolExecutionEnd {
+            tool_call_id,
+            is_error,
+            ..
+        } = event
+        {
+            ends.push((tool_call_id, is_error));
+        }
+    }
+    assert_eq!(ends, [("call_1".to_string(), true)]);
+    let contexts = contexts.lock().unwrap();
+    assert_eq!(contexts.len(), 2);
+    let results: Vec<_> = contexts[1]
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::ToolResult(result) => Some(&result.tool_call_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["call_1"]);
+}
