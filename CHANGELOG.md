@@ -2,8 +2,12 @@
 
 Notable user-facing changes by release.
 
-## [Unreleased]
+## [v0.53.1] - 2026-11-28
 
+- The TUI caches rendered transcript lines and batches terminal events to reduce typing and scrolling lag in long sessions.
+- Markdown, `/usage`, the project trust dialog, and the question pane use more consistent theme colors. The `Answer` label stays bold magenta, and answer text uses the theme's body color.
+- `/hot-reload` applies theme changes from `settings.json`. Resumed sessions show the `Answer` label on completed turns.
+- The OpenRouter catalog adds the Gemini Pro Latest and Gemini Flash Latest aliases. The model picker scrolls past its first eight matches.
 - Model presets still select the provider, model, and thinking level. Cupel ignores legacy preset `prompt` fields and removes them the next time it saves home settings. Put instructions that apply across presets in `AGENTS.md` or `CLAUDE.md`.
 
 ## [v0.53.0] - 2026-11-26
