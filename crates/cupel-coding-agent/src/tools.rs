@@ -31,4 +31,5 @@ pub(crate) mod jobs;
 pub mod patch_parser;
 pub mod patch_update;
 pub mod read;
+mod read_text;
 pub mod text_diff;

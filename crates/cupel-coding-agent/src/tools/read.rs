@@ -24,10 +24,8 @@ use cupel_core::types::{ImageContent, TextContent, ToolResultContent};
 use crate::instruction_cache::InstructionCache;
 use crate::search::{resolve_to_root, source_locator};
 use crate::source_observations::SourceObservations;
-use crate::truncate::{
-    DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, format_size,
-    truncate_head,
-};
+use crate::tools::read_text;
+use crate::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, format_size};
 
 // Leave headroom below providers' per image limits (Anthropic, 5 MiB).
 const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
@@ -297,27 +295,29 @@ impl AgentTool for ReadTool {
                 .map_err(read_error)?,
             None => None,
         };
-        let live_content;
-        let content = if let Some(instruction) = &instruction {
-            instruction.content.as_ref()
-        } else {
-            live_content = tokio::fs::read_to_string(&source_path)
-                .await
-                .map_err(read_error)?;
-            &live_content
-        };
+        let cached = instruction.as_ref().map(|entry| Arc::clone(&entry.content));
+        let scan_path = source_path.clone();
+        let scan_cancel = cancel.clone();
+        let limit = args.limit;
+        let view = tokio::task::spawn_blocking(move || match cached {
+            Some(content) => {
+                read_text::scan(content.as_bytes(), start_line, limit, false, &scan_cancel)
+            }
+            None => read_text::scan(
+                read_text::live_file(&scan_path)?,
+                start_line,
+                limit,
+                true,
+                &scan_cancel,
+            ),
+        })
+        .await?
+        .map_err(read_error)?;
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
 
-        // A terminal newline is not an extra source line. Keep one empty line
-        // for an empty file, consistent with the offset=1 fallback.
-        let all_lines: Vec<&str> = content
-            .strip_suffix('\n')
-            .unwrap_or(content)
-            .split('\n')
-            .collect();
-        let total_file_lines = all_lines.len();
+        let total_file_lines = view.total_lines;
 
         if start_line >= total_file_lines {
             return Err(format!(
@@ -326,46 +326,25 @@ impl AgentTool for ReadTool {
             .into());
         }
 
-        // A user provided limit is honored first, truncate_head still applies
-        // its own line/byte caps afterwards.
-        let end_line = args.limit.map_or(total_file_lines, |limit| {
-            start_line.saturating_add(limit).min(total_file_lines)
-        });
-        let selected_lines = end_line - start_line;
-        let mut selected = all_lines[start_line..end_line].join("\n");
-        // Preserve the last selected line's terminator. Otherwise a selected
-        // trailing blank line looks like a terminator to truncate_head, which
-        // can undercount the view and bypass the line cap by one.
-        if end_line < total_file_lines || content.ends_with('\n') {
-            selected.push('\n');
-        }
-
-        let truncation = truncate_head(&selected, TruncationOptions::default());
-        let returned_lines = if truncation.truncated {
-            truncation.output_lines
-        } else {
-            selected_lines
-        };
-        let range = (returned_lines > 0).then(|| SourceRange {
+        let end_line = start_line + view.returned_lines;
+        let range = (view.returned_lines > 0).then_some(SourceRange {
             start: start_line_display,
-            end: start_line + returned_lines,
+            end: end_line,
         });
         let observation = self
             .observations
-            .record(&checkout, &source_path, content.as_bytes())
+            .record_revision(&checkout, &source_path, view.revision)
             .await?;
-        let output = if truncation.first_line_exceeds_limit {
-            let first_line_size = format_size(all_lines[start_line].len());
+        let output = if let Some(first_line_size) = view.oversized_first_line {
+            let first_line_size = format_size(first_line_size);
             format!(
-                "[Line {start_line_display} is {first_line_size}, exceeds {} limit. Use bash: \
-                 sed -n '{start_line_display}p' {} | head -c {DEFAULT_MAX_BYTES}]",
+                "[Line {start_line_display} is {first_line_size}, exceeds the {} read limit.]",
                 format_size(DEFAULT_MAX_BYTES),
-                args.path
             )
-        } else if truncation.truncated {
-            let end_line_display = start_line_display + truncation.output_lines - 1;
+        } else if let Some(truncated_by) = view.truncated_by {
+            let end_line_display = end_line;
             let next_offset = end_line_display + 1;
-            let reason = if truncation.truncated_by == Some(TruncatedBy::Lines) {
+            let reason = if truncated_by == TruncatedBy::Lines {
                 format!(
                     "Showing lines {start_line_display}-{end_line_display} of {total_file_lines}."
                 )
@@ -376,20 +355,24 @@ impl AgentTool for ReadTool {
                     format_size(DEFAULT_MAX_BYTES)
                 )
             };
-            format!(
-                "{}\n\n[{reason} Use offset={next_offset} to continue.]",
-                truncation.content
-            )
+            if end_line_display < total_file_lines {
+                format!(
+                    "{}\n\n[{reason} Use offset={next_offset} to continue.]",
+                    view.content
+                )
+            } else {
+                view.content
+            }
         } else if end_line < total_file_lines {
             // The user's limit stopped early but the file continues.
             let remaining = total_file_lines - end_line;
             let next_offset = end_line + 1;
             format!(
                 "{}\n\n[{remaining} more lines in file. Use offset={next_offset} to continue.]",
-                truncation.content
+                view.content
             )
         } else {
-            truncation.content
+            view.content
         };
 
         let mut details = json!({
@@ -399,7 +382,7 @@ impl AgentTool for ReadTool {
             "revision": observation.revision,
             "range": range.map(|range| json!({"start": range.start, "end": range.end})),
             "totalLines": total_file_lines,
-            "truncated": truncation.truncated,
+            "truncated": view.truncated_by.is_some(),
         });
         let path = source_locator(&source_path, &checkout);
         let header = observation_header(&observation.id, &path, range, total_file_lines);
@@ -500,8 +483,9 @@ mod tests {
     async fn observation_uses_the_same_raw_bytes_as_the_view() {
         let dir = std::env::temp_dir().join(format!("cupel-read-raw-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let raw = "\u{feff}one\r\ntwo\r\nthree\r\n";
-        std::fs::write(dir.join("f.txt"), raw).unwrap();
+        let long = "a".repeat(64 * 1024 + 2 - '\u{feff}'.len_utf8());
+        let raw = format!("\u{feff}{long}\u{1f4d6}\r\ntwo\r\nthree\r\n");
+        std::fs::write(dir.join("f.txt"), &raw).unwrap();
         let store = Arc::new(SourceObservations::new());
         let tool = ReadTool::new(&dir).with_observations(Arc::clone(&store));
         let result = tool
@@ -576,11 +560,12 @@ mod tests {
                     .contains(&format!("Use offset={} to continue", expected_end + 1))
             );
         }
-        std::fs::write(dir.join("f.txt"), "x".repeat(DEFAULT_MAX_BYTES + 1)).unwrap();
+        let unusual_path = "long path; with spaces.txt";
+        std::fs::write(dir.join(unusual_path), "x".repeat(1024 * 1024)).unwrap();
         let result = tool
             .execute(
                 "read",
-                json!({"path": "f.txt"}),
+                json!({"path": unusual_path}),
                 CancellationToken::new(),
                 None,
             )
@@ -591,6 +576,8 @@ mod tests {
             panic!("expected text");
         };
         assert!(text.text.contains("none; no source returned]"));
+        assert!(text.text.contains("[Line 1 is 1.0MB"));
+        assert!(!text.text.contains("Use bash:"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
