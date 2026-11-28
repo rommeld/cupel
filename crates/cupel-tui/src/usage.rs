@@ -159,7 +159,7 @@ pub fn render(frame: &mut Frame<'_>, popup: &mut UsagePopup, area: Rect, theme: 
     );
     let block = Block::new()
         .borders(Borders::ALL)
-        .style(theme.popup_row)
+        .style(theme.popup)
         .border_style(theme.pane_border)
         .title(Span::styled("[X] Usage", theme.chrome))
         .title_bottom(Span::styled(

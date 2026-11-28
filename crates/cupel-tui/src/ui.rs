@@ -231,7 +231,7 @@ fn render_autocomplete(
             Line::from(Span::styled(format!(" {} ", row.display), style))
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines).style(theme.popup_row), popup);
+    frame.render_widget(Paragraph::new(lines).style(theme.popup), popup);
 }
 
 fn render_transcript(frame: &mut Frame<'_>, app: &mut App, area: Rect, theme: &Theme) {
@@ -6084,7 +6084,7 @@ pub(crate) mod tests {
             }
             assert_eq!(
                 sessions_style_of(&mut sessions, "code panel").fg,
-                theme.base.fg.or(Some(Color::Reset)),
+                theme.md_code_block.fg.or(Some(Color::Reset)),
                 "{}: fenced code keeps its foreground",
                 theme.id,
             );
@@ -7278,6 +7278,31 @@ pub(crate) mod tests {
             assert_eq!(lines[2].spans[0].style, theme.popup_row);
             assert_eq!(lines[3].spans[0].style, theme.chrome);
             assert_eq!(lines[5].spans[0].style, theme.popup_selected);
+            let mut sessions = crate::sessions::Sessions::new(test_app());
+            let _answer = open_question(sessions.active_mut());
+            sessions.theme = Arc::clone(&theme);
+            let pane_bg = theme.base.bg.or(Some(Color::Reset));
+            let unselected = sessions_style_of(&mut sessions, "1. settings.json");
+            let selected = sessions_style_of(&mut sessions, "2. presets.toml");
+            assert_eq!(unselected.bg, pane_bg, "{}", theme.id);
+            assert_eq!(selected.bg, pane_bg, "{}", theme.id);
+            assert_eq!(
+                unselected.fg,
+                theme.popup_row.fg.or(Some(Color::Reset)),
+                "{}",
+                theme.id
+            );
+            assert_eq!(
+                selected.fg,
+                theme.base.fg.or(Some(Color::Reset)),
+                "{}",
+                theme.id
+            );
+            assert!(
+                selected.add_modifier.contains(Modifier::REVERSED),
+                "{}",
+                theme.id
+            );
         }
     }
 
