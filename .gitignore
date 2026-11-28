@@ -2,7 +2,9 @@
 
 !/crates/
 !/crates/**
-/crates/cupel-coding-agent/examples/
+/crates/cupel-coding-agent/examples/*
+!/crates/cupel-coding-agent/examples/grep-ranking.rs
+!/crates/cupel-coding-agent/examples/grep-ranking.tsv
 /crates/cupel-acp/examples
 /crates/.DS_Store
 
@@ -49,6 +51,7 @@
 
 !/docs/
 !/docs/coding-guidelines.md
+!/docs/grep-ranking.md
 
 !/.cupel/skills/
 !/.cupel/skills/**

@@ -230,7 +230,7 @@ fn is_match(matcher: Option<&RegexMatcher>, line: &str) -> bool {
 const MODIFIERS: &str = r#"(?:pub(?:\([^)]*\))?|public|private|protected|internal|export|default|async|unsafe|extern(?:\s+"[^"]+")?|static|const|abstract|final|override|sealed|partial|virtual|synchronized)\s+"#;
 /// Keywords that introduce an item (function, type, or module) in the
 /// common languages. Items are definitions at any indentation.
-const ITEM_KEYWORDS: &str = "fn|func|function|def|class|struct|enum|union|trait|interface|impl|type|typedef|mod|static|macro_rules!|record|protocol";
+const ITEM_KEYWORDS: &str = "fn|func|function|def|class|struct|enum|union|trait|interface|type|typedef|mod|static|macro_rules!|record|protocol";
 /// Keywords that introduce a binding. Only a binding at column 0 is a
 /// definition (a module level `const foo = ...`), indented ones are the
 /// locals every function body is made of.
@@ -240,7 +240,7 @@ const BINDING_KEYWORDS: &str = "let|var|const";
 /// (`typedef struct Foo`), optional generics, then the pattern itself.
 fn defines_name_pattern(pattern: &str, boundary: &str) -> String {
     format!(
-        r"^\s*(?:{MODIFIERS})*(?:(?:(?:{ITEM_KEYWORDS}|{BINDING_KEYWORDS})\s*(?:<[^>]*>)?\s+){{1,2}}(?:{pattern}){boundary}|func\s+\([^)]*\)\s+(?:{pattern}){boundary}|impl\b[^{{]*\bfor\s+(?:{pattern}){boundary})"
+        r"^\s*(?:{MODIFIERS})*(?:(?:(?:{ITEM_KEYWORDS})\s*(?:<[^>]*>)?\s+){{1,2}}(?:{pattern}){boundary}|(?:{BINDING_KEYWORDS})\s+(?:{pattern}){boundary}(?:\s|=|:[^:]|$)|func\s+\([^)]*\)\s+(?:{pattern}){boundary}|impl\b[^{{]*\bfor\s+(?:{pattern}){boundary}|impl\s*(?:<[^>]*>)?\s+(?:{pattern}){boundary}(?:<[^>]*>)?\s*(?:\{{|$))"
     )
 }
 
@@ -249,7 +249,7 @@ fn defines_name_pattern(pattern: &str, boundary: &str) -> String {
 /// never qualify.
 fn definition_shaped_pattern() -> String {
     format!(
-        r"^(?:\s*(?:{MODIFIERS})*(?:{ITEM_KEYWORDS})(?:[\s<(]|\b)|(?:{MODIFIERS})*(?:{BINDING_KEYWORDS})\s)"
+        r"^(?:\s*(?:{MODIFIERS})*(?:{ITEM_KEYWORDS}|impl)(?:[\s<(]|\b)|(?:{MODIFIERS})*(?:{BINDING_KEYWORDS})\s)"
     )
 }
 
@@ -384,6 +384,8 @@ mod tests {
             "// the Foo type",
             "/// fn Foo is documented here",
             "fn make_foo() -> Foo {",
+            "    let Foo::Bar(value) = item else {",
+            "impl Foo for Bar {",
         ] {
             assert!(!defines(&ranker, line), "does not define Foo: {line}");
         }
