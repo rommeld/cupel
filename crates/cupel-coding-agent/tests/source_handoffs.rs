@@ -157,6 +157,32 @@ async fn unknown_arguments_are_rejected_before_tools_run() {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn invalid_bash_timeouts_do_not_start_the_command() {
+    let project = Project::new("bash-timeout-validation");
+    let tools = bootstrap::coding_tools(&project.0);
+    let bash = tool(&tools, "bash");
+    for timeout in [1e20, f64::MAX, 14_400.25, 0.0, -0.5, f64::MIN_POSITIVE] {
+        for mut args in [
+            json!({}),
+            json!({"background": true}),
+            json!({"yield_after_ms": 10}),
+        ] {
+            args["command"] = json!("touch spawned");
+            args["timeout"] = json!(timeout);
+            let result = execute(bash, args.clone()).await;
+            assert!(!project.0.join("spawned").exists(), "{args}");
+            let error = result.expect_err("expected a tool error").to_string();
+            assert!(error.contains("timeout"), "{args}: {error}");
+        }
+    }
+    execute(bash, json!({"command": "touch spawned", "timeout": 14_400}))
+        .await
+        .unwrap();
+    assert!(project.0.join("spawned").is_file());
+}
+
 #[tokio::test]
 async fn whole_file_preconditions_reject_unrelated_edits_before_any_writes() {
     let project = Project::new("stale");
