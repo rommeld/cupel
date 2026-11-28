@@ -37,6 +37,7 @@ use crate::jobs::{CaptureUpdate, YieldOutcome};
 use crate::process::output_chunks;
 #[cfg(any(test, not(unix)))]
 use crate::process::{EXIT_STDIO_GRACE, OutputChunk};
+use crate::tools::bash_spill::{Spill, SpillChunk};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, TruncationResult,
     format_size, truncate_tail,
@@ -81,7 +82,7 @@ pub(crate) struct OutputAccumulator {
     has_open_line: bool,
     current_line_bytes: usize,
     pending: Vec<u8>,
-    temp: Option<(PathBuf, std::fs::File)>,
+    spill: Option<Spill>,
     incomplete: bool,
     #[cfg(unix)]
     last_progress: Option<tokio::time::Instant>,
@@ -99,7 +100,7 @@ impl OutputAccumulator {
             has_open_line: false,
             current_line_bytes: 0,
             pending: Vec::new(),
-            temp: None,
+            spill: None,
             incomplete: false,
             #[cfg(unix)]
             last_progress: None,
@@ -115,7 +116,7 @@ impl OutputAccumulator {
         self.completed_lines + usize::from(self.has_open_line)
     }
 
-    pub(crate) fn append(&mut self, data: &[u8]) {
+    pub(crate) fn append(&mut self, data: &[u8]) -> Option<SpillChunk> {
         let was_over_limits = self.over_limits();
         self.total_bytes += data.len();
 
@@ -157,46 +158,22 @@ impl OutputAccumulator {
 
         // Full output preservation, buffer in memory until limits trip, then
         // spill everything to a temp file and stream into it from then on.
-        if let Some((_, file)) = &mut self.temp {
-            use std::io::Write as _;
-            let _ = file.write_all(data);
-        } else if !was_over_limits {
+        if let Some(spill) = &self.spill {
+            return Some(spill.chunk(data.to_vec()));
+        }
+        if !was_over_limits {
             self.pending.extend_from_slice(data);
             if self.over_limits() {
-                self.open_temp_file();
-                self.pending = Vec::new();
+                self.spill = Spill::start();
+                let pending = std::mem::take(&mut self.pending);
+                return self.spill.as_ref().map(|spill| spill.chunk(pending));
             }
         }
+        None
     }
 
     fn over_limits(&self) -> bool {
         self.total_bytes > self.max_bytes || self.total_lines() > self.max_lines
-    }
-
-    fn open_temp_file(&mut self) {
-        let Ok(nonce) = getrandom::u64() else {
-            return;
-        };
-        let path = std::env::temp_dir().join(format!(
-            "cupel-bash-{}-{nonce:016x}.log",
-            std::process::id()
-        ));
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            options.mode(0o600);
-        }
-        if let Ok(mut file) = options.open(&path) {
-            use std::io::Write as _;
-            if file.write_all(&self.pending).is_ok() {
-                self.temp = Some((path, file));
-            } else {
-                drop(file);
-                let _ = std::fs::remove_file(path);
-            }
-        }
     }
 
     /// Current display view, tail truncated text plus truncation metadata
@@ -244,19 +221,9 @@ impl OutputAccumulator {
     }
 }
 
-impl Drop for OutputAccumulator {
-    fn drop(&mut self) {
-        if let Some((path, file)) = self.temp.take() {
-            drop(file);
-            let _ = std::fs::remove_file(path);
-        }
-    }
-}
-
 pub struct BashTool {
     cwd: PathBuf,
     description: String,
-    #[cfg_attr(not(unix), allow(dead_code))]
     jobs: Option<Arc<Jobs>>,
 }
 
@@ -470,7 +437,9 @@ impl AgentTool for BashTool {
                             outcome,
                             args.timeout,
                             cleanup_error.as_deref(),
-                        );
+                            self.jobs.as_deref(),
+                        )
+                        .await;
                     }
                     YieldOutcome::Yielded(snapshot) => snapshot,
                 };
@@ -508,26 +477,43 @@ impl AgentTool for BashTool {
                 if let Ok(mut output) = output.lock() {
                     match update {
                         CaptureUpdate::Bytes(bytes) => {
-                            output.append(bytes);
+                            let spill = output.append(bytes);
                             if let Some(on_update) = &on_update
                                 && let Some(text) = output.progress()
                             {
                                 on_update(AgentToolResult::text(text));
                             }
+                            return spill;
                         }
                         CaptureUpdate::Incomplete => output.mark_incomplete(),
                     }
                 }
+                None
             };
             let (outcome, cleanup_error) =
                 crate::jobs::run_foreground(command, deadline, &cancel, capture).await?;
             let output = output
                 .into_inner()
                 .map_err(|error| format!("foreground output unavailable: {error}"))?;
-            finish_output(output, outcome, args.timeout, cleanup_error.as_deref())
+            finish_output(
+                output,
+                outcome,
+                args.timeout,
+                cleanup_error.as_deref(),
+                self.jobs.as_deref(),
+            )
+            .await
         }
         #[cfg(not(unix))]
-        run_non_unix(command, deadline, &cancel, on_update, args.timeout).await
+        run_non_unix(
+            command,
+            deadline,
+            &cancel,
+            on_update,
+            args.timeout,
+            self.jobs.as_deref(),
+        )
+        .await
     }
 }
 
@@ -538,6 +524,7 @@ async fn run_non_unix(
     cancel: &CancellationToken,
     on_update: Option<ToolUpdateFn>,
     timeout_seconds: Option<f64>,
+    jobs: Option<&Jobs>,
 ) -> Result<AgentToolResult, ToolError> {
     let mut child = command
         .spawn()
@@ -579,7 +566,9 @@ async fn run_non_unix(
             chunk = next_output_chunk(&mut rx, exited.is_some()) => {
                 match chunk {
                     Some(chunk) => {
-                        output.append(chunk.as_bytes());
+                        if let Some(mut spill) = output.append(chunk.as_bytes()) {
+                            spill.send().await;
+                        }
                         if let Some(on_update) = &on_update
                             && last_update.elapsed() >= UPDATE_THROTTLE
                         {
@@ -613,7 +602,9 @@ async fn run_non_unix(
         while let Ok(Some(chunk)) =
             tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
         {
-            output.append(chunk.as_bytes());
+            if let Some(mut spill) = output.append(chunk.as_bytes()) {
+                spill.send().await;
+            }
         }
         // Bounded reap, if the process somehow survived both kills, give
         // up after a beat instead of hanging the turn. The OS reaps the
@@ -622,19 +613,24 @@ async fn run_non_unix(
     }
 
     let outcome = outcome.ok_or("Shell finished without an outcome")?;
-    finish_output(output, outcome, timeout_seconds, None)
+    finish_output(output, outcome, timeout_seconds, None, jobs).await
 }
 
-fn finish_output(
+async fn finish_output(
     mut output: OutputAccumulator,
     outcome: RunOutcome,
     timeout_seconds: Option<f64>,
     cleanup_error: Option<&str>,
+    jobs: Option<&Jobs>,
 ) -> Result<AgentToolResult, ToolError> {
     let (content, truncation) = output.snapshot();
     // A path returned to the caller outlives the accumulator. An undisclosed
     // spill (for example, when a command yields) is deleted on drop.
-    let full_output_path = output.temp.take().map(|(path, _)| path);
+    let full_output_path = if let Some(spill) = output.spill.take() {
+        spill.finish().await.and_then(|log| log.publish(jobs))
+    } else {
+        None
+    };
     let mut text = if content.is_empty() {
         String::new()
     } else {
@@ -937,21 +933,26 @@ mod tests {
 
     #[tokio::test]
     async fn long_output_truncates_to_tail_and_saves_full_output() {
-        // 3000 lines exceeds the 2000 line limit, the model sees the tail.
-        let err_or_ok = run(json!({"command": "seq 1 3000"})).await.unwrap();
-        assert!(err_or_ok.contains("3000"), "tail should include the end");
-        assert!(!err_or_ok.contains("\n1\n"), "head should be gone");
-        assert!(err_or_ok.contains("Full output:"), "got: {err_or_ok}");
-        assert!(err_or_ok.contains("of 3000"), "got: {err_or_ok}");
-    }
-
-    #[test]
-    fn undisclosed_spill_is_removed_on_drop() {
-        let mut output = OutputAccumulator::new();
-        output.append(&vec![b'x'; DEFAULT_MAX_BYTES + 1]);
-        let path = output.temp.as_ref().unwrap().0.clone();
-        assert!(path.is_file());
-        drop(output);
-        assert!(!path.exists());
+        let jobs = Arc::new(Jobs::default());
+        let tool = tool().with_jobs(Arc::clone(&jobs));
+        let error = tool
+            .execute(
+                "log",
+                json!({"command": "seq 1 3000; exit 3"}),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exited with code 3"), "{error}");
+        assert!(!error.contains("\n1\n"), "head should be gone");
+        let (_, path) = error.split_once(" Full output: ").unwrap();
+        let (path, _) = path.split_once("]\n\n").unwrap();
+        let data = std::fs::read_to_string(path).unwrap();
+        jobs.shutdown().await;
+        assert_eq!(data.lines().count(), 3000);
+        assert!(data.starts_with("1\n2\n") && data.ends_with("2999\n3000\n"));
+        assert!(!Path::new(path).exists());
     }
 }

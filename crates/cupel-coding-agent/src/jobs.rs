@@ -8,6 +8,7 @@ mod process_session;
 pub(crate) use child::CaptureUpdate;
 
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,6 +22,8 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
 use crate::tools::bash::{OutputAccumulator, RunOutcome};
+#[cfg(unix)]
+use crate::tools::bash_spill::SpillChunk;
 #[cfg(unix)]
 use cupel_agent::types::ToolUpdateFn;
 
@@ -41,6 +44,7 @@ struct State {
     closed: bool,
     live: Vec<Live>,
     completed: VecDeque<Arc<Completed>>,
+    spills: Vec<PathBuf>,
 }
 
 struct Live {
@@ -137,7 +141,7 @@ pub(crate) async fn run_foreground(
     command: tokio::process::Command,
     deadline: Option<Instant>,
     cancel: &CancellationToken,
-    capture: impl Fn(CaptureUpdate<'_>) + Sync,
+    capture: impl Fn(CaptureUpdate<'_>) -> Option<SpillChunk> + Sync,
 ) -> Result<(RunOutcome, Option<String>), String> {
     let stop = cancel.child_token();
     let termination = child::ManagedChild::spawn(command)?
@@ -330,6 +334,30 @@ impl Jobs {
         for finished in self.close() {
             finished.cancelled().await;
         }
+        let spills = match self.state.lock() {
+            Ok(mut state) => std::mem::take(&mut state.spills),
+            Err(error) => {
+                tracing::warn!("Cannot take session spill paths: {error}");
+                return;
+            }
+        };
+        for path in spills {
+            if let Err(error) = tokio::fs::remove_file(&path).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %path.display(), "Cannot remove session spill: {error}");
+            }
+        }
+    }
+
+    pub(crate) fn retain_spill(&self, path: &Path) -> bool {
+        if let Ok(mut state) = self.state.lock()
+            && !state.closed
+        {
+            state.spills.push(path.to_path_buf());
+            return true;
+        }
+        false
     }
 
     pub(crate) fn close(&self) -> Vec<CancellationToken> {
@@ -530,12 +558,13 @@ impl Jobs {
         tokio::spawn(async move {
             let _done = done;
             let capture = |update: child::CaptureUpdate<'_>| {
+                let mut spill = None;
                 if let child::CaptureUpdate::Bytes(bytes) = update
                     && let Some(output) = &pending_output
                     && let Ok(mut output) = output.lock()
                     && let Some(output) = output.as_mut()
                 {
-                    output.append(bytes);
+                    spill = output.append(bytes);
                     if let Some(progress) = &progress
                         && !progress.is_closed()
                         && let Some(text) = output.progress()
@@ -552,6 +581,7 @@ impl Jobs {
                         child::CaptureUpdate::Incomplete => capture.incomplete = true,
                     }
                 }
+                spill
             };
             let claim_inline = || {
                 if let Ok(mut state) = shared.lock()

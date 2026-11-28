@@ -24,6 +24,7 @@
 pub mod apply_patch;
 pub mod ask_user;
 pub mod bash;
+pub(crate) mod bash_spill;
 pub mod file_queue;
 pub mod grep;
 pub mod grep_rank;
