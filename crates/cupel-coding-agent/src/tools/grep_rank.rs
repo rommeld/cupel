@@ -22,7 +22,8 @@
 //! = the files the agent went on to read), MRR 0.455 vs pgr's 0.405 and
 //! raw ripgrep's 0.32, Hit@1 40% vs 34% vs 26%.
 
-use std::collections::BTreeMap;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BTreeMap, BinaryHeap};
 use std::path::{Path, PathBuf};
 
 use grep_matcher::Matcher as _;
@@ -50,6 +51,7 @@ pub struct FileSummary {
     pub preview_line_number: u64,
     pub preview: String,
     pub matches: usize,
+    pub more_matches: bool,
     pub bucket: Bucket,
     pub defines_name: bool,
     pub definition_shaped: bool,
@@ -63,6 +65,60 @@ impl FileSummary {
             self.bucket,
             self.matches.min(DENSITY_CAP),
         )
+    }
+
+    fn rank_cmp(&self, other: &Self) -> Ordering {
+        self.sort_key()
+            .cmp(&other.sort_key())
+            .then_with(|| other.path.cmp(&self.path))
+    }
+}
+
+struct RankedFile(FileSummary);
+
+impl PartialEq for RankedFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for RankedFile {}
+
+impl Ord for RankedFile {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.rank_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for RankedFile {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct BestFiles {
+    files: BinaryHeap<Reverse<RankedFile>>,
+}
+
+impl BestFiles {
+    pub(crate) fn retain(&mut self, summary: FileSummary, limit: usize) {
+        let candidate = Reverse(RankedFile(summary));
+        if self.files.len() < limit {
+            self.files.push(candidate);
+        } else if let Some(mut worst) = self.files.peek_mut()
+            && candidate < *worst
+        {
+            *worst = candidate;
+        }
+    }
+
+    pub(crate) fn into_ranked(self) -> Vec<FileSummary> {
+        self.files
+            .into_sorted_vec()
+            .into_iter()
+            .map(|Reverse(RankedFile(summary))| summary)
+            .collect()
     }
 }
 
@@ -107,8 +163,6 @@ impl Ranker {
     /// is not test code wholesale.
     #[must_use]
     pub fn rank(&self, matches: &[SearchMatch], root: &Path) -> Vec<FileSummary> {
-        // BTreeMap keeps files in path order, so equal ranked files come
-        // out alphabetically without a second sort key.
         let mut per_file: BTreeMap<&Path, Vec<&SearchMatch>> = BTreeMap::new();
         for m in matches {
             per_file.entry(&m.path).or_default().push(m);
@@ -117,32 +171,53 @@ impl Ranker {
             .into_iter()
             .map(|(path, lines)| self.summarize(path, root, &lines))
             .collect();
-        // sort_by_key is stable, so ties keep the path order from the map,
-        // Reverse turns the ascending sort into best first.
-        files.sort_by_key(|f| std::cmp::Reverse(f.sort_key()));
+        files.sort_by(|left, right| right.rank_cmp(left));
         files
     }
 
     fn summarize(&self, path: &Path, root: &Path, lines: &[&SearchMatch]) -> FileSummary {
+        let mut summary = Self::file(path, root);
+        for hit in lines {
+            self.add_match(&mut summary, hit.line_number, &hit.line, usize::MAX);
+        }
+        summary
+    }
+
+    pub(crate) fn file(path: &Path, root: &Path) -> FileSummary {
         let relative = path
             .strip_prefix(root)
             .unwrap_or_else(|_not_under_root| Path::new(path.file_name().unwrap_or_default()));
-        let first_name = lines.iter().find(|m| is_match(self.name.as_ref(), &m.line));
-        let first_shaped = lines
-            .iter()
-            .find(|m| is_match(self.shaped.as_ref(), &m.line));
-        let preview = first_name
-            .or(first_shaped)
-            .or_else(|| lines.first())
-            .expect("a file summary needs at least one match");
         FileSummary {
             path: path.to_path_buf(),
-            preview_line_number: preview.line_number,
-            preview: preview.line.clone(),
-            matches: lines.len(),
+            preview_line_number: 0,
+            preview: String::new(),
+            matches: 0,
+            more_matches: false,
             bucket: bucket_of(relative),
-            defines_name: first_name.is_some(),
-            definition_shaped: first_shaped.is_some(),
+            defines_name: false,
+            definition_shaped: false,
+        }
+    }
+
+    pub(crate) fn add_match(
+        &self,
+        file: &mut FileSummary,
+        line_number: u64,
+        line: &str,
+        cap: usize,
+    ) {
+        let named = !file.defines_name && is_match(self.name.as_ref(), line);
+        let shaped = !file.definition_shaped && is_match(self.shaped.as_ref(), line);
+        if file.matches == 0 || named || (shaped && !file.defines_name) {
+            file.preview_line_number = line_number;
+            file.preview = crate::truncate::truncate_line(line.trim(), 120).0;
+        }
+        file.defines_name |= named;
+        file.definition_shaped |= shaped;
+        if file.matches < cap {
+            file.matches += 1;
+        } else {
+            file.more_matches = true;
         }
     }
 }
@@ -207,12 +282,12 @@ fn bucket_of(relative: &Path) -> Bucket {
     let Some((name, dirs)) = components.split_last() else {
         return Bucket::Source;
     };
-    if name.ends_with(".md")
-        || name.ends_with(".markdown")
-        || name.ends_with(".mdx")
-        || name == "changelog"
-        || name.starts_with("changelog.")
-    {
+    let markdown = relative.extension().is_some_and(|extension| {
+        ["md", "markdown", "mdx"]
+            .iter()
+            .any(|kind| extension.eq_ignore_ascii_case(kind))
+    });
+    if markdown || name == "changelog" || name.starts_with("changelog.") {
         return Bucket::LowPriority;
     }
     if dirs.iter().any(|c| TEST_DIRS.contains(&c.as_str())) {

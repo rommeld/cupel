@@ -1,13 +1,15 @@
 //! Code search abstraction + the grep based default backend.
 
-use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use tokio_util::sync::CancellationToken;
+
+use crate::tools::grep_rank::{BestFiles, FileSummary, Ranker};
 
 pub(crate) const MAX_CONTEXT_LINES: usize = 256;
 
@@ -42,7 +44,8 @@ pub struct SearchMatch {
 pub struct SearchOutcome {
     pub matches: Vec<SearchMatch>,
     pub context: Vec<SearchMatch>,
-    pub files_with_more: HashSet<PathBuf>,
+    pub ranked_files: Vec<FileSummary>,
+    pub matched_files: usize,
     pub limit_reached: bool,
 }
 
@@ -231,18 +234,25 @@ fn search_blocking(
         .after_context(context)
         .build();
 
-    // The two budget shapes unfold into three plain numbers so the loop below
-    // has one code path.
-    let (max_matches, max_files, per_file) = match query.limit {
-        SearchLimit::Matches(n) => (n.max(1), usize::MAX, usize::MAX),
+    let max_matches = match query.limit {
+        SearchLimit::Matches(n) => n.max(1),
         SearchLimit::Files {
             max_files,
             per_file,
-        } => (usize::MAX, max_files.max(1), per_file.max(1)),
+        } => {
+            return search_ranked(
+                walker.build(),
+                &mut searcher,
+                &matcher,
+                query,
+                &search_path,
+                cancel,
+                (max_files.max(1), per_file.max(1)),
+            );
+        }
     };
 
     let mut outcome = SearchOutcome::default();
-    let mut files_with_matches = 0_usize;
 
     // Stored, single threaded walk => deterministic result order.
     for entry in walker.build() {
@@ -255,11 +265,7 @@ fn search_blocking(
         }
 
         let path = entry.path();
-        let cap = if files_with_matches == max_files {
-            0
-        } else {
-            per_file.min(max_matches.saturating_sub(outcome.matches.len()))
-        };
+        let cap = max_matches.saturating_sub(outcome.matches.len());
         let mut sink = SearchRows {
             path,
             cancel,
@@ -278,13 +284,8 @@ fn search_blocking(
         if result.is_err() {
             continue;
         }
-        if sink.overflow && (matches!(query.limit, SearchLimit::Matches(_)) || cap == 0) {
-            outcome.limit_reached = true;
-        } else if sink.overflow {
-            outcome.files_with_more.insert(path.to_path_buf());
-        }
+        outcome.limit_reached = sink.overflow;
         if !sink.matches.is_empty() {
-            files_with_matches += 1;
             outcome.matches.extend(sink.matches);
             outcome.context.extend(sink.around);
         }
@@ -294,6 +295,59 @@ fn search_blocking(
     }
 
     Ok(outcome)
+}
+
+fn search_ranked(
+    walker: ignore::Walk,
+    searcher: &mut Searcher,
+    matcher: &grep_regex::RegexMatcher,
+    query: &SearchQuery,
+    root: &Path,
+    cancel: &CancellationToken,
+    (max_files, per_file): (usize, usize),
+) -> Result<SearchOutcome, SearchError> {
+    let ranker = Ranker::new(query);
+    let mut best = BestFiles::default();
+    let mut matched_files = 0;
+    for entry in walker {
+        if cancel.is_cancelled() {
+            return Err(SearchError::Aborted);
+        }
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let mut file = Ranker::file(entry.path(), root);
+        let result = searcher.search_path(
+            matcher,
+            entry.path(),
+            UTF8(|line_number, line: &str| {
+                if cancel.is_cancelled() {
+                    return Ok(false);
+                }
+                ranker.add_match(
+                    &mut file,
+                    line_number,
+                    line.trim_end_matches(['\r', '\n']),
+                    per_file,
+                );
+                Ok(true)
+            }),
+        );
+        if cancel.is_cancelled() {
+            return Err(SearchError::Aborted);
+        }
+        if result.is_ok() && file.matches != 0 {
+            matched_files += 1;
+            best.retain(file, max_files);
+        }
+    }
+    Ok(SearchOutcome {
+        ranked_files: best.into_ranked(),
+        matched_files,
+        limit_reached: matched_files > max_files,
+        ..SearchOutcome::default()
+    })
 }
 
 struct SearchRows<'a> {
@@ -551,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn files_limit_caps_per_file_and_stops_at_max_files() {
+    fn files_limit_retains_only_requested_summaries() {
         let root = temp_root("fileslimit");
         write_tree(
             &root,
@@ -567,9 +621,26 @@ mod tests {
             per_file: 2,
         };
         let outcome = run(&root, query);
-        // a.txt is capped at 2 of its 4 lines, b.txt takes the second file
-        // slot, c.txt is never opened.
-        assert_eq!(relative_paths(&root, &outcome), ["a.txt", "a.txt", "b.txt"]);
+        assert!(outcome.matches.is_empty());
+        assert_eq!(outcome.matched_files, 3);
+        let files: Vec<_> = outcome
+            .ranked_files
+            .iter()
+            .map(|file| {
+                (
+                    source_locator(&file.path, &root),
+                    file.matches,
+                    file.more_matches,
+                )
+            })
+            .collect();
+        assert_eq!(
+            files,
+            [
+                ("a.txt".to_string(), 2, true),
+                ("b.txt".to_string(), 1, false)
+            ]
+        );
         assert!(outcome.limit_reached);
     }
 }

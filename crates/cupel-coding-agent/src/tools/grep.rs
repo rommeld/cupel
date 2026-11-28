@@ -17,10 +17,9 @@ use tokio_util::sync::CancellationToken;
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 
 use crate::search::{
-    CodeSearch, MAX_CONTEXT_LINES, SearchLimit, SearchMatch, SearchQuery, resolve_to_root,
-    source_locator,
+    CodeSearch, MAX_CONTEXT_LINES, SearchLimit, SearchMatch, SearchQuery, source_locator,
 };
-use crate::tools::grep_rank::{Bucket, FileSummary, Ranker};
+use crate::tools::grep_rank::{Bucket, FileSummary};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, GREP_MAX_LINE_LENGTH, TruncationOptions, format_size, truncate_head,
     truncate_line,
@@ -29,8 +28,6 @@ use crate::truncate::{
 const DEFAULT_LIMIT: usize = 100;
 const FILES_DEFAULT_LIMIT: usize = 10;
 const FILES_PER_FILE_CAP: usize = 20;
-const FILES_RANKING_WINDOW: usize = 500;
-const FILES_PREVIEW_MAX_CHARS: usize = 120;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -185,13 +182,10 @@ impl AgentTool for GrepTool {
         let limit = match args.output_mode {
             OutputMode::Content => SearchLimit::Matches(effective_limit),
             OutputMode::Files => SearchLimit::Files {
-                max_files: effective_limit.max(FILES_RANKING_WINDOW),
+                max_files: effective_limit,
                 per_file: FILES_PER_FILE_CAP,
             },
         };
-
-        // The search scope affects ranking, never the meaning of a result path.
-        let search_path = resolve_to_root(args.path.as_deref().unwrap_or("."), &self.cwd);
 
         // The scope, spelled out for the no match message, a model that sees
         // what was searched where fixes a bad glob instead of retrying blind.
@@ -212,13 +206,9 @@ impl AgentTool for GrepTool {
             context: args.context.min(MAX_CONTEXT_LINES as u64) as usize,
             limit,
         };
-        // Files mode needs to know what a definition of the pattern looks
-        // like, the ranker reads that off the query before the backend
-        // takes ownership of it.
-        let ranker = (args.output_mode == OutputMode::Files).then(|| Ranker::new(&query));
         let outcome = self.backend.search(query, cancel.clone()).await?;
 
-        if outcome.matches.is_empty() {
+        if outcome.matches.is_empty() && outcome.ranked_files.is_empty() {
             return Ok(AgentToolResult::text(format!(
                 "No matches found for {scope}"
             )));
@@ -226,13 +216,11 @@ impl AgentTool for GrepTool {
 
         let format_path = |path: &Path| source_locator(path, &self.cwd);
 
-        if let Some(ranker) = ranker {
-            let ranked = ranker.rank(&outcome.matches, &search_path);
+        if args.output_mode == OutputMode::Files {
             return Ok(render_files(
-                &ranked,
-                outcome.limit_reached,
+                &outcome.ranked_files,
+                outcome.matched_files,
                 effective_limit,
-                &outcome.files_with_more,
                 format_path,
             ));
         }
@@ -329,23 +317,17 @@ fn render_content(
 /// `files` mode output, the best `limit` files, one line each.
 fn render_files(
     ranked: &[FileSummary],
-    window_full: bool,
+    total: usize,
     limit: usize,
-    files_with_more: &std::collections::HashSet<PathBuf>,
     format_path: impl Fn(&Path) -> String,
 ) -> AgentToolResult {
-    let total = ranked.len();
     let mut lines: Vec<String> = Vec::with_capacity(total.min(limit));
     for file in ranked.iter().take(limit) {
         let mut line = format!("{}:{}", format_path(&file.path), file.preview_line_number);
         if file.defines_name {
             line.push_str(" [def]");
         }
-        let more = if files_with_more.contains(&file.path) {
-            "+"
-        } else {
-            ""
-        };
+        let more = if file.more_matches { "+" } else { "" };
         let plural = if file.matches == 1 { "" } else { "es" };
         line.push_str(&format!(" ({}{more} match{plural}", file.matches));
         match file.bucket {
@@ -353,8 +335,7 @@ fn render_files(
             Bucket::Test => line.push_str(", test"),
             Bucket::LowPriority => line.push_str(", low-priority"),
         }
-        let (preview, _was_truncated) = truncate_line(file.preview.trim(), FILES_PREVIEW_MAX_CHARS);
-        line.push_str(&format!(")  {preview}"));
+        line.push_str(&format!(")  {}", file.preview));
         lines.push(line);
     }
 
@@ -370,11 +351,9 @@ fn render_files(
     let mut output = truncation.content;
     let mut details = serde_json::Map::new();
     let mut notices: Vec<String> = Vec::new();
-    if total > limit || window_full {
-        // Only lower bound.
-        let more = if window_full { "+" } else { "" };
+    if total > limit {
         notices.push(format!(
-            "{} of {total}{more} files shown. Use limit={} for more, or refine pattern",
+            "{} of {total} files shown. Use limit={} for more, or refine pattern",
             lines.len(),
             limit.saturating_mul(2),
         ));
@@ -705,8 +684,8 @@ mod tests {
     #[tokio::test]
     async fn files_mode_limit_counts_files() {
         let root = temp_root("fileslimit");
-        for name in ["a.txt", "b.txt", "c.txt"] {
-            std::fs::write(root.join(name), "x\n".repeat(30)).unwrap();
+        for (name, count) in [("a.txt", 20), ("b.txt", 21), ("c.txt", 21)] {
+            std::fs::write(root.join(name), "x\n".repeat(count)).unwrap();
         }
         let result = run_tool(
             &root,
@@ -715,7 +694,7 @@ mod tests {
         .await;
         let text = text_of(&result);
         assert!(
-            text.starts_with("a.txt:1 (20+ matches)  x\nb.txt:1 (20+ matches)  x"),
+            text.starts_with("a.txt:1 (20 matches)  x\nb.txt:1 (20+ matches)  x"),
             "got: {text}"
         );
         assert!(text.contains("2 of 3 files shown"), "got: {text}");
@@ -724,9 +703,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn files_mode_ranks_the_whole_window_before_applying_the_limit() {
+    async fn files_mode_detects_definitions_after_the_former_file_cutoff() {
         let root = temp_root("fileswindow");
-        std::fs::write(root.join("a.rs"), "use crate::Widget;\n").unwrap();
+        for index in 0..550 {
+            std::fs::write(root.join(format!("a{index:04}.rs")), "use crate::Widget;\n").unwrap();
+        }
         std::fs::write(root.join("z.rs"), "pub struct Widget;\n").unwrap();
         let result = run_tool(
             &root,
@@ -738,6 +719,30 @@ mod tests {
             text.starts_with("z.rs:1 [def] (1 match)  pub struct Widget;"),
             "got: {text}"
         );
-        assert!(text.contains("1 of 2 files shown"), "got: {text}");
+        assert!(text.contains("1 of 551 files shown"), "got: {text}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn files_mode_uses_definitions_beyond_the_displayed_match_count() {
+        let root = temp_root("files-late-definition");
+        std::fs::write(root.join("a.rs"), "use crate::Widget;\n").unwrap();
+        let references = "use crate::Widget;\n".repeat(20);
+        std::fs::write(
+            root.join("b.rs"),
+            format!("{references}pub struct Widget;\n"),
+        )
+        .unwrap();
+        let result = run_tool(
+            &root,
+            json!({"pattern": "Widget", "outputMode": "files", "limit": 1}),
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(
+            text.starts_with("b.rs:21 [def] (20+ matches)  pub struct Widget;"),
+            "{text}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
