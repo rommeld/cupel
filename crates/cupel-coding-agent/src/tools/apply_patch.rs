@@ -80,7 +80,7 @@ Re-read after mutations rather than weakening context. Hashes and patch locks do
 arbitrary shell/editor writes; application I/O failures may leave earlier writes in place.";
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ApplyPatchArgs {
     input: String,
     #[serde(default)]
@@ -321,6 +321,7 @@ impl AgentTool for ApplyPatchTool {
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
+            "additionalProperties": false,
             "properties": {
                 "input": {
                     "type": "string",

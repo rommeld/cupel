@@ -274,6 +274,8 @@ mod tests {
                     .as_str()
                     .unwrap()
                     .to_owned()
+            } else if task == "tool-schemas" {
+                body["tools"].to_string()
             } else {
                 format!("reply:{task};users={}", users.len())
             };
@@ -297,6 +299,37 @@ mod tests {
         let _ = write
             .write_all(format!("data: {done}\n\ndata: [DONE]\n\n").as_bytes())
             .await;
+    }
+
+    #[tokio::test]
+    async fn publishes_strict_coding_tool_schemas() {
+        let fixture = Fixture::new().await;
+        let mut client = fixture.start();
+        client.init().await;
+        let id = client.new_session(&fixture.cwd()).await;
+        let response = client.prompt(&id, 3, "tool-schemas").await;
+        let tools: Vec<Value> = serde_json::from_str(&text(&response)).unwrap();
+        let parameters = |name: &str| {
+            &tools
+                .iter()
+                .find(|tool| tool["function"]["name"] == name)
+                .expect(name)["function"]["parameters"]
+        };
+        for name in ["read", "grep", "apply_patch", "bash"] {
+            assert_eq!(parameters(name)["additionalProperties"], false, "{name}");
+        }
+        for (name, field, minimum) in [
+            ("read", "offset", 1),
+            ("read", "limit", 1),
+            ("grep", "limit", 1),
+            ("grep", "context", 0),
+        ] {
+            let schema = &parameters(name)["properties"][field];
+            assert_eq!(schema["type"], "integer", "{name}.{field}");
+            assert_eq!(schema["minimum"], minimum, "{name}.{field}");
+        }
+        assert_eq!(parameters("grep")["properties"]["pattern"]["minLength"], 1);
+        client.close().await;
     }
 
     #[tokio::test]

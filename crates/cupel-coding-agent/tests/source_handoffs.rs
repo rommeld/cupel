@@ -64,6 +64,54 @@ async fn observe(reader: &dyn AgentTool, path: &str) -> String {
 }
 
 #[tokio::test]
+async fn unknown_arguments_are_rejected_before_tools_run() {
+    let project = Project::new("unknown-arguments");
+    let tools = bootstrap::coding_tools(&project.0);
+    project.write("file", "old\nunrelated line\n");
+    let id = observe(tool(&tools, "read"), "file").await;
+    let current = "old\nnew unrelated line\n";
+    project.write("file", current);
+    let patch = "*** Begin Patch\n*** Update File: file\n@@\n-old\n+new\n*** End Patch";
+    let cases = [
+        (
+            "apply_patch",
+            json!({"input": patch, "expected_observations": [id]}),
+            "expected_observations",
+            "expectedObservations",
+        ),
+        (
+            "bash",
+            json!({"command": "touch ran-bash", "cwd": "."}),
+            "cwd",
+            "command",
+        ),
+        (
+            "read",
+            json!({"path": "file", "startLine": 999}),
+            "startLine",
+            "offset",
+        ),
+        (
+            "grep",
+            json!({"pattern": "old", "ignore_case": true}),
+            "ignore_case",
+            "ignoreCase",
+        ),
+    ];
+    for (name, args, unknown, valid) in cases {
+        let result = execute(tool(&tools, name), args).await;
+        assert_eq!(project.read("file"), current);
+        assert!(!project.0.join("ran-bash").exists());
+        let error = result.expect_err(name).to_string();
+        assert!(
+            error.contains(&format!("unknown field `{unknown}`")),
+            "{name}: {error}"
+        );
+        assert!(error.contains(&format!("`{valid}`")), "{name}: {error}");
+    }
+}
+
+#[tokio::test]
 async fn whole_file_preconditions_reject_unrelated_edits_before_any_writes() {
     let project = Project::new("stale");
     let tools = bootstrap::coding_tools(&project.0);
