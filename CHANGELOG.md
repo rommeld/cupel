@@ -2,8 +2,32 @@
 
 Notable user-facing changes by release.
 
-## [Unreleased]
+## [v0.54.0] - 2026-11-28
 
+- Restore the Unix foreground Bash handler after the merge
+- Resolve patch paths and render diffs off async workers
+- Check grep ranking against a pinned set of queries
+- Write Bash spill logs off the async worker
+- Stream inline Bash progress and keep UTF-8 tail boundaries
+- Share Unix supervision for foreground Bash and managed jobs
+- Rank grep files across the full search
+- Recognize more definitions and test paths in grep ranking
+- Capture grep context in the search pass
+- Stream text reads with bounded memory
+- Replace patched files atomically and preserve move modes
+- Validate Bash timeouts before spawning commands
+- Preserve source indentation in fuzzy patches
+- Validate Bash timeouts before spawning commands
+- Preserve source indentation in fuzzy patches
+- Reuse source observation IDs for retained revisions
+- Reject unknown arguments to coding tools
+
+## [v0.53.1] - 2026-11-28
+
+- The TUI caches rendered transcript lines and batches terminal events to reduce typing and scrolling lag in long sessions.
+- Markdown, `/usage`, the project trust dialog, and the question pane use more consistent theme colors. The `Answer` label stays bold magenta, and answer text uses the theme's body color.
+- `/hot-reload` applies theme changes from `settings.json`. Resumed sessions show the `Answer` label on completed turns.
+- The OpenRouter catalog adds the Gemini Pro Latest and Gemini Flash Latest aliases. The model picker scrolls past its first eight matches.
 - Model presets still select the provider, model, and thinking level. Cupel ignores legacy preset `prompt` fields and removes them the next time it saves home settings. Put instructions that apply across presets in `AGENTS.md` or `CLAUDE.md`.
 
 ## [v0.53.0] - 2026-11-26
