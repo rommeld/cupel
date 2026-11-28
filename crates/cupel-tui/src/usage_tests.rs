@@ -122,10 +122,10 @@ async fn usage_opens_a_bordered_table_without_a_conversation_notice() {
     record(&mut app, "first", 10, StopReason::Stop).await;
     record(&mut app, "second", 20, StopReason::Error).await;
     assert_eq!(app.totals.input, 30);
-    let cells = app.transcript.cells.len();
+    let cells = app.transcript.cells().len();
     open(&mut app);
     finish_loading(&mut app).await;
-    assert_eq!(app.transcript.cells.len(), cells);
+    assert_eq!(app.transcript.cells().len(), cells);
     let screen = draw(&mut app, 120, 30);
     for expected in [
         "[X] Usage",

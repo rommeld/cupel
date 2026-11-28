@@ -37,6 +37,10 @@ impl TextSelection {
         (self.anchor.min(self.end), self.anchor.max(self.end))
     }
 
+    pub fn end_row(&self) -> usize {
+        self.bounds().1.row
+    }
+
     fn columns(&self, row: usize) -> Option<std::ops::Range<usize>> {
         let (start, end) = self.bounds();
         (start.row..=end.row).contains(&row).then(|| {
@@ -50,15 +54,28 @@ impl TextSelection {
         })
     }
 
+    pub fn snapshot_prefix(&self, lines: &[Line<'_>]) -> Option<Vec<String>> {
+        let (_, end) = self.bounds();
+        (lines.len() > end.row).then(|| {
+            lines[..=end.row]
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect()
+                })
+                .collect()
+        })
+    }
+
     /// Ignore style changes, but invalidate coordinates when preceding text changes.
-    pub fn matches(&self, old: &[Line<'_>], new: &[Line<'_>]) -> bool {
+    pub fn matches_snapshot(&self, old: &[String], new: &[Line<'_>]) -> bool {
         let (_, end) = self.bounds();
         old.len() > end.row
             && new.len() > end.row
             && old[..=end.row].iter().zip(&new[..=end.row]).all(|(a, b)| {
-                a.spans
-                    .iter()
-                    .flat_map(|span| span.content.chars())
+                a.chars()
                     .eq(b.spans.iter().flat_map(|span| span.content.chars()))
             })
     }
@@ -241,7 +258,7 @@ mod tests {
     #[test]
     fn wheel_extends_a_drag_across_viewports_and_preserves_a_released_selection() {
         let mut app = test_app();
-        app.transcript.cells.push(Cell::Assistant {
+        app.transcript.push(Cell::Assistant {
             text: (0..60)
                 .map(|i| format!("line {i:02}"))
                 .collect::<Vec<_>>()
@@ -290,7 +307,7 @@ mod tests {
     #[test]
     fn selections_survive_appends_but_not_reflow_or_changes_before_the_range() {
         let mut app = short_selection();
-        app.transcript.cells.push(Cell::Notice {
+        app.transcript.push(Cell::Notice {
             text: "new output".into(),
         });
         draw(&mut app, 80);
@@ -299,7 +316,7 @@ mod tests {
         assert!(app.text_selection.is_none());
 
         let mut app = short_selection();
-        app.transcript.cells.insert(
+        app.transcript.insert(
             0,
             Cell::Notice {
                 text: "inserted".into(),

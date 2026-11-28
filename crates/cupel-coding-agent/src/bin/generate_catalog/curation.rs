@@ -422,7 +422,10 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             // fewer tokens, so it uses the same template as Kimi K3. Fireworks
             // serves it as a Research Preview.
             fireworks_anthropic("accounts/fireworks/models/ember-1"),
-            fireworks_anthropic("accounts/fireworks/models/inkling"),
+            fireworks_completions(
+                "accounts/fireworks/models/inkling-2-small",
+                Thinking::FromEffort,
+            ),
             fireworks_completions("accounts/fireworks/models/glm-5p3", Thinking::FromEffort),
             // The fast router serves GLM 5.3 and lists the same effort scale.
             fireworks_completions(
@@ -450,10 +453,6 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             ),
             fireworks_completions(
                 "accounts/fireworks/routers/glm-5p3-spot",
-                Thinking::FromEffort,
-            ),
-            fireworks_completions(
-                "accounts/fireworks/routers/kimi-k3-spot",
                 Thinking::FromEffort,
             ),
             fireworks_completions(
@@ -531,7 +530,6 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("deepseek/deepseek-v4.1-flash-1017", Thinking::FromEffort),
             openrouter("x-ai/grok-4.6", Thinking::FromEffort),
             openrouter("x-ai/grok-4.7", Thinking::FromEffort),
-            openrouter_tiered("x-ai/grok-build-0.1"),
             openrouter("google/gemini-3.7-flash", Thinking::FromEffort),
             openrouter("google/gemini-3.8-flash", Thinking::FromEffort),
             openrouter("google/gemini-3.5-flash-lite", Thinking::FromEffort),
@@ -586,11 +584,6 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("minimax/minimax-m3", Thinking::FromEffort),
             openrouter("minimax/minimax-m3.1-flash", Thinking::FromEffort),
             openrouter("elorian/glimpse", Thinking::FromEffort),
-            openrouter("xingchen-agi/xing4.0-29b-a4b:free", Thinking::FromEffort),
-            openrouter("inception/mercury-3", Thinking::FromEffort),
-            openrouter("unbiased/pareto-26.10", Thinking::FromEffort),
-            openrouter("unbiased/pareto-26.9", Thinking::FromEffort),
-            openrouter("~unbiased/pareto-latest", Thinking::FromEffort),
             openrouter("nvidia/nemotron-3.5-super-vl", Thinking::FromEffort),
             openrouter("nvidia/nemotron-3.5-super-vl:free", Thinking::FromEffort),
             openrouter("nvidia/nemotron-3.5-lightning", Thinking::FromEffort),
@@ -605,8 +598,6 @@ pub const PROVIDERS: &[CuratedProvider] = &[
                 Thinking::FromEffort,
             ),
             openrouter("liquid/lfm-2.5-24b-a2b", Thinking::FromEffort),
-            openrouter("liquid/lfm-2.5-2.6b", Thinking::FromEffort),
-            openrouter("liquid/lfm-2.5-2.6b:free", Thinking::FromEffort),
             openrouter("mistralai/mistral-large-4-0", Thinking::FromEffort),
             openrouter("mistralai/mistral-medium-3-5", Thinking::FromEffort),
             openrouter("mistralai/mistral-small-2603", Thinking::FromEffort),
@@ -616,10 +607,12 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("inclusionai/ling-3.1-flash", Thinking::FromEffort),
             openrouter("inclusionai/ling-3.2-flash:free", Thinking::FromEffort),
             openrouter("inclusionai/ling-3.0-flash-vl", Thinking::FromEffort),
+            openrouter("inclusionai/lingsante-3.1-air-vl", Thinking::FromEffort),
             openrouter("aion-labs/aion-3.5", Thinking::FromEffort),
             openrouter("aion-labs/aion-3.5-mini", Thinking::FromEffort),
             openrouter("upstage/solar-pro4", Thinking::FromEffort),
             openrouter("upstage/solar-mini4", Thinking::FromEffort),
+            openrouter("upstage/solar-mini-4-5", Thinking::FromEffort),
             openrouter("stepfun/step-5-preview", Thinking::FromEffort),
             openrouter("stepfun/step-3.7-flash", Thinking::FromEffort),
             openrouter_tiered("sakana/fugu-ultra-v2"),
@@ -630,11 +623,8 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("tencent/hy4", Thinking::FromEffort),
             openrouter("tencent/hy4-flash", Thinking::FromEffort),
             openrouter("ricursiveai/ripple-65b-preview", Thinking::FromEffort),
-            openrouter("stealth/crouton-alpha", Thinking::FromEffort),
             openrouter("ibm-granite/granite-4.2-8b", Thinking::FromEffort),
-            openrouter("meituan/longcat-2.0", Thinking::FromEffort),
             openrouter("cohere/command-a-plus", Thinking::FromEffort),
-            openrouter("cohere/north-mini-code:free", Thinking::FromEffort),
             openrouter("bytedance-seed/seed-2-1-turbo", Thinking::FromEffort),
             openrouter_tiered("bytedance-seed/seed-2.0-lite"),
             openrouter_tiered("bytedance-seed/seed-2.0-mini"),
@@ -647,10 +637,6 @@ pub const PROVIDERS: &[CuratedProvider] = &[
             openrouter("liquid/lfm-3-1.7b", Thinking::FromEffort),
             openrouter("liquid/lfm-3-1.7b:free", Thinking::FromEffort),
             openrouter("nex-agi/nex-n2.6", Thinking::FromEffort),
-            openrouter(
-                "thinkingmachines/inkling-2-small:free",
-                Thinking::FromEffort,
-            ),
             openrouter("google/gemini-4-carbon", Thinking::FromEffort),
             openrouter("kt/midm-k-3.0-pro", Thinking::FromEffort),
             openrouter("motif-technologies/motif-3", Thinking::FromEffort),
