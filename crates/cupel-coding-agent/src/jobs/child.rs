@@ -12,10 +12,20 @@ use tokio_util::sync::CancellationToken;
 
 use crate::jobs::{Exit, Phase, Termination, process_session};
 use crate::process::EXIT_STDIO_GRACE;
+use crate::tools::bash_spill::SpillChunk;
 
-pub(super) enum CaptureUpdate<'a> {
+pub(crate) enum CaptureUpdate<'a> {
     Bytes(&'a [u8]),
     Incomplete,
+}
+
+pub(super) enum ExitMode<'a> {
+    Foreground,
+    Published,
+    Yielding {
+        published: &'a CancellationToken,
+        claim: &'a (dyn Fn() -> bool + Sync),
+    },
 }
 
 pub(super) struct ManagedChild {
@@ -61,18 +71,18 @@ impl ManagedChild {
         mut self,
         deadline: Option<Instant>,
         stop: &CancellationToken,
-        capture: impl Fn(CaptureUpdate<'_>),
-        handoff: Option<&CancellationToken>,
-        claim_inline: impl FnOnce() -> bool,
+        capture: impl Fn(CaptureUpdate<'_>) -> Option<SpillChunk>,
+        exit_mode: ExitMode<'_>,
     ) -> Termination {
         // No queued payload or reader tasks. A single supervisor drains both pipes
         // with two fixed 8 KiB buffers and writes directly to the 64 KiB tail.
         let mut pipes = Pipes {
             stdout: Pipe::new(self.child.stdout().take()),
             stderr: Pipe::new(self.child.stderr().take()),
+            spill: None,
         };
         if pipes.stdout.reader.is_none() || pipes.stderr.reader.is_none() {
-            capture(CaptureUpdate::Incomplete);
+            let _ = capture(CaptureUpdate::Incomplete);
         }
         let mut phase = tokio::select! {
             biased;
@@ -91,16 +101,24 @@ impl ManagedChild {
             } => match never {},
         };
         let mut inline = false;
-        if matches!(phase, Phase::Exited)
-            && let Some(handoff) = handoff
-        {
+        if matches!(phase, Phase::Exited) && !matches!(exit_mode, ExitMode::Published) {
             tokio::select! {
                 biased;
                 () = stop.cancelled() => phase = Phase::Stopped,
                 () = wait_for_deadline(deadline) => phase = Phase::TimedOut,
-                () = handoff.cancelled() => {},
+                () = async {
+                    if let ExitMode::Yielding { published, .. } = &exit_mode {
+                        published.cancelled().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {},
                 () = pipes.drain_until_quiet(&capture) => {
-                    inline = claim_inline();
+                    inline = match exit_mode {
+                        ExitMode::Foreground => true,
+                        ExitMode::Yielding { claim, .. } => claim(),
+                        ExitMode::Published => false,
+                    };
                     if !inline && stop.is_cancelled() {
                         phase = Phase::Stopped;
                     }
@@ -138,8 +156,9 @@ impl ManagedChild {
                 .await
                 .is_err()
         {
-            capture(CaptureUpdate::Incomplete);
+            let _ = capture(CaptureUpdate::Incomplete);
         }
+        pipes.flush_spill().await;
         let exit = Exit {
             exit_code: status.and_then(|status| status.code()),
             signal: status.and_then(|status| status.signal()),
@@ -213,26 +232,43 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
 struct Pipes<Out, Err> {
     stdout: Pipe<Out>,
     stderr: Pipe<Err>,
+    spill: Option<SpillChunk>,
 }
 
 impl<Out: AsyncRead + Unpin, Err: AsyncRead + Unpin> Pipes<Out, Err> {
-    async fn drain(&mut self, capture: &impl Fn(CaptureUpdate<'_>)) {
+    async fn flush_spill(&mut self) {
+        if let Some(spill) = &mut self.spill {
+            spill.send().await;
+            self.spill = None;
+        }
+    }
+
+    async fn drain(&mut self, capture: &impl Fn(CaptureUpdate<'_>) -> Option<SpillChunk>) {
         while self.read_chunk(capture).await {}
     }
 
-    async fn drain_until_quiet(&mut self, capture: &impl Fn(CaptureUpdate<'_>)) {
+    async fn drain_until_quiet(
+        &mut self,
+        capture: &impl Fn(CaptureUpdate<'_>) -> Option<SpillChunk>,
+    ) {
         while let Ok(true) = tokio::time::timeout(EXIT_STDIO_GRACE, self.read_chunk(capture)).await
         {
         }
     }
 
-    async fn read_chunk(&mut self, capture: &impl Fn(CaptureUpdate<'_>)) -> bool {
+    async fn read_chunk(
+        &mut self,
+        capture: &impl Fn(CaptureUpdate<'_>) -> Option<SpillChunk>,
+    ) -> bool {
+        self.flush_spill().await;
         while self.stdout.reader.is_some() || self.stderr.reader.is_some() {
             let captured = tokio::select! {
                 captured = self.stdout.read(capture), if self.stdout.reader.is_some() => captured,
                 captured = self.stderr.read(capture), if self.stderr.reader.is_some() => captured,
             };
-            if captured {
+            if let Some(spill) = captured {
+                self.spill = spill;
+                self.flush_spill().await;
                 return true;
             }
         }
@@ -253,22 +289,24 @@ impl<R: AsyncRead + Unpin> Pipe<R> {
         }
     }
 
-    async fn read(&mut self, capture: &impl Fn(CaptureUpdate<'_>)) -> bool {
+    async fn read(
+        &mut self,
+        capture: &impl Fn(CaptureUpdate<'_>) -> Option<SpillChunk>,
+    ) -> Option<Option<SpillChunk>> {
         if let Some(reader) = &mut self.reader {
             match reader.read(&mut self.buffer).await {
                 Ok(0) => self.reader = None,
                 Ok(n) => {
-                    capture(CaptureUpdate::Bytes(&self.buffer[..n]));
-                    return true;
+                    return Some(capture(CaptureUpdate::Bytes(&self.buffer[..n])));
                 }
                 Err(error) => {
                     tracing::warn!("Cannot read background shell output: {error}");
-                    capture(CaptureUpdate::Incomplete);
+                    let _ = capture(CaptureUpdate::Incomplete);
                     self.reader = None;
                 }
             }
         }
-        false
+        None
     }
 }
 
@@ -299,13 +337,17 @@ mod tests {
         let mut pipes = Pipes {
             stdout: Pipe::new(Some(BrokenPipe)),
             stderr: Pipe::new(Some(&b"stderr still captured"[..])),
+            spill: None,
         };
         let incomplete = Cell::new(false);
         let seen = Cell::new(0);
         pipes
-            .drain(&|update| match update {
-                CaptureUpdate::Incomplete => incomplete.set(true),
-                CaptureUpdate::Bytes(bytes) => seen.set(seen.get() + bytes.len()),
+            .drain(&|update| {
+                match update {
+                    CaptureUpdate::Incomplete => incomplete.set(true),
+                    CaptureUpdate::Bytes(bytes) => seen.set(seen.get() + bytes.len()),
+                }
+                None
             })
             .await;
         assert!(incomplete.get(), "a read error is not EOF");

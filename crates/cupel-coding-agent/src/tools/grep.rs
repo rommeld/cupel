@@ -17,9 +17,9 @@ use tokio_util::sync::CancellationToken;
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 
 use crate::search::{
-    CodeSearch, SearchLimit, SearchMatch, SearchQuery, resolve_to_root, source_locator,
+    CodeSearch, MAX_CONTEXT_LINES, SearchLimit, SearchMatch, SearchQuery, source_locator,
 };
-use crate::tools::grep_rank::{Bucket, FileSummary, Ranker};
+use crate::tools::grep_rank::{Bucket, FileSummary};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, GREP_MAX_LINE_LENGTH, TruncationOptions, format_size, truncate_head,
     truncate_line,
@@ -28,8 +28,6 @@ use crate::truncate::{
 const DEFAULT_LIMIT: usize = 100;
 const FILES_DEFAULT_LIMIT: usize = 10;
 const FILES_PER_FILE_CAP: usize = 20;
-const FILES_RANKING_WINDOW: usize = 500;
-const FILES_PREVIEW_MAX_CHARS: usize = 120;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -184,13 +182,10 @@ impl AgentTool for GrepTool {
         let limit = match args.output_mode {
             OutputMode::Content => SearchLimit::Matches(effective_limit),
             OutputMode::Files => SearchLimit::Files {
-                max_files: effective_limit.max(FILES_RANKING_WINDOW),
+                max_files: effective_limit,
                 per_file: FILES_PER_FILE_CAP,
             },
         };
-
-        // The search scope affects ranking, never the meaning of a result path.
-        let search_path = resolve_to_root(args.path.as_deref().unwrap_or("."), &self.cwd);
 
         // The scope, spelled out for the no match message, a model that sees
         // what was searched where fixes a bad glob instead of retrying blind.
@@ -208,15 +203,12 @@ impl AgentTool for GrepTool {
             glob: args.glob,
             ignore_case: args.ignore_case,
             literal: args.literal,
+            context: args.context.min(MAX_CONTEXT_LINES as u64) as usize,
             limit,
         };
-        // Files mode needs to know what a definition of the pattern looks
-        // like, the ranker reads that off the query before the backend
-        // takes ownership of it.
-        let ranker = (args.output_mode == OutputMode::Files).then(|| Ranker::new(&query));
         let outcome = self.backend.search(query, cancel.clone()).await?;
 
-        if outcome.matches.is_empty() {
+        if outcome.matches.is_empty() && outcome.ranked_files.is_empty() {
             return Ok(AgentToolResult::text(format!(
                 "No matches found for {scope}"
             )));
@@ -224,18 +216,17 @@ impl AgentTool for GrepTool {
 
         let format_path = |path: &Path| source_locator(path, &self.cwd);
 
-        if let Some(ranker) = ranker {
-            let ranked = ranker.rank(&outcome.matches, &search_path);
+        if args.output_mode == OutputMode::Files {
             return Ok(render_files(
-                &ranked,
-                outcome.limit_reached,
+                &outcome.ranked_files,
+                outcome.matched_files,
                 effective_limit,
                 format_path,
             ));
         }
 
-        let (output_lines, lines_truncated, context_changed) =
-            render_content(&outcome.matches, args.context, format_path, &cancel)?;
+        let (output_lines, lines_truncated) =
+            render_content(&outcome.matches, &outcome.context, format_path, &cancel)?;
 
         // No line limit here, the match limit already capped the row count.
         let raw_output = output_lines.join("\n");
@@ -253,7 +244,7 @@ impl AgentTool for GrepTool {
         if outcome.limit_reached {
             notices.push(format!(
                 "{effective_limit} matches limit reached. Use limit={} for more, or refine pattern",
-                effective_limit * 2
+                effective_limit.saturating_mul(2)
             ));
             details.insert("matchLimitReached".into(), json!(effective_limit));
         }
@@ -266,10 +257,6 @@ impl AgentTool for GrepTool {
                 "Some lines truncated to {GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines"
             ));
             details.insert("linesTruncated".into(), json!(true));
-        }
-        if context_changed {
-            notices.push("Context unavailable or changed since search. Match text is from search; use read for current source".into());
-            details.insert("contextChanged".into(), json!(true));
         }
         if !notices.is_empty() {
             output.push_str(&format!("\n\n[{}]", notices.join(". ")));
@@ -285,122 +272,62 @@ impl AgentTool for GrepTool {
     }
 }
 
-/// Union context intervals before rendering, keeping the union of match markers.
-/// Match text remains the backend observation, not a later reread of that line.
 fn render_content(
     matches: &[SearchMatch],
-    context: u64,
+    context: &[SearchMatch],
     format_path: impl Fn(&Path) -> String,
     cancel: &CancellationToken,
-) -> Result<(Vec<String>, bool, bool), ToolError> {
-    let mut files: BTreeMap<&Path, BTreeMap<u64, &str>> = BTreeMap::new();
-    for m in matches {
+) -> Result<(Vec<String>, bool), ToolError> {
+    let mut files = BTreeMap::new();
+    let rows = context
+        .iter()
+        .map(|row| (row, '-'))
+        .chain(matches.iter().map(|row| (row, ':')));
+    for (row, separator) in rows {
         files
-            .entry(&m.path)
-            .or_default()
-            .insert(m.line_number, &m.line);
+            .entry(row.path.as_path())
+            .or_insert_with(BTreeMap::new)
+            .insert(row.line_number, (separator, row.line.as_str()));
     }
     let mut output = Vec::new();
     let mut output_bytes = 0_usize;
     let mut lines_truncated = false;
-    let mut context_changed = false;
-    'files: for (path, hits) in files {
+    'files: for (path, rows) in files {
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
         let locator = format_path(path);
-        let content = (context > 0).then(|| std::fs::read_to_string(path));
-        let lines: Vec<&str> = match &content {
-            Some(Ok(content)) => {
-                // Match the search backend's removal of a leading UTF-8 BOM.
-                content
-                    .strip_prefix('\u{feff}')
-                    .unwrap_or(content)
-                    .lines()
-                    .collect()
+        for (line, (separator, source)) in rows {
+            if cancel.is_cancelled() {
+                return Err("Operation aborted".into());
             }
-            Some(Err(_)) => {
-                context_changed = true;
-                Vec::new()
-            }
-            None => Vec::new(),
-        };
-        let mut windows = Vec::new();
-        for (&line, &text) in &hits {
-            let current = usize::try_from(line.saturating_sub(1))
-                .ok()
-                .and_then(|i| lines.get(i));
-            let (start, end) = if context > 0 && current.copied() == Some(text) {
-                (
-                    line.saturating_sub(context).max(1),
-                    line.saturating_add(context).min(lines.len() as u64),
-                )
-            } else {
-                context_changed |= context > 0;
-                (line, line)
-            };
-            windows.push((start, end));
-        }
-        windows.sort_unstable();
-        let mut intervals: Vec<(u64, u64)> = Vec::new();
-        for (start, end) in windows {
-            if let Some((_, previous_end)) = intervals.last_mut()
-                && start <= previous_end.saturating_add(1)
-            {
-                *previous_end = (*previous_end).max(end);
-            } else {
-                intervals.push((start, end));
-            }
-        }
-        for (start, end) in intervals {
-            for line in start..=end {
-                if cancel.is_cancelled() {
-                    return Err("Operation aborted".into());
-                }
-                let source = hits.get(&line).copied().unwrap_or_else(|| {
-                    usize::try_from(line - 1)
-                        .ok()
-                        .and_then(|i| lines.get(i))
-                        .copied()
-                        .unwrap_or("")
-                });
-                let (text, truncated) = truncate_line(source, GREP_MAX_LINE_LENGTH);
-                lines_truncated |= truncated;
-                let separator = if hits.contains_key(&line) { ':' } else { '-' };
-                let row = format!("{locator}{separator}{line}{separator} {text}");
-                output_bytes =
-                    output_bytes.saturating_add(row.len() + usize::from(!output.is_empty()));
-                output.push(row);
-                // Keep one overflow row so the usual truncation path emits its
-                // notice, without building unbounded context output in memory.
-                if output_bytes > DEFAULT_MAX_BYTES {
-                    break 'files;
-                }
+            let (text, truncated) = truncate_line(source, GREP_MAX_LINE_LENGTH);
+            lines_truncated |= truncated;
+            let row = format!("{locator}{separator}{line}{separator} {text}");
+            output_bytes = output_bytes.saturating_add(row.len() + usize::from(!output.is_empty()));
+            output.push(row);
+            if output_bytes > DEFAULT_MAX_BYTES {
+                break 'files;
             }
         }
     }
-    Ok((output, lines_truncated, context_changed))
+    Ok((output, lines_truncated))
 }
 
 /// `files` mode output, the best `limit` files, one line each.
 fn render_files(
     ranked: &[FileSummary],
-    window_full: bool,
+    total: usize,
     limit: usize,
     format_path: impl Fn(&Path) -> String,
 ) -> AgentToolResult {
-    let total = ranked.len();
     let mut lines: Vec<String> = Vec::with_capacity(total.min(limit));
     for file in ranked.iter().take(limit) {
         let mut line = format!("{}:{}", format_path(&file.path), file.preview_line_number);
         if file.defines_name {
             line.push_str(" [def]");
         }
-        let more = if file.matches >= FILES_PER_FILE_CAP {
-            "+"
-        } else {
-            ""
-        };
+        let more = if file.more_matches { "+" } else { "" };
         let plural = if file.matches == 1 { "" } else { "es" };
         line.push_str(&format!(" ({}{more} match{plural}", file.matches));
         match file.bucket {
@@ -408,8 +335,7 @@ fn render_files(
             Bucket::Test => line.push_str(", test"),
             Bucket::LowPriority => line.push_str(", low-priority"),
         }
-        let (preview, _was_truncated) = truncate_line(file.preview.trim(), FILES_PREVIEW_MAX_CHARS);
-        line.push_str(&format!(")  {preview}"));
+        line.push_str(&format!(")  {}", file.preview));
         lines.push(line);
     }
 
@@ -425,13 +351,11 @@ fn render_files(
     let mut output = truncation.content;
     let mut details = serde_json::Map::new();
     let mut notices: Vec<String> = Vec::new();
-    if total > limit || window_full {
-        // Only lower bound.
-        let more = if window_full { "+" } else { "" };
+    if total > limit {
         notices.push(format!(
-            "{} of {total}{more} files shown. Use limit={} for more, or refine pattern",
+            "{} of {total} files shown. Use limit={} for more, or refine pattern",
             lines.len(),
-            limit * 2,
+            limit.saturating_mul(2),
         ));
         details.insert("fileLimitReached".into(), json!(limit));
     }
@@ -595,7 +519,7 @@ mod tests {
                     expected.canonicalize().unwrap(),
                     "scope={scope}, mode={mode}, locator={locator}"
                 );
-                assert!(text_of(&read).contains("Coverage: complete file"));
+                assert!(text_of(&read).contains("; complete file]"));
             }
         }
     }
@@ -651,31 +575,36 @@ mod tests {
         assert_eq!(details["matchLimitReached"], 2);
     }
 
-    #[test]
-    fn changed_or_unavailable_context_does_not_replace_the_observed_match() {
+    #[tokio::test]
+    async fn captured_context_renders_after_the_file_is_removed() {
         let root = temp_root("changed-context");
         let path = root.join("a.txt");
-        std::fs::write(&path, "one\nnew text\nhit\nfour\n").unwrap();
-        let matches = vec![
-            SearchMatch {
-                path: path.clone(),
-                line_number: 2,
-                line: "old hit".to_string(),
-            },
-            SearchMatch {
-                path: path.clone(),
-                line_number: 3,
-                line: "hit".to_string(),
-            },
-        ];
-        let (rows, _, changed) = render_content(
-            &matches,
-            2,
+        std::fs::write(&path, "one\nold hit\nhit\nfour\n").unwrap();
+        let cancel = CancellationToken::new();
+        let outcome = GrepSearch::new(&root)
+            .search(
+                SearchQuery {
+                    pattern: "hit".to_string(),
+                    path: None,
+                    glob: None,
+                    ignore_case: false,
+                    literal: true,
+                    context: 2,
+                    limit: SearchLimit::Matches(2),
+                },
+                cancel.clone(),
+            )
+            .await
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let (rows, _) = render_content(
+            &outcome.matches,
+            &outcome.context,
             |path| source_locator(path, &root),
-            &CancellationToken::new(),
+            &cancel,
         )
         .unwrap();
-        assert!(changed);
+        assert!(!outcome.limit_reached);
         assert_eq!(
             rows,
             [
@@ -685,24 +614,18 @@ mod tests {
                 "a.txt-4- four"
             ]
         );
-        std::fs::remove_file(&path).unwrap();
-        let (rows, _, changed) = render_content(
-            &matches,
-            2,
-            |path| source_locator(path, &root),
-            &CancellationToken::new(),
-        )
-        .unwrap();
-        assert!(changed);
-        assert_eq!(rows, ["a.txt:2: old hit", "a.txt:3: hit"]);
     }
 
     #[tokio::test]
     async fn limit_notice_appears() {
         let root = temp_root("limitnotice");
-        std::fs::write(root.join("a.txt"), "x\n".repeat(10)).unwrap();
-        let result = run_tool(&root, json!({"pattern": "x", "limit": 3})).await;
+        std::fs::write(root.join("a.txt"), "x\nx\nx\ntrailing\nskip\nx\n").unwrap();
+        let result = run_tool(&root, json!({"pattern": "^x$", "limit": 3, "context": 1})).await;
         let text = text_of(&result);
+        assert!(
+            text.starts_with("a.txt:1: x\na.txt:2: x\na.txt:3: x\na.txt-4- trailing\n\n"),
+            "{text}"
+        );
         assert!(text.contains("3 matches limit reached"), "got: {text}");
         assert!(text.contains("limit=6"), "got: {text}");
     }
@@ -761,8 +684,8 @@ mod tests {
     #[tokio::test]
     async fn files_mode_limit_counts_files() {
         let root = temp_root("fileslimit");
-        for name in ["a.txt", "b.txt", "c.txt"] {
-            std::fs::write(root.join(name), "x\n".repeat(30)).unwrap();
+        for (name, count) in [("a.txt", 20), ("b.txt", 21), ("c.txt", 21)] {
+            std::fs::write(root.join(name), "x\n".repeat(count)).unwrap();
         }
         let result = run_tool(
             &root,
@@ -771,7 +694,7 @@ mod tests {
         .await;
         let text = text_of(&result);
         assert!(
-            text.starts_with("a.txt:1 (20+ matches)  x\nb.txt:1 (20+ matches)  x"),
+            text.starts_with("a.txt:1 (20 matches)  x\nb.txt:1 (20+ matches)  x"),
             "got: {text}"
         );
         assert!(text.contains("2 of 3 files shown"), "got: {text}");
@@ -780,9 +703,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn files_mode_ranks_the_whole_window_before_applying_the_limit() {
+    async fn files_mode_detects_definitions_after_the_former_file_cutoff() {
         let root = temp_root("fileswindow");
-        std::fs::write(root.join("a.rs"), "use crate::Widget;\n").unwrap();
+        for index in 0..550 {
+            std::fs::write(root.join(format!("a{index:04}.rs")), "use crate::Widget;\n").unwrap();
+        }
         std::fs::write(root.join("z.rs"), "pub struct Widget;\n").unwrap();
         let result = run_tool(
             &root,
@@ -794,6 +719,30 @@ mod tests {
             text.starts_with("z.rs:1 [def] (1 match)  pub struct Widget;"),
             "got: {text}"
         );
-        assert!(text.contains("1 of 2 files shown"), "got: {text}");
+        assert!(text.contains("1 of 551 files shown"), "got: {text}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn files_mode_uses_definitions_beyond_the_displayed_match_count() {
+        let root = temp_root("files-late-definition");
+        std::fs::write(root.join("a.rs"), "use crate::Widget;\n").unwrap();
+        let references = "use crate::Widget;\n".repeat(20);
+        std::fs::write(
+            root.join("b.rs"),
+            format!("{references}pub struct Widget;\n"),
+        )
+        .unwrap();
+        let result = run_tool(
+            &root,
+            json!({"pattern": "Widget", "outputMode": "files", "limit": 1}),
+        )
+        .await;
+        let text = text_of(&result);
+        assert!(
+            text.starts_with("b.rs:21 [def] (20+ matches)  pub struct Widget;"),
+            "{text}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

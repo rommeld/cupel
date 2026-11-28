@@ -78,6 +78,39 @@ fn text(result: &AgentToolResult) -> &str {
 }
 
 #[tokio::test]
+async fn inline_progress_reaches_the_caller_before_completion() {
+    let cwd = std::env::temp_dir().join(format!("cupel-inline-progress-{}", std::process::id()));
+    std::fs::create_dir_all(&cwd).unwrap();
+    let release = cwd.join("release");
+    let jobs = Arc::new(Jobs::default());
+    let result = BashTool::new(&cwd).with_jobs(Arc::clone(&jobs)).execute(
+        "inline", json!({"command": "echo ready; while [[ ! -f release ]]; do sleep .01; done; echo done", "yield_after_ms": 2000}),
+        CancellationToken::new(),
+        Some(Arc::new(move |update| {
+            if text(&update).contains("ready") {
+                std::fs::File::create(&release).unwrap();
+            }
+        })),
+    ).await;
+    jobs.shutdown().await;
+    std::fs::remove_dir_all(cwd).unwrap();
+    let result = result.unwrap();
+    assert_eq!(text(&result), "ready\ndone\n");
+    assert!(result.details.is_none());
+}
+
+#[test]
+fn capped_job_tail_does_not_start_with_half_a_character() {
+    let mut capture = Capture::default();
+    capture.append(&[b'x', 0xe2, 0x82]);
+    let mut trailing = vec![b'b'; TAIL_BYTES - 1];
+    trailing[0] = 0xac;
+    capture.append(&trailing);
+    assert!(capture.truncated);
+    assert_eq!(capture.output(), "b".repeat(TAIL_BYTES - 2));
+}
+
+#[tokio::test]
 async fn bash_yield_inline_drains_inherited_output_like_foreground_bash() {
     let cwd =
         std::env::temp_dir().join(format!("cupel-inline-{}-{}", std::process::id(), now_ms()));
@@ -556,6 +589,7 @@ async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
         Stop,
         Timeout,
         Shutdown,
+        ForegroundTimeout,
     }
 
     let cwd = std::env::temp_dir().join(format!(
@@ -569,10 +603,15 @@ async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
             if [[ -e release ]]; then touch witness; exit; fi
             sleep .02
         done) </dev/null >/dev/null 2>&1 &
-        printf '%s\n' "$!"
+        printf '%s\n' "$!" > pid
         wait
     "#;
-    for action in [Cleanup::Stop, Cleanup::Timeout, Cleanup::Shutdown] {
+    for action in [
+        Cleanup::Stop,
+        Cleanup::Timeout,
+        Cleanup::Shutdown,
+        Cleanup::ForegroundTimeout,
+    ] {
         let jobs = Jobs::default();
         let other_jobs = Jobs::default();
         let dir = cwd.join(format!("{action:?}"));
@@ -588,19 +627,30 @@ async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
             &jobs
         };
         let cancel = CancellationToken::new();
-        let job_timeout = matches!(action, Cleanup::Timeout).then_some(Duration::from_secs(30));
-        let id = jobs
-            .start(command, script, job_timeout, &cancel)
-            .await
-            .unwrap();
+        let (id, foreground) = if matches!(action, Cleanup::ForegroundTimeout) {
+            let tool = BashTool::new(&dir);
+            let args = json!({"command": script, "timeout": 30});
+            let task = tokio::spawn(async move {
+                tool.execute("foreground", args, CancellationToken::new(), None)
+                    .await
+            });
+            (String::new(), Some(task))
+        } else {
+            let job_timeout = matches!(action, Cleanup::Timeout).then_some(Duration::from_secs(30));
+            let id = jobs
+                .start(command, script, job_timeout, &cancel)
+                .await
+                .unwrap();
+            (id, None)
+        };
         let other_id = other_registry
             .start(other_command, script, None, &cancel)
             .await
             .unwrap();
         let pid = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                let (_, output) = jobs.inspect(&id, true).unwrap();
-                if let Some((pid, _)) = output.unwrap().split_once('\n')
+                if let Ok(contents) = std::fs::read_to_string(dir.join("pid"))
+                    && let Some((pid, _)) = contents.split_once('\n')
                     && dir.join("ready").exists()
                     && other_dir.join("ready").exists()
                 {
@@ -614,13 +664,19 @@ async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
 
         match action {
             Cleanup::Stop => jobs.stop(&id).await.unwrap(),
-            Cleanup::Timeout => {
+            Cleanup::Timeout | Cleanup::ForegroundTimeout => {
                 tokio::time::pause();
                 tokio::time::advance(Duration::from_secs(30)).await;
                 tokio::time::resume();
-                let (status, _) = completed(&jobs, &id).await;
-                assert_eq!(status["state"], "timedOut");
-                assert!(status["cleanupError"].is_null(), "{status}");
+                if let Some(task) = foreground {
+                    let error = task.await.unwrap().unwrap_err().to_string();
+                    assert!(error.contains("timed out"), "{error}");
+                    assert!(!error.contains("cleanup was incomplete"), "{error}");
+                } else {
+                    let (status, _) = completed(&jobs, &id).await;
+                    assert_eq!(status["state"], "timedOut");
+                    assert!(status["cleanupError"].is_null(), "{status}");
+                }
             }
             Cleanup::Shutdown => jobs.shutdown().await,
         }

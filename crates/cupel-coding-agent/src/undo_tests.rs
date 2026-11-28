@@ -87,14 +87,39 @@ async fn one_turn_restores_creation_deletion_renames_and_overwritten_destination
     fixture.write("source", "source\n");
     fixture.write("destination", "my destination\n");
     fixture.write("overwrite", "my original\n");
+    #[cfg(unix)]
+    let mode_of = |path: &str| {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(fixture.cwd.join(path))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    #[cfg(unix)]
+    for (path, mode) in [("source", 0o755), ("destination", 0o644)] {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            fixture.cwd.join(path),
+            std::fs::Permissions::from_mode(mode),
+        )
+        .unwrap();
+    }
     fixture.patch("*** Add File: nested/new\n+new\n*** Delete File: deleted.bin\n*** Update File: source\n*** Move to: destination\n@@\n-source\n+moved\n*** Add File: overwrite\n+replacement\n").await.unwrap();
     assert_eq!(fixture.read("destination"), b"moved\n");
+    assert!(!fixture.cwd.join("source").exists());
+    #[cfg(unix)]
+    assert_eq!(mode_of("destination"), 0o755);
+    let changes = fixture.resumed().changes().await.unwrap();
+    assert!(changes.contains("+moved"), "{changes}");
     fixture.resumed().undo().await.unwrap();
     assert!(!fixture.cwd.join("nested/new").exists());
     assert_eq!(fixture.read("deleted.bin"), [0, 255, 1, 128]);
     assert_eq!(fixture.read("source"), b"source\n");
     assert_eq!(fixture.read("destination"), b"my destination\n");
     assert_eq!(fixture.read("overwrite"), b"my original\n");
+    #[cfg(unix)]
+    assert_eq!((mode_of("source"), mode_of("destination")), (0o755, 0o644));
 }
 
 #[tokio::test]
@@ -401,8 +426,8 @@ async fn partial_patches_reconcile_only_the_previous_or_intended_contents() {
         let mut recording = fixture.journal.lock().await;
         recording
             .prepare(&[
-                (fixture.cwd.join("a"), Some(b"after\n")),
-                (fixture.cwd.join("b"), Some(b"after\n")),
+                RecordedEdit::new(&fixture.cwd.join("a"), Some(b"after\n")),
+                RecordedEdit::new(&fixture.cwd.join("b"), Some(b"after\n")),
             ])
             .unwrap();
         fixture.write("a", "after\n");
@@ -420,7 +445,7 @@ async fn write_ahead_manifest_recovers_a_crash_after_writing_without_finalizatio
     {
         let mut recording = fixture.journal.lock().await;
         recording
-            .prepare(&[(fixture.cwd.join("a"), Some(b"after\n"))])
+            .prepare(&[RecordedEdit::new(&fixture.cwd.join("a"), Some(b"after\n"))])
             .unwrap();
         fixture.write("a", "after\n");
     }
@@ -435,7 +460,7 @@ async fn unexpected_bytes_after_an_interrupted_patch_are_never_blindly_restored(
     {
         let mut recording = fixture.journal.lock().await;
         recording
-            .prepare(&[(fixture.cwd.join("a"), Some(b"after\n"))])
+            .prepare(&[RecordedEdit::new(&fixture.cwd.join("a"), Some(b"after\n"))])
             .unwrap();
         fixture.write("a", "partial write or user edit");
         assert_eq!(recording.finish().unwrap(), Some(UNAVAILABLE));
@@ -614,7 +639,7 @@ async fn cleanup_waits_for_inflight_patch_recording() {
     fixture.write("a", "original\n");
     let mut recording = fixture.journal.lock().await;
     recording
-        .prepare(&[(fixture.cwd.join("a"), Some(b"edited\n"))])
+        .prepare(&[RecordedEdit::new(&fixture.cwd.join("a"), Some(b"edited\n"))])
         .unwrap();
     let journal = Arc::clone(&fixture.journal);
     let mut cleanup = tokio::spawn(async move { journal.cleanup().await });

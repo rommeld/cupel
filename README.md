@@ -83,12 +83,15 @@ result, or stop the job. Canceling a wait leaves the command running. Cupel stop
 the session reloads or ends. If Bash finishes before returning a job ID, normal shell exit does not
 stop its descendants.
 
-Job cleanup is best effort. On macOS and Linux, Cupel also looks for descendants in other process
-groups within the job's Unix session. This requires `/bin/ps`, plus process file descriptors on
-Linux or Apple's private process identity API on macOS. If Cupel cannot complete cleanup, `jobs stop`
-reports an error and the retained job result includes `cleanupError`. On other Unix platforms,
-cleanup only targets the original process group. Processes that create a new Unix session are
-outside job cleanup.
+On timeout or cancellation, Bash cleanup is best effort. On macOS and Linux, Cupel also looks for
+descendants in other process groups within the command's Unix session. This requires `/bin/ps`, plus
+process file descriptors on Linux or Apple's private process identity API on macOS. Incomplete
+cleanup is reported in foreground output or in a managed job's `cleanupError`. On other Unix
+platforms, cleanup only targets the original process group. Processes that create a new Unix session
+are outside this cleanup boundary.
+
+When Bash reports a full-output log path, the file remains readable until the session closes
+normally, even if the command failed. A crash can leave the file behind.
 
 ### Configuration and sessions
 

@@ -4,8 +4,11 @@
 mod child;
 #[cfg(unix)]
 mod process_session;
+#[cfg(unix)]
+pub(crate) use child::CaptureUpdate;
 
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,6 +22,10 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
 use crate::tools::bash::{OutputAccumulator, RunOutcome};
+#[cfg(unix)]
+use crate::tools::bash_spill::SpillChunk;
+#[cfg(unix)]
+use cupel_agent::types::ToolUpdateFn;
 
 const MAX_LIVE: usize = 2;
 const MAX_COMPLETED: usize = 8;
@@ -37,6 +44,7 @@ struct State {
     closed: bool,
     live: Vec<Live>,
     completed: VecDeque<Arc<Completed>>,
+    spills: Vec<PathBuf>,
 }
 
 struct Live {
@@ -54,6 +62,7 @@ enum Visibility {
         completion: oneshot::Sender<Completed>,
         output: PendingOutput,
         handoff: Handoff,
+        progress: Option<watch::Sender<Option<String>>>,
     },
     #[cfg(unix)]
     Discarded,
@@ -115,6 +124,32 @@ struct Termination {
     cleanup_error: Option<String>,
 }
 
+#[cfg(unix)]
+impl Termination {
+    fn outcome(&self) -> RunOutcome {
+        match self.phase {
+            Phase::Exited => RunOutcome::Exited(self.exit.exit_code),
+            Phase::TimedOut => RunOutcome::TimedOut,
+            Phase::Stopped | Phase::Stopping => RunOutcome::Aborted,
+            Phase::Running | Phase::Failed => RunOutcome::Failed,
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(crate) async fn run_foreground(
+    command: tokio::process::Command,
+    deadline: Option<Instant>,
+    cancel: &CancellationToken,
+    capture: impl Fn(CaptureUpdate<'_>) -> Option<SpillChunk> + Sync,
+) -> Result<(RunOutcome, Option<String>), String> {
+    let stop = cancel.child_token();
+    let termination = child::ManagedChild::spawn(command)?
+        .run(deadline, &stop, capture, child::ExitMode::Foreground)
+        .await;
+    Ok((termination.outcome(), termination.cleanup_error))
+}
+
 struct Record {
     id: String,
     command: String,
@@ -136,6 +171,15 @@ impl Capture {
         self.tail.drain(..excess.min(self.tail.len()));
         self.tail
             .extend(&bytes[bytes.len().saturating_sub(TAIL_BYTES)..]);
+        if self.truncated {
+            while self
+                .tail
+                .front()
+                .is_some_and(|&byte| crate::truncate::is_utf8_continuation(byte))
+            {
+                self.tail.pop_front();
+            }
+        }
     }
 
     fn output(&self) -> String {
@@ -240,12 +284,7 @@ impl Completed {
 
     #[cfg(unix)]
     fn inline_result(self, output: &PendingOutput) -> Result<YieldOutcome, String> {
-        let outcome = match self.termination.phase {
-            Phase::Exited => RunOutcome::Exited(self.termination.exit.exit_code),
-            Phase::TimedOut => RunOutcome::TimedOut,
-            Phase::Stopped | Phase::Stopping => RunOutcome::Aborted,
-            Phase::Running | Phase::Failed => RunOutcome::Failed,
-        };
+        let outcome = self.termination.outcome();
         let mut output = output
             .lock()
             .map_err(|error| format!("Inline output unavailable: {error}"))?
@@ -295,6 +334,30 @@ impl Jobs {
         for finished in self.close() {
             finished.cancelled().await;
         }
+        let spills = match self.state.lock() {
+            Ok(mut state) => std::mem::take(&mut state.spills),
+            Err(error) => {
+                tracing::warn!("Cannot take session spill paths: {error}");
+                return;
+            }
+        };
+        for path in spills {
+            if let Err(error) = tokio::fs::remove_file(&path).await
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %path.display(), "Cannot remove session spill: {error}");
+            }
+        }
+    }
+
+    pub(crate) fn retain_spill(&self, path: &Path) -> bool {
+        if let Ok(mut state) = self.state.lock()
+            && !state.closed
+        {
+            state.spills.push(path.to_path_buf());
+            return true;
+        }
+        false
     }
 
     pub(crate) fn close(&self) -> Vec<CancellationToken> {
@@ -342,8 +405,10 @@ impl Jobs {
         timeout: Option<Duration>,
         yield_after: Duration,
         cancel: &CancellationToken,
+        on_update: Option<ToolUpdateFn>,
     ) -> Result<YieldOutcome, String> {
         let (sender, mut completion) = oneshot::channel();
+        let (progress, mut updates) = watch::channel(None);
         let output = Arc::new(Mutex::new(Some(Box::new(OutputAccumulator::new()))));
         let started = self.spawn(
             display_command,
@@ -352,6 +417,7 @@ impl Jobs {
                 completion: sender,
                 output: Arc::clone(&output),
                 handoff: Handoff::Available(CancellationToken::new()),
+                progress: on_update.is_some().then_some(progress),
             },
             cancel,
             || child::ManagedChild::spawn(command),
@@ -363,6 +429,7 @@ impl Jobs {
             .ok_or("yield_after_ms is too large")?;
 
         let mut try_handoff = true;
+        let mut watch_progress = on_update.is_some();
         loop {
             tokio::select! {
                 biased;
@@ -395,6 +462,14 @@ impl Jobs {
                             output.take();
                         }
                         return Ok(YieldOutcome::Yielded(snapshot));
+                    }
+                }
+                update = updates.changed(), if watch_progress => {
+                    watch_progress = update.is_ok();
+                    if let Some(on_update) = &on_update
+                        && let Some(output) = updates.borrow_and_update().clone()
+                    {
+                        on_update(cupel_agent::types::AgentToolResult::text(output));
                     }
                 }
             }
@@ -447,9 +522,15 @@ impl Jobs {
         if cancel.is_cancelled() {
             return Err("Operation aborted".to_string());
         }
+        let deadline = timeout
+            .map(|duration| {
+                Instant::now()
+                    .checked_add(duration)
+                    .ok_or("timeout deadline is out of range")
+            })
+            .transpose()?;
         let child = spawn_child()?;
         let started_at = Instant::now();
-        let deadline = timeout.map(|timeout| started_at + timeout);
         // If cancellation won during spawn, the worker still reaps the child
         // but no handle is exposed.
         let interrupted = cancel.is_cancelled();
@@ -461,23 +542,35 @@ impl Jobs {
         let done = finished.clone().drop_guard();
         let worker_stop = stop.clone();
         let caller_cancel = cancel.clone();
-        let (pending_output, handoff) = match &visibility {
+        let (pending_output, handoff, progress) = match &visibility {
             Visibility::Pending {
                 output,
                 handoff: Handoff::Available(published),
+                progress,
                 ..
-            } if !interrupted => (Some(Arc::clone(output)), Some(published.clone())),
-            _ => (None, None),
+            } if !interrupted => (
+                Some(Arc::clone(output)),
+                Some(published.clone()),
+                progress.clone(),
+            ),
+            _ => (None, None, None),
         };
         tokio::spawn(async move {
             let _done = done;
             let capture = |update: child::CaptureUpdate<'_>| {
+                let mut spill = None;
                 if let child::CaptureUpdate::Bytes(bytes) = update
                     && let Some(output) = &pending_output
                     && let Ok(mut output) = output.lock()
                     && let Some(output) = output.as_mut()
                 {
-                    output.append(bytes);
+                    spill = output.append(bytes);
+                    if let Some(progress) = &progress
+                        && !progress.is_closed()
+                        && let Some(text) = output.progress()
+                    {
+                        progress.send_replace(Some(text));
+                    }
                 }
                 if let Ok(mut state) = shared.lock()
                     && let Some(job) = state.live.iter_mut().find(|job| job.record.id == worker_id)
@@ -488,6 +581,7 @@ impl Jobs {
                         child::CaptureUpdate::Incomplete => capture.incomplete = true,
                     }
                 }
+                spill
             };
             let claim_inline = || {
                 if let Ok(mut state) = shared.lock()
@@ -506,15 +600,15 @@ impl Jobs {
                 }
                 false
             };
-            let termination = child
-                .run(
-                    deadline,
-                    &worker_stop,
-                    capture,
-                    handoff.as_ref(),
-                    claim_inline,
-                )
-                .await;
+            let exit_mode = handoff
+                .as_ref()
+                .map_or(child::ExitMode::Published, |published| {
+                    child::ExitMode::Yielding {
+                        published,
+                        claim: &claim_inline,
+                    }
+                });
+            let termination = child.run(deadline, &worker_stop, capture, exit_mode).await;
             if let Some(error) = &termination.cleanup_error {
                 tracing::warn!(job_id = %worker_id, "Managed job cleanup was incomplete: {error}");
             }

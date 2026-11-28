@@ -264,8 +264,11 @@ async fn run_one(script: &Path, payload: &str, cwd: &Path, timeout: Duration) {
                     () = &mut write, if writing => writing = false,
                     chunk = rx.recv(), if reading => {
                         match chunk {
-                            Some(OutputChunk::Stderr(bytes)) => stderr.extend(bytes),
-                            Some(OutputChunk::Stdout(_)) => {},
+                            Some(chunk) => {
+                                if matches!(chunk, OutputChunk::Stderr(_)) {
+                                    stderr.extend_from_slice(chunk.as_bytes());
+                                }
+                            }
                             None => reading = false,
                         }
                     }

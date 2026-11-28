@@ -64,6 +64,52 @@ async fn observe(reader: &dyn AgentTool, path: &str) -> String {
 }
 
 #[tokio::test]
+async fn fuzzy_patch_preserves_target_context_and_shifts_only_additions() {
+    let project = Project::new("fuzzy-indent");
+    let patcher = ApplyPatchTool::new(&project.0);
+    for (original, context, expected) in [
+        (
+            "if True:\n    if True:\n        before()  \n        old()\n",
+            "     before()",
+            "if True:\n    if True:\n        before()  \n        if ready():\n            new()\n",
+        ),
+        (
+            "if True:\n    if True:\n        before()  # smart \u{2019}\n        old()\n",
+            "     before()  # smart '",
+            "if True:\n    if True:\n        before()  # smart \u{2019}\n        if ready():\n            new()\n",
+        ),
+    ] {
+        project.write("f.py", original);
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: f.py\n@@\n{context}\n-    old()\n+    if ready():\n+        new()\n*** End Patch"
+        );
+        execute(&patcher, json!({"input": patch})).await.unwrap();
+        assert_eq!(project.read("f.py"), expected);
+    }
+}
+
+#[tokio::test]
+async fn uncertain_fuzzy_indentation_rejects_the_patch_before_any_writes() {
+    let project = Project::new("uncertain-indent");
+    let patcher = ApplyPatchTool::new(&project.0);
+    let patch = "*** Begin Patch\n*** Add File: created.txt\n+created\n*** Update File: f.py\n@@\n     before()\n-    old()\n+    new()\n*** End Patch";
+    for original in [
+        "        before()\n    old()\n",
+        "\t    before()\n\t    old()\n",
+    ] {
+        project.write("f.py", original);
+        let result = execute(&patcher, json!({"input": patch})).await;
+        assert_eq!(project.read("f.py"), original);
+        assert!(!project.0.join("created.txt").exists());
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("indentation") && error.contains("f.py"),
+            "{error}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn unknown_arguments_are_rejected_before_tools_run() {
     let project = Project::new("unknown-arguments");
     let tools = bootstrap::coding_tools(&project.0);
@@ -111,6 +157,32 @@ async fn unknown_arguments_are_rejected_before_tools_run() {
     }
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn invalid_bash_timeouts_do_not_start_the_command() {
+    let project = Project::new("bash-timeout-validation");
+    let tools = bootstrap::coding_tools(&project.0);
+    let bash = tool(&tools, "bash");
+    for timeout in [1e20, f64::MAX, 14_400.25, 0.0, -0.5, f64::MIN_POSITIVE] {
+        for mut args in [
+            json!({}),
+            json!({"background": true}),
+            json!({"yield_after_ms": 10}),
+        ] {
+            args["command"] = json!("touch spawned");
+            args["timeout"] = json!(timeout);
+            let result = execute(bash, args.clone()).await;
+            assert!(!project.0.join("spawned").exists(), "{args}");
+            let error = result.expect_err("expected a tool error").to_string();
+            assert!(error.contains("timeout"), "{args}: {error}");
+        }
+    }
+    execute(bash, json!({"command": "touch spawned", "timeout": 14_400}))
+        .await
+        .unwrap();
+    assert!(project.0.join("spawned").is_file());
+}
+
 #[tokio::test]
 async fn whole_file_preconditions_reject_unrelated_edits_before_any_writes() {
     let project = Project::new("stale");
@@ -153,24 +225,47 @@ async fn raw_byte_preconditions_survive_normalization_but_detect_format_changes(
     project.write("file", raw);
     let id = observe(tool(&tools, "read"), "file").await;
     let patch = "*** Begin Patch\n*** Update File: ./file\n@@\n-old\n+new\n*** End Patch";
-    execute(
-        tool(&tools, "apply_patch"),
+    let patcher = tool(&tools, "apply_patch");
+    let result = execute(
+        patcher,
         json!({"input": patch, "expectedObservations": [id]}),
     )
     .await
     .unwrap();
     assert_eq!(project.read("file"), "\u{feff}before\r\nnew\r\nafter\r\n");
-    project.write("file", raw);
-    let id = observe(tool(&tools, "read"), "file").await;
-    project.write("file", &raw.replace("\r\n", "\n"));
+    let details = result.details.unwrap();
+    let written = details["observations"][0]["observation"].as_str().unwrap();
+    let cupel_core::types::ToolResultContent::Text(text) = &result.content[0] else {
+        panic!("expected a patch summary");
+    };
+    assert!(text.text.contains(written), "{}", text.text);
+    assert_eq!(details["observations"][0]["path"], "file");
+    let diff = details["diff"].as_str().unwrap();
+    assert!(diff.lines().any(|line| line == "+2 new"), "{diff}");
+
+    let second_patch = "*** Begin Patch\n*** Update File: file\n@@\n-new\n+next\n*** End Patch";
+    let second = execute(
+        patcher,
+        json!({"input": second_patch, "expectedObservations": [written]}),
+    )
+    .await
+    .unwrap();
+    let updated = "\u{feff}before\r\nnext\r\nafter\r\n";
+    assert_eq!(project.read("file"), updated);
+    let normalized = updated.replace("\r\n", "\n");
+    project.write("file", &normalized);
+    let third_patch = "*** Begin Patch\n*** Update File: file\n@@\n-next\n+last\n*** End Patch";
+    let second_details = second.details.unwrap();
+    let written = &second_details["observations"][0]["observation"];
     let error = execute(
-        tool(&tools, "apply_patch"),
-        json!({"input": patch, "expectedObservations": [id]}),
+        patcher,
+        json!({"input": third_patch, "expectedObservations": [written]}),
     )
     .await
     .unwrap_err()
     .to_string();
     assert!(error.contains("Stale source observation"), "{error}");
+    assert_eq!(project.read("file"), normalized);
 
     project.write("file", raw);
     let id = observe(tool(&tools, "read"), "file").await;
@@ -228,19 +323,36 @@ async fn preconditions_also_protect_deletes_overwrites_and_move_destinations() {
         assert_eq!(project.read("protected"), "before\nexternally changed\n");
         assert_eq!(project.read("source"), "old\n");
         let fresh = observe(tool(&tools, "read"), "protected").await;
-        execute(
+        let result = execute(
             tool(&tools, "apply_patch"),
             json!({"input": input, "expectedObservations": [fresh]}),
         )
         .await
         .unwrap();
+        let details = result.details.unwrap();
+        let observations = details["observations"].as_array().unwrap();
         match name {
-            "delete" => assert!(!project.0.join("protected").exists()),
+            "delete" => {
+                assert!(!project.0.join("protected").exists());
+                assert!(observations.is_empty());
+            }
             "overwrite" => assert_eq!(project.read("protected"), "replacement\n"),
             _ => {
                 assert_eq!(project.read("protected"), "new\n");
                 assert!(!project.0.join("source").exists());
             }
+        }
+        if name != "delete" {
+            assert_eq!(observations.len(), 1);
+            assert_eq!(observations[0]["path"], "protected");
+            let follow_up = "*** Begin Patch\n*** Add File: protected\n+follow-up\n*** End Patch";
+            execute(
+                tool(&tools, "apply_patch"),
+                json!({"input": follow_up, "expectedObservations": [observations[0]["observation"]]}),
+            )
+            .await
+            .unwrap();
+            assert_eq!(project.read("protected"), "follow-up\n");
         }
     }
 }
@@ -326,6 +438,7 @@ async fn an_alias_can_use_the_observation_but_retargeting_it_cannot() {
     assert_eq!(project.read("second"), "before\nold\n");
     std::fs::remove_file(&alias).unwrap();
     symlink(Path::new("first"), &alias).unwrap();
+    let mut original = std::fs::File::open(&alias).unwrap();
     execute(
         tool(&tools, "apply_patch"),
         json!({"input": input, "expectedObservations": [id]}),
@@ -334,6 +447,10 @@ async fn an_alias_can_use_the_observation_but_retargeting_it_cannot() {
     .unwrap();
     assert_eq!(project.read("first"), "before\nnew\n");
     assert_eq!(project.read("second"), "before\nold\n");
+    assert_eq!(std::fs::read_link(alias).unwrap(), Path::new("first"));
+    let mut previous = String::new();
+    std::io::Read::read_to_string(&mut original, &mut previous).unwrap();
+    assert_eq!(previous, "before\nold\n");
 }
 
 #[tokio::test]

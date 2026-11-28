@@ -22,7 +22,8 @@
 //! = the files the agent went on to read), MRR 0.455 vs pgr's 0.405 and
 //! raw ripgrep's 0.32, Hit@1 40% vs 34% vs 26%.
 
-use std::collections::BTreeMap;
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BTreeMap, BinaryHeap};
 use std::path::{Path, PathBuf};
 
 use grep_matcher::Matcher as _;
@@ -50,6 +51,7 @@ pub struct FileSummary {
     pub preview_line_number: u64,
     pub preview: String,
     pub matches: usize,
+    pub more_matches: bool,
     pub bucket: Bucket,
     pub defines_name: bool,
     pub definition_shaped: bool,
@@ -63,6 +65,60 @@ impl FileSummary {
             self.bucket,
             self.matches.min(DENSITY_CAP),
         )
+    }
+
+    fn rank_cmp(&self, other: &Self) -> Ordering {
+        self.sort_key()
+            .cmp(&other.sort_key())
+            .then_with(|| other.path.cmp(&self.path))
+    }
+}
+
+struct RankedFile(FileSummary);
+
+impl PartialEq for RankedFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for RankedFile {}
+
+impl Ord for RankedFile {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.rank_cmp(&other.0)
+    }
+}
+
+impl PartialOrd for RankedFile {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct BestFiles {
+    files: BinaryHeap<Reverse<RankedFile>>,
+}
+
+impl BestFiles {
+    pub(crate) fn retain(&mut self, summary: FileSummary, limit: usize) {
+        let candidate = Reverse(RankedFile(summary));
+        if self.files.len() < limit {
+            self.files.push(candidate);
+        } else if let Some(mut worst) = self.files.peek_mut()
+            && candidate < *worst
+        {
+            *worst = candidate;
+        }
+    }
+
+    pub(crate) fn into_ranked(self) -> Vec<FileSummary> {
+        self.files
+            .into_sorted_vec()
+            .into_iter()
+            .map(|Reverse(RankedFile(summary))| summary)
+            .collect()
     }
 }
 
@@ -107,8 +163,6 @@ impl Ranker {
     /// is not test code wholesale.
     #[must_use]
     pub fn rank(&self, matches: &[SearchMatch], root: &Path) -> Vec<FileSummary> {
-        // BTreeMap keeps files in path order, so equal ranked files come
-        // out alphabetically without a second sort key.
         let mut per_file: BTreeMap<&Path, Vec<&SearchMatch>> = BTreeMap::new();
         for m in matches {
             per_file.entry(&m.path).or_default().push(m);
@@ -117,32 +171,53 @@ impl Ranker {
             .into_iter()
             .map(|(path, lines)| self.summarize(path, root, &lines))
             .collect();
-        // sort_by_key is stable, so ties keep the path order from the map,
-        // Reverse turns the ascending sort into best first.
-        files.sort_by_key(|f| std::cmp::Reverse(f.sort_key()));
+        files.sort_by(|left, right| right.rank_cmp(left));
         files
     }
 
     fn summarize(&self, path: &Path, root: &Path, lines: &[&SearchMatch]) -> FileSummary {
+        let mut summary = Self::file(path, root);
+        for hit in lines {
+            self.add_match(&mut summary, hit.line_number, &hit.line, usize::MAX);
+        }
+        summary
+    }
+
+    pub(crate) fn file(path: &Path, root: &Path) -> FileSummary {
         let relative = path
             .strip_prefix(root)
             .unwrap_or_else(|_not_under_root| Path::new(path.file_name().unwrap_or_default()));
-        let first_name = lines.iter().find(|m| is_match(self.name.as_ref(), &m.line));
-        let first_shaped = lines
-            .iter()
-            .find(|m| is_match(self.shaped.as_ref(), &m.line));
-        let preview = first_name
-            .or(first_shaped)
-            .or_else(|| lines.first())
-            .expect("a file summary needs at least one match");
         FileSummary {
             path: path.to_path_buf(),
-            preview_line_number: preview.line_number,
-            preview: preview.line.clone(),
-            matches: lines.len(),
+            preview_line_number: 0,
+            preview: String::new(),
+            matches: 0,
+            more_matches: false,
             bucket: bucket_of(relative),
-            defines_name: first_name.is_some(),
-            definition_shaped: first_shaped.is_some(),
+            defines_name: false,
+            definition_shaped: false,
+        }
+    }
+
+    pub(crate) fn add_match(
+        &self,
+        file: &mut FileSummary,
+        line_number: u64,
+        line: &str,
+        cap: usize,
+    ) {
+        let named = !file.defines_name && is_match(self.name.as_ref(), line);
+        let shaped = !file.definition_shaped && is_match(self.shaped.as_ref(), line);
+        if file.matches == 0 || named || (shaped && !file.defines_name) {
+            file.preview_line_number = line_number;
+            file.preview = crate::truncate::truncate_line(line.trim(), 120).0;
+        }
+        file.defines_name |= named;
+        file.definition_shaped |= shaped;
+        if file.matches < cap {
+            file.matches += 1;
+        } else {
+            file.more_matches = true;
         }
     }
 }
@@ -152,10 +227,10 @@ fn is_match(matcher: Option<&RegexMatcher>, line: &str) -> bool {
 }
 
 /// Visibility and qualifier words that may precede a definition keyword.
-const MODIFIERS: &str = r"(?:pub(?:\([^)]*\))?|export|default|async|unsafe|extern|static|const|abstract|final|override)\s+";
+const MODIFIERS: &str = r#"(?:pub(?:\([^)]*\))?|public|private|protected|internal|export|default|async|unsafe|extern(?:\s+"[^"]+")?|static|const|abstract|final|override|sealed|partial|virtual|synchronized)\s+"#;
 /// Keywords that introduce an item (function, type, or module) in the
 /// common languages. Items are definitions at any indentation.
-const ITEM_KEYWORDS: &str = "fn|func|function|def|class|struct|enum|union|trait|interface|impl|type|typedef|mod|static|macro_rules!|record|protocol";
+const ITEM_KEYWORDS: &str = "fn|func|function|def|class|struct|enum|union|trait|interface|type|typedef|mod|static|macro_rules!|record|protocol";
 /// Keywords that introduce a binding. Only a binding at column 0 is a
 /// definition (a module level `const foo = ...`), indented ones are the
 /// locals every function body is made of.
@@ -165,7 +240,7 @@ const BINDING_KEYWORDS: &str = "let|var|const";
 /// (`typedef struct Foo`), optional generics, then the pattern itself.
 fn defines_name_pattern(pattern: &str, boundary: &str) -> String {
     format!(
-        r"^\s*(?:{MODIFIERS})*(?:(?:(?:{ITEM_KEYWORDS}|{BINDING_KEYWORDS})\s*(?:<[^>]*>)?\s+){{1,2}}(?:{pattern}){boundary}|impl\b[^{{]*\bfor\s+(?:{pattern}){boundary})"
+        r"^\s*(?:{MODIFIERS})*(?:(?:(?:{ITEM_KEYWORDS})\s*(?:<[^>]*>)?\s+){{1,2}}(?:{pattern}){boundary}|(?:{BINDING_KEYWORDS})\s+(?:{pattern}){boundary}(?:\s|=|:[^:]|$)|func\s+\([^)]*\)\s+(?:{pattern}){boundary}|impl\b[^{{]*\bfor\s+(?:{pattern}){boundary}|impl\s*(?:<[^>]*>)?\s+(?:{pattern}){boundary}(?:<[^>]*>)?\s*(?:\{{|$))"
     )
 }
 
@@ -174,7 +249,7 @@ fn defines_name_pattern(pattern: &str, boundary: &str) -> String {
 /// never qualify.
 fn definition_shaped_pattern() -> String {
     format!(
-        r"^(?:\s*(?:{MODIFIERS})*(?:{ITEM_KEYWORDS})(?:[\s<(]|\b)|(?:{MODIFIERS})*(?:{BINDING_KEYWORDS})\s)"
+        r"^(?:\s*(?:{MODIFIERS})*(?:{ITEM_KEYWORDS}|impl)(?:[\s<(]|\b)|(?:{MODIFIERS})*(?:{BINDING_KEYWORDS})\s)"
     )
 }
 
@@ -194,6 +269,7 @@ fn bucket_of(relative: &Path) -> Bucket {
         "vendor",
         "node_modules",
         "third_party",
+        "docs",
     ];
     const TEST_DIRS: &[&str] = &["test", "tests", "testing", "spec", "specs", "__tests__"];
     let components: Vec<String> = relative
@@ -206,13 +282,29 @@ fn bucket_of(relative: &Path) -> Bucket {
     let Some((name, dirs)) = components.split_last() else {
         return Bucket::Source;
     };
+    let markdown = relative.extension().is_some_and(|extension| {
+        ["md", "markdown", "mdx"]
+            .iter()
+            .any(|kind| extension.eq_ignore_ascii_case(kind))
+    });
+    if markdown || name == "changelog" || name.starts_with("changelog.") {
+        return Bucket::LowPriority;
+    }
     if dirs.iter().any(|c| TEST_DIRS.contains(&c.as_str())) {
         return Bucket::Test;
     }
     if name.contains("_test.")
+        || name.contains("_tests.")
+        || name.contains("_spec.")
         || name.starts_with("test_")
+        || name.starts_with("test.")
+        || name.starts_with("tests.")
         || name.contains(".test.")
         || name.contains(".spec.")
+        || relative
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|stem| stem.ends_with("Test") || stem.ends_with("Tests"))
     {
         return Bucket::Test;
     }
@@ -231,6 +323,7 @@ mod tests {
             glob: None,
             ignore_case: false,
             literal: false,
+            context: 0,
             limit: SearchLimit::Matches(100),
         }
     }
@@ -276,8 +369,13 @@ mod tests {
             "typedef struct Foo {",
             "macro_rules! Foo {",
             "const Foo = require('foo');",
+            "func (s *Server) Foo(w http.ResponseWriter) {",
+            "public final class Foo {",
+            "public sealed partial class Foo {",
+            "pub unsafe extern \"C\" fn Foo() {}",
         ] {
             assert!(defines(&ranker, line), "should define Foo: {line}");
+            assert!(shaped(&ranker, line), "should be definition-shaped: {line}");
         }
         for line in [
             "use crate::Foo;",
@@ -286,6 +384,8 @@ mod tests {
             "// the Foo type",
             "/// fn Foo is documented here",
             "fn make_foo() -> Foo {",
+            "    let Foo::Bar(value) = item else {",
+            "impl Foo for Bar {",
         ] {
             assert!(!defines(&ranker, line), "does not define Foo: {line}");
         }
@@ -421,6 +521,7 @@ mod tests {
             "lib/foo.py",
             "src/testing.rs",
             "attest/x.py",
+            "src/contest.java",
         ] {
             assert_eq!(bucket_of(Path::new(path)), Bucket::Source, "{path}");
         }
@@ -434,6 +535,12 @@ mod tests {
             "src/foo.test.ts",
             "src/foo.spec.js",
             "src/test_foo.py",
+            "crates/cupel-coding-agent/src/undo_tests.rs",
+            "src/usage_tests.rs",
+            "src/jobs/tests.rs",
+            "src/foo_spec.rb",
+            "src/FooTest.java",
+            "src/FooTests.cs",
         ] {
             assert_eq!(bucket_of(Path::new(path)), Bucket::Test, "{path}");
         }
@@ -444,6 +551,9 @@ mod tests {
             "testdata/input.txt",
             "src/fixtures/data.json",
             "vendor/tests/foo.go",
+            "docs/reference.py",
+            "CHANGELOG.md",
+            "AI-CODING-AGENT-EDIT-FINDINGS.md",
         ] {
             assert_eq!(bucket_of(Path::new(path)), Bucket::LowPriority, "{path}");
         }
