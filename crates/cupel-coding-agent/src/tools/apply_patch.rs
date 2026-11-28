@@ -81,7 +81,7 @@ after other mutations rather than weakening context. Hashes and patch locks do n
 shell or editor writes. An I/O failure can leave earlier writes in place.";
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ApplyPatchArgs {
     input: String,
     #[serde(default)]
@@ -365,6 +365,7 @@ impl AgentTool for ApplyPatchTool {
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
+            "additionalProperties": false,
             "properties": {
                 "input": {
                     "type": "string",

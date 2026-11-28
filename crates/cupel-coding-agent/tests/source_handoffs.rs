@@ -64,39 +64,51 @@ async fn observe(reader: &dyn AgentTool, path: &str) -> String {
 }
 
 #[tokio::test]
-async fn pagination_reuses_a_revision_without_replacing_other_files_or_earlier_ranges() {
-    let project = Project::new("pages");
+async fn unknown_arguments_are_rejected_before_tools_run() {
+    let project = Project::new("unknown-arguments");
     let tools = bootstrap::coding_tools(&project.0);
-    let reader = tool(&tools, "read");
-    project.write("other.txt", "before\nold\n");
-    let other_id = observe(reader, "other.txt").await;
-    project.write("pages.txt", &"line\n".repeat(256));
-    let first = execute(reader, json!({"path": "pages.txt", "limit": 1}))
-        .await
-        .unwrap()
-        .details
-        .unwrap();
-    for line in 2..=256 {
-        let page = execute(
-            reader,
-            json!({"path": "pages.txt", "offset": line, "limit": 1}),
-        )
-        .await
-        .unwrap()
-        .details
-        .unwrap();
-        assert_eq!(page["observation"], first["observation"], "page {line}");
-        assert_eq!(page["range"], json!({"start": line, "end": line}));
+    project.write("file", "old\nunrelated line\n");
+    let id = observe(tool(&tools, "read"), "file").await;
+    let current = "old\nnew unrelated line\n";
+    project.write("file", current);
+    let patch = "*** Begin Patch\n*** Update File: file\n@@\n-old\n+new\n*** End Patch";
+    let cases = [
+        (
+            "apply_patch",
+            json!({"input": patch, "expected_observations": [id]}),
+            "expected_observations",
+            "expectedObservations",
+        ),
+        (
+            "bash",
+            json!({"command": "touch ran-bash", "cwd": "."}),
+            "cwd",
+            "command",
+        ),
+        (
+            "read",
+            json!({"path": "file", "startLine": 999}),
+            "startLine",
+            "offset",
+        ),
+        (
+            "grep",
+            json!({"pattern": "old", "ignore_case": true}),
+            "ignore_case",
+            "ignoreCase",
+        ),
+    ];
+    for (name, args, unknown, valid) in cases {
+        let result = execute(tool(&tools, name), args).await;
+        assert_eq!(project.read("file"), current);
+        assert!(!project.0.join("ran-bash").exists());
+        let error = result.expect_err(name).to_string();
+        assert!(
+            error.contains(&format!("unknown field `{unknown}`")),
+            "{name}: {error}"
+        );
+        assert!(error.contains(&format!("`{valid}`")), "{name}: {error}");
     }
-    assert_eq!(first["range"], json!({"start": 1, "end": 1}));
-    let patch = "*** Begin Patch\n*** Update File: other.txt\n@@\n-old\n+new\n*** End Patch";
-    execute(
-        tool(&tools, "apply_patch"),
-        json!({"input": patch, "expectedObservations": [other_id]}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(project.read("other.txt"), "before\nnew\n");
 }
 
 #[tokio::test]

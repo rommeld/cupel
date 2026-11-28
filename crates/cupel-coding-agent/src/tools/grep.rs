@@ -31,10 +31,8 @@ const FILES_PER_FILE_CAP: usize = 20;
 const FILES_RANKING_WINDOW: usize = 500;
 const FILES_PREVIEW_MAX_CHARS: usize = 120;
 
-/// Tool arguments. Deserializing into this struct is the argument
-/// validation (unknown fields are ignored, wrong types are errors).
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GrepArgs {
     pattern: String,
     path: Option<String>,
@@ -101,9 +99,11 @@ impl AgentTool for GrepTool {
         // Kept in sync with `GrepArgs` by hand.
         json!({
             "type": "object",
+            "additionalProperties": false,
             "properties": {
                 "pattern": {
                     "type": "string",
+                    "minLength": 1,
                     "description": "Search pattern (regex or literal string)"
                 },
                 "path": {
@@ -123,11 +123,13 @@ impl AgentTool for GrepTool {
                     "description": "Treat pattern as literal string instead of regex (default: false)"
                 },
                 "context": {
-                    "type": "number",
+                    "type": "integer",
+                    "minimum": 0,
                     "description": "Number of lines to show before and after each match (default: 0)"
                 },
                 "limit": {
-                    "type": "number",
+                    "type": "integer",
+                    "minimum": 1,
                     "description": "Maximum number of matches to return (default: 100); in outputMode files, maximum number of files shown (default: 10)"
                 },
                 "outputMode": {
@@ -169,13 +171,16 @@ impl AgentTool for GrepTool {
         _on_update: Option<ToolUpdateFn>,
     ) -> Result<AgentToolResult, ToolError> {
         let args: GrepArgs = serde_json::from_value(args)?;
-        let effective_limit = args
-            .limit
-            .unwrap_or(match args.output_mode {
-                OutputMode::Content => DEFAULT_LIMIT,
-                OutputMode::Files => FILES_DEFAULT_LIMIT,
-            })
-            .max(1);
+        if args.pattern.is_empty() {
+            return Err("pattern must not be empty".into());
+        }
+        if args.limit == Some(0) {
+            return Err("limit must be at least 1".into());
+        }
+        let effective_limit = args.limit.unwrap_or(match args.output_mode {
+            OutputMode::Content => DEFAULT_LIMIT,
+            OutputMode::Files => FILES_DEFAULT_LIMIT,
+        });
         let limit = match args.output_mode {
             OutputMode::Content => SearchLimit::Matches(effective_limit),
             OutputMode::Files => SearchLimit::Files {
@@ -706,15 +711,21 @@ mod tests {
     async fn invalid_args_are_an_error() {
         let root = temp_root("badargs");
         let tool = GrepTool::new(&root, Arc::new(GrepSearch::new(&root)));
-        let result = tool
-            .execute(
-                "call_1",
-                json!({"pattern": 42}),
-                CancellationToken::new(),
-                None,
-            )
-            .await;
-        assert!(result.is_err());
+        for (args, expected) in [
+            (json!({"pattern": 42}), "expected a string"),
+            (json!({"pattern": ""}), "pattern must not be empty"),
+            (
+                json!({"pattern": "x", "limit": 0}),
+                "limit must be at least 1",
+            ),
+        ] {
+            let error = tool
+                .execute("call_1", args, CancellationToken::new(), None)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[tokio::test]

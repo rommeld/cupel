@@ -33,7 +33,7 @@ use crate::truncate::{
 const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ReadArgs {
     path: String,
     offset: Option<usize>,
@@ -157,17 +157,20 @@ impl AgentTool for ReadTool {
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
+            "additionalProperties": false,
             "properties": {
                 "path": {
                     "type": "string",
                     "description": "Path to the file to read (relative or absolute)"
                 },
                 "offset": {
-                    "type": "number",
+                    "type": "integer",
+                    "minimum": 1,
                     "description": "Line number to start reading from (1-indexed)"
                 },
                 "limit": {
-                    "type": "number",
+                    "type": "integer",
+                    "minimum": 1,
                     "description": "Maximum number of lines to read"
                 }
             },
@@ -204,6 +207,13 @@ impl AgentTool for ReadTool {
         _on_update: Option<ToolUpdateFn>,
     ) -> Result<AgentToolResult, ToolError> {
         let args: ReadArgs = serde_json::from_value(args)?;
+        let start_line_display = args.offset.unwrap_or(1);
+        let Some(start_line) = start_line_display.checked_sub(1) else {
+            return Err("offset must be at least 1".into());
+        };
+        if args.limit == Some(0) {
+            return Err("limit must be at least 1".into());
+        }
         let absolute_path = resolve_to_root(&args.path, &self.cwd);
 
         if cancel.is_cancelled() {
@@ -309,12 +319,9 @@ impl AgentTool for ReadTool {
             .collect();
         let total_file_lines = all_lines.len();
 
-        let start_line = args.offset.map_or(0, |o| o.saturating_sub(1));
-        let start_line_display = start_line + 1;
-        if start_line >= all_lines.len() {
+        if start_line >= total_file_lines {
             return Err(format!(
-                "Offset {} is beyond end of file ({total_file_lines} lines total)",
-                args.offset.unwrap_or(0)
+                "Offset {start_line_display} is beyond end of file ({total_file_lines} lines total)"
             )
             .into());
         }
@@ -329,7 +336,7 @@ impl AgentTool for ReadTool {
         // Preserve the last selected line's terminator. Otherwise a selected
         // trailing blank line looks like a terminator to truncate_head, which
         // can undercount the view and bypass the line cap by one.
-        if selected_lines > 0 && (end_line < total_file_lines || content.ends_with('\n')) {
+        if end_line < total_file_lines || content.ends_with('\n') {
             selected.push('\n');
         }
 

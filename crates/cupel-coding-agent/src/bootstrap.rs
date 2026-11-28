@@ -594,15 +594,30 @@ mod tests {
         );
         assert_eq!(result.details.unwrap()["skill"], "review-pr");
 
-        for args in [
-            serde_json::json!({"path": "skills/not-a-root/SKILL.md"}),
-            serde_json::json!({"path": path, "limit": 0}),
+        let result = reader
+            .execute(
+                "not-a-skill-load",
+                serde_json::json!({"path": "skills/not-a-root/SKILL.md"}),
+                CancellationToken::new(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(result.details.unwrap().get("skill").is_none());
+
+        for (args, field) in [
+            (serde_json::json!({"path": path, "limit": 0}), "limit"),
+            (serde_json::json!({"path": path, "offset": 0}), "offset"),
         ] {
-            let result = reader
+            let error = reader
                 .execute("not-a-skill-load", args, CancellationToken::new(), None)
                 .await
-                .unwrap();
-            assert!(result.details.unwrap().get("skill").is_none());
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(&format!("{field} must be at least 1")),
+                "{error}"
+            );
         }
         std::fs::remove_dir_all(root).unwrap();
     }

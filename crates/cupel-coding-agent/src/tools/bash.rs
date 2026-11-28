@@ -44,6 +44,7 @@ use crate::truncate::{
 const UPDATE_THROTTLE: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BashArgs {
     command: String,
     timeout: Option<f64>,
@@ -316,6 +317,7 @@ impl AgentTool for BashTool {
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
+            "additionalProperties": false,
             "properties": {
                 "command": {
                     "type": "string",
