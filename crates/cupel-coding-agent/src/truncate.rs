@@ -12,6 +12,10 @@ pub const DEFAULT_MAX_BYTES: usize = 50 * 1024;
 /// Max characters per grep match line.
 pub const GREP_MAX_LINE_LENGTH: usize = 500;
 
+pub(crate) const fn is_utf8_continuation(byte: u8) -> bool {
+    byte & 0xC0 == 0x80
+}
+
 /// Which limit cut the content off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TruncatedBy {

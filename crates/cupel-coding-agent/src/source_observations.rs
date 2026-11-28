@@ -62,7 +62,15 @@ impl SourceObservations {
         path: &Path,
         bytes: &[u8],
     ) -> Result<SourceObservation, String> {
-        let revision = revision(bytes);
+        self.record_revision(checkout, path, revision(bytes)).await
+    }
+
+    pub(crate) async fn record_revision(
+        &self,
+        checkout: &Path,
+        path: &Path,
+        revision: String,
+    ) -> Result<SourceObservation, String> {
         let mut state = self.state.lock().await;
         if let Some(observation) = state.observations.iter().find(|observation| {
             observation.checkout == checkout
@@ -111,7 +119,11 @@ impl SourceObservations {
 }
 
 fn revision(bytes: &[u8]) -> String {
-    format!("sha256:{}", hex(&Sha256::digest(bytes)))
+    format_revision(&Sha256::digest(bytes))
+}
+
+pub(crate) fn format_revision(digest: &[u8]) -> String {
+    format!("sha256:{}", hex(digest))
 }
 
 fn hex(bytes: &[u8]) -> String {

@@ -28,12 +28,13 @@ use cupel_core::types::{TextContent, ToolResultContent};
 
 use crate::search::{resolve_to_root, source_locator};
 use crate::source_observations::{SourceObservation, SourceObservations};
-use crate::tools::file_queue::{lock_file_for_mutation, queue_key};
+use crate::tools::file_queue::{lock_mutation_key, queue_key};
 use crate::tools::patch_parser::{Hunk, parse_patch};
 use crate::tools::patch_update::apply_chunks;
 use crate::tools::text_diff::{
     detect_line_ending, generate_diff_string, normalize_to_lf, restore_line_endings, strip_bom,
 };
+use crate::undo::{self, RecordedEdit};
 
 const DIFF_CONTEXT_LINES: usize = 4;
 const NEW_FILE_PREVIEW_LINES: usize = 20;
@@ -155,14 +156,19 @@ impl ApplyPatchTool {
         }
         targets.sort();
         targets.dedup();
+        let mut keyed_targets = Vec::with_capacity(targets.len());
+        for target in targets {
+            let key = queue_key(&target).await;
+            keyed_targets.push((target, key));
+        }
         for id in ids {
             let observation = store.get(id).await?;
             if observation.checkout != checkout {
                 return Err(format!("Source observation {id} belongs to a different checkout. Read the file in this checkout before retrying.").into());
             }
             let mut matched = false;
-            for target in &targets {
-                if queue_key(target) == observation.path {
+            for (target, key) in &keyed_targets {
+                if *key == observation.path {
                     if expected
                         .insert(target.clone(), observation.clone())
                         .is_some()
@@ -183,7 +189,7 @@ impl ApplyPatchTool {
     /// the file queue's identity key and sorted. Two hunks on one file are refused up front, as
     /// in Codex, applying them in sequence would make the second one
     /// operate on the first one's result, which the patch did not say.
-    fn lock_keys(&self, hunks: &[Hunk]) -> Result<Vec<PathBuf>, ToolError> {
+    async fn lock_keys(&self, hunks: &[Hunk]) -> Result<Vec<PathBuf>, ToolError> {
         let mut targets: Vec<PathBuf> = Vec::new();
         for hunk in hunks {
             let source = match hunk {
@@ -191,7 +197,7 @@ impl ApplyPatchTool {
                 | Hunk::DeleteFile { path }
                 | Hunk::UpdateFile { path, .. } => path,
             };
-            let target = queue_key(&resolve_to_root(source, &self.cwd));
+            let target = queue_key(&resolve_to_root(source, &self.cwd)).await;
             if targets.contains(&target) {
                 return Err(format!("multiple operations target {source}").into());
             }
@@ -201,7 +207,7 @@ impl ApplyPatchTool {
                 ..
             } = hunk
             {
-                let destination_key = queue_key(&resolve_to_root(destination, &self.cwd));
+                let destination_key = queue_key(&resolve_to_root(destination, &self.cwd)).await;
                 if destination_key != target {
                     if targets.contains(&destination_key) {
                         return Err(format!("multiple operations target {destination}").into());
@@ -264,6 +270,12 @@ impl ApplyPatchTool {
                     check_expected(&resolve_to_root(destination, &self.cwd), None, expected)
                         .await?;
                 }
+                let metadata = tokio::fs::metadata(&absolute)
+                    .await
+                    .map_err(|error| format!("cannot inspect {path}: {error}"))?;
+                if !metadata.is_file() {
+                    return Err(format!("not a regular file: {path}").into());
+                }
                 // Match in BOM free, LF normalized space, restore both on
                 // write.
                 let (bom, text) = strip_bom(&raw);
@@ -280,6 +292,7 @@ impl ApplyPatchTool {
                     old_text,
                     new_text,
                     content,
+                    mode: undo::file_mode(&metadata),
                 })
             }
         }
@@ -349,6 +362,7 @@ enum Change {
         old_text: String,
         new_text: String,
         content: String,
+        mode: u32,
     },
 }
 
@@ -425,7 +439,7 @@ impl AgentTool for ApplyPatchTool {
             Some(undo) => Some(undo.lock().await),
             None => None,
         };
-        let _guards = lock_all(&self.lock_keys(&hunks)?).await;
+        let guards = Arc::new(lock_all(self.lock_keys(&hunks).await?).await);
         if cancel.is_cancelled() {
             return Err("Operation aborted".into());
         }
@@ -445,41 +459,40 @@ impl AgentTool for ApplyPatchTool {
             let mut edits = Vec::new();
             for change in &changes {
                 match change {
-                    Change::Add { path, content, .. }
-                    | Change::Update {
-                        path,
-                        move_to: None,
-                        content,
-                        ..
-                    } => {
-                        edits.push((path.clone(), Some(content.as_bytes())));
+                    Change::Add { path, content, .. } => {
+                        edits.push(RecordedEdit::new(path, Some(content.as_bytes())));
                     }
-                    Change::Delete { path, .. } => edits.push((path.clone(), None)),
+                    Change::Delete { path, .. } => edits.push(RecordedEdit::new(path, None)),
                     Change::Update {
                         path,
-                        move_to: Some((destination, _)),
+                        move_to,
                         content,
+                        mode,
                         ..
                     } => {
-                        if queue_key(path) == queue_key(destination) {
-                            if path != destination {
+                        let mut target = path;
+                        if let Some((destination, _)) = move_to {
+                            if path != destination
+                                && queue_key(path).await == queue_key(destination).await
+                            {
                                 return Err("tracked patches do not support aliased renames".into());
                             }
-                            edits.push((path.clone(), Some(content.as_bytes())));
-                        } else {
-                            edits.push((path.clone(), None));
-                            edits.push((destination.clone(), Some(content.as_bytes())));
+                            if path != destination {
+                                edits.push(RecordedEdit::new(path, None));
+                                target = destination;
+                            }
                         }
+                        edits.push(
+                            RecordedEdit::new(target, Some(content.as_bytes())).with_mode(*mode),
+                        );
                     }
                 }
             }
             warning = recording.prepare(&edits)?;
         }
 
-        let mut diff = String::new();
-        let (mut added, mut modified, mut deleted) = (Vec::new(), Vec::new(), Vec::new());
         for change in &changes {
-            if let Err(error) = apply(change).await {
+            if let Err(error) = apply(change, &guards).await {
                 let error: ToolError = format!(
                     "Patch application I/O failure: {error}\nEarlier writes may already have occurred; inspect the workspace before retrying."
                 ).into();
@@ -496,38 +509,6 @@ impl AgentTool for ApplyPatchTool {
                     None => error,
                 });
             }
-            match change {
-                Change::Add {
-                    display, content, ..
-                } => {
-                    diff.push_str(&added_file_diff(display, content));
-                    added.push(display.clone());
-                }
-                Change::Delete { display, .. } => {
-                    diff.push_str(&format!("D {display}\n"));
-                    deleted.push(display.clone());
-                }
-                Change::Update {
-                    display,
-                    move_to,
-                    old_text,
-                    new_text,
-                    ..
-                } => {
-                    let target = move_to
-                        .as_ref()
-                        .map_or(display.clone(), |(_, destination)| destination.clone());
-                    diff.push_str(&match move_to {
-                        Some((_, destination)) => format!("M {display} -> {destination}\n"),
-                        None => format!("M {display}\n"),
-                    });
-                    diff.push_str(
-                        &generate_diff_string(old_text, new_text, DIFF_CONTEXT_LINES).diff,
-                    );
-                    diff.push('\n');
-                    modified.push(target);
-                }
-            }
         }
         if let Some(recording) = &mut recording {
             warning = warning.or(recording.finish().map_err(|error| {
@@ -535,13 +516,53 @@ impl AgentTool for ApplyPatchTool {
             })?);
         }
 
-        // Codex's summary, verbatim, the models know it.
-        let mut summary = String::from("Success. Updated the following files:");
-        for (letter, paths) in [('A', &added), ('M', &modified), ('D', &deleted)] {
-            for path in paths {
-                summary.push_str(&format!("\n{letter} {path}"));
+        let (changes, mut diff, mut summary) = tokio::task::spawn_blocking(move || {
+            let mut diff = String::new();
+            let (mut added, mut modified, mut deleted) = (Vec::new(), Vec::new(), Vec::new());
+            for change in &changes {
+                match change {
+                    Change::Add {
+                        display, content, ..
+                    } => {
+                        diff.push_str(&added_file_diff(display, content));
+                        added.push(display.clone());
+                    }
+                    Change::Delete { display, .. } => {
+                        diff.push_str(&format!("D {display}\n"));
+                        deleted.push(display.clone());
+                    }
+                    Change::Update {
+                        display,
+                        move_to,
+                        old_text,
+                        new_text,
+                        ..
+                    } => {
+                        let target = move_to
+                            .as_ref()
+                            .map_or(display.clone(), |(_, destination)| destination.clone());
+                        diff.push_str(&match move_to {
+                            Some((_, destination)) => format!("M {display} -> {destination}\n"),
+                            None => format!("M {display}\n"),
+                        });
+                        diff.push_str(
+                            &generate_diff_string(old_text, new_text, DIFF_CONTEXT_LINES).diff,
+                        );
+                        diff.push('\n');
+                        modified.push(target);
+                    }
+                }
             }
-        }
+            // Codex's summary, verbatim, the models know it.
+            let mut summary = String::from("Success. Updated the following files:");
+            for (letter, paths) in [('A', &added), ('M', &modified), ('D', &deleted)] {
+                for path in paths {
+                    summary.push_str(&format!("\n{letter} {path}"));
+                }
+            }
+            (changes, diff, summary)
+        })
+        .await?;
         if let Some(warning) = warning {
             summary.push_str(&format!("\nWarning: {warning}"));
             // Frontends display the diff instead of the summary. Put the same
@@ -597,40 +618,46 @@ async fn check_expected(
     Ok(())
 }
 
-async fn lock_all(keys: &[PathBuf]) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+type FileLocks = Vec<tokio::sync::OwnedMutexGuard<()>>;
+
+async fn lock_all(keys: Vec<PathBuf>) -> FileLocks {
     let mut guards = Vec::with_capacity(keys.len());
     for key in keys {
-        guards.push(lock_file_for_mutation(key).await);
+        guards.push(lock_mutation_key(key).await);
     }
     guards
 }
 
-async fn write_creating_parents(
+async fn replace_file(
     path: &Path,
     display: &str,
     content: &str,
+    mode: Option<u32>,
+    guards: &Arc<FileLocks>,
 ) -> Result<(), ToolError> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create parent directories for {display}: {e}"))?;
-    }
-    tokio::fs::write(path, content)
-        .await
-        .map_err(|e| format!("Failed to write file {display}: {e}"))?;
+    let path = path.to_path_buf();
+    let bytes = content.as_bytes().to_vec();
+    let guards = Arc::clone(guards);
+    tokio::task::spawn_blocking(move || {
+        let result = undo::patch_write(&path, &bytes, mode);
+        drop(guards);
+        result
+    })
+    .await?
+    .map_err(|error| format!("failed to write {display}: {error}"))?;
     Ok(())
 }
 
 /// The write step. Like Codex, an I/O failure here leaves the changes
 /// before it in place, the error names the file, and the model can read
 /// it back.
-async fn apply(change: &Change) -> Result<(), ToolError> {
+async fn apply(change: &Change, guards: &Arc<FileLocks>) -> Result<(), ToolError> {
     match change {
         Change::Add {
             path,
             display,
             content,
-        } => write_creating_parents(path, display, content).await,
+        } => replace_file(path, display, content, None, guards).await,
         Change::Delete { path, display } => tokio::fs::remove_file(path)
             .await
             .map_err(|e| format!("Failed to delete file {display}: {e}").into()),
@@ -639,26 +666,31 @@ async fn apply(change: &Change) -> Result<(), ToolError> {
             display,
             move_to: None,
             content,
+            mode,
             ..
-        } => tokio::fs::write(path, content)
-            .await
-            .map_err(|e| format!("Failed to write file {display}: {e}").into()),
+        } => replace_file(path, display, content, Some(*mode), guards).await,
         Change::Update {
             path,
             display,
             move_to: Some((destination, destination_display)),
             content,
+            mode,
             ..
         } => {
-            if queue_key(path) == queue_key(destination) {
-                tokio::fs::write(path, content)
-                    .await
-                    .map_err(|e| format!("Failed to write file {display}: {e}"))?;
+            if queue_key(path).await == queue_key(destination).await {
+                replace_file(path, display, content, Some(*mode), guards).await?;
                 return tokio::fs::rename(path, destination).await.map_err(|e| {
                     format!("Failed to rename {display} to {destination_display}: {e}").into()
                 });
             }
-            write_creating_parents(destination, destination_display, content).await?;
+            replace_file(
+                destination,
+                destination_display,
+                content,
+                Some(*mode),
+                guards,
+            )
+            .await?;
             tokio::fs::remove_file(path)
                 .await
                 .map_err(|e| format!("Failed to remove original {display}: {e}"))?;
@@ -820,8 +852,8 @@ mod tests {
             let root = temp_root(name);
             write(&root, "name.txt", "old\n");
             assert_eq!(
-                queue_key(&root.join("name.txt")),
-                queue_key(&root.join(destination))
+                queue_key(&root.join("name.txt")).await,
+                queue_key(&root.join(destination)).await
             );
             let result = run(
                 &root,

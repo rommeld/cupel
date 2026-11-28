@@ -438,6 +438,7 @@ async fn an_alias_can_use_the_observation_but_retargeting_it_cannot() {
     assert_eq!(project.read("second"), "before\nold\n");
     std::fs::remove_file(&alias).unwrap();
     symlink(Path::new("first"), &alias).unwrap();
+    let mut original = std::fs::File::open(&alias).unwrap();
     execute(
         tool(&tools, "apply_patch"),
         json!({"input": input, "expectedObservations": [id]}),
@@ -446,6 +447,10 @@ async fn an_alias_can_use_the_observation_but_retargeting_it_cannot() {
     .unwrap();
     assert_eq!(project.read("first"), "before\nnew\n");
     assert_eq!(project.read("second"), "before\nold\n");
+    assert_eq!(std::fs::read_link(alias).unwrap(), Path::new("first"));
+    let mut previous = String::new();
+    std::io::Read::read_to_string(&mut original, &mut previous).unwrap();
+    assert_eq!(previous, "before\nold\n");
 }
 
 #[tokio::test]

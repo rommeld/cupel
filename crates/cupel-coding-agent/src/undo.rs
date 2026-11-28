@@ -348,16 +348,38 @@ pub(crate) struct Recording<'a> {
     state: MutexGuard<'a, JournalState>,
 }
 
+pub(crate) struct RecordedEdit<'a> {
+    path: &'a Path,
+    bytes: Option<&'a [u8]>,
+    mode: Option<u32>,
+}
+
+impl<'a> RecordedEdit<'a> {
+    pub(crate) fn new(path: &'a Path, bytes: Option<&'a [u8]>) -> Self {
+        Self {
+            path,
+            bytes,
+            mode: None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn with_mode(mut self, mode: u32) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+}
+
 impl Recording<'_> {
     pub(crate) fn prepare(
         &mut self,
-        edits: &[(PathBuf, Option<&[u8]>)],
+        edits: &[RecordedEdit<'_>],
     ) -> Result<Option<&'static str>, String> {
         if self.journal.directory.is_none() {
             return Ok(None);
         }
         // These protections still apply after undo tracking has been disabled.
-        for (path, _) in edits {
+        for &RecordedEdit { path, .. } in edits {
             let location = location(path)?;
             if self.journal.directory.as_ref().is_some_and(|root| {
                 location.starts_with(root)
@@ -380,7 +402,12 @@ impl Recording<'_> {
         if !recordable(turn) {
             return disable(turn);
         }
-        for (path, content) in edits {
+        for &RecordedEdit {
+            path,
+            bytes: content,
+            mode,
+        } in edits
+        {
             let location = location(path)?;
             let (before, bytes) = inspect(path)?;
             let index = if let Some(index) = turn
@@ -401,7 +428,7 @@ impl Recording<'_> {
                     write_new_private(&turn.backup(index), &bytes)?;
                 }
                 turn.manifest.entries.push(Entry {
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                     location,
                     before: before.clone(),
                     after: before.clone(),
@@ -409,10 +436,10 @@ impl Recording<'_> {
                 });
                 index
             };
-            let mode = match before {
+            let mode = mode.or(match before {
                 Fingerprint::File { mode, .. } => mode,
                 Fingerprint::Missing => None,
-            };
+            });
             turn.manifest.entries[index].pending = Some(match content {
                 Some(bytes) => Fingerprint::File {
                     sha256: hash(bytes),
@@ -587,18 +614,16 @@ fn inspect(path: &Path) -> Result<(Fingerprint, Option<Vec<u8>>), String> {
         ));
     }
     #[cfg(unix)]
-    let mode = {
-        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    {
+        use std::os::unix::fs::MetadataExt as _;
         if metadata.nlink() != 1 {
             return Err(format!(
                 "undo does not support hard-linked files: {}",
                 path.display()
             ));
         }
-        Some(metadata.permissions().mode() & 0o7777)
-    };
-    #[cfg(not(unix))]
-    let mode = Some(u32::from(metadata.permissions().readonly()));
+    }
+    let mode = Some(file_mode(&metadata));
     let bytes = std::fs::read(path)
         .map_err(|e| format!("cannot snapshot {} for undo: {e}", path.display()))?;
     Ok((
@@ -692,9 +717,58 @@ fn atomic_write(
     mode: Option<u32>,
     expected: Option<&Entry>,
 ) -> Result<(), String> {
-    let parent = path.parent().ok_or("undo target has no parent")?;
+    atomic_replace(path, bytes, mode, true, || {
+        if let Some(entry) = expected
+            && !entry.after.matches(&checked_fingerprint(entry)?)
+        {
+            return Err(conflict(path));
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn file_mode(metadata: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        metadata.permissions().mode() & 0o7777
+    }
+    #[cfg(not(unix))]
+    {
+        u32::from(metadata.permissions().readonly())
+    }
+}
+
+pub(crate) fn patch_write(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), String> {
+    let (target, mode) = match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            let target = path
+                .canonicalize()
+                .map_err(|error| format!("cannot resolve {}: {error}", path.display()))?;
+            let metadata = target
+                .metadata()
+                .map_err(|error| format!("cannot inspect {}: {error}", target.display()))?;
+            if !metadata.is_file() {
+                return Err(format!("not a regular file: {}", target.display()));
+            }
+            (target, mode.or_else(|| Some(file_mode(&metadata))))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (path.to_path_buf(), mode),
+        Err(error) => return Err(format!("cannot inspect {}: {error}", path.display())),
+    };
+    atomic_replace(&target, bytes, mode, mode.is_some(), || Ok(()))
+}
+
+fn atomic_replace(
+    path: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+    private: bool,
+    before_replace: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let parent = path.parent().ok_or("replacement target has no parent")?;
     std::fs::create_dir_all(parent)
-        .map_err(|e| format!("cannot create undo parent {}: {e}", parent.display()))?;
+        .map_err(|e| format!("cannot create parent {}: {e}", parent.display()))?;
     let mut allocated = None;
     for attempt in 0..100 {
         let temporary = parent.join(format!(
@@ -702,19 +776,32 @@ fn atomic_write(
             std::process::id(),
             cupel_core::types::now_ms()
         ));
-        match open_private(&temporary) {
+        let file = if private {
+            open_private(&temporary)
+        } else {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+        };
+        match file {
             Ok(file) => {
                 allocated = Some((temporary, file));
                 break;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(format!("cannot stage undo for {}: {e}", path.display())),
+            Err(e) => {
+                return Err(format!(
+                    "cannot stage replacement for {}: {e}",
+                    path.display()
+                ));
+            }
         }
     }
-    let (temporary, mut file) = allocated.ok_or("cannot allocate undo temporary file")?;
+    let (temporary, mut file) = allocated.ok_or("cannot allocate replacement temporary file")?;
     let result = (|| {
         file.write_all(bytes)
-            .map_err(|e| format!("cannot stage undo for {}: {e}", path.display()))?;
+            .map_err(|e| format!("cannot stage replacement for {}: {e}", path.display()))?;
         if let Some(mode) = mode {
             #[cfg(unix)]
             {
@@ -734,16 +821,12 @@ fn atomic_write(
             }
         }
         file.sync_all()
-            .map_err(|e| format!("cannot sync undo for {}: {e}", path.display()))?;
+            .map_err(|e| format!("cannot sync replacement for {}: {e}", path.display()))?;
         // Staging a large original can take time. Recheck immediately before the
         // replacement, not only before writing the temporary file.
-        if let Some(entry) = expected
-            && !entry.after.matches(&checked_fingerprint(entry)?)
-        {
-            return Err(conflict(path));
-        }
+        before_replace()?;
         std::fs::rename(&temporary, path)
-            .map_err(|e| format!("cannot restore {}: {e}", path.display()))?;
+            .map_err(|e| format!("cannot replace {}: {e}", path.display()))?;
         sync_directory(parent)
     })();
     if result.is_err() {

@@ -29,15 +29,15 @@ fn registry() -> &'static StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>> {
 }
 
 /// Shared identity for mutation locks and duplicate patch targets.
-pub(crate) fn queue_key(path: &Path) -> PathBuf {
-    if let Ok(canonical) = path.canonicalize() {
+pub(crate) async fn queue_key(path: &Path) -> PathBuf {
+    if let Ok(canonical) = tokio::fs::canonicalize(path).await {
         return canonical;
     }
     // A missing leaf still has a stable identity when its parent exists.
     // Canonicalize the parent rather than collapsing `..` across symlinks.
     if let Some(parent) = path.parent()
         && let Some(name) = path.file_name()
-        && let Ok(parent) = parent.canonicalize()
+        && let Ok(parent) = tokio::fs::canonicalize(parent).await
     {
         return parent.join(name);
     }
@@ -48,9 +48,13 @@ pub(crate) fn queue_key(path: &Path) -> PathBuf {
 /// await this function and hold the guard for their whole read modify write cycle,
 /// preventing another mutation from interleaving on the same file.
 pub async fn lock_file_for_mutation(path: &Path) -> tokio::sync::OwnedMutexGuard<()> {
+    lock_mutation_key(queue_key(path).await).await
+}
+
+pub(crate) async fn lock_mutation_key(key: PathBuf) -> tokio::sync::OwnedMutexGuard<()> {
     let lock = {
         let mut map = registry().lock().expect("file queue registry poisoned");
-        Arc::clone(map.entry(queue_key(path)).or_default())
+        Arc::clone(map.entry(key).or_default())
     };
     // Entries are never removed, a lock is 16 bytes and the set of files an
     // agent session touches is small. Locks hold nothing once unlocked.
@@ -74,14 +78,15 @@ mod tests {
         let path = root.join("new.txt");
         let alias = root.join("nested/../new.txt");
         let guard = lock_file_for_mutation(&alias).await;
-        let mut other = Box::pin(lock_file_for_mutation(&path));
+        let key_before_creation = queue_key(&path).await;
+        assert_eq!(key_before_creation, queue_key(&alias).await);
+        let mut other = Box::pin(lock_mutation_key(key_before_creation.clone()));
         assert!(
             other.as_mut().now_or_never().is_none(),
             "aliases of a new file must share a lock"
         );
-        let key_before_creation = queue_key(&alias);
         std::fs::write(&path, "created\n").unwrap();
-        assert_eq!(queue_key(&path), key_before_creation);
+        assert_eq!(queue_key(&path).await, key_before_creation);
         assert!(other.as_mut().now_or_never().is_none());
         drop(guard);
         assert!(other.now_or_never().is_some());

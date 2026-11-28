@@ -1,0 +1,26 @@
+e4a38be3f7fd8fbbb07828ad2efa127c96adb8df
+ReadTool	crates/cupel-coding-agent/src/tools/read.rs
+BashTool	crates/cupel-coding-agent/src/tools/bash.rs
+ApplyPatchTool	crates/cupel-coding-agent/src/tools/apply_patch.rs
+GrepTool	crates/cupel-coding-agent/src/tools/grep.rs
+GrepSearch	crates/cupel-coding-agent/src/search.rs
+SearchQuery	crates/cupel-coding-agent/src/search.rs
+Ranker	crates/cupel-coding-agent/src/tools/grep_rank.rs
+SourceObservations	crates/cupel-coding-agent/src/source_observations.rs
+SourceObservation	crates/cupel-coding-agent/src/source_observations.rs
+UndoJournal	crates/cupel-coding-agent/src/undo.rs
+SessionRecorder	crates/cupel-coding-agent/src/session.rs
+JobsTool	crates/cupel-coding-agent/src/tools/jobs.rs
+InstructionCache	crates/cupel-coding-agent/src/instruction_cache.rs
+AgentOptions	crates/cupel-agent/src/agent.rs
+AgentMessage	crates/cupel-agent/src/types.rs
+AgentEvent	crates/cupel-agent/src/types.rs
+ToolCall	crates/cupel-core/src/types.rs
+Context	crates/cupel-core/src/types.rs
+Model	crates/cupel-core/src/types.rs
+Provider	crates/cupel-core/src/provider.rs
+Registry	crates/cupel-core/src/provider.rs
+AssistantMessageStream	crates/cupel-core/src/event_stream.rs
+OutputAccumulator	crates/cupel-coding-agent/src/tools/bash.rs
+AgentTool	crates/cupel-agent/src/types.rs
+SearchOutcome	crates/cupel-coding-agent/src/search.rs
