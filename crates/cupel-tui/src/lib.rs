@@ -51,7 +51,8 @@ use cupel_coding_agent::program_status::Reporter;
 use cupel_coding_agent::tools::ask_user::QuestionReceiver;
 use ratatui::crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    KeyEventKind, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 
@@ -133,12 +134,66 @@ fn spawn_input_thread() -> tokio::sync::mpsc::UnboundedReceiver<Event> {
     std::thread::spawn(move || {
         // Runs until read() errors or the receiver is dropped.
         while let Ok(event) = ratatui::crossterm::event::read() {
+            if is_ignored_terminal_event(&event) {
+                continue;
+            }
             if tx.send(event).is_err() {
                 break; // Receiver dropped, the UI is gone.
             }
         }
     });
     rx
+}
+
+/// Terminal events that Cupel never acts on. Dropping them before waking the
+/// event loop avoids redrawing on mouse motion or key release floods.
+fn is_ignored_terminal_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Moved
+    ) || matches!(
+        event,
+        Event::Key(key) if key.kind != KeyEventKind::Press
+    ) || matches!(event, Event::FocusGained)
+}
+
+/// Mouse press and release rely on hit-test geometry from the latest draw, so
+/// they wait for a frame before running after other queued events.
+fn needs_fresh_geometry(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::Down(_) | MouseEventKind::Up(_))
+    )
+}
+
+/// Drain already-queued terminal events so wheel bursts, drags, and fast
+/// typing share one render pass instead of queueing one draw per event.
+fn drain_terminal_events(
+    terminal_events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    sessions: &mut sessions::Sessions,
+    pending_event: &mut Option<Event>,
+) {
+    let start_active = sessions.active;
+    let start_usage_open = sessions.active().usage_popup.is_some();
+    while pending_event.is_none()
+        && sessions.active == start_active
+        && sessions.active().usage_popup.is_some() == start_usage_open
+        && !sessions.active().has_pending_loop_action()
+    {
+        match terminal_events.try_recv() {
+            Ok(event) => {
+                if is_ignored_terminal_event(&event) {
+                    continue;
+                }
+                if needs_fresh_geometry(&event) {
+                    *pending_event = Some(event);
+                    break;
+                }
+                sessions.on_terminal_event(event);
+            }
+            Err(_) => break,
+        }
+    }
 }
 
 async fn event_loop(
@@ -165,6 +220,7 @@ async fn event_loop(
     let mut session_clock = tokio::time::interval(std::time::Duration::from_secs(1));
     session_clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut status = Reporter::for_stdout();
+    let mut pending_terminal_event: Option<Event> = None;
 
     let result = loop {
         // Startup prompts use the same hooks as typed prompts, before blocking.
@@ -178,37 +234,46 @@ async fn event_loop(
             break Err(error);
         }
 
-        // Wait for whichever source has something first. `next_agent_event`
-        // parks forever while idle, so this never busy spins.
-        tokio::select! {
-            // External termination must not wait for the busy spinoff quit confirmation.
-            _ = signals.recv() => break Ok(Exit::Quit),
-            event = terminal_events.recv() => {
-                match event {
-                    Some(event) => sessions.on_terminal_event(event),
-                    None => break Ok(Exit::Quit), // Input thread died, nothing left to do.
+        if let Some(event) = pending_terminal_event.take() {
+            sessions.on_terminal_event(event);
+        } else {
+            // Wait for whichever source has something first. `next_agent_event`
+            // parks forever while idle, so this never busy spins.
+            tokio::select! {
+                // External termination must not wait for the busy spinoff quit confirmation.
+                _ = signals.recv() => break Ok(Exit::Quit),
+                event = terminal_events.recv() => {
+                    match event {
+                        Some(event) => sessions.on_terminal_event(event),
+                        None => break Ok(Exit::Quit), // Input thread died, nothing left to do.
+                    }
                 }
-            }
-            // Agent events and login events share one wakeup, two
-            // `&mut app` futures cannot sit in the same select!, so the
-            // App multiplexes them itself (next_event).
-            (index, event) = sessions.next_event() => {
-                sessions.list[index].app.on_event(event).await;
-            }
-            // The update work has its own source, because it belongs to no session.
-            event = updates.next_event() => {
-                if let Some(restart) = updates.on_event(event, &mut sessions) {
-                    break Ok(Exit::Restart(restart));
+                // Agent events and login events share one wakeup, two
+                // `&mut app` futures cannot sit in the same select!, so the
+                // App multiplexes them itself (next_event).
+                (index, event) = sessions.next_event() => {
+                    sessions.list[index].app.on_event(event).await;
                 }
+                // The update work has its own source, because it belongs to no session.
+                event = updates.next_event() => {
+                    if let Some(restart) = updates.on_event(event, &mut sessions) {
+                        break Ok(Exit::Restart(restart));
+                    }
+                }
+                _ = ticker.tick(), if sessions.any_running() => {
+                    sessions.tick();
+                }
+                _ = session_clock.tick(), if !sessions.any_running() => {}
             }
-            _ = ticker.tick(), if sessions.any_running() => {
-                sessions.tick();
-            }
-            _ = session_clock.tick(), if !sessions.any_running() => {}
         }
 
         // Catch up without waiting, rendering the entire transcript per queued
         // delta would make a fast stream fall behind the producer.
+        drain_terminal_events(
+            &mut terminal_events,
+            &mut sessions,
+            &mut pending_terminal_event,
+        );
         sessions.drain_ready_events().await;
 
         // A run ended somewhere. Check for conflicts between the checkouts.
@@ -313,11 +378,112 @@ fn osc52(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::osc52;
+    use super::{drain_terminal_events, is_ignored_terminal_event, osc52};
+    use crate::sessions::Sessions;
+    use crate::transcript::Cell;
+    use crate::ui::tests::test_app;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
+    };
 
     #[test]
     fn osc52_wraps_the_text_in_the_clipboard_sequence() {
         // "hi" is "aGk=" in base64, ESC ] opens the OSC, BEL closes it.
         assert_eq!(osc52("hi"), "\u{1b}]52;c;aGk=\u{7}");
+    }
+
+    #[test]
+    fn terminal_event_drain_coalesces_scroll_and_typing_ignores_motion_and_defers_clicks() {
+        let mouse = |kind| {
+            Event::Mouse(MouseEvent {
+                kind,
+                column: 4,
+                row: 4,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let mut release = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        let mut repeat = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        repeat.kind = KeyEventKind::Repeat;
+
+        assert!(is_ignored_terminal_event(&mouse(MouseEventKind::Moved)));
+        assert!(is_ignored_terminal_event(&Event::Key(release)));
+        assert!(is_ignored_terminal_event(&Event::Key(repeat)));
+        assert!(is_ignored_terminal_event(&Event::FocusGained));
+        assert!(!is_ignored_terminal_event(&mouse(MouseEventKind::ScrollUp)));
+        assert!(!is_ignored_terminal_event(&Event::FocusLost));
+
+        let mut app = test_app();
+        for i in 0..80 {
+            app.transcript.push(Cell::Assistant {
+                text: format!("line {i}"),
+            });
+        }
+        let mut sessions = Sessions::new(app);
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| crate::ui::render_sessions(frame, &mut sessions))
+            .unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        // Burst: mouse motion noise + 5 wheel notches + typed text + mouse click + trailing key.
+        for _ in 0..20 {
+            tx.send(mouse(MouseEventKind::Moved)).unwrap();
+        }
+        for _ in 0..5 {
+            tx.send(mouse(MouseEventKind::ScrollUp)).unwrap();
+        }
+        for ch in ['h', 'i'] {
+            tx.send(Event::Key(KeyEvent::new(
+                KeyCode::Char(ch),
+                KeyModifiers::NONE,
+            )))
+            .unwrap();
+        }
+        let click = mouse(MouseEventKind::Down(MouseButton::Left));
+        tx.send(click.clone()).unwrap();
+        tx.send(Event::Key(KeyEvent::new(
+            KeyCode::Char('!'),
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+
+        let mut pending = None;
+        drain_terminal_events(&mut rx, &mut sessions, &mut pending);
+        assert_eq!(sessions.active().scroll_from_bottom, 15);
+        assert_eq!(sessions.active().input.text(), "hi");
+        assert_eq!(
+            pending,
+            Some(click),
+            "click must wait for a draw so hit testing uses the scrolled viewport"
+        );
+
+        // Enter queues a pending prompt and stops draining before the next key.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        tx.send(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        tx.send(Event::Key(KeyEvent::new(
+            KeyCode::Char('z'),
+            KeyModifiers::NONE,
+        )))
+        .unwrap();
+        let mut pending = None;
+        drain_terminal_events(&mut rx, &mut sessions, &mut pending);
+        assert_eq!(sessions.active().pending_prompt.as_deref(), Some("hi"));
+        assert!(sessions.active().input.is_empty());
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::Key(KeyEvent {
+                code: KeyCode::Char('z'),
+                ..
+            }))
+        ));
     }
 }

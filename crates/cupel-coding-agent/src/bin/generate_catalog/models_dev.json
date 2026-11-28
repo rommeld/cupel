@@ -6485,6 +6485,89 @@
           }
         ],
         "temperature": true
+      },
+      "~google/gemini-flash-latest": {
+        "cost": {
+          "cache_read": 0.075,
+          "cache_write": 0.083333,
+          "input": 1.5,
+          "output": 7.5,
+          "tiers": []
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "audio",
+            "pdf",
+            "image",
+            "text",
+            "video"
+          ]
+        },
+        "name": "Gemini Flash Latest",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "temperature": true
+      },
+      "~google/gemini-pro-latest": {
+        "cost": {
+          "cache_read": 0.1,
+          "cache_write": 0.1875,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "cache_write": 0.0,
+              "input": 4.0,
+              "output": 18.0,
+              "tier": {
+                "size": 200000
+              }
+            }
+          ]
+        },
+        "limit": {
+          "context": 1048576,
+          "input": null,
+          "output": 943718
+        },
+        "modalities": {
+          "input": [
+            "audio",
+            "pdf",
+            "image",
+            "text",
+            "video"
+          ]
+        },
+        "name": "Gemini Pro Latest",
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "temperature": true
       }
     }
   }

@@ -1,12 +1,19 @@
-"""Offline tests for preparing release metadata without pushing or tagging."""
+"""Offline tests for preparing manual and automatic releases without pushing."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
 PACKAGING = Path(__file__).resolve().parent
+MERGED_AT = "2026-11-27T12:00:00Z"
+
+
+def comment(body, author="OWNER", updated_at=MERGED_AT):
+    return {"body": body, "author_association": author, "updated_at": updated_at}
 
 
 class PrepareReleaseTests(unittest.TestCase):
@@ -27,6 +34,15 @@ awk -F '"' '/^version = / { print $2; exit }' Cargo.toml > Cargo.lock
 """)
         cargo.chmod(0o755)
         self.env = {**os.environ, "PATH": f"{tools}{os.pathsep}{os.defpath}"}
+        gh = tools / "gh"
+        gh.write_text("""#!/bin/sh
+set -eu
+[ "$*" = "api --paginate --slurp repos/cupel/test/issues/$PR_NUMBER/comments?per_page=100" ]
+cat "$PR_COMMENTS"
+""")
+        gh.chmod(0o755)
+        self.event = root / "event.json"
+        self.comments = root / "comments.json"
         self.git("init", "--initial-branch=main")
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.com")
@@ -53,6 +69,19 @@ awk -F '"' '/^version = / { print $2; exit }' Cargo.toml > Cargo.lock
             ["sh", str(PACKAGING / "prepare-release.sh"), tag],
             cwd=self.work, env=self.env, capture_output=True, text=True, timeout=30,
         )
+
+    def prepare_merge(self, number, pages):
+        self.event.write_text(json.dumps({"pull_request": {"number": number, "merged_at": MERGED_AT}}))
+        self.comments.write_text(json.dumps(pages))
+        result = subprocess.run(
+            [sys.executable, str(PACKAGING / "prepare-merge-release.py")],
+            cwd=self.work, env={
+                **self.env, "GITHUB_EVENT_PATH": str(self.event), "GITHUB_REPOSITORY": "cupel/test",
+                "PR_NUMBER": str(number), "PR_COMMENTS": str(self.comments),
+            }, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
 
     def test_prepares_only_metadata_without_committing_or_tagging(self):
         result = self.prepare()
@@ -114,6 +143,46 @@ awk -F '"' '/^version = / { print $2; exit }' Cargo.toml > Cargo.lock
         self.assertNotEqual(self.prepare().returncode, 0)
         self.assertEqual((self.work / "CHANGELOG.md").read_text(), original)
         self.assertEqual(self.git("rev-parse", "HEAD"), self.head)
+
+    def test_merge_without_an_eligible_comment_does_not_tag(self):
+        pages = [[
+            comment("Changelog: added", author="NONE"),
+            comment("Changelog: refact", updated_at="2026-11-27T13:00:00Z"),
+            comment("Use `Changelog: fixed` to release"),
+        ]]
+        self.assertEqual(self.prepare_merge(1, pages), "")
+        self.assertEqual(self.git("tag", "--list"), "v0.33.10")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_merge_rerun_preserves_original_tag(self):
+        self.assertEqual(self.prepare_merge(1, [[comment("Changelog: fixed")]]), "v0.33.11")
+        tagged = self.git("rev-parse", "v0.33.11")
+        self.assertEqual(self.git("rev-parse", "v0.33.11^"), self.head)
+        self.assertEqual(self.git("rev-parse", "main"), self.head)
+        self.git("switch", "main")
+        self.assertEqual(self.prepare_merge(1, [[comment("Changelog: added")]]), "v0.33.11")
+        self.assertEqual(self.git("rev-parse", "v0.33.11"), tagged)
+        self.assertEqual(self.git("tag", "--list"), "v0.33.10\nv0.33.11")
+
+    def test_successive_merges_use_previous_tag_only_release(self):
+        pages = [[comment("Changelog: fixed")], [comment("Changelog: added", author="MEMBER")]]
+        self.git("tag", "v9.0.0-rc.1")
+        self.assertEqual(self.prepare_merge(1, pages), "v0.34.0")
+        self.git("switch", "main")
+        (self.work / "README.md").write_text("Another change\n")
+        self.git("commit", "-am", "second change")
+        self.assertEqual(self.prepare_merge(2, [[comment("Changelog: refact")]]), "v0.34.1")
+
+        changelog = self.git("show", "v0.34.1:CHANGELOG.md")
+        new_section, prior_section = changelog.split("## [v0.34.0]", 1)
+        self.assertIn("## [v0.34.1]", new_section)
+        self.assertIn("- second change", new_section)
+        self.assertNotIn("- example change", new_section)
+        self.assertIn("- example change", prior_section)
+        self.assertEqual(self.git("show", "v0.34.1:Cargo.lock"), "0.34.1")
+
+        self.git("switch", "--detach", self.head)
+        self.assertEqual(self.prepare_merge(3, pages), "")
 
 
 if __name__ == "__main__":

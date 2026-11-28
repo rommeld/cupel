@@ -76,6 +76,35 @@ fn draw(app: &mut App, width: u16, height: u16) -> String {
     buffer_text(terminal.backend().buffer())
 }
 
+fn draw_buffer(
+    app: &mut App,
+    width: u16,
+    height: u16,
+    theme: &crate::theme::Theme,
+) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| crate::ui::render(frame, app, frame.area(), theme))
+        .unwrap();
+    terminal.backend().buffer().clone()
+}
+
+fn style_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> ratatui::style::Style {
+    for y in 0..buffer.area.height {
+        let mut row = String::new();
+        let mut cols = Vec::new();
+        for x in 0..buffer.area.width {
+            cols.push((row.len(), x));
+            row.push_str(buffer[(x, y)].symbol());
+        }
+        if let Some(byte) = row.find(needle) {
+            let (_, x) = cols.into_iter().find(|(start, _)| *start == byte).unwrap();
+            return buffer[(x, y)].style();
+        }
+    }
+    panic!("{needle:?} not found:\n{}", buffer_text(buffer));
+}
+
 fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
     let mut text = String::new();
     for y in 0..buffer.area.height {
@@ -93,10 +122,10 @@ async fn usage_opens_a_bordered_table_without_a_conversation_notice() {
     record(&mut app, "first", 10, StopReason::Stop).await;
     record(&mut app, "second", 20, StopReason::Error).await;
     assert_eq!(app.totals.input, 30);
-    let cells = app.transcript.cells.len();
+    let cells = app.transcript.cells().len();
     open(&mut app);
     finish_loading(&mut app).await;
-    assert_eq!(app.transcript.cells.len(), cells);
+    assert_eq!(app.transcript.cells().len(), cells);
     let screen = draw(&mut app, 120, 30);
     for expected in [
         "[X] Usage",
@@ -425,4 +454,38 @@ async fn usage_displays_loading_failures_inside_the_popup() {
     let screen = draw(&mut app, 120, 30);
     assert!(screen.contains("test history failure"), "{screen}");
     assert!(screen.contains("CURRENT SESSION"), "{screen}");
+}
+
+#[tokio::test]
+async fn usage_body_and_notes_use_base_foreground_not_popup_row_accent() {
+    use ratatui::style::Color;
+
+    let mut app = test_app();
+    record(&mut app, "first", 10, StopReason::Stop).await;
+    open(&mut app);
+    finish_loading(&mut app).await;
+    app.usage_popup.as_mut().unwrap().history = HistoryState::Ready(HistoryUsage::default());
+    for theme in crate::theme::example_themes() {
+        let buffer = draw_buffer(&mut app, 120, 30, &theme);
+        let body_fg = theme.base.fg.or(Some(Color::Reset));
+        let popup_bg = theme.popup.bg.or(Some(Color::Reset));
+        for text in ["test/first", "Snapshot; cached = reads"] {
+            let style = style_of(&buffer, text);
+            assert_eq!(style.fg, body_fg, "{}: {text}", theme.id);
+            assert_eq!(style.bg, popup_bg, "{}: {text}", theme.id);
+            assert_ne!(style.fg, theme.popup_row.fg, "{}: {text}", theme.id);
+        }
+        assert_eq!(
+            style_of(&buffer, "CURRENT SESSION").fg,
+            theme.chrome.fg.or(Some(Color::Reset)),
+            "{}",
+            theme.id
+        );
+        assert_eq!(
+            style_of(&buffer, "┌").fg,
+            theme.pane_border.fg.or(Some(Color::Reset)),
+            "{}",
+            theme.id
+        );
+    }
 }

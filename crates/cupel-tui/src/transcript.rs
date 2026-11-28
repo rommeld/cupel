@@ -100,21 +100,148 @@ pub struct Rendered {
     pub cell_at: Vec<Option<usize>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CellSpan {
+    /// Start index of this cell's own lines in `lines` (after any leading spacer).
+    start: usize,
+    /// Number of this cell's own lines (`0` if the cell rendered empty).
+    len: usize,
+    /// Whether a blank spacer line sits at `start - 1`.
+    has_spacer: bool,
+}
+
+impl CellSpan {
+    fn slot_start(self) -> usize {
+        self.start - usize::from(self.has_spacer)
+    }
+
+    fn slot_end(self) -> usize {
+        self.start + self.len
+    }
+
+    fn slot_len(self) -> usize {
+        self.len + usize::from(self.has_spacer)
+    }
+}
+
+/// Incremental layout cache for [`Transcript::sync_rendered`].
+#[derive(Default)]
+pub struct TranscriptCache {
+    initialized: bool,
+    width: usize,
+    theme: Option<Theme>,
+    selected: Option<usize>,
+    spans: Vec<CellSpan>,
+    running_clocks: Vec<(usize, String)>,
+}
+
+impl TranscriptCache {
+    pub fn clear(&mut self) {
+        self.initialized = false;
+        self.spans.clear();
+        self.running_clocks.clear();
+    }
+
+    /// First line and line count for `cell`, or `None` when empty or out of bounds.
+    #[must_use]
+    pub fn cell_range(&self, cell: usize) -> Option<(usize, usize)> {
+        let span = self.spans.get(cell)?;
+        (span.len > 0).then_some((span.start, span.len))
+    }
+}
+
+#[derive(Default)]
+enum Dirty {
+    #[default]
+    Clean,
+    Cells(Vec<usize>),
+    Rebuild,
+}
+
 #[derive(Default)]
 pub struct Transcript {
-    pub cells: Vec<Cell>,
-    pub reasoning_collapsed: bool,
+    cells: Vec<Cell>,
+    reasoning_collapsed: bool,
+    dirty: Dirty,
+    running_tools: Vec<usize>,
 }
 
 impl Transcript {
+    #[must_use]
+    pub fn from_cells(cells: Vec<Cell>) -> Self {
+        let mut transcript = Self {
+            cells,
+            reasoning_collapsed: false,
+            dirty: Dirty::Rebuild,
+            running_tools: Vec::new(),
+        };
+        transcript.rebuild_running_tools();
+        transcript
+    }
+
+    #[must_use]
+    pub fn cells(&self) -> &[Cell] {
+        &self.cells
+    }
+
+    #[must_use]
+    pub fn reasoning_collapsed(&self) -> bool {
+        self.reasoning_collapsed
+    }
+
+    pub fn push(&mut self, cell: Cell) {
+        let index = self.cells.len();
+        if is_running_tool(&cell) {
+            self.running_tools.push(index);
+        }
+        self.cells.push(cell);
+        self.mark_dirty(index);
+    }
+
+    pub fn insert(&mut self, index: usize, cell: Cell) {
+        self.cells.insert(index, cell);
+        self.rebuild_running_tools();
+        self.dirty = Dirty::Rebuild;
+    }
+
+    pub fn clear(&mut self) {
+        self.cells.clear();
+        self.running_tools.clear();
+        self.dirty = Dirty::Rebuild;
+    }
+
+    fn mark_dirty(&mut self, index: usize) {
+        match &mut self.dirty {
+            Dirty::Rebuild => {}
+            Dirty::Clean => self.dirty = Dirty::Cells(vec![index]),
+            Dirty::Cells(indices) => {
+                if indices.last() != Some(&index) {
+                    indices.push(index);
+                }
+            }
+        }
+    }
+
+    fn rebuild_running_tools(&mut self) {
+        self.running_tools.clear();
+        for (index, cell) in self.cells.iter().enumerate() {
+            if is_running_tool(cell) {
+                self.running_tools.push(index);
+            }
+        }
+    }
+
     /// Append a delta to the last assistant cell, creating one if the last
     /// cell is something else (e.g. the first delta after a tool result).
     pub fn append_assistant(&mut self, delta: &str) {
-        let tail = self.cells.last_mut();
-        if let Some(Cell::Assistant { text }) = tail {
+        let last = self.cells.len().checked_sub(1);
+        if let Some(index) = last
+            && let Cell::Assistant { text } = &mut self.cells[index]
+        {
             text.push_str(delta);
+            self.mark_dirty(index);
         } else {
-            self.cells.push(Cell::Assistant {
+            self.push(Cell::Assistant {
                 text: delta.to_string(),
             });
         }
@@ -122,14 +249,43 @@ impl Transcript {
 
     /// Same, for thinking deltas.
     pub fn append_thinking(&mut self, delta: &str) {
-        let tail = self.cells.last_mut();
-        if let Some(Cell::Thinking { text, .. }) = tail {
+        let last = self.cells.len().checked_sub(1);
+        if let Some(index) = last
+            && let Cell::Thinking { text, .. } = &mut self.cells[index]
+        {
             text.push_str(delta);
+            self.mark_dirty(index);
         } else {
-            self.cells.push(Cell::Thinking {
+            self.push(Cell::Thinking {
                 text: delta.to_string(),
                 collapsed: self.reasoning_collapsed,
             });
+        }
+    }
+
+    /// Append a new empty thinking cell and return its index.
+    pub fn push_thinking(&mut self) -> usize {
+        let index = self.cells.len();
+        self.push(Cell::Thinking {
+            text: String::new(),
+            collapsed: self.reasoning_collapsed,
+        });
+        index
+    }
+
+    /// Append a delta to an existing thinking cell by index.
+    pub fn append_thinking_at(&mut self, index: usize, delta: &str) {
+        if let Some(Cell::Thinking { text, .. }) = self.cells.get_mut(index) {
+            text.push_str(delta);
+            self.mark_dirty(index);
+        }
+    }
+
+    /// Replace the text of an existing thinking cell by index.
+    pub fn set_thinking_at(&mut self, index: usize, content: String) {
+        if let Some(Cell::Thinking { text, .. }) = self.cells.get_mut(index) {
+            *text = content;
+            self.mark_dirty(index);
         }
     }
 
@@ -137,57 +293,87 @@ impl Transcript {
     pub fn toggle_reasoning(&mut self, index: usize) {
         if let Some(Cell::Thinking { collapsed, .. }) = self.cells.get_mut(index) {
             *collapsed = !*collapsed;
+            self.mark_dirty(index);
         }
     }
 
     /// Ctrl+R also sets the visibility of reasoning blocks streamed next.
     pub fn toggle_all_reasoning(&mut self) {
         self.reasoning_collapsed = !self.reasoning_collapsed;
-        for cell in &mut self.cells {
+        let collapsed_target = self.reasoning_collapsed;
+        let mut changed = Vec::new();
+        for (index, cell) in self.cells.iter_mut().enumerate() {
             if let Cell::Thinking { collapsed, .. } = cell {
-                *collapsed = self.reasoning_collapsed;
+                *collapsed = collapsed_target;
+                changed.push(index);
             }
+        }
+        for index in changed {
+            self.mark_dirty(index);
         }
     }
 
-    /// The tool cell for a call id. Searches from the end.
-    fn tool_mut(&mut self, tool_call_id: &str) -> Option<&mut Cell> {
+    /// The index of the tool cell for a call id. Searches from the end.
+    fn tool_index(&self, tool_call_id: &str) -> Option<usize> {
         self.cells
-            .iter_mut()
+            .iter()
+            .enumerate()
             .rev()
-            .find(|cell| matches!(cell, Cell::Tool { id, .. } if id == tool_call_id))
+            .find_map(|(index, cell)| {
+                matches!(cell, Cell::Tool { id, .. } if id == tool_call_id).then_some(index)
+            })
     }
 
     /// The loop started executing a call. Start the clock.
     pub fn mark_tool_started(&mut self, tool_call_id: &str) {
-        if let Some(Cell::Tool { started_at, .. }) = self.tool_mut(tool_call_id) {
-            *started_at = Some(Instant::now());
+        if let Some(index) = self.tool_index(tool_call_id) {
+            if let Cell::Tool {
+                started_at, result, ..
+            } = &mut self.cells[index]
+            {
+                *started_at = Some(Instant::now());
+                if result.is_none() && !self.running_tools.contains(&index) {
+                    self.running_tools.push(index);
+                }
+            }
+            self.mark_dirty(index);
         }
     }
 
     /// A progress snapshot from a running tool.
     pub fn attach_tool_progress(&mut self, tool_call_id: &str, text: String) {
-        if let Some(Cell::Tool {
-            live, result: None, ..
-        }) = self.tool_mut(tool_call_id)
-        {
-            *live = Some(text);
+        if let Some(index) = self.tool_index(tool_call_id) {
+            let mut updated = false;
+            if let Cell::Tool {
+                live, result: None, ..
+            } = &mut self.cells[index]
+            {
+                *live = Some(text);
+                updated = true;
+            }
+            if updated {
+                self.mark_dirty(index);
+            }
         }
     }
 
     /// Attach a finished result to its tool cell (matched by call id). The
     /// cell's clock, if it was started, becomes the outcome's `took`.
     pub fn attach_tool_result(&mut self, tool_call_id: &str, mut outcome: ToolOutcome) {
-        if let Some(Cell::Tool {
-            started_at,
-            live,
-            result,
-            ..
-        }) = self.tool_mut(tool_call_id)
-        {
-            outcome.took = started_at.map(|started| started.elapsed());
-            *live = None;
-            *result = Some(outcome);
+        if let Some(index) = self.tool_index(tool_call_id) {
+            if let Cell::Tool {
+                started_at,
+                live,
+                result,
+                ..
+            } = &mut self.cells[index]
+            {
+                outcome.took = started_at.map(|started| started.elapsed());
+                *live = None;
+                *result = Some(outcome);
+            }
+            self.running_tools.retain(|&running| running != index);
+            self.mark_dirty(index);
         }
     }
 
@@ -199,15 +385,21 @@ impl Transcript {
             } else {
                 ToolDisplay::Full
             };
+            self.mark_dirty(index);
         }
     }
 
     /// Apply the global Ctrl+T display mode to existing tools.
     pub fn set_all_tools_display(&mut self, display: ToolDisplay) {
-        for cell in &mut self.cells {
+        let mut changed = Vec::new();
+        for (index, cell) in self.cells.iter_mut().enumerate() {
             if let Cell::Tool { display: mode, .. } = cell {
                 *mode = display;
+                changed.push(index);
             }
+        }
+        for index in changed {
+            self.mark_dirty(index);
         }
     }
 
@@ -220,7 +412,8 @@ impl Transcript {
     /// anything substantive, a run that ended in an Error cell keeps its
     /// plain cells. There is no "answer" to celebrate.
     pub fn promote_final_answer(&mut self) {
-        for cell in self.cells.iter_mut().rev() {
+        let mut promoted = None;
+        for (index, cell) in self.cells.iter_mut().enumerate().rev() {
             match cell {
                 Cell::Usage { .. } | Cell::Notice { .. } | Cell::LoadedSkills { .. } => {}
                 Cell::Assistant { text } => {
@@ -229,10 +422,14 @@ impl Transcript {
                     // the text.
                     let text = core::mem::take(text);
                     *cell = Cell::Answer { text };
-                    return;
+                    promoted = Some(index);
+                    break;
                 }
-                _ => return,
+                _ => break,
             }
+        }
+        if let Some(index) = promoted {
+            self.mark_dirty(index);
         }
     }
 
@@ -250,7 +447,7 @@ impl Transcript {
             cell_at: Vec::new(),
         };
         for (index, cell) in self.cells.iter().enumerate() {
-            let mut lines = cell_lines(cell, width, theme);
+            let mut lines = render_cell(cell, width, selected == Some(index), theme);
             if lines.is_empty() {
                 continue;
             }
@@ -259,42 +456,189 @@ impl Transcript {
                 rendered.lines.push(Line::default());
                 rendered.cell_at.push(None);
             }
-            if selected == Some(index) {
-                // Spans can carry their own panel background. Tint both
-                // layers without changing foregrounds or Markdown modifiers.
-                for line in &mut lines {
-                    line.style = line.style.patch(theme.selected);
-                    for span in &mut line.spans {
-                        span.style = span.style.patch(theme.selected);
-                    }
-                }
-            }
-            if matches!(cell, Cell::User { .. }) {
-                let surface = if selected == Some(index) {
-                    theme.task.patch(theme.selected)
-                } else {
-                    theme.task
-                };
-                // Colored surfaces use half-row padding. With an inherited
-                // background, blank padding avoids visible foreground-colored bars.
-                let (top, bottom) = if surface.bg.is_some() {
-                    ("▄", "▀")
-                } else {
-                    (" ", " ")
-                };
-                let edge_style = Style {
-                    fg: surface.bg,
-                    ..theme.base
-                };
-                lines.insert(0, Line::from(top.repeat(width)).style(edge_style));
-                lines.push(Line::from(bottom.repeat(width)).style(edge_style));
-            }
             rendered
                 .cell_at
                 .extend(std::iter::repeat_n(Some(index), lines.len()));
             rendered.lines.append(&mut lines);
         }
         rendered
+    }
+
+    /// Incrementally synchronize cached rendered `lines` and `cell_at` with
+    /// the current transcript state. Returns `true` when any line was updated.
+    /// When a mutation is needed, `before_mutate` runs before `lines` changes
+    /// with the earliest line index that may be affected.
+    pub fn sync_rendered<F>(
+        &mut self,
+        cache: &mut TranscriptCache,
+        lines: &mut Vec<Line<'static>>,
+        cell_at: &mut Vec<Option<usize>>,
+        width: u16,
+        selected: Option<usize>,
+        theme: &Theme,
+        before_mutate: F,
+    ) -> bool
+    where
+        F: FnOnce(usize, &[Line<'static>]),
+    {
+        let width = width.max(10) as usize;
+        let expected_len = cache.spans.last().copied().map_or(0, CellSpan::slot_end);
+        let full_rebuild = !cache.initialized
+            || cache.width != width
+            || cache.theme.as_ref() != Some(theme)
+            || matches!(self.dirty, Dirty::Rebuild)
+            || cache.spans.len() > self.cells.len()
+            || lines.len() != expected_len
+            || cell_at.len() != expected_len;
+
+        if full_rebuild {
+            before_mutate(0, lines);
+            lines.clear();
+            cell_at.clear();
+            cache.spans.clear();
+            cache.spans.reserve(self.cells.len());
+            for (index, cell) in self.cells.iter().enumerate() {
+                let mut cell_rendered = render_cell(cell, width, selected == Some(index), theme);
+                append_rendered_cell(lines, cell_at, &mut cache.spans, index, &mut cell_rendered);
+            }
+            cache.initialized = true;
+            cache.width = width;
+            cache.theme = Some(theme.clone());
+            cache.selected = selected;
+            self.refresh_running_clocks(cache);
+            self.dirty = Dirty::Clean;
+            return true;
+        }
+
+        let mut dirty = match core::mem::take(&mut self.dirty) {
+            Dirty::Cells(indices) => indices,
+            Dirty::Clean | Dirty::Rebuild => Vec::new(),
+        };
+
+        if cache.selected != selected {
+            if let Some(previous) = cache.selected
+                && previous < self.cells.len()
+            {
+                dirty.push(previous);
+            }
+            if let Some(current) = selected
+                && current < self.cells.len()
+            {
+                dirty.push(current);
+            }
+        }
+
+        for &index in &self.running_tools {
+            let current = running_clock_text(&self.cells[index]);
+            let previous = cache
+                .running_clocks
+                .iter()
+                .find(|(cached_index, _)| *cached_index == index)
+                .map(|(_, clock)| clock.as_str());
+            if current.as_deref() != previous {
+                dirty.push(index);
+            }
+        }
+
+        if cache.spans.len() < self.cells.len() {
+            dirty.extend(cache.spans.len()..self.cells.len());
+        }
+
+        dirty.retain(|&index| index < self.cells.len());
+        dirty.sort_unstable();
+        dirty.dedup();
+
+        if dirty.is_empty() {
+            cache.selected = selected;
+            if self.running_tools.is_empty() && !cache.running_clocks.is_empty() {
+                cache.running_clocks.clear();
+            }
+            return false;
+        }
+
+        let first_dirty = dirty[0];
+        let earliest_line = if first_dirty < cache.spans.len() {
+            cache.spans[first_dirty].slot_start()
+        } else {
+            lines.len()
+        };
+        before_mutate(earliest_line, lines);
+
+        if first_dirty >= cache.spans.len().saturating_sub(1) {
+            let tail_start = first_dirty.min(cache.spans.len());
+            if tail_start < cache.spans.len() {
+                let truncate_to = cache.spans[tail_start].slot_start();
+                lines.truncate(truncate_to);
+                cell_at.truncate(truncate_to);
+                cache.spans.truncate(tail_start);
+            }
+            for (index, cell) in self.cells.iter().enumerate().skip(tail_start) {
+                let mut cell_rendered = render_cell(cell, width, selected == Some(index), theme);
+                append_rendered_cell(lines, cell_at, &mut cache.spans, index, &mut cell_rendered);
+            }
+        } else if dirty.len() <= 4 {
+            for index in dirty {
+                let mut cell_rendered =
+                    render_cell(&self.cells[index], width, selected == Some(index), theme);
+                if index < cache.spans.len() {
+                    splice_rendered_cell(
+                        lines,
+                        cell_at,
+                        &mut cache.spans,
+                        index,
+                        &mut cell_rendered,
+                    );
+                } else {
+                    append_rendered_cell(
+                        lines,
+                        cell_at,
+                        &mut cache.spans,
+                        index,
+                        &mut cell_rendered,
+                    );
+                }
+            }
+        } else {
+            let old_lines = core::mem::take(lines);
+            let old_spans = core::mem::take(&mut cache.spans);
+            cell_at.clear();
+            let mut old_iter = old_lines.into_iter();
+            let mut consumed = 0_usize;
+            let mut dirty_cursor = 0_usize;
+            cache.spans.reserve(self.cells.len());
+            for (index, cell) in self.cells.iter().enumerate() {
+                let is_dirty = dirty
+                    .get(dirty_cursor)
+                    .is_some_and(|&dirty_index| dirty_index == index);
+                if is_dirty {
+                    dirty_cursor += 1;
+                }
+                let mut cell_rendered = if !is_dirty && index < old_spans.len() {
+                    let span = old_spans[index];
+                    for _ in consumed..span.start {
+                        let _ = old_iter.next();
+                    }
+                    consumed = span.slot_end();
+                    old_iter.by_ref().take(span.len).collect()
+                } else {
+                    render_cell(cell, width, selected == Some(index), theme)
+                };
+                append_rendered_cell(lines, cell_at, &mut cache.spans, index, &mut cell_rendered);
+            }
+        }
+
+        cache.selected = selected;
+        self.refresh_running_clocks(cache);
+        true
+    }
+
+    fn refresh_running_clocks(&self, cache: &mut TranscriptCache) {
+        cache.running_clocks.clear();
+        for &index in &self.running_tools {
+            if let Some(clock) = running_clock_text(&self.cells[index]) {
+                cache.running_clocks.push((index, clock));
+            }
+        }
     }
 
     /// The raw text a copy places on the clipboard. The unrendered cell
@@ -316,6 +660,176 @@ impl Transcript {
             | Cell::Summary { text } => Some(text),
             Cell::Tool { .. } => None,
         }
+    }
+}
+
+fn is_running_tool(cell: &Cell) -> bool {
+    matches!(
+        cell,
+        Cell::Tool {
+            started_at: Some(_),
+            result: None,
+            ..
+        }
+    )
+}
+
+fn running_clock_text(cell: &Cell) -> Option<String> {
+    match cell {
+        Cell::Tool {
+            display,
+            started_at: Some(started),
+            result: None,
+            ..
+        } if *display != ToolDisplay::Collapsed => Some(format_seconds(started.elapsed())),
+        _ => None,
+    }
+}
+
+/// Styled, wrapped, and decorated lines for one cell (including selection tint
+/// and user surface padding).
+fn render_cell(cell: &Cell, width: usize, selected: bool, theme: &Theme) -> Vec<Line<'static>> {
+    let mut lines = cell_lines(cell, width, theme);
+    if lines.is_empty() {
+        return lines;
+    }
+    if selected {
+        // Spans can carry their own panel background. Tint both
+        // layers without changing foregrounds or Markdown modifiers.
+        for line in &mut lines {
+            line.style = line.style.patch(theme.selected);
+            for span in &mut line.spans {
+                span.style = span.style.patch(theme.selected);
+            }
+        }
+    }
+    if matches!(cell, Cell::User { .. }) {
+        let surface = if selected {
+            theme.task.patch(theme.selected)
+        } else {
+            theme.task
+        };
+        // Colored surfaces use half-row padding. With an inherited
+        // background, blank padding avoids visible foreground-colored bars.
+        let (top, bottom) = if surface.bg.is_some() {
+            ("▄", "▀")
+        } else {
+            (" ", " ")
+        };
+        let edge_style = Style {
+            fg: surface.bg,
+            ..theme.base
+        };
+        lines.insert(0, Line::from(top.repeat(width)).style(edge_style));
+        lines.push(Line::from(bottom.repeat(width)).style(edge_style));
+    }
+    lines
+}
+
+fn append_rendered_cell(
+    lines: &mut Vec<Line<'static>>,
+    cell_at: &mut Vec<Option<usize>>,
+    spans: &mut Vec<CellSpan>,
+    index: usize,
+    cell_rendered: &mut Vec<Line<'static>>,
+) {
+    let len = cell_rendered.len();
+    if len == 0 {
+        spans.push(CellSpan {
+            start: lines.len(),
+            len: 0,
+            has_spacer: false,
+        });
+        return;
+    }
+    let has_spacer = !lines.is_empty();
+    if has_spacer {
+        lines.push(Line::default());
+        cell_at.push(None);
+    }
+    let start = lines.len();
+    cell_at.extend(std::iter::repeat_n(Some(index), len));
+    lines.append(cell_rendered);
+    spans.push(CellSpan {
+        start,
+        len,
+        has_spacer,
+    });
+}
+
+fn splice_rendered_cell(
+    lines: &mut Vec<Line<'static>>,
+    cell_at: &mut Vec<Option<usize>>,
+    spans: &mut [CellSpan],
+    index: usize,
+    cell_rendered: &mut Vec<Line<'static>>,
+) {
+    let old_span = spans[index];
+    let old_slot_start = old_span.slot_start();
+    let old_slot_end = old_span.slot_end();
+    let old_slot_len = old_span.slot_len();
+    let has_prev_non_empty = old_slot_start > 0;
+
+    let new_len = cell_rendered.len();
+    let new_has_spacer = new_len > 0 && has_prev_non_empty;
+    let new_slot_len = new_len + usize::from(new_has_spacer);
+
+    let mut replacement_lines = Vec::with_capacity(new_slot_len);
+    let mut replacement_cells = Vec::with_capacity(new_slot_len);
+    if new_has_spacer {
+        replacement_lines.push(Line::default());
+        replacement_cells.push(None);
+    }
+    replacement_lines.append(cell_rendered);
+    replacement_cells.extend(std::iter::repeat_n(Some(index), new_len));
+
+    lines.splice(old_slot_start..old_slot_end, replacement_lines);
+    cell_at.splice(old_slot_start..old_slot_end, replacement_cells);
+
+    spans[index] = CellSpan {
+        start: old_slot_start + usize::from(new_has_spacer),
+        len: new_len,
+        has_spacer: new_has_spacer,
+    };
+
+    if new_slot_len != old_slot_len {
+        for span in &mut spans[index + 1..] {
+            shift_span_start(span, new_slot_len, old_slot_len);
+        }
+    }
+
+    // If this cell became or stopped being the first non-empty cell, the next
+    // non-empty cell must gain or lose its leading spacer.
+    if !has_prev_non_empty
+        && (old_span.len == 0) != (new_len == 0)
+        && let Some(offset) = spans[index + 1..].iter().position(|span| span.len > 0)
+    {
+        let next = index + 1 + offset;
+        if new_len > 0 {
+            let insert_at = spans[next].start;
+            lines.insert(insert_at, Line::default());
+            cell_at.insert(insert_at, None);
+            spans[next].has_spacer = true;
+            for span in &mut spans[next..] {
+                span.start += 1;
+            }
+        } else {
+            let remove_at = spans[next].start - 1;
+            lines.remove(remove_at);
+            cell_at.remove(remove_at);
+            spans[next].has_spacer = false;
+            for span in &mut spans[next..] {
+                span.start -= 1;
+            }
+        }
+    }
+}
+
+fn shift_span_start(span: &mut CellSpan, new_len: usize, old_len: usize) {
+    if new_len >= old_len {
+        span.start += new_len - old_len;
+    } else {
+        span.start -= old_len - new_len;
     }
 }
 
@@ -1763,5 +2277,150 @@ mod tests {
                 .chars()
                 .any(|c| ('\u{007f}'..='\u{009f}').contains(&c))
         );
+    }
+
+    #[test]
+    fn sync_rendered_matches_to_lines_across_incremental_mutations_and_reuses_cache() {
+        #[derive(Default)]
+        struct Harness {
+            transcript: Transcript,
+            cache: TranscriptCache,
+            lines: Vec<Line<'static>>,
+            cell_at: Vec<Option<usize>>,
+        }
+        impl Harness {
+            fn check(
+                &mut self,
+                width: u16,
+                selected: Option<usize>,
+                theme: &Theme,
+                expect_change: bool,
+                step: &str,
+            ) {
+                let mut callback_ran = false;
+                let changed = self.transcript.sync_rendered(
+                    &mut self.cache,
+                    &mut self.lines,
+                    &mut self.cell_at,
+                    width,
+                    selected,
+                    theme,
+                    |_, _| callback_ran = true,
+                );
+                assert_eq!(changed, expect_change, "{step}: changed mismatch");
+                assert_eq!(callback_ran, expect_change, "{step}: callback mismatch");
+                let fresh = self.transcript.to_lines(width, selected, theme);
+                assert_eq!(self.lines, fresh.lines, "{step}: lines diverged");
+                assert_eq!(self.cell_at, fresh.cell_at, "{step}: cell_at diverged");
+            }
+        }
+
+        let mut h = Harness::default();
+
+        // Empty initial sync, then unchanged no-op.
+        h.check(60, None, &CUPEL, true, "init empty");
+        h.check(60, None, &CUPEL, false, "noop empty");
+
+        // Empty thinking cell at index 0 followed by a non-empty cell, then
+        // transitioning cell 0 empty -> non-empty -> empty -> non-empty.
+        let thinking_0 = h.transcript.push_thinking();
+        h.transcript.push(Cell::User {
+            text: "first prompt".into(),
+        });
+        h.check(60, None, &CUPEL, true, "empty leading thinking");
+        h.transcript
+            .append_thinking_at(thinking_0, "**Plan**\nstep 1");
+        h.check(60, None, &CUPEL, true, "leading thinking became non-empty");
+        h.transcript.set_thinking_at(thinking_0, "   ".into());
+        h.check(60, None, &CUPEL, true, "leading thinking became empty");
+        h.transcript
+            .set_thinking_at(thinking_0, "**Plan**\nstep 2".into());
+        h.check(60, None, &CUPEL, true, "leading thinking restored");
+
+        // Tail streaming + running tool lifecycle.
+        h.transcript.push(tool("call_1"));
+        h.check(60, None, &CUPEL, true, "tool pushed");
+        h.transcript.mark_tool_started("call_1");
+        h.check(60, None, &CUPEL, true, "tool started");
+        h.transcript
+            .attach_tool_progress("call_1", "line 1\nline 2".into());
+        h.check(60, None, &CUPEL, true, "tool progress");
+        h.transcript.attach_tool_result(
+            "call_1",
+            ToolOutcome {
+                text: "done\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7".into(),
+                is_error: false,
+                diff: None,
+                skill: None,
+                took: None,
+            },
+        );
+        h.check(60, None, &CUPEL, true, "tool result");
+        h.check(60, None, &CUPEL, false, "idle after tool result");
+
+        // Streaming assistant text at the tail must not claim earlier lines changed.
+        let prev_len = h.lines.len();
+        h.transcript.append_assistant("partial ");
+        let mut earliest = None;
+        assert!(h.transcript.sync_rendered(
+            &mut h.cache,
+            &mut h.lines,
+            &mut h.cell_at,
+            60,
+            None,
+            &CUPEL,
+            |line, _| earliest = Some(line),
+        ));
+        assert_eq!(
+            earliest,
+            Some(prev_len),
+            "tail append should only touch lines at/after previous end"
+        );
+        h.transcript.append_assistant("**answer**");
+        h.check(60, None, &CUPEL, true, "tail delta");
+        h.transcript.push(Cell::Usage {
+            text: "[10 in / 5 out]".into(),
+        });
+        h.transcript.promote_final_answer();
+        h.check(60, None, &CUPEL, true, "promote final answer");
+
+        // Selection changes and single-cell toggles.
+        h.check(60, Some(1), &CUPEL, true, "select user cell");
+        h.check(60, Some(1), &CUPEL, false, "same selection noop");
+        h.check(60, Some(3), &CUPEL, true, "move selection");
+        h.transcript.toggle_tool(2);
+        h.check(60, Some(3), &CUPEL, true, "toggle one tool");
+        h.transcript.toggle_reasoning(0);
+        h.check(60, Some(3), &CUPEL, true, "toggle one reasoning");
+
+        // Multi-cell (> 4) global toggle path.
+        for i in 0..6 {
+            h.transcript.push(bash_cell(ToolDisplay::Preview));
+            h.transcript.append_thinking(&format!("thought {i}"));
+        }
+        h.check(60, None, &CUPEL, true, "many cells pushed");
+        h.transcript.set_all_tools_display(ToolDisplay::Collapsed);
+        h.check(60, None, &CUPEL, true, "collapse all tools");
+        h.transcript.toggle_all_reasoning();
+        h.check(60, None, &CUPEL, true, "toggle all reasoning");
+        h.check(60, None, &CUPEL, false, "unchanged after global toggles");
+
+        // Resize and theme change (including same-id edited theme).
+        h.check(32, None, &CUPEL, true, "width resize");
+        let mut edited_theme = CUPEL.clone();
+        edited_theme.answer = Style::new().fg(ratatui::style::Color::Green);
+        h.check(32, None, &edited_theme, true, "edited theme");
+        h.check(32, None, &edited_theme, false, "same edited theme noop");
+
+        // Insert at front and clear.
+        h.transcript.insert(
+            0,
+            Cell::Notice {
+                text: "prepended".into(),
+            },
+        );
+        h.check(32, None, &edited_theme, true, "insert at 0");
+        h.transcript.clear();
+        h.check(32, None, &edited_theme, true, "clear");
     }
 }

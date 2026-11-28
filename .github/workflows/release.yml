@@ -1,17 +1,66 @@
-# Prepare the version and changelog in a tested PR, then push its version tag.
 # Linux binaries use musl, macOS binaries contain Apple Silicon and Intel slices.
 
 name: release
 
 on:
+  pull_request_target:
+    branches: [main]
+    types: [closed]
   push:
     tags: ["v*"]
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  queue: max
+
 jobs:
+  prepare:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.13"
+      - name: Prepare release from PR comments
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tag=$(python3 packaging/prepare-merge-release.py)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Push release tag
+        if: steps.metadata.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          gh auth setup-git
+          git push origin "refs/tags/$RELEASE_TAG"
+
   build:
+    needs: prepare
+    if: >-
+      ${{ !cancelled() && (github.event_name == 'push' ||
+      (needs.prepare.result == 'success' && needs.prepare.outputs.tag != '')) }}
     strategy:
       matrix:
         include:
@@ -27,6 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ needs.prepare.outputs.tag && format('refs/tags/{0}', needs.prepare.outputs.tag) || github.sha }}
           persist-credentials: false
       - name: Install Rust toolchain
         run: rustup show active-toolchain
@@ -36,7 +86,7 @@ jobs:
 
       - name: Verify prepared release metadata
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
@@ -90,20 +140,16 @@ jobs:
           overwrite: true
 
   publish:
-    needs: build
+    needs: [prepare, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-    concurrency:
-      group: release-publish
-      cancel-in-progress: false
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           merge-multiple: true
@@ -117,9 +163,10 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --draft \
-              --title "cupel $GITHUB_REF_NAME" --generate-notes --verify-tag
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --draft \
+              --title "cupel $RELEASE_TAG" --generate-notes --verify-tag
           fi
-          gh release upload "$GITHUB_REF_NAME" cupel-*.tar.gz sha256sums.txt --clobber
-          gh release edit "$GITHUB_REF_NAME" --draft=false
+          gh release upload "$RELEASE_TAG" cupel-*.tar.gz sha256sums.txt --clobber
+          id=$(gh release view "$RELEASE_TAG" --json databaseId --jq .databaseId)
+          gh api --method PATCH "repos/$GH_REPO/releases/$id" -F draft=false -f make_latest=legacy --silent

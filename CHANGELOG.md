@@ -2,6 +2,10 @@
 
 Notable user-facing changes by release.
 
+## [Unreleased]
+
+- Model presets still select the provider, model, and thinking level. Cupel ignores legacy preset `prompt` fields and removes them the next time it saves home settings. Put instructions that apply across presets in `AGENTS.md` or `CLAUDE.md`.
+
 ## [v0.53.0] - 2026-11-26
 
 - Model presets still select the provider, model, and thinking level. Cupel keeps legacy preset `prompt` text in settings but no longer sends it to the model. Put instructions that apply across presets in `AGENTS.md` or `CLAUDE.md`.
