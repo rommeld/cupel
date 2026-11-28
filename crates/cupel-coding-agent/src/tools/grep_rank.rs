@@ -152,7 +152,7 @@ fn is_match(matcher: Option<&RegexMatcher>, line: &str) -> bool {
 }
 
 /// Visibility and qualifier words that may precede a definition keyword.
-const MODIFIERS: &str = r"(?:pub(?:\([^)]*\))?|export|default|async|unsafe|extern|static|const|abstract|final|override)\s+";
+const MODIFIERS: &str = r#"(?:pub(?:\([^)]*\))?|public|private|protected|internal|export|default|async|unsafe|extern(?:\s+"[^"]+")?|static|const|abstract|final|override|sealed|partial|virtual|synchronized)\s+"#;
 /// Keywords that introduce an item (function, type, or module) in the
 /// common languages. Items are definitions at any indentation.
 const ITEM_KEYWORDS: &str = "fn|func|function|def|class|struct|enum|union|trait|interface|impl|type|typedef|mod|static|macro_rules!|record|protocol";
@@ -165,7 +165,7 @@ const BINDING_KEYWORDS: &str = "let|var|const";
 /// (`typedef struct Foo`), optional generics, then the pattern itself.
 fn defines_name_pattern(pattern: &str, boundary: &str) -> String {
     format!(
-        r"^\s*(?:{MODIFIERS})*(?:(?:(?:{ITEM_KEYWORDS}|{BINDING_KEYWORDS})\s*(?:<[^>]*>)?\s+){{1,2}}(?:{pattern}){boundary}|impl\b[^{{]*\bfor\s+(?:{pattern}){boundary})"
+        r"^\s*(?:{MODIFIERS})*(?:(?:(?:{ITEM_KEYWORDS}|{BINDING_KEYWORDS})\s*(?:<[^>]*>)?\s+){{1,2}}(?:{pattern}){boundary}|func\s+\([^)]*\)\s+(?:{pattern}){boundary}|impl\b[^{{]*\bfor\s+(?:{pattern}){boundary})"
     )
 }
 
@@ -194,6 +194,7 @@ fn bucket_of(relative: &Path) -> Bucket {
         "vendor",
         "node_modules",
         "third_party",
+        "docs",
     ];
     const TEST_DIRS: &[&str] = &["test", "tests", "testing", "spec", "specs", "__tests__"];
     let components: Vec<String> = relative
@@ -206,13 +207,29 @@ fn bucket_of(relative: &Path) -> Bucket {
     let Some((name, dirs)) = components.split_last() else {
         return Bucket::Source;
     };
+    if name.ends_with(".md")
+        || name.ends_with(".markdown")
+        || name.ends_with(".mdx")
+        || name == "changelog"
+        || name.starts_with("changelog.")
+    {
+        return Bucket::LowPriority;
+    }
     if dirs.iter().any(|c| TEST_DIRS.contains(&c.as_str())) {
         return Bucket::Test;
     }
     if name.contains("_test.")
+        || name.contains("_tests.")
+        || name.contains("_spec.")
         || name.starts_with("test_")
+        || name.starts_with("test.")
+        || name.starts_with("tests.")
         || name.contains(".test.")
         || name.contains(".spec.")
+        || relative
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|stem| stem.ends_with("Test") || stem.ends_with("Tests"))
     {
         return Bucket::Test;
     }
@@ -277,8 +294,13 @@ mod tests {
             "typedef struct Foo {",
             "macro_rules! Foo {",
             "const Foo = require('foo');",
+            "func (s *Server) Foo(w http.ResponseWriter) {",
+            "public final class Foo {",
+            "public sealed partial class Foo {",
+            "pub unsafe extern \"C\" fn Foo() {}",
         ] {
             assert!(defines(&ranker, line), "should define Foo: {line}");
+            assert!(shaped(&ranker, line), "should be definition-shaped: {line}");
         }
         for line in [
             "use crate::Foo;",
@@ -422,6 +444,7 @@ mod tests {
             "lib/foo.py",
             "src/testing.rs",
             "attest/x.py",
+            "src/contest.java",
         ] {
             assert_eq!(bucket_of(Path::new(path)), Bucket::Source, "{path}");
         }
@@ -435,6 +458,12 @@ mod tests {
             "src/foo.test.ts",
             "src/foo.spec.js",
             "src/test_foo.py",
+            "crates/cupel-coding-agent/src/undo_tests.rs",
+            "src/usage_tests.rs",
+            "src/jobs/tests.rs",
+            "src/foo_spec.rb",
+            "src/FooTest.java",
+            "src/FooTests.cs",
         ] {
             assert_eq!(bucket_of(Path::new(path)), Bucket::Test, "{path}");
         }
@@ -445,6 +474,9 @@ mod tests {
             "testdata/input.txt",
             "src/fixtures/data.json",
             "vendor/tests/foo.go",
+            "docs/reference.py",
+            "CHANGELOG.md",
+            "AI-CODING-AGENT-EDIT-FINDINGS.md",
         ] {
             assert_eq!(bucket_of(Path::new(path)), Bucket::LowPriority, "{path}");
         }
