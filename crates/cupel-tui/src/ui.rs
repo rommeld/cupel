@@ -6334,6 +6334,158 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[tokio::test]
+    async fn hot_reload_applies_settings_theme_changes_and_warns_on_unknown() {
+        use crate::app::ReloadTarget;
+        use crate::sessions::Sessions;
+
+        let root = std::env::temp_dir().join(format!(
+            "cupel-ui-theme-settings-reload-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let themes_dir = home.join("themes");
+        std::fs::create_dir_all(&themes_dir).unwrap();
+        let repo_themes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../themes");
+        for name in ["nightfox.json", "ayu-light.json"] {
+            std::fs::copy(repo_themes.join(name), themes_dir.join(name)).unwrap();
+        }
+
+        let app = test_app_with_home(&root, "cupel-settings-reload");
+        let mut sessions = Sessions::new(app);
+        assert_eq!(sessions.theme.id, "cupel");
+
+        std::fs::write(home.join("settings.json"), r#"{"theme": "nightfox"}"#).unwrap();
+        sessions.reload(ReloadTarget::Current).await;
+        assert_eq!(sessions.theme.id, "nightfox");
+        assert_eq!(
+            sessions_style_of(&mut sessions, "version:").bg,
+            sessions.theme.base.bg
+        );
+
+        std::fs::write(home.join("settings.json"), r#"{"theme": "ayu-light"}"#).unwrap();
+        sessions.reload(ReloadTarget::Current).await;
+        assert_eq!(sessions.theme.id, "ayu-light");
+        assert_eq!(
+            sessions_style_of(&mut sessions, "version:").bg,
+            sessions.theme.base.bg
+        );
+
+        std::fs::write(home.join("settings.json"), r#"{"theme": "dracula"}"#).unwrap();
+        sessions.reload(ReloadTarget::Current).await;
+        assert_eq!(sessions.theme.id, "cupel");
+        assert!(has_notice(sessions.active(), "unknown theme \"dracula\""));
+
+        std::fs::write(home.join("settings.json"), r#"{"theme": "nightfox"}"#).unwrap();
+        sessions.reload(ReloadTarget::Current).await;
+        assert_eq!(sessions.theme.id, "nightfox");
+
+        std::fs::write(home.join("settings.json"), "{}").unwrap();
+        sessions.reload(ReloadTarget::Current).await;
+        assert_eq!(sessions.theme.id, "cupel");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replay_history_promotes_completed_turn_answers_without_promoting_pretool_or_error_turns() {
+        use cupel_agent::AgentMessage;
+        use cupel_core::types::{
+            Api, AssistantContent, AssistantMessage, Message, Provider, StopReason, TextContent,
+            ToolCall, ToolResultContent, ToolResultMessage, Usage, now_ms,
+        };
+
+        let assistant = |content, stop_reason, error_message: Option<&str>| {
+            AgentMessage::Llm(Message::Assistant(AssistantMessage {
+                content,
+                api: Api::from("test"),
+                provider: Provider::from("test"),
+                model: "test-model".to_string(),
+                response_model: None,
+                response_id: None,
+                usage: Usage::default(),
+                stop_reason,
+                error_message: error_message.map(str::to_string),
+                error_kind: None,
+                timestamp: now_ms(),
+            }))
+        };
+        let old = test_app();
+        let mut options = AgentOptions::new(old.agent.state().model, old.agent.registry());
+        options.messages = vec![
+            AgentMessage::user_text("first question"),
+            assistant(
+                vec![
+                    AssistantContent::Text(TextContent::plain("checking files")),
+                    AssistantContent::ToolCall(ToolCall {
+                        id: "call_1".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path": "a.rs"}),
+                        thought_signature: None,
+                    }),
+                ],
+                StopReason::ToolUse,
+                None,
+            ),
+            AgentMessage::Llm(Message::ToolResult(ToolResultMessage {
+                tool_call_id: "call_1".into(),
+                tool_name: "read".into(),
+                content: vec![ToolResultContent::Text(TextContent::plain("fn a() {}"))],
+                details: None,
+                is_error: false,
+                timestamp: now_ms(),
+            })),
+            assistant(
+                vec![AssistantContent::Text(TextContent::plain(
+                    "first final answer",
+                ))],
+                StopReason::Stop,
+                None,
+            ),
+            AgentMessage::user_text("second question"),
+            assistant(
+                vec![AssistantContent::Text(TextContent::plain(
+                    "partial failed reply",
+                ))],
+                StopReason::Error,
+                Some("boom"),
+            ),
+            AgentMessage::user_text("third question"),
+            assistant(
+                vec![AssistantContent::Text(TextContent::plain(
+                    "latest final answer",
+                ))],
+                StopReason::Stop,
+                None,
+            ),
+        ];
+        let mut app = App::new(Agent::new(options), old.meta, old.recorder);
+        let answers: Vec<&str> = app
+            .transcript
+            .cells
+            .iter()
+            .filter_map(|cell| match cell {
+                Cell::Answer { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(answers, ["first final answer", "latest final answer"]);
+        let plain: Vec<&str> = app
+            .transcript
+            .cells
+            .iter()
+            .filter_map(|cell| match cell {
+                Cell::Assistant { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(plain, ["checking files", "partial failed reply"]);
+        let screen = draw(&mut app, 80, 40);
+        assert_eq!(screen.matches("Answer").count(), 2, "{screen}");
+        assert_eq!(style_of(&mut app, "Answer").fg, CUPEL.answer_label.fg);
+    }
+
     #[test]
     fn the_sidebar_lists_every_session_once_there_are_two() {
         use crate::sessions::{Session, Sessions};

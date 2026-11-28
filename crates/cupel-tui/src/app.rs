@@ -445,6 +445,9 @@ impl App {
                         },
                         None => Cell::User { text },
                     };
+                    if matches!(cell, Cell::User { .. }) {
+                        self.transcript.promote_final_answer();
+                    }
                     self.transcript.cells.push(cell);
                 }
                 AgentMessage::Llm(Message::Assistant(assistant)) => {
@@ -498,6 +501,7 @@ impl App {
                 AgentMessage::Custom { .. } | AgentMessage::Metadata { .. } => {}
             }
         }
+        self.transcript.promote_final_answer();
     }
 
     #[must_use]
