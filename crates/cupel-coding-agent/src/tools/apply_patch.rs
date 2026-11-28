@@ -34,6 +34,7 @@ use crate::tools::patch_update::apply_chunks;
 use crate::tools::text_diff::{
     detect_line_ending, generate_diff_string, normalize_to_lf, restore_line_endings, strip_bom,
 };
+use crate::undo::{self, RecordedEdit};
 
 const DIFF_CONTEXT_LINES: usize = 4;
 const NEW_FILE_PREVIEW_LINES: usize = 20;
@@ -264,6 +265,12 @@ impl ApplyPatchTool {
                     check_expected(&resolve_to_root(destination, &self.cwd), None, expected)
                         .await?;
                 }
+                let metadata = tokio::fs::metadata(&absolute)
+                    .await
+                    .map_err(|error| format!("cannot inspect {path}: {error}"))?;
+                if !metadata.is_file() {
+                    return Err(format!("not a regular file: {path}").into());
+                }
                 // Match in BOM free, LF normalized space, restore both on
                 // write.
                 let (bom, text) = strip_bom(&raw);
@@ -280,6 +287,7 @@ impl ApplyPatchTool {
                     old_text,
                     new_text,
                     content,
+                    mode: undo::file_mode(&metadata),
                 })
             }
         }
@@ -349,6 +357,7 @@ enum Change {
         old_text: String,
         new_text: String,
         content: String,
+        mode: u32,
     },
 }
 
@@ -445,31 +454,30 @@ impl AgentTool for ApplyPatchTool {
             let mut edits = Vec::new();
             for change in &changes {
                 match change {
-                    Change::Add { path, content, .. }
-                    | Change::Update {
-                        path,
-                        move_to: None,
-                        content,
-                        ..
-                    } => {
-                        edits.push((path.clone(), Some(content.as_bytes())));
+                    Change::Add { path, content, .. } => {
+                        edits.push(RecordedEdit::new(path, Some(content.as_bytes())));
                     }
-                    Change::Delete { path, .. } => edits.push((path.clone(), None)),
+                    Change::Delete { path, .. } => edits.push(RecordedEdit::new(path, None)),
                     Change::Update {
                         path,
-                        move_to: Some((destination, _)),
+                        move_to,
                         content,
+                        mode,
                         ..
                     } => {
-                        if queue_key(path) == queue_key(destination) {
-                            if path != destination {
+                        let mut target = path;
+                        if let Some((destination, _)) = move_to {
+                            if path != destination && queue_key(path) == queue_key(destination) {
                                 return Err("tracked patches do not support aliased renames".into());
                             }
-                            edits.push((path.clone(), Some(content.as_bytes())));
-                        } else {
-                            edits.push((path.clone(), None));
-                            edits.push((destination.clone(), Some(content.as_bytes())));
+                            if path != destination {
+                                edits.push(RecordedEdit::new(path, None));
+                                target = destination;
+                            }
                         }
+                        edits.push(
+                            RecordedEdit::new(target, Some(content.as_bytes())).with_mode(*mode),
+                        );
                     }
                 }
             }
@@ -605,19 +613,17 @@ async fn lock_all(keys: &[PathBuf]) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
     guards
 }
 
-async fn write_creating_parents(
+async fn replace_file(
     path: &Path,
     display: &str,
     content: &str,
+    mode: Option<u32>,
 ) -> Result<(), ToolError> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create parent directories for {display}: {e}"))?;
-    }
-    tokio::fs::write(path, content)
-        .await
-        .map_err(|e| format!("Failed to write file {display}: {e}"))?;
+    let path = path.to_path_buf();
+    let bytes = content.as_bytes().to_vec();
+    tokio::task::spawn_blocking(move || undo::patch_write(&path, &bytes, mode))
+        .await?
+        .map_err(|error| format!("failed to write {display}: {error}"))?;
     Ok(())
 }
 
@@ -630,7 +636,7 @@ async fn apply(change: &Change) -> Result<(), ToolError> {
             path,
             display,
             content,
-        } => write_creating_parents(path, display, content).await,
+        } => replace_file(path, display, content, None).await,
         Change::Delete { path, display } => tokio::fs::remove_file(path)
             .await
             .map_err(|e| format!("Failed to delete file {display}: {e}").into()),
@@ -639,26 +645,24 @@ async fn apply(change: &Change) -> Result<(), ToolError> {
             display,
             move_to: None,
             content,
+            mode,
             ..
-        } => tokio::fs::write(path, content)
-            .await
-            .map_err(|e| format!("Failed to write file {display}: {e}").into()),
+        } => replace_file(path, display, content, Some(*mode)).await,
         Change::Update {
             path,
             display,
             move_to: Some((destination, destination_display)),
             content,
+            mode,
             ..
         } => {
             if queue_key(path) == queue_key(destination) {
-                tokio::fs::write(path, content)
-                    .await
-                    .map_err(|e| format!("Failed to write file {display}: {e}"))?;
+                replace_file(path, display, content, Some(*mode)).await?;
                 return tokio::fs::rename(path, destination).await.map_err(|e| {
                     format!("Failed to rename {display} to {destination_display}: {e}").into()
                 });
             }
-            write_creating_parents(destination, destination_display, content).await?;
+            replace_file(destination, destination_display, content, Some(*mode)).await?;
             tokio::fs::remove_file(path)
                 .await
                 .map_err(|e| format!("Failed to remove original {display}: {e}"))?;
