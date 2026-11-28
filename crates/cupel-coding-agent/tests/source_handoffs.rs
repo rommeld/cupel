@@ -64,6 +64,52 @@ async fn observe(reader: &dyn AgentTool, path: &str) -> String {
 }
 
 #[tokio::test]
+async fn fuzzy_patch_preserves_target_context_and_shifts_only_additions() {
+    let project = Project::new("fuzzy-indent");
+    let patcher = ApplyPatchTool::new(&project.0);
+    for (original, context, expected) in [
+        (
+            "if True:\n    if True:\n        before()  \n        old()\n",
+            "     before()",
+            "if True:\n    if True:\n        before()  \n        if ready():\n            new()\n",
+        ),
+        (
+            "if True:\n    if True:\n        before()  # smart \u{2019}\n        old()\n",
+            "     before()  # smart '",
+            "if True:\n    if True:\n        before()  # smart \u{2019}\n        if ready():\n            new()\n",
+        ),
+    ] {
+        project.write("f.py", original);
+        let patch = format!(
+            "*** Begin Patch\n*** Update File: f.py\n@@\n{context}\n-    old()\n+    if ready():\n+        new()\n*** End Patch"
+        );
+        execute(&patcher, json!({"input": patch})).await.unwrap();
+        assert_eq!(project.read("f.py"), expected);
+    }
+}
+
+#[tokio::test]
+async fn uncertain_fuzzy_indentation_rejects_the_patch_before_any_writes() {
+    let project = Project::new("uncertain-indent");
+    let patcher = ApplyPatchTool::new(&project.0);
+    let patch = "*** Begin Patch\n*** Add File: created.txt\n+created\n*** Update File: f.py\n@@\n     before()\n-    old()\n+    new()\n*** End Patch";
+    for original in [
+        "        before()\n    old()\n",
+        "\t    before()\n\t    old()\n",
+    ] {
+        project.write("f.py", original);
+        let result = execute(&patcher, json!({"input": patch})).await;
+        assert_eq!(project.read("f.py"), original);
+        assert!(!project.0.join("created.txt").exists());
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("indentation") && error.contains("f.py"),
+            "{error}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn unknown_arguments_are_rejected_before_tools_run() {
     let project = Project::new("unknown-arguments");
     let tools = bootstrap::coding_tools(&project.0);
@@ -109,6 +155,32 @@ async fn unknown_arguments_are_rejected_before_tools_run() {
         );
         assert!(error.contains(&format!("`{valid}`")), "{name}: {error}");
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn invalid_bash_timeouts_do_not_start_the_command() {
+    let project = Project::new("bash-timeout-validation");
+    let tools = bootstrap::coding_tools(&project.0);
+    let bash = tool(&tools, "bash");
+    for timeout in [1e20, f64::MAX, 14_400.25, 0.0, -0.5, f64::MIN_POSITIVE] {
+        for mut args in [
+            json!({}),
+            json!({"background": true}),
+            json!({"yield_after_ms": 10}),
+        ] {
+            args["command"] = json!("touch spawned");
+            args["timeout"] = json!(timeout);
+            let result = execute(bash, args.clone()).await;
+            assert!(!project.0.join("spawned").exists(), "{args}");
+            let error = result.expect_err("expected a tool error").to_string();
+            assert!(error.contains("timeout"), "{args}: {error}");
+        }
+    }
+    execute(bash, json!({"command": "touch spawned", "timeout": 14_400}))
+        .await
+        .unwrap();
+    assert!(project.0.join("spawned").is_file());
 }
 
 #[tokio::test]
