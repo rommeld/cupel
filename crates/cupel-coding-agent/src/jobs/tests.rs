@@ -556,6 +556,7 @@ async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
         Stop,
         Timeout,
         Shutdown,
+        ForegroundTimeout,
     }
 
     let cwd = std::env::temp_dir().join(format!(
@@ -569,10 +570,15 @@ async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
             if [[ -e release ]]; then touch witness; exit; fi
             sleep .02
         done) </dev/null >/dev/null 2>&1 &
-        printf '%s\n' "$!"
+        printf '%s\n' "$!" > pid
         wait
     "#;
-    for action in [Cleanup::Stop, Cleanup::Timeout, Cleanup::Shutdown] {
+    for action in [
+        Cleanup::Stop,
+        Cleanup::Timeout,
+        Cleanup::Shutdown,
+        Cleanup::ForegroundTimeout,
+    ] {
         let jobs = Jobs::default();
         let other_jobs = Jobs::default();
         let dir = cwd.join(format!("{action:?}"));
@@ -588,19 +594,30 @@ async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
             &jobs
         };
         let cancel = CancellationToken::new();
-        let job_timeout = matches!(action, Cleanup::Timeout).then_some(Duration::from_secs(30));
-        let id = jobs
-            .start(command, script, job_timeout, &cancel)
-            .await
-            .unwrap();
+        let (id, foreground) = if matches!(action, Cleanup::ForegroundTimeout) {
+            let tool = BashTool::new(&dir);
+            let args = json!({"command": script, "timeout": 30});
+            let task = tokio::spawn(async move {
+                tool.execute("foreground", args, CancellationToken::new(), None)
+                    .await
+            });
+            (String::new(), Some(task))
+        } else {
+            let job_timeout = matches!(action, Cleanup::Timeout).then_some(Duration::from_secs(30));
+            let id = jobs
+                .start(command, script, job_timeout, &cancel)
+                .await
+                .unwrap();
+            (id, None)
+        };
         let other_id = other_registry
             .start(other_command, script, None, &cancel)
             .await
             .unwrap();
         let pid = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                let (_, output) = jobs.inspect(&id, true).unwrap();
-                if let Some((pid, _)) = output.unwrap().split_once('\n')
+                if let Ok(contents) = std::fs::read_to_string(dir.join("pid"))
+                    && let Some((pid, _)) = contents.split_once('\n')
                     && dir.join("ready").exists()
                     && other_dir.join("ready").exists()
                 {
@@ -614,13 +631,19 @@ async fn cleanup_stops_job_control_children_without_stopping_other_jobs() {
 
         match action {
             Cleanup::Stop => jobs.stop(&id).await.unwrap(),
-            Cleanup::Timeout => {
+            Cleanup::Timeout | Cleanup::ForegroundTimeout => {
                 tokio::time::pause();
                 tokio::time::advance(Duration::from_secs(30)).await;
                 tokio::time::resume();
-                let (status, _) = completed(&jobs, &id).await;
-                assert_eq!(status["state"], "timedOut");
-                assert!(status["cleanupError"].is_null(), "{status}");
+                if let Some(task) = foreground {
+                    let error = task.await.unwrap().unwrap_err().to_string();
+                    assert!(error.contains("timed out"), "{error}");
+                    assert!(!error.contains("cleanup was incomplete"), "{error}");
+                } else {
+                    let (status, _) = completed(&jobs, &id).await;
+                    assert_eq!(status["state"], "timedOut");
+                    assert!(status["cleanupError"].is_null(), "{status}");
+                }
             }
             Cleanup::Shutdown => jobs.shutdown().await,
         }

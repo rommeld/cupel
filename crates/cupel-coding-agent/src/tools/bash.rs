@@ -26,6 +26,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+#[cfg(any(test, not(unix)))]
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -33,8 +34,11 @@ use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 
 use crate::jobs::Jobs;
 #[cfg(unix)]
-use crate::jobs::YieldOutcome;
-use crate::process::{EXIT_STDIO_GRACE, OutputChunk, kill_process_group, output_chunks};
+use crate::jobs::{CaptureUpdate, YieldOutcome};
+#[cfg(not(unix))]
+use crate::process::output_chunks;
+#[cfg(any(test, not(unix)))]
+use crate::process::{EXIT_STDIO_GRACE, OutputChunk};
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, TruncationResult,
     format_size, truncate_tail,
@@ -297,6 +301,7 @@ fn resolve_shell(system_bash: &Path, path: Option<&OsStr>) -> PathBuf {
     .unwrap_or_else(|| PathBuf::from("sh"))
 }
 
+#[cfg(any(test, not(unix)))]
 async fn next_output_chunk(
     rx: &mut mpsc::Receiver<OutputChunk>,
     shell_exited: bool,
@@ -466,10 +471,6 @@ impl AgentTool for BashTool {
             return Ok(result);
         }
 
-        // A fresh process group so abort/timeout can kill the whole tree.
-        #[cfg(unix)]
-        command.process_group(0);
-
         let deadline = timeout
             .map(|duration| {
                 tokio::time::Instant::now()
@@ -477,102 +478,132 @@ impl AgentTool for BashTool {
                     .ok_or("timeout deadline is out of range")
             })
             .transpose()?;
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("Failed to run shell: {e}"))?;
-        let pid = child.id();
-
-        // stdout and stderr are read on their own tasks feeding one channel,
-        // preserving arrival order well enough for interleaved output.
-        let mut rx = output_chunks(&mut child);
-
-        let mut output = OutputAccumulator::new();
-        // Backdated so the first chunk sends an update immediately, falls
-        // back to "now" on platforms where Instant can't go that far back.
-        let mut last_update = std::time::Instant::now()
-            .checked_sub(UPDATE_THROTTLE)
-            .unwrap_or_else(std::time::Instant::now);
-
-        let mut exited: Option<std::process::ExitStatus> = None;
-
-        // Main loop, pump output chunks, racing cancellation, the timeout,
-        // and the shell's own exit.
-        let mut outcome: Option<RunOutcome> = None;
-        while outcome.is_none() {
-            tokio::select! {
-                biased;
-                () = cancel.cancelled() => {
-                    if let Some(pid) = pid {
-                        kill_process_group(pid);
-                    }
-                    // Also SIGKILL the direct child via tokio, even if the
-                    // external `kill` misbehaves, the shell itself dies (and
-                    // bash executing a command string usually execs the command, so the shell is
-                    // the command).
-                    let _ = child.start_kill();
-                    outcome = Some(RunOutcome::Aborted);
-                }
-                () = async {
-                    match deadline {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    if let Some(pid) = pid {
-                        kill_process_group(pid);
-                    }
-                    let _ = child.start_kill();
-                    outcome = Some(RunOutcome::TimedOut);
-                }
-                // Each chunk starts a fresh quiet interval after shell exit.
-                chunk = next_output_chunk(&mut rx, exited.is_some()) => {
-                    match chunk {
-                        Some(chunk) => {
-                            output.append(chunk.as_bytes());
+        #[cfg(unix)]
+        {
+            let output = std::sync::Mutex::new((OutputAccumulator::new(), None));
+            let capture = |update: CaptureUpdate<'_>| {
+                if let Ok(mut state) = output.lock() {
+                    let (output, last_update) = &mut *state;
+                    match update {
+                        CaptureUpdate::Bytes(bytes) => {
+                            output.append(bytes);
                             if let Some(on_update) = &on_update
-                                && last_update.elapsed() >= UPDATE_THROTTLE
+                                && last_update.is_none_or(|time: std::time::Instant| {
+                                    time.elapsed() >= UPDATE_THROTTLE
+                                })
                             {
-                                last_update = std::time::Instant::now();
-                                let (content, _) = output.snapshot();
-                                on_update(AgentToolResult::text(content));
+                                *last_update = Some(std::time::Instant::now());
+                                on_update(AgentToolResult::text(output.snapshot().0));
                             }
                         }
-                        // Both pipes closed, or the exited shell's pipes stayed quiet.
-                        None => {
-                            let status = match exited {
-                                Some(status) => status,
-                                None => child.wait().await?,
-                            };
-                            outcome = Some(RunOutcome::Exited(status.code()));
-                        }
+                        CaptureUpdate::Incomplete => output.mark_incomplete(),
                     }
                 }
-                // The shell exited, but a background process it started
-                // (`server &`) may hold the pipes open for hours. Don't wait
-                // for them to close, start the quiet timer instead.
-                status = child.wait(), if exited.is_none() => {
-                    exited = Some(status?);
+            };
+            let (outcome, cleanup_error) =
+                crate::jobs::run_foreground(command, deadline, &cancel, capture).await?;
+            let (output, _) = output
+                .into_inner()
+                .map_err(|error| format!("foreground output unavailable: {error}"))?;
+            finish_output(output, outcome, args.timeout, cleanup_error.as_deref())
+        }
+        #[cfg(not(unix))]
+        run_non_unix(command, deadline, &cancel, on_update, args.timeout).await
+    }
+}
+
+#[cfg(not(unix))]
+async fn run_non_unix(
+    mut command: tokio::process::Command,
+    deadline: Option<tokio::time::Instant>,
+    cancel: &CancellationToken,
+    on_update: Option<ToolUpdateFn>,
+    timeout_seconds: Option<f64>,
+) -> Result<AgentToolResult, ToolError> {
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Failed to run shell: {e}"))?;
+
+    // stdout and stderr are read on their own tasks feeding one channel,
+    // preserving arrival order well enough for interleaved output.
+    let mut rx = output_chunks(&mut child);
+
+    let mut output = OutputAccumulator::new();
+    // Backdated so the first chunk sends an update immediately, falls
+    // back to "now" on platforms where Instant can't go that far back.
+    let mut last_update = std::time::Instant::now()
+        .checked_sub(UPDATE_THROTTLE)
+        .unwrap_or_else(std::time::Instant::now);
+
+    let mut exited: Option<std::process::ExitStatus> = None;
+
+    // Main loop, pump output chunks, racing cancellation, the timeout,
+    // and the shell's own exit.
+    let mut outcome: Option<RunOutcome> = None;
+    while outcome.is_none() {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                let _ = child.start_kill();
+                outcome = Some(RunOutcome::Aborted);
+            }
+            () = async {
+                match deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let _ = child.start_kill();
+                outcome = Some(RunOutcome::TimedOut);
+            }
+            // Each chunk starts a fresh quiet interval after shell exit.
+            chunk = next_output_chunk(&mut rx, exited.is_some()) => {
+                match chunk {
+                    Some(chunk) => {
+                        output.append(chunk.as_bytes());
+                        if let Some(on_update) = &on_update
+                            && last_update.elapsed() >= UPDATE_THROTTLE
+                        {
+                            last_update = std::time::Instant::now();
+                            let (content, _) = output.snapshot();
+                            on_update(AgentToolResult::text(content));
+                        }
+                    }
+                    // Both pipes closed, or the exited shell's pipes stayed quiet.
+                    None => {
+                        let status = match exited {
+                            Some(status) => status,
+                            None => child.wait().await?,
+                        };
+                        outcome = Some(RunOutcome::Exited(status.code()));
+                    }
                 }
             }
-        }
-
-        // After a kill, drain whatever was already in flight and reap the
-        // child so it doesn't linger as a zombie.
-        if !matches!(outcome, Some(RunOutcome::Exited(_))) {
-            while let Ok(Some(chunk)) =
-                tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
-            {
-                output.append(chunk.as_bytes());
+            // The shell exited, but a background process it started
+            // (`server &`) may hold the pipes open for hours. Don't wait
+            // for them to close, start the quiet timer instead.
+            status = child.wait(), if exited.is_none() => {
+                exited = Some(status?);
             }
-            // Bounded reap, if the process somehow survived both kills, give
-            // up after a beat instead of hanging the turn. The OS reaps the
-            // zombie when cupel exits, which beats a frozen agent.
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         }
-
-        let outcome = outcome.ok_or("Shell finished without an outcome")?;
-        finish_output(output, outcome, args.timeout, None)
     }
+
+    // After a kill, drain whatever was already in flight and reap the
+    // child so it doesn't linger as a zombie.
+    if !matches!(outcome, Some(RunOutcome::Exited(_))) {
+        while let Ok(Some(chunk)) =
+            tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
+        {
+            output.append(chunk.as_bytes());
+        }
+        // Bounded reap, if the process somehow survived both kills, give
+        // up after a beat instead of hanging the turn. The OS reaps the
+        // zombie when cupel exits, which beats a frozen agent.
+        let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+    }
+
+    let outcome = outcome.ok_or("Shell finished without an outcome")?;
+    finish_output(output, outcome, timeout_seconds, None)
 }
 
 fn finish_output(

@@ -4,6 +4,8 @@
 mod child;
 #[cfg(unix)]
 mod process_session;
+#[cfg(unix)]
+pub(crate) use child::CaptureUpdate;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -113,6 +115,32 @@ struct Termination {
     phase: Phase,
     exit: Exit,
     cleanup_error: Option<String>,
+}
+
+#[cfg(unix)]
+impl Termination {
+    fn outcome(&self) -> RunOutcome {
+        match self.phase {
+            Phase::Exited => RunOutcome::Exited(self.exit.exit_code),
+            Phase::TimedOut => RunOutcome::TimedOut,
+            Phase::Stopped | Phase::Stopping => RunOutcome::Aborted,
+            Phase::Running | Phase::Failed => RunOutcome::Failed,
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(crate) async fn run_foreground(
+    command: tokio::process::Command,
+    deadline: Option<Instant>,
+    cancel: &CancellationToken,
+    capture: impl Fn(CaptureUpdate<'_>) + Sync,
+) -> Result<(RunOutcome, Option<String>), String> {
+    let stop = cancel.child_token();
+    let termination = child::ManagedChild::spawn(command)?
+        .run(deadline, &stop, capture, child::ExitMode::Foreground)
+        .await;
+    Ok((termination.outcome(), termination.cleanup_error))
 }
 
 struct Record {
@@ -240,12 +268,7 @@ impl Completed {
 
     #[cfg(unix)]
     fn inline_result(self, output: &PendingOutput) -> Result<YieldOutcome, String> {
-        let outcome = match self.termination.phase {
-            Phase::Exited => RunOutcome::Exited(self.termination.exit.exit_code),
-            Phase::TimedOut => RunOutcome::TimedOut,
-            Phase::Stopped | Phase::Stopping => RunOutcome::Aborted,
-            Phase::Running | Phase::Failed => RunOutcome::Failed,
-        };
+        let outcome = self.termination.outcome();
         let mut output = output
             .lock()
             .map_err(|error| format!("Inline output unavailable: {error}"))?
@@ -512,15 +535,15 @@ impl Jobs {
                 }
                 false
             };
-            let termination = child
-                .run(
-                    deadline,
-                    &worker_stop,
-                    capture,
-                    handoff.as_ref(),
-                    claim_inline,
-                )
-                .await;
+            let exit_mode = handoff
+                .as_ref()
+                .map_or(child::ExitMode::Published, |published| {
+                    child::ExitMode::Yielding {
+                        published,
+                        claim: &claim_inline,
+                    }
+                });
+            let termination = child.run(deadline, &worker_stop, capture, exit_mode).await;
             if let Some(error) = &termination.cleanup_error {
                 tracing::warn!(job_id = %worker_id, "Managed job cleanup was incomplete: {error}");
             }

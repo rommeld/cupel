@@ -13,9 +13,18 @@ use tokio_util::sync::CancellationToken;
 use crate::jobs::{Exit, Phase, Termination, process_session};
 use crate::process::EXIT_STDIO_GRACE;
 
-pub(super) enum CaptureUpdate<'a> {
+pub(crate) enum CaptureUpdate<'a> {
     Bytes(&'a [u8]),
     Incomplete,
+}
+
+pub(super) enum ExitMode<'a> {
+    Foreground,
+    Published,
+    Yielding {
+        published: &'a CancellationToken,
+        claim: &'a (dyn Fn() -> bool + Sync),
+    },
 }
 
 pub(super) struct ManagedChild {
@@ -62,8 +71,7 @@ impl ManagedChild {
         deadline: Option<Instant>,
         stop: &CancellationToken,
         capture: impl Fn(CaptureUpdate<'_>),
-        handoff: Option<&CancellationToken>,
-        claim_inline: impl FnOnce() -> bool,
+        exit_mode: ExitMode<'_>,
     ) -> Termination {
         // No queued payload or reader tasks. A single supervisor drains both pipes
         // with two fixed 8 KiB buffers and writes directly to the 64 KiB tail.
@@ -91,16 +99,24 @@ impl ManagedChild {
             } => match never {},
         };
         let mut inline = false;
-        if matches!(phase, Phase::Exited)
-            && let Some(handoff) = handoff
-        {
+        if matches!(phase, Phase::Exited) && !matches!(exit_mode, ExitMode::Published) {
             tokio::select! {
                 biased;
                 () = stop.cancelled() => phase = Phase::Stopped,
                 () = wait_for_deadline(deadline) => phase = Phase::TimedOut,
-                () = handoff.cancelled() => {},
+                () = async {
+                    if let ExitMode::Yielding { published, .. } = &exit_mode {
+                        published.cancelled().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {},
                 () = pipes.drain_until_quiet(&capture) => {
-                    inline = claim_inline();
+                    inline = match exit_mode {
+                        ExitMode::Foreground => true,
+                        ExitMode::Yielding { claim, .. } => claim(),
+                        ExitMode::Published => false,
+                    };
                     if !inline && stop.is_cancelled() {
                         phase = Phase::Stopped;
                     }
