@@ -1,6 +1,6 @@
 //! Bounded, live source observations shared by read and patch within one session.
 //!
-//! Revisions identify the exact bytes read, not comprehension, filesystem
+//! Revisions identify the exact bytes read or written, not comprehension, filesystem
 //! isolation, or verification outcomes. Nothing here is persisted as memory.
 
 use std::collections::VecDeque;
@@ -9,56 +9,18 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 
-use crate::search::source_locator;
-
 const MAX_OBSERVATIONS: usize = 256;
 
-/// Inclusive, one-based source lines actually delivered to the model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourceRange {
-    pub start: usize,
-    pub end: usize,
-}
-
-/// An immutable observation; its id never refers to different source bytes or a
-/// different view. Paths identify the checkout and file, not just a basename.
+/// An immutable observation of a file revision, independent of any read range.
 #[derive(Debug, Clone)]
 pub struct SourceObservation {
     pub id: String,
     pub checkout: PathBuf,
     pub path: PathBuf,
     pub revision: String,
-    pub range: Option<SourceRange>,
-    pub total_lines: usize,
 }
 
 impl SourceObservation {
-    /// Compact provenance that travels in tool content, not only UI metadata.
-    #[must_use]
-    pub fn header(&self) -> String {
-        let range = self.range.map_or_else(
-            || "none".to_string(),
-            |range| {
-                format!(
-                    "{}-{} of {} lines",
-                    range.start, range.end, self.total_lines
-                )
-            },
-        );
-        let coverage = match self.range {
-            Some(SourceRange { start: 1, end }) if end == self.total_lines => "complete file",
-            Some(_) => "partial file",
-            None => "no source returned",
-        };
-        format!(
-            "[Observation: {}\nCheckout: {}\nPath: {}\nRevision: {}\nRange: {range}\nCoverage: {coverage}]",
-            self.id,
-            self.checkout.display(),
-            source_locator(&self.path, &self.checkout),
-            self.revision,
-        )
-    }
-
     /// Whole-file precondition, checked against the same raw bytes used to
     /// construct the patch's normalized matching input.
     pub(crate) fn check(&self, path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -93,18 +55,22 @@ impl SourceObservations {
         Self::default()
     }
 
-    /// Record provenance from the bytes that actually supplied a view. Callers
-    /// resolve checkout/file identities before reading, never by a later rehash.
+    /// Record the exact bytes read or written, reusing an ID for a retained revision.
     pub async fn record(
         &self,
         checkout: &Path,
         path: &Path,
         bytes: &[u8],
-        range: Option<SourceRange>,
-        total_lines: usize,
     ) -> Result<SourceObservation, String> {
         let revision = revision(bytes);
         let mut state = self.state.lock().await;
+        if let Some(observation) = state.observations.iter().find(|observation| {
+            observation.checkout == checkout
+                && observation.path == path
+                && observation.revision == revision
+        }) {
+            return Ok(observation.clone());
+        }
         if state.namespace.is_none() {
             let mut bytes = [0_u8; 16];
             getrandom::fill(&mut bytes)
@@ -124,8 +90,6 @@ impl SourceObservations {
             checkout: checkout.to_path_buf(),
             path: path.to_path_buf(),
             revision,
-            range,
-            total_lines,
         };
         if state.observations.len() >= MAX_OBSERVATIONS {
             state.observations.pop_front();
@@ -169,16 +133,7 @@ mod tests {
         let store = SourceObservations::new();
         let checkout = Path::new("/checkout");
         let path = Path::new("/checkout/file");
-        let first = store
-            .record(
-                checkout,
-                path,
-                b"old",
-                Some(SourceRange { start: 1, end: 1 }),
-                1,
-            )
-            .await
-            .unwrap();
+        let first = store.record(checkout, path, b"old").await.unwrap();
         assert_eq!(
             store.get(&first.id).await.unwrap().revision,
             revision(b"old")
@@ -190,13 +145,17 @@ mod tests {
                 .contains("Stale source")
         );
         assert!(first.check(Path::new("/other/file"), b"old").is_err());
-        for _ in 0..MAX_OBSERVATIONS {
-            let next = store.record(checkout, path, b"new", None, 1).await.unwrap();
+        for version in 0..MAX_OBSERVATIONS {
+            let bytes = version.to_string();
+            let next = store
+                .record(checkout, path, bytes.as_bytes())
+                .await
+                .unwrap();
             assert_ne!(first.id, next.id);
         }
         assert!(store.get(&first.id).await.unwrap_err().contains("expired"));
         let other = SourceObservations::new();
-        let next = other.record(checkout, path, b"old", None, 1).await.unwrap();
+        let next = other.record(checkout, path, b"old").await.unwrap();
         assert_ne!(first.id, next.id);
         assert!(other.get(&first.id).await.is_err());
     }

@@ -22,8 +22,8 @@ use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{ImageContent, TextContent, ToolResultContent};
 
 use crate::instruction_cache::InstructionCache;
-use crate::search::resolve_to_root;
-use crate::source_observations::{SourceObservations, SourceRange};
+use crate::search::{resolve_to_root, source_locator};
+use crate::source_observations::SourceObservations;
 use crate::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, TruncationOptions, format_size,
     truncate_head,
@@ -38,6 +38,29 @@ struct ReadArgs {
     path: String,
     offset: Option<usize>,
     limit: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct SourceRange {
+    start: usize,
+    end: usize,
+}
+
+fn observation_header(
+    id: &str,
+    path: &str,
+    range: Option<SourceRange>,
+    total_lines: usize,
+) -> String {
+    let Some(SourceRange { start, end }) = range else {
+        return format!("[Observation: {id} {path:?} none; no source returned]");
+    };
+    let coverage = if start == 1 && end == total_lines {
+        "complete file"
+    } else {
+        "partial file"
+    };
+    format!("[Observation: {id} {path:?} {start}-{end}/{total_lines}; {coverage}]")
 }
 
 /// Map a file extension to a provider supported image MIME type.
@@ -100,10 +123,9 @@ impl ReadTool {
                  is truncated to \
                  {DEFAULT_MAX_LINES} lines or {}KB (whichever is hit first). Use offset/limit \
                  for large files. When you need the full file, continue with offset until \
-                 complete. Text results include a source observation id, checkout, path, raw-byte \
-                 revision and actual returned range. Supply the id in apply_patch's \
-                 expectedObservations for an optional whole-file stale-source check. Observations \
-                 are bounded and session-local; expired ids require a fresh read.",
+                 complete. Text results show a source observation ID, path, returned range, and \
+                 coverage. Supply the ID in apply_patch's expectedObservations for a whole-file \
+                 stale-source check. IDs are session-local. Re-read if an ID expires.",
                 DEFAULT_MAX_BYTES / 1024
             ),
         }
@@ -323,13 +345,7 @@ impl AgentTool for ReadTool {
         });
         let observation = self
             .observations
-            .record(
-                &checkout,
-                &source_path,
-                content.as_bytes(),
-                range,
-                total_file_lines,
-            )
+            .record(&checkout, &source_path, content.as_bytes())
             .await?;
         let output = if truncation.first_line_exceeds_limit {
             let first_line_size = format_size(all_lines[start_line].len());
@@ -378,9 +394,10 @@ impl AgentTool for ReadTool {
             "totalLines": total_file_lines,
             "truncated": truncation.truncated,
         });
+        let path = source_locator(&source_path, &checkout);
+        let header = observation_header(&observation.id, &path, range, total_file_lines);
         let mut content = vec![ToolResultContent::Text(TextContent::plain(format!(
-            "{}\n\n{output}",
-            observation.header()
+            "{header}\n\n{output}"
         )))];
         if let Some(instruction) = instruction {
             if range.is_some()
@@ -449,13 +466,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("f.txt"), "one\ntwo\nthree").unwrap();
         let out = run_read(&dir, json!({"path": "f.txt"})).await.unwrap();
-        assert!(out.starts_with("[Observation: R"), "{out}");
-        assert!(out.contains("Path: f.txt\nRevision: sha256:"), "{out}");
+        let (header, body) = out.split_once("\n\n").unwrap();
+        assert!(header.starts_with("[Observation: R"), "{header}");
         assert!(
-            out.contains("Range: 1-3 of 3 lines\nCoverage: complete file"),
-            "{out}"
+            header.ends_with("\"f.txt\" 1-3/3; complete file]"),
+            "{header}"
         );
-        assert!(out.ends_with("\n\none\ntwo\nthree"), "{out}");
+        assert!(!header.contains('\n') && header.len() < 100, "{header}");
+        assert_eq!(body, "one\ntwo\nthree");
     }
 
     #[tokio::test]
@@ -466,10 +484,7 @@ mod tests {
         let out = run_read(&dir, json!({"path": "f.txt", "offset": 2, "limit": 2}))
             .await
             .unwrap();
-        assert!(
-            out.contains("Range: 2-3 of 5 lines\nCoverage: partial file"),
-            "got: {out}"
-        );
+        assert!(out.contains("2-3/5; partial file"), "got: {out}");
         assert!(out.contains("\n\n2\n3"), "got: {out}");
         assert!(out.contains("Use offset=4 to continue"), "got: {out}");
     }
@@ -498,9 +513,12 @@ mod tests {
             .unwrap();
         assert_eq!(observation.checkout, dir.canonicalize().unwrap());
         assert_eq!(observation.path, dir.join("f.txt").canonicalize().unwrap());
-        assert_eq!(observation.range, Some(SourceRange { start: 2, end: 2 }));
+        assert_eq!(details["checkout"], json!(observation.checkout));
+        assert_eq!(details["path"], json!(observation.path));
+        assert_eq!(details["revision"], observation.revision);
+        assert_eq!(details["range"], json!({"start": 2, "end": 2}));
         assert_eq!(
-            observation.total_lines, 3,
+            details["totalLines"], 3,
             "terminal newline is not another source line"
         );
         observation
@@ -514,7 +532,7 @@ mod tests {
         let ToolResultContent::Text(text) = &result.content[0] else {
             panic!("expected text");
         };
-        assert!(text.text.contains(&observation.revision));
+        assert!(!text.text.contains(&observation.revision));
         assert!(text.text.contains("\n\ntwo\r\n\n\n["), "{}", text.text);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -545,7 +563,7 @@ mod tests {
             let ToolResultContent::Text(text) = &result.content[0] else {
                 panic!("expected text");
             };
-            assert!(text.text.contains("Coverage: partial file"));
+            assert!(text.text.contains("; partial file]"));
             assert!(
                 text.text
                     .contains(&format!("Use offset={} to continue", expected_end + 1))
@@ -565,7 +583,7 @@ mod tests {
         let ToolResultContent::Text(text) = &result.content[0] else {
             panic!("expected text");
         };
-        assert!(text.text.contains("Coverage: no source returned"));
+        assert!(text.text.contains("none; no source returned]"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

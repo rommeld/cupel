@@ -64,6 +64,42 @@ async fn observe(reader: &dyn AgentTool, path: &str) -> String {
 }
 
 #[tokio::test]
+async fn pagination_reuses_a_revision_without_replacing_other_files_or_earlier_ranges() {
+    let project = Project::new("pages");
+    let tools = bootstrap::coding_tools(&project.0);
+    let reader = tool(&tools, "read");
+    project.write("other.txt", "before\nold\n");
+    let other_id = observe(reader, "other.txt").await;
+    project.write("pages.txt", &"line\n".repeat(256));
+    let first = execute(reader, json!({"path": "pages.txt", "limit": 1}))
+        .await
+        .unwrap()
+        .details
+        .unwrap();
+    for line in 2..=256 {
+        let page = execute(
+            reader,
+            json!({"path": "pages.txt", "offset": line, "limit": 1}),
+        )
+        .await
+        .unwrap()
+        .details
+        .unwrap();
+        assert_eq!(page["observation"], first["observation"], "page {line}");
+        assert_eq!(page["range"], json!({"start": line, "end": line}));
+    }
+    assert_eq!(first["range"], json!({"start": 1, "end": 1}));
+    let patch = "*** Begin Patch\n*** Update File: other.txt\n@@\n-old\n+new\n*** End Patch";
+    execute(
+        tool(&tools, "apply_patch"),
+        json!({"input": patch, "expectedObservations": [other_id]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(project.read("other.txt"), "before\nnew\n");
+}
+
+#[tokio::test]
 async fn whole_file_preconditions_reject_unrelated_edits_before_any_writes() {
     let project = Project::new("stale");
     let tools = bootstrap::coding_tools(&project.0);
@@ -105,24 +141,47 @@ async fn raw_byte_preconditions_survive_normalization_but_detect_format_changes(
     project.write("file", raw);
     let id = observe(tool(&tools, "read"), "file").await;
     let patch = "*** Begin Patch\n*** Update File: ./file\n@@\n-old\n+new\n*** End Patch";
-    execute(
-        tool(&tools, "apply_patch"),
+    let patcher = tool(&tools, "apply_patch");
+    let result = execute(
+        patcher,
         json!({"input": patch, "expectedObservations": [id]}),
     )
     .await
     .unwrap();
     assert_eq!(project.read("file"), "\u{feff}before\r\nnew\r\nafter\r\n");
-    project.write("file", raw);
-    let id = observe(tool(&tools, "read"), "file").await;
-    project.write("file", &raw.replace("\r\n", "\n"));
+    let details = result.details.unwrap();
+    let written = details["observations"][0]["observation"].as_str().unwrap();
+    let cupel_core::types::ToolResultContent::Text(text) = &result.content[0] else {
+        panic!("expected a patch summary");
+    };
+    assert!(text.text.contains(written), "{}", text.text);
+    assert_eq!(details["observations"][0]["path"], "file");
+    let diff = details["diff"].as_str().unwrap();
+    assert!(diff.lines().any(|line| line == "+2 new"), "{diff}");
+
+    let second_patch = "*** Begin Patch\n*** Update File: file\n@@\n-new\n+next\n*** End Patch";
+    let second = execute(
+        patcher,
+        json!({"input": second_patch, "expectedObservations": [written]}),
+    )
+    .await
+    .unwrap();
+    let updated = "\u{feff}before\r\nnext\r\nafter\r\n";
+    assert_eq!(project.read("file"), updated);
+    let normalized = updated.replace("\r\n", "\n");
+    project.write("file", &normalized);
+    let third_patch = "*** Begin Patch\n*** Update File: file\n@@\n-next\n+last\n*** End Patch";
+    let second_details = second.details.unwrap();
+    let written = &second_details["observations"][0]["observation"];
     let error = execute(
-        tool(&tools, "apply_patch"),
-        json!({"input": patch, "expectedObservations": [id]}),
+        patcher,
+        json!({"input": third_patch, "expectedObservations": [written]}),
     )
     .await
     .unwrap_err()
     .to_string();
     assert!(error.contains("Stale source observation"), "{error}");
+    assert_eq!(project.read("file"), normalized);
 
     project.write("file", raw);
     let id = observe(tool(&tools, "read"), "file").await;
@@ -180,19 +239,36 @@ async fn preconditions_also_protect_deletes_overwrites_and_move_destinations() {
         assert_eq!(project.read("protected"), "before\nexternally changed\n");
         assert_eq!(project.read("source"), "old\n");
         let fresh = observe(tool(&tools, "read"), "protected").await;
-        execute(
+        let result = execute(
             tool(&tools, "apply_patch"),
             json!({"input": input, "expectedObservations": [fresh]}),
         )
         .await
         .unwrap();
+        let details = result.details.unwrap();
+        let observations = details["observations"].as_array().unwrap();
         match name {
-            "delete" => assert!(!project.0.join("protected").exists()),
+            "delete" => {
+                assert!(!project.0.join("protected").exists());
+                assert!(observations.is_empty());
+            }
             "overwrite" => assert_eq!(project.read("protected"), "replacement\n"),
             _ => {
                 assert_eq!(project.read("protected"), "new\n");
                 assert!(!project.0.join("source").exists());
             }
+        }
+        if name != "delete" {
+            assert_eq!(observations.len(), 1);
+            assert_eq!(observations[0]["path"], "protected");
+            let follow_up = "*** Begin Patch\n*** Add File: protected\n+follow-up\n*** End Patch";
+            execute(
+                tool(&tools, "apply_patch"),
+                json!({"input": follow_up, "expectedObservations": [observations[0]["observation"]]}),
+            )
+            .await
+            .unwrap();
+            assert_eq!(project.read("protected"), "follow-up\n");
         }
     }
 }
