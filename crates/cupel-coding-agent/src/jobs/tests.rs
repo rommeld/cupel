@@ -78,6 +78,39 @@ fn text(result: &AgentToolResult) -> &str {
 }
 
 #[tokio::test]
+async fn inline_progress_reaches_the_caller_before_completion() {
+    let cwd = std::env::temp_dir().join(format!("cupel-inline-progress-{}", std::process::id()));
+    std::fs::create_dir_all(&cwd).unwrap();
+    let release = cwd.join("release");
+    let jobs = Arc::new(Jobs::default());
+    let result = BashTool::new(&cwd).with_jobs(Arc::clone(&jobs)).execute(
+        "inline", json!({"command": "echo ready; while [[ ! -f release ]]; do sleep .01; done; echo done", "yield_after_ms": 2000}),
+        CancellationToken::new(),
+        Some(Arc::new(move |update| {
+            if text(&update).contains("ready") {
+                std::fs::File::create(&release).unwrap();
+            }
+        })),
+    ).await;
+    jobs.shutdown().await;
+    std::fs::remove_dir_all(cwd).unwrap();
+    let result = result.unwrap();
+    assert_eq!(text(&result), "ready\ndone\n");
+    assert!(result.details.is_none());
+}
+
+#[test]
+fn capped_job_tail_does_not_start_with_half_a_character() {
+    let mut capture = Capture::default();
+    capture.append(&[b'x', 0xe2, 0x82]);
+    let mut trailing = vec![b'b'; TAIL_BYTES - 1];
+    trailing[0] = 0xac;
+    capture.append(&trailing);
+    assert!(capture.truncated);
+    assert_eq!(capture.output(), "b".repeat(TAIL_BYTES - 2));
+}
+
+#[tokio::test]
 async fn bash_yield_inline_drains_inherited_output_like_foreground_bash() {
     let cwd =
         std::env::temp_dir().join(format!("cupel-inline-{}-{}", std::process::id(), now_ms()));

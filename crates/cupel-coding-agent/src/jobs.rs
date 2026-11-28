@@ -21,6 +21,8 @@ use tokio_util::sync::CancellationToken;
 
 #[cfg(unix)]
 use crate::tools::bash::{OutputAccumulator, RunOutcome};
+#[cfg(unix)]
+use cupel_agent::types::ToolUpdateFn;
 
 const MAX_LIVE: usize = 2;
 const MAX_COMPLETED: usize = 8;
@@ -56,6 +58,7 @@ enum Visibility {
         completion: oneshot::Sender<Completed>,
         output: PendingOutput,
         handoff: Handoff,
+        progress: Option<watch::Sender<Option<String>>>,
     },
     #[cfg(unix)]
     Discarded,
@@ -164,6 +167,15 @@ impl Capture {
         self.tail.drain(..excess.min(self.tail.len()));
         self.tail
             .extend(&bytes[bytes.len().saturating_sub(TAIL_BYTES)..]);
+        if self.truncated {
+            while self
+                .tail
+                .front()
+                .is_some_and(|&byte| crate::truncate::is_utf8_continuation(byte))
+            {
+                self.tail.pop_front();
+            }
+        }
     }
 
     fn output(&self) -> String {
@@ -365,8 +377,10 @@ impl Jobs {
         timeout: Option<Duration>,
         yield_after: Duration,
         cancel: &CancellationToken,
+        on_update: Option<ToolUpdateFn>,
     ) -> Result<YieldOutcome, String> {
         let (sender, mut completion) = oneshot::channel();
+        let (progress, mut updates) = watch::channel(None);
         let output = Arc::new(Mutex::new(Some(Box::new(OutputAccumulator::new()))));
         let started = self.spawn(
             display_command,
@@ -375,6 +389,7 @@ impl Jobs {
                 completion: sender,
                 output: Arc::clone(&output),
                 handoff: Handoff::Available(CancellationToken::new()),
+                progress: on_update.is_some().then_some(progress),
             },
             cancel,
             || child::ManagedChild::spawn(command),
@@ -386,6 +401,7 @@ impl Jobs {
             .ok_or("yield_after_ms is too large")?;
 
         let mut try_handoff = true;
+        let mut watch_progress = on_update.is_some();
         loop {
             tokio::select! {
                 biased;
@@ -418,6 +434,14 @@ impl Jobs {
                             output.take();
                         }
                         return Ok(YieldOutcome::Yielded(snapshot));
+                    }
+                }
+                update = updates.changed(), if watch_progress => {
+                    watch_progress = update.is_ok();
+                    if let Some(on_update) = &on_update
+                        && let Some(output) = updates.borrow_and_update().clone()
+                    {
+                        on_update(cupel_agent::types::AgentToolResult::text(output));
                     }
                 }
             }
@@ -490,13 +514,18 @@ impl Jobs {
         let done = finished.clone().drop_guard();
         let worker_stop = stop.clone();
         let caller_cancel = cancel.clone();
-        let (pending_output, handoff) = match &visibility {
+        let (pending_output, handoff, progress) = match &visibility {
             Visibility::Pending {
                 output,
                 handoff: Handoff::Available(published),
+                progress,
                 ..
-            } if !interrupted => (Some(Arc::clone(output)), Some(published.clone())),
-            _ => (None, None),
+            } if !interrupted => (
+                Some(Arc::clone(output)),
+                Some(published.clone()),
+                progress.clone(),
+            ),
+            _ => (None, None, None),
         };
         tokio::spawn(async move {
             let _done = done;
@@ -507,6 +536,12 @@ impl Jobs {
                     && let Some(output) = output.as_mut()
                 {
                     output.append(bytes);
+                    if let Some(progress) = &progress
+                        && !progress.is_closed()
+                        && let Some(text) = output.progress()
+                    {
+                        progress.send_replace(Some(text));
+                    }
                 }
                 if let Ok(mut state) = shared.lock()
                     && let Some(job) = state.live.iter_mut().find(|job| job.record.id == worker_id)

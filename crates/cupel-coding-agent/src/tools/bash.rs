@@ -7,11 +7,9 @@
 //!   last 2000 lines or 50 KB, since errors tend to be at the end. It spills
 //!   the complete output to a temp file the moment limits are exceeded, so the
 //!   truncation notice can say "Full output, /tmp/...".
-//! * **Kill the whole tree.** `cargo test` spawns children. Killing just the
-//!   shell leaves them running. The child gets its own process group, and
-//!   abort/timeout kills the group. Because this workspace forbids `unsafe`
-//!   (no direct `kill`), the group kill shells out to a forceful kill of the process group
-//!   * one extra process spawn on the rare abort path is a fine trade.
+//! * **Clean up before reaping.** Unix commands use the job supervisor. It can
+//!   stop the original process session on timeout or cancellation before
+//!   the shell's process ID can be recycled.
 //! * **Exit codes are errors.** A non zero exit becomes an error tool result
 //!   (with the output attached) so the model *sees* failure as failure.
 //! * **The shell's exit ends the call, not the pipes'.** A background
@@ -85,6 +83,8 @@ pub(crate) struct OutputAccumulator {
     pending: Vec<u8>,
     temp: Option<(PathBuf, std::fs::File)>,
     incomplete: bool,
+    #[cfg(unix)]
+    last_progress: Option<tokio::time::Instant>,
 }
 
 impl OutputAccumulator {
@@ -101,6 +101,8 @@ impl OutputAccumulator {
             pending: Vec::new(),
             temp: None,
             incomplete: false,
+            #[cfg(unix)]
+            last_progress: None,
         }
     }
 
@@ -145,7 +147,8 @@ impl OutputAccumulator {
             let mut start = self.tail.len() - rolling_cap;
             // Never cut a UTF 8 character in half (continuation bytes are
             // 0b10xx_xxxx).
-            while start < self.tail.len() && (self.tail[start] & 0xC0) == 0x80 {
+            while start < self.tail.len() && crate::truncate::is_utf8_continuation(self.tail[start])
+            {
                 start += 1;
             }
             self.tail_at_line_boundary = start == 0 || self.tail[start - 1] == b'\n';
@@ -202,6 +205,7 @@ impl OutputAccumulator {
         let mut text = String::from_utf8_lossy(&self.tail).into_owned();
         if !self.tail_at_line_boundary
             && let Some(newline) = text.find('\n')
+            && newline + 1 < text.len()
         {
             text = text[newline + 1..].to_string();
         }
@@ -225,6 +229,18 @@ impl OutputAccumulator {
         }
         let content = truncation.content.clone();
         (content, truncation)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn progress(&mut self) -> Option<String> {
+        if self
+            .last_progress
+            .is_some_and(|last| last.elapsed() < UPDATE_THROTTLE)
+        {
+            return None;
+        }
+        self.last_progress = Some(tokio::time::Instant::now());
+        Some(self.snapshot().0)
     }
 }
 
@@ -375,6 +391,12 @@ impl AgentTool for BashTool {
                 None => format!("$ {command} (background)"),
             };
         }
+        if let Some(wait) = args.get("yield_after_ms").and_then(Value::as_u64) {
+            return match args.get("timeout").and_then(Value::as_f64) {
+                Some(timeout) => format!("$ {command} (yield after {wait}ms, timeout {timeout}s)"),
+                None => format!("$ {command} (yield after {wait}ms)"),
+            };
+        }
         match args.get("timeout").and_then(Value::as_f64) {
             Some(timeout) => format!("$ {command} (timeout {timeout}s)"),
             None => format!("$ {command}"),
@@ -434,6 +456,7 @@ impl AgentTool for BashTool {
                         timeout,
                         Duration::from_millis(wait_ms),
                         &cancel,
+                        on_update,
                     )
                     .await?;
                 let snapshot = match outcome {
@@ -480,20 +503,16 @@ impl AgentTool for BashTool {
             .transpose()?;
         #[cfg(unix)]
         {
-            let output = std::sync::Mutex::new((OutputAccumulator::new(), None));
+            let output = std::sync::Mutex::new(OutputAccumulator::new());
             let capture = |update: CaptureUpdate<'_>| {
-                if let Ok(mut state) = output.lock() {
-                    let (output, last_update) = &mut *state;
+                if let Ok(mut output) = output.lock() {
                     match update {
                         CaptureUpdate::Bytes(bytes) => {
                             output.append(bytes);
                             if let Some(on_update) = &on_update
-                                && last_update.is_none_or(|time: std::time::Instant| {
-                                    time.elapsed() >= UPDATE_THROTTLE
-                                })
+                                && let Some(text) = output.progress()
                             {
-                                *last_update = Some(std::time::Instant::now());
-                                on_update(AgentToolResult::text(output.snapshot().0));
+                                on_update(AgentToolResult::text(text));
                             }
                         }
                         CaptureUpdate::Incomplete => output.mark_incomplete(),
@@ -502,7 +521,7 @@ impl AgentTool for BashTool {
             };
             let (outcome, cleanup_error) =
                 crate::jobs::run_foreground(command, deadline, &cancel, capture).await?;
-            let (output, _) = output
+            let output = output
                 .into_inner()
                 .map_err(|error| format!("foreground output unavailable: {error}"))?;
             finish_output(output, outcome, args.timeout, cleanup_error.as_deref())
