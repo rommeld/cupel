@@ -231,6 +231,7 @@ mod tests {
             glob: None,
             ignore_case: false,
             literal: false,
+            context: 0,
             limit: SearchLimit::Matches(100),
         }
     }
