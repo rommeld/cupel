@@ -74,7 +74,14 @@ pub struct UpdateFileChunk {
     pub change_context: Option<String>,
     pub old_lines: Vec<String>,
     pub new_lines: Vec<String>,
+    pub context_lines: Vec<ContextLine>,
     pub is_end_of_file: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextLine {
+    pub old_index: usize,
+    pub new_index: usize,
 }
 
 pub fn parse_patch(text: &str) -> Result<Vec<Hunk>, ParseError> {
@@ -389,6 +396,10 @@ impl Parser {
             '+' => chunk.new_lines.push(content.to_string()),
             '-' => chunk.old_lines.push(content.to_string()),
             _ => {
+                chunk.context_lines.push(ContextLine {
+                    old_index: chunk.old_lines.len(),
+                    new_index: chunk.new_lines.len(),
+                });
                 chunk.old_lines.push(content.to_string());
                 chunk.new_lines.push(content.to_string());
             }
@@ -401,11 +412,24 @@ impl Parser {
 mod tests {
     use super::*;
 
-    fn chunk(context: Option<&str>, old: &[&str], new: &[&str], eof: bool) -> UpdateFileChunk {
+    fn chunk(
+        context: Option<&str>,
+        old: &[&str],
+        new: &[&str],
+        shared: &[(usize, usize)],
+        eof: bool,
+    ) -> UpdateFileChunk {
         UpdateFileChunk {
             change_context: context.map(str::to_string),
             old_lines: old.iter().map(|s| (*s).to_string()).collect(),
             new_lines: new.iter().map(|s| (*s).to_string()).collect(),
+            context_lines: shared
+                .iter()
+                .map(|&(old_index, new_index)| ContextLine {
+                    old_index,
+                    new_index,
+                })
+                .collect(),
             is_end_of_file: eof,
         }
     }
@@ -451,7 +475,7 @@ mod tests {
             vec![Hunk::UpdateFile {
                 path: "foo.txt".to_string(),
                 move_path: None,
-                chunks: vec![chunk(None, &["old"], &["new"], false)],
+                chunks: vec![chunk(None, &["old"], &["new"], &[], false)],
             }]
         );
         assert_eq!(
@@ -496,6 +520,7 @@ mod tests {
                         Some("def f():"),
                         &["    pass"],
                         &["    return 123"],
+                        &[],
                         false
                     )],
                 },
@@ -519,7 +544,13 @@ mod tests {
             vec![Hunk::UpdateFile {
                 path: "file2.py".to_string(),
                 move_path: None,
-                chunks: vec![chunk(None, &["import foo"], &["import foo", "bar"], false)],
+                chunks: vec![chunk(
+                    None,
+                    &["import foo"],
+                    &["import foo", "bar"],
+                    &[(0, 0)],
+                    false
+                )],
             }]
         );
     }
@@ -535,7 +566,7 @@ mod tests {
             vec![Hunk::UpdateFile {
                 path: "file.txt".to_string(),
                 move_path: None,
-                chunks: vec![chunk(None, &[], &["quux"], true)],
+                chunks: vec![chunk(None, &[], &["quux"], &[], true)],
             }]
         );
     }
@@ -556,9 +587,10 @@ mod tests {
                         None,
                         &["old a", "*** Update File: b.txt"],
                         &["new a", "*** Update File: b.txt"],
+                        &[(1, 1)],
                         false
                     ),
-                    chunk(None, &["old b"], &["new b"], false),
+                    chunk(None, &["old b"], &["new b"], &[], false),
                 ],
             }]
         );
@@ -579,6 +611,7 @@ mod tests {
                     None,
                     &["context before", "", "context after"],
                     &["context before", "", "context after"],
+                    &[(0, 0), (1, 1), (2, 2)],
                     false
                 )],
             }]
@@ -596,7 +629,7 @@ mod tests {
             vec![Hunk::UpdateFile {
                 path: "file.txt".to_string(),
                 move_path: None,
-                chunks: vec![chunk(None, &["old"], &["new"], false)],
+                chunks: vec![chunk(None, &["old"], &["new"], &[], false)],
             }]
         );
     }
@@ -607,7 +640,13 @@ mod tests {
         let expected = vec![Hunk::UpdateFile {
             path: "file2.py".to_string(),
             move_path: None,
-            chunks: vec![chunk(None, &["import foo"], &["import foo", "bar"], false)],
+            chunks: vec![chunk(
+                None,
+                &["import foo"],
+                &["import foo", "bar"],
+                &[(0, 0)],
+                false,
+            )],
         }];
         for wrapper in ["<<EOF", "<<'EOF'", "<<\"EOF\""] {
             assert_eq!(

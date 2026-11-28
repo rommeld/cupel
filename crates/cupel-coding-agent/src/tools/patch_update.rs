@@ -215,6 +215,94 @@ fn normalise(line: &str) -> String {
     normalize_for_fuzzy_match(line.trim())
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum IndentShift<'a> {
+    #[default]
+    Unchanged,
+    Indent(&'a str),
+    Dedent(&'a str),
+}
+
+impl<'a> IndentShift<'a> {
+    fn between(wanted: &'a str, actual: &'a str) -> Option<Self> {
+        if wanted == actual {
+            return Some(Self::Unchanged);
+        }
+        if let Some(extra) = actual.strip_prefix(wanted)
+            && same_indent_style(actual, extra)
+        {
+            return Some(Self::Indent(extra));
+        }
+        if let Some(extra) = wanted.strip_prefix(actual)
+            && same_indent_style(wanted, extra)
+        {
+            return Some(Self::Dedent(extra));
+        }
+        None
+    }
+
+    fn apply(self, line: &str) -> Option<String> {
+        let indentation = leading_indent(line);
+        if indentation == line {
+            return Some(line.to_string());
+        }
+        match self {
+            Self::Unchanged => Some(line.to_string()),
+            Self::Indent(extra) if same_indent_style(indentation, extra) => {
+                Some(format!("{extra}{line}"))
+            }
+            Self::Dedent(extra) if same_indent_style(indentation, extra) => {
+                line.strip_prefix(extra).map(str::to_string)
+            }
+            Self::Indent(_) | Self::Dedent(_) => None,
+        }
+    }
+}
+
+fn same_indent_style(indentation: &str, extra: &str) -> bool {
+    extra.bytes().next().is_some_and(|kind| {
+        matches!(kind, b' ' | b'\t') && indentation.bytes().all(|byte| byte == kind)
+    })
+}
+
+fn leading_indent(line: &str) -> &str {
+    let unindented = line.trim_start();
+    &line[..line.len() - unindented.len()]
+}
+
+fn replacement_lines(
+    chunk: &UpdateFileChunk,
+    new_lines: &[String],
+    matched: &[String],
+) -> Option<Vec<String>> {
+    let mut shift = None;
+    let pairs = chunk.old_lines.iter().zip(matched);
+    for (wanted, actual) in pairs {
+        let wanted_indent = leading_indent(wanted);
+        let actual_indent = leading_indent(actual);
+        if wanted_indent == wanted && actual_indent == actual {
+            continue;
+        }
+        let proposed = IndentShift::between(wanted_indent, actual_indent)?;
+        if shift.is_some_and(|shift| shift != proposed) {
+            return None;
+        }
+        shift = Some(proposed);
+    }
+
+    let shift = shift.unwrap_or_default();
+    let mut context = chunk.context_lines.iter().peekable();
+    let mut output = Vec::with_capacity(new_lines.len());
+    for (index, line) in new_lines.iter().enumerate() {
+        if let Some(context) = context.next_if(|context| context.new_index == index) {
+            output.push(matched.get(context.old_index).unwrap_or(line).clone());
+        } else {
+            output.push(shift.apply(line)?);
+        }
+    }
+    Some(output)
+}
+
 /// Rewrite `original` (LF normalize) with `chunks`, `path` only labels error messages.
 ///
 /// Codex semantics, kept deliberately,
@@ -307,8 +395,12 @@ fn compute_replacements(
                 "expected lines",
             ));
         };
-        replacements.push((start, pattern.len(), new_lines.to_vec()));
-        line_index = start + pattern.len();
+        let end = start + pattern.len();
+        let replacement = replacement_lines(chunk, new_lines, &lines[start..end]).ok_or_else(|| {
+            format!("Uncertain indentation in {path} at line {}. Match the target's indentation before retrying; no files were written.", start + 1)
+        })?;
+        replacements.push((start, pattern.len(), replacement));
+        line_index = end;
     }
 
     replacements.sort_by_key(|(start, _, _)| *start);
@@ -338,6 +430,7 @@ mod tests {
             change_context: context.map(str::to_string),
             old_lines: lines(old),
             new_lines: lines(new),
+            context_lines: Vec::new(),
             is_end_of_file: eof,
         }
     }
