@@ -59,6 +59,7 @@ pub struct Theme {
     pub pane_border: Style,
     pub selected: Style,
     pub scrollbar_thumb: Style,
+    pub popup: Style,
     pub popup_selected: Style,
     pub popup_row: Style,
 
@@ -107,7 +108,7 @@ pub const CUPEL: Theme = Theme {
     task: Style::new().fg(Color::White).bg(Color::Indexed(235)),
     question: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     assistant: Style::new(),
-    answer: Style::new().fg(Color::Magenta),
+    answer: Style::new(),
     answer_label: Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     // Give neon text a dark surface even on light terminal backgrounds.
     reasoning_header: Style::new()
@@ -132,7 +133,8 @@ pub const CUPEL: Theme = Theme {
     // xtrem 256 index 237 (#3a3a3a).
     selected: Style::new().bg(Color::Indexed(237)),
     scrollbar_thumb: Style::new().fg(Color::DarkGray),
-    // The selected row inverts, the rest match the tool color.
+    popup: Style::new(),
+    // The selected row inverts, selectable choices match the tool color.
     popup_selected: Style::new().add_modifier(Modifier::REVERSED),
     popup_row: Style::new().fg(Color::Cyan),
     md_heading: Style::new()
@@ -143,9 +145,8 @@ pub const CUPEL: Theme = Theme {
     md_strike: Style::new().add_modifier(Modifier::CROSSED_OUT),
     // cupel's cyan accent family (tools, popups).
     md_code: Style::new().fg(Color::Cyan),
-    // xtrem 256 index 235 (#262626), subtler and more portable than truecolor, and
-    // visually "a surface", not a color. The terminal's default forground stays.
-    md_code_block: Style::new().bg(Color::Indexed(235)),
+    // Explicit foreground stays readable on this dark surface even in light terminals.
+    md_code_block: Style::new().fg(Color::White).bg(Color::Indexed(235)),
     md_quote: Style::new()
         .add_modifier(Modifier::DIM)
         .add_modifier(Modifier::ITALIC),
@@ -183,7 +184,7 @@ impl Theme {
     /// Build an opaque theme with `CUPEL`'s hierarchy in a palette's colors.
     /// Headings, bold, italic, and links get the palette's Markdown accents.
     #[must_use]
-    pub const fn from_palette(
+    pub fn from_palette(
         id: &'static str,
         name: &'static str,
         appearance: Appearance,
@@ -193,6 +194,7 @@ impl Theme {
             bg,
             fg,
             surface,
+            raised,
             selection,
             border,
             muted,
@@ -204,8 +206,8 @@ impl Theme {
             heading,
             emphasis,
             link,
-            ..
         } = palette;
+        let popup_accent = readable_on(readable_on(cyan, raised), bg);
         Self {
             id: Cow::Borrowed(id),
             name: Cow::Borrowed(name),
@@ -215,13 +217,12 @@ impl Theme {
             task: Style::new().fg(fg).bg(surface),
             question: Style::new().fg(yellow).add_modifier(Modifier::BOLD),
             assistant: Style::new().fg(fg),
-            answer: Style::new().fg(magenta),
-            answer_label: Style::new().fg(magenta).add_modifier(Modifier::BOLD),
+            answer: Style::new().fg(fg),
+            answer_label: Style::new()
+                .fg(readable_on(magenta, bg))
+                .add_modifier(Modifier::BOLD),
             reasoning_header: Style::new()
-                .fg(match appearance {
-                    Appearance::Light => Color::Rgb(0x00, 0x75, 0x20),
-                    Appearance::Dark | Appearance::Terminal => NEON_GREEN,
-                })
+                .fg(readable_on(green, bg))
                 .add_modifier(Modifier::BOLD),
             reasoning: Style::new().fg(reasoning_color(fg, muted)),
             tool_header: Style::new().fg(cyan),
@@ -239,8 +240,9 @@ impl Theme {
             pane_border: Style::new().fg(border),
             selected: Style::new().bg(selection),
             scrollbar_thumb: Style::new().fg(muted),
+            popup: Style::new().fg(fg).bg(raised),
             popup_selected: Style::new().add_modifier(Modifier::REVERSED),
-            popup_row: Style::new().fg(cyan).bg(surface),
+            popup_row: Style::new().fg(popup_accent),
             md_heading: Style::new()
                 .fg(heading)
                 .add_modifier(Modifier::BOLD)
@@ -249,14 +251,12 @@ impl Theme {
             md_italic: Style::new().fg(emphasis).add_modifier(Modifier::ITALIC),
             md_strike: Style::new().add_modifier(Modifier::CROSSED_OUT),
             md_code: Style::new().fg(cyan),
-            md_code_block: Style::new().bg(surface),
-            md_quote: Style::new()
-                .add_modifier(Modifier::DIM)
-                .add_modifier(Modifier::ITALIC),
+            md_code_block: Style::new().fg(fg).bg(surface),
+            md_quote: Style::new().fg(muted).add_modifier(Modifier::ITALIC),
             md_bullet: Style::new().fg(cyan),
             md_link: Style::new().fg(link).add_modifier(Modifier::UNDERLINED),
-            md_link_url: Style::new().add_modifier(Modifier::DIM),
-            md_rule: Style::new().add_modifier(Modifier::DIM),
+            md_link_url: Style::new().fg(muted),
+            md_rule: Style::new().fg(muted),
             md_table_header: Style::new().add_modifier(Modifier::BOLD),
         }
     }
@@ -311,6 +311,46 @@ const fn reasoning_color(foreground: Color, muted: Color) -> Color {
         }
         _ => foreground,
     }
+}
+
+/// Keep a palette accent readable on `surface` (at least WCAG 4.5:1) by
+/// darkening or lightening it only as much as needed while preserving hue.
+fn readable_on(accent: Color, surface: Color) -> Color {
+    const TARGET: f64 = 4.5;
+    let (Color::Rgb(r, g, b), Color::Rgb(sr, sg, sb)) = (accent, surface) else {
+        return accent;
+    };
+    let bg = Rgb(sr, sg, sb);
+    if cupel_coding_agent::themes::contrast(Rgb(r, g, b), bg) >= TARGET {
+        return accent;
+    }
+    let black = Rgb(0, 0, 0);
+    let white = Rgb(255, 255, 255);
+    let toward = if cupel_coding_agent::themes::contrast(black, bg)
+        >= cupel_coding_agent::themes::contrast(white, bg)
+    {
+        black
+    } else {
+        white
+    };
+    let mut lo = 0_u16;
+    let mut hi = 256_u16;
+    let mut best = toward;
+    while lo < hi {
+        let mid = lo.midpoint(hi);
+        let mix = |from: u8, to: u8| {
+            let blended = (u16::from(from) * (256 - mid) + u16::from(to) * mid + 128) / 256;
+            u8::try_from(blended).unwrap_or(u8::MAX)
+        };
+        let candidate = Rgb(mix(r, toward.0), mix(g, toward.1), mix(b, toward.2));
+        if cupel_coding_agent::themes::contrast(candidate, bg) >= TARGET {
+            best = candidate;
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    color(best)
 }
 
 /// A theme file's color as a ratatui color.
@@ -508,32 +548,52 @@ mod tests {
 
     /// WCAG contrast ratio, 4.5 is the body text minimum.
     fn contrast(first: Option<Color>, second: Option<Color>) -> f64 {
-        let luminance = |color: Option<Color>| {
-            let Some(Color::Rgb(red, green, blue)) = color else {
-                panic!("palette themes paint RGB colors, got {color:?}");
-            };
-            let linear = |channel: u8| {
-                let value = f64::from(channel) / 255.0;
-                if value <= 0.039_28 {
-                    value / 12.92
-                } else {
-                    ((value + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        let rgb = |color: Option<Color>| match color {
+            Some(Color::Rgb(red, green, blue)) => Rgb(red, green, blue),
+            other => panic!("palette themes paint RGB colors, got {other:?}"),
         };
-        let (first, second) = (luminance(first), luminance(second));
-        (first.max(second) + 0.05) / (first.min(second) + 0.05)
+        cupel_coding_agent::themes::contrast(rgb(first), rgb(second))
     }
 
     #[test]
     fn palette_text_is_readable_on_every_surface() {
+        assert_eq!(CUPEL.md_code_block.fg, Some(Color::White));
+        assert_eq!(CUPEL.md_code_block.bg, Some(Color::Indexed(235)));
         for theme in example_themes()
             .iter()
             .filter(|t| t.appearance != Appearance::Terminal)
         {
+            assert_ne!(
+                theme.reasoning_header.fg,
+                Some(NEON_GREEN),
+                "{}: reasoning_header should come from the palette",
+                theme.id
+            );
+            assert_ne!(
+                theme.reasoning_header.fg,
+                Some(Color::Rgb(0x00, 0x75, 0x20)),
+                "{}: reasoning_header should come from the palette",
+                theme.id
+            );
+            for (role, style) in [
+                ("md_quote", theme.md_quote),
+                ("md_link_url", theme.md_link_url),
+                ("md_rule", theme.md_rule),
+            ] {
+                assert_eq!(style.fg, theme.chrome.fg, "{}: {role}", theme.id);
+                assert!(
+                    !style.add_modifier.contains(Modifier::DIM),
+                    "{}: {role} must not rely on terminal DIM",
+                    theme.id
+                );
+            }
+            assert_ne!(theme.popup.bg, theme.base.bg, "{}", theme.id);
             for (surface, ratio) in [
                 ("background", contrast(theme.base.fg, theme.base.bg)),
+                (
+                    "answer label",
+                    contrast(theme.answer_label.fg, theme.base.bg),
+                ),
                 ("reasoning", contrast(theme.reasoning.fg, theme.base.bg)),
                 (
                     "reasoning headline",
@@ -542,7 +602,13 @@ mod tests {
                 ("user message", contrast(theme.task.fg, theme.task.bg)),
                 (
                     "code block",
-                    contrast(theme.base.fg, theme.md_code_block.bg),
+                    contrast(theme.md_code_block.fg, theme.md_code_block.bg),
+                ),
+                ("popup", contrast(theme.popup.fg, theme.popup.bg)),
+                ("popup row", contrast(theme.popup_row.fg, theme.popup.bg)),
+                (
+                    "question option",
+                    contrast(theme.popup_row.fg, theme.base.bg),
                 ),
             ] {
                 assert!(ratio >= 4.5, "{}: {surface} contrast {ratio:.2}", theme.id);

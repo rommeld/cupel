@@ -186,7 +186,7 @@ fn readability_warning(theme: &ThemeFile) -> Option<String> {
     let palette = theme.palette;
     [
         ("background", palette.bg),
-        ("user message", palette.raised),
+        ("popup", palette.raised),
         ("code block", palette.surface),
     ]
     .into_iter()

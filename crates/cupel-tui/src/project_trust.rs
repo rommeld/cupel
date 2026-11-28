@@ -142,11 +142,12 @@ fn render(frame: &mut Frame<'_>, cwd: &Path, selected: ProjectTrust, theme: &The
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines)
-            .style(theme.base)
+            .style(theme.popup)
             .block(
                 Block::default()
-                    .title(" Project trust ")
-                    .borders(Borders::ALL),
+                    .title(Span::styled(" Project trust ", theme.chrome))
+                    .borders(Borders::ALL)
+                    .border_style(theme.pane_border),
             )
             .wrap(Wrap { trim: false }),
         popup,
@@ -248,5 +249,36 @@ mod tests {
                 .iter()
                 .all(|cell| { cell.bg != ratatui::style::Color::Reset })
         );
+        for theme in crate::theme::example_themes() {
+            let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render(
+                        frame,
+                        std::path::Path::new("/foreign/repo"),
+                        ProjectTrust::Restricted,
+                        &theme,
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let corner = buffer
+                .content
+                .iter()
+                .find(|cell| cell.symbol() == "┌")
+                .expect("dialog border");
+            assert_eq!(
+                corner.style().fg,
+                theme.pane_border.fg.or(Some(ratatui::style::Color::Reset)),
+                "{}",
+                theme.id
+            );
+            assert_eq!(
+                corner.style().bg,
+                theme.popup.bg.or(Some(ratatui::style::Color::Reset)),
+                "{}",
+                theme.id
+            );
+        }
     }
 }

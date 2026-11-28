@@ -177,12 +177,22 @@ impl Sessions {
     /// `/new` and hot reload in the session on screen, rebuild that one `App` and
     /// put it back in its place.
     pub async fn reload(&mut self, target: ReloadTarget) {
+        let previous_setting = self.active().meta.settings.theme.clone();
         let Session { label, app } = self.list.remove(self.active);
         let app = app.hot_reload(target).await;
         self.list.insert(self.active, Session { label, app });
-        // Show the active theme's new version after re reading the files.
-        // If its file disappeared or broke, keep the current look until a switch.
-        if let Some(theme) = crate::theme::find(&self.active().themes, &self.theme.id) {
+        let configured = self.active().meta.settings.theme.clone();
+        if configured != previous_setting {
+            match crate::theme::from_settings(&self.active().themes, configured.as_deref()) {
+                Ok(theme) => self.theme = theme,
+                Err(warning) => {
+                    self.theme = Arc::clone(&self.active().themes[0]);
+                    self.active_mut().notice(warning);
+                }
+            }
+        } else if let Some(theme) = crate::theme::find(&self.active().themes, &self.theme.id) {
+            // Show the active theme's new version after re reading the files.
+            // If its file disappeared or broke, keep the current look until a switch.
             self.theme = theme;
         }
     }
@@ -307,11 +317,16 @@ impl Sessions {
                     &theme.id,
                 );
                 let note = match saved {
-                    Ok(path) => format!(
-                        "theme switched to {} (saved to {})",
-                        theme.name,
-                        path.display()
-                    ),
+                    Ok(path) => {
+                        for session in &mut self.list {
+                            session.app.meta.settings.theme = Some(theme.id.to_string());
+                        }
+                        format!(
+                            "theme switched to {} (saved to {})",
+                            theme.name,
+                            path.display()
+                        )
+                    }
                     Err(error) => format!(
                         "theme switched to {} for this run only - not saved: {error}",
                         theme.name
