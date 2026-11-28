@@ -42,6 +42,7 @@ use crate::truncate::{
 
 /// Minimum interval between streamed progress updates to the UI.
 const UPDATE_THROTTLE: Duration = Duration::from_millis(100);
+const MAX_TIMEOUT_SECONDS: f64 = 14_400.0;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,6 +52,20 @@ struct BashArgs {
     #[serde(default)]
     background: bool,
     yield_after_ms: Option<u64>,
+}
+
+fn parse_timeout(seconds: f64) -> Result<Duration, ToolError> {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err("timeout must be a positive finite number of seconds".into());
+    }
+    if seconds > MAX_TIMEOUT_SECONDS {
+        return Err(format!("timeout cannot exceed {MAX_TIMEOUT_SECONDS} seconds").into());
+    }
+    let duration = Duration::try_from_secs_f64(seconds)?;
+    if duration.is_zero() {
+        return Err("timeout must round to at least one nanosecond".into());
+    }
+    Ok(duration)
 }
 
 /// Streaming output tracker with bounded memory (see module docs).
@@ -325,7 +340,9 @@ impl AgentTool for BashTool {
                 },
                 "timeout": {
                     "type": "number",
-                    "description": "Stop the command this many seconds after spawn, even if it yielded (optional, no default; up to 4 hours for managed jobs)"
+                    "exclusiveMinimum": 0,
+                    "maximum": MAX_TIMEOUT_SECONDS,
+                    "description": "Time limit in seconds, even if the command yields. Accepts fractional seconds. Omit for no deadline."
                 },
                 "background": {
                     "type": "boolean",
@@ -367,11 +384,7 @@ impl AgentTool for BashTool {
         on_update: Option<ToolUpdateFn>,
     ) -> Result<AgentToolResult, ToolError> {
         let args: BashArgs = serde_json::from_value(args)?;
-        if let Some(timeout) = args.timeout
-            && (!timeout.is_finite() || timeout <= 0.0)
-        {
-            return Err("Invalid timeout: must be a finite number of seconds".into());
-        }
+        let timeout = args.timeout.map(parse_timeout).transpose()?;
         if args.background && args.yield_after_ms.is_some() {
             return Err("Cannot combine background: true with yield_after_ms".into());
         }
@@ -404,15 +417,10 @@ impl AgentTool for BashTool {
 
         #[cfg(unix)]
         if managed {
-            const MAX_TIMEOUT_SECONDS: f64 = 14_400.0;
-            if args.timeout.is_some_and(|secs| secs > MAX_TIMEOUT_SECONDS) {
-                return Err("Managed job timeout cannot exceed 4 hours (14400 seconds)".into());
-            }
             let jobs = self
                 .jobs
                 .as_ref()
                 .ok_or("No managed job session is bound")?;
-            let timeout = args.timeout.map(Duration::from_secs_f64);
             if let Some(wait_ms) = args.yield_after_ms {
                 let outcome = jobs
                     .start_yielding(
@@ -462,6 +470,13 @@ impl AgentTool for BashTool {
         #[cfg(unix)]
         command.process_group(0);
 
+        let deadline = timeout
+            .map(|duration| {
+                tokio::time::Instant::now()
+                    .checked_add(duration)
+                    .ok_or("timeout deadline is out of range")
+            })
+            .transpose()?;
         let mut child = command
             .spawn()
             .map_err(|e| format!("Failed to run shell: {e}"))?;
@@ -477,9 +492,6 @@ impl AgentTool for BashTool {
         let mut last_update = std::time::Instant::now()
             .checked_sub(UPDATE_THROTTLE)
             .unwrap_or_else(std::time::Instant::now);
-        let deadline = args
-            .timeout
-            .map(|secs| tokio::time::Instant::now() + Duration::from_secs_f64(secs));
 
         let mut exited: Option<std::process::ExitStatus> = None;
 

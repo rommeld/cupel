@@ -447,9 +447,15 @@ impl Jobs {
         if cancel.is_cancelled() {
             return Err("Operation aborted".to_string());
         }
+        let deadline = timeout
+            .map(|duration| {
+                Instant::now()
+                    .checked_add(duration)
+                    .ok_or("timeout deadline is out of range")
+            })
+            .transpose()?;
         let child = spawn_child()?;
         let started_at = Instant::now();
-        let deadline = timeout.map(|timeout| started_at + timeout);
         // If cancellation won during spawn, the worker still reaps the child
         // but no handle is exposed.
         let interrupted = cancel.is_cancelled();
