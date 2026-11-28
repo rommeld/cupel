@@ -595,7 +595,7 @@ mod tests {
                     expected.canonicalize().unwrap(),
                     "scope={scope}, mode={mode}, locator={locator}"
                 );
-                assert!(text_of(&read).contains("Coverage: complete file"));
+                assert!(text_of(&read).contains("; complete file]"));
             }
         }
     }

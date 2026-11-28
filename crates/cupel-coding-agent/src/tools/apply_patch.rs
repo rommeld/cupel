@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use cupel_agent::types::{AgentTool, AgentToolResult, ToolError, ToolUpdateFn};
 use cupel_core::types::{TextContent, ToolResultContent};
 
-use crate::search::resolve_to_root;
+use crate::search::{resolve_to_root, source_locator};
 use crate::source_observations::{SourceObservation, SourceObservations};
 use crate::tools::file_queue::{lock_file_for_mutation, queue_key};
 use crate::tools::patch_parser::{Hunk, parse_patch};
@@ -72,12 +72,13 @@ the working directory. Matching tiers are exact, trailing-whitespace-insensitive
 surrounding-whitespace-insensitive, then normalized punctuation; ambiguity is checked at \
 the strongest tier with matches. If any hunk does not match, the whole patch is rejected \
 and no file is written. Optionally supply \
-expectedObservations alongside input: an array of ids returned by read, one per protected \
-file (including move destinations or existing files overwritten by Add File). Each is a \
+expectedObservations alongside input: an array of IDs returned by read or apply_patch, one \
+per protected file (including move destinations or existing files overwritten by Add File). Each is a \
 whole-file raw-byte revision precondition: stale, unavailable, wrong-checkout or unrelated \
 observations reject the entire patch before writes. Unrelated edits also invalidate it. \
-Re-read after mutations rather than weakening context. Hashes and patch locks do not isolate \
-arbitrary shell/editor writes; application I/O failures may leave earlier writes in place.";
+Use the written revision IDs for follow-up patches; they do not show file contents. Re-read \
+after other mutations rather than weakening context. Hashes and patch locks do not isolate \
+shell or editor writes. An I/O failure can leave earlier writes in place.";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -283,6 +284,49 @@ impl ApplyPatchTool {
             }
         }
     }
+
+    async fn record_written_revisions(
+        &self,
+        store: &SourceObservations,
+        changes: &[Change],
+    ) -> Result<Vec<SourceObservation>, ToolError> {
+        let checkout = tokio::fs::canonicalize(&self.cwd).await.map_err(|error| {
+            format!(
+                "could not identify checkout {}: {error}",
+                self.cwd.display()
+            )
+        })?;
+        let mut observations = Vec::new();
+        for change in changes {
+            let (path, content) = match change {
+                Change::Add { path, content, .. } => (path, content),
+                Change::Update {
+                    path,
+                    move_to,
+                    content,
+                    ..
+                } => (
+                    move_to
+                        .as_ref()
+                        .map_or(path, |(destination, _)| destination),
+                    content,
+                ),
+                Change::Delete { .. } => continue,
+            };
+            let identity = tokio::fs::canonicalize(path).await.map_err(|error| {
+                format!(
+                    "could not identify written file {}: {error}",
+                    path.display()
+                )
+            })?;
+            observations.push(
+                store
+                    .record(&checkout, &identity, content.as_bytes())
+                    .await?,
+            );
+        }
+        Ok(observations)
+    }
 }
 
 /// One verified file operation, all reading and matching is done, only
@@ -330,7 +374,7 @@ impl AgentTool for ApplyPatchTool {
                 "expectedObservations": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional read observation ids, one per protected file. Whole-file revision checks reject stale or unavailable source before any writes. Omit for ordinary path-based patches."
+                    "description": "Optional revision IDs from read or apply_patch, one per protected file. Whole-file revision checks reject stale or unavailable source before any writes. Omit for ordinary path-based patches."
                 }
             },
             "required": ["input"]
@@ -504,11 +548,22 @@ impl AgentTool for ApplyPatchTool {
             // one-time notice first so it remains visible in a short preview.
             diff.insert_str(0, &format!("Warning: {warning}\n"));
         }
+        let mut details = json!({ "diff": diff.trim_end() });
+        if let Some(store) = &self.observations {
+            let written = self.record_written_revisions(store, &changes).await.map_err(|error| {
+                format!("Patch writes completed, but recording source observations failed: {error}. Inspect the workspace before retrying.")
+            })?;
+            let mut observations = Vec::with_capacity(written.len());
+            for observation in written {
+                let path = source_locator(&observation.path, &observation.checkout);
+                summary.push_str(&format!("\nWritten revision {} {path:?}", observation.id));
+                observations.push(json!({ "path": path, "observation": observation.id }));
+            }
+            details["observations"] = json!(observations);
+        }
         Ok(AgentToolResult {
             content: vec![ToolResultContent::Text(TextContent::plain(summary))],
-            // The diff rides in details for the transcript, the model only
-            // needs the summary (it wrote the patch).
-            details: Some(json!({ "diff": diff.trim_end() })),
+            details: Some(details),
             terminate: false,
         })
     }
