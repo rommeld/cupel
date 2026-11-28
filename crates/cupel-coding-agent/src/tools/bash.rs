@@ -471,13 +471,67 @@ impl AgentTool for BashTool {
             })
             .transpose()?;
         #[cfg(unix)]
-        {
-            let output = std::sync::Mutex::new(OutputAccumulator::new());
-            let capture = |update: CaptureUpdate<'_>| {
-                if let Ok(mut output) = output.lock() {
-                    match update {
-                        CaptureUpdate::Bytes(bytes) => {
-                            let spill = output.append(bytes);
+        command.process_group(0);
+
+        let deadline = timeout
+            .map(|duration| {
+                tokio::time::Instant::now()
+                    .checked_add(duration)
+                    .ok_or("timeout deadline is out of range")
+            })
+            .transpose()?;
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("Failed to run shell: {e}"))?;
+        let pid = child.id();
+
+        // stdout and stderr are read on their own tasks feeding one channel,
+        // preserving arrival order well enough for interleaved output.
+        let mut rx = output_chunks(&mut child);
+
+        let mut output = OutputAccumulator::new();
+        // Backdated so the first chunk sends an update immediately, falls
+        // back to "now" on platforms where Instant can't go that far back.
+        let mut last_update = std::time::Instant::now()
+            .checked_sub(UPDATE_THROTTLE)
+            .unwrap_or_else(std::time::Instant::now);
+
+        let mut exited: Option<std::process::ExitStatus> = None;
+
+        // Main loop, pump output chunks, racing cancellation, the timeout,
+        // and the shell's own exit.
+        let mut outcome: Option<RunOutcome> = None;
+        while outcome.is_none() {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    if let Some(pid) = pid {
+                        kill_process_group(pid);
+                    }
+                    // Also SIGKILL the direct child via tokio, even if the
+                    // external `kill` misbehaves, the shell itself dies (and
+                    // bash executing a command string usually execs the command, so the shell is
+                    // the command).
+                    let _ = child.start_kill();
+                    outcome = Some(RunOutcome::Aborted);
+                }
+                () = async {
+                    match deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if let Some(pid) = pid {
+                        kill_process_group(pid);
+                    }
+                    let _ = child.start_kill();
+                    outcome = Some(RunOutcome::TimedOut);
+                }
+                // Each chunk starts a fresh quiet interval after shell exit.
+                chunk = next_output_chunk(&mut rx, exited.is_some()) => {
+                    match chunk {
+                        Some(chunk) => {
+                            output.append(chunk.as_bytes());
                             if let Some(on_update) = &on_update
                                 && let Some(text) = output.progress()
                             {
